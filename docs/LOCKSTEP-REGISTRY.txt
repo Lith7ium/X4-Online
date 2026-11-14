@@ -112,7 +112,12 @@ Two ways a replay family takes a guard entry over:
                            Also the Lua entry PerformAction (the target system's instant action: the seat's "Take
                            Command of Ship"; the transporter terminal runs X4's own, its menu is UI only) and
                            TransportPlayerToTarget (the transporter menu: a zone target, "Use Spacesuit", of a walking
-                           slot 2..N is op 0x08 with the airlock's class on its own ship; anything else refused)
+                           slot 2..N is op 0x08 with the airlock's class on its own ship; slot 1's is op 0x08 with
+                           the command's own class 0x2c49cb8, applied by X4's export; anything else refused).
+                           Slot 1's seat (class 0x2b45548) at the apply: the action's own check 0x35b400 reads the
+                           client's crosshair, so it is answered yes on every client through a copy of that one
+                           action object's vtable for the length of the call (0x35b400 and 0x35b8a0 pinned; the
+                           image is not patched)
              inventory     8 FFI entries (lockstep_ui_inventory.h uiinv_claim_decide): DropInventory, the inventory
                            menu's Drop as a kind 3 event of op 0x90; AddPlayerMoney LearnBlueprint StartResearch
                            ClearProductionItems StartTerraformingProject AbortActiveTerraformingProject
@@ -145,6 +150,25 @@ function's entry, must agree with its owner first)
                                                                                                    slots' updates run there. Inside
                                                                                                    lockstep_pilot_foot.h's pin
                                                                                                    {0x9fe29d,0x3a}, checked at arming
+  0xd84d9c   the PlayerController's bank reset (0xd84c20, run by  lockstep_pilot_slots.h           two bytes, jmp 0xd84db0, with the
+             every take): flight control 0x2f4b828 set from this  (stock slots 2..N)               0x9fe2a9 site; the flight control
+             client's input object (+0xce0)                                                        keeps the slot's replayed value
+  0x2ba90c0  U::FlightControlStartedEvent's vtable slot +0x10     lockstep_pilot_slots.h phud_*    8 bytes each (the slot, not code): a
+  0x2ba9088  U::FlightControlStoppedEvent's vtable slot +0x10     (stock slots 2..N)               client of slot 2..N keeps slot 1's
+             (the event's hand-over to one listener,                                              event from the HUD's two listeners
+             0x9b7060 / 0x9b7100)                                                                  and gives them its own slot's
+  0x7315d5   0x731560 (from U::Player's own update): call        lockstep_pilot_death.h pvehk_    calls re-pointed (slots' near page
+  0x7313e6   0x710390, X4's entry of a suited player into a    enter (native_gate_pilot_death_  +0x100): a slot 2..N's player is
+             ship; the same call in the dock core 0x730ff0      suit)                            noted for the pass, never moved by
+                                                                                                   X4; any other player passes
+  0xfa7330   the screen fade's start (behind FadeScreen2;      lockstep_pilot_death.h pvehk_    E9 -> stub (slots' near page
+             called by the eject at 0x7100ae and by the         fade                             +0x120, trampoline +0x140): from
+             entry's body at 0x71050d)                                                            those two callers the fade only
+                                                                                                   on the client whose own slot the
+                                                                                                   action runs for; others pass
+  Called, not patched: 0xaea500 (the UI message manager's player setter; lockstep_pilot_foot.h puts X4's own player back
+  when a slot's scope left another one there), 0x730f30 / 0x1252850 (the GET_UP context's request and withdrawal, same file),
+  0x730df0 (the UNDOCK key context's keeper, asked again with each client's own player, same file).
 
 4. STOP REASONS (gate finish(reason); stats.reason, the probe's STOP line)
 Codes 1..99 belong to the gate core (lockstep_gate.c, linux/gate_linux.c);

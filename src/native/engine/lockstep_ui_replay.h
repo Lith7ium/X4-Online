@@ -933,7 +933,8 @@ static int uirep_run_native(unsigned slot,unsigned op,const unsigned char *data,
             default:a[i]=0;break;
             }
         }
-        /* A slot in its own spacesuit (lockstep_pilot_death.h pvehk_*): its dock request is the way home, not X4's. */
+        /* A walking slot's dock request is its way out through the airlock (lockstep_pilot_death.h pvehk_*); a slot in its
+         * own spacesuit gets X4's handler, as in the plain game (0 from pvehk_home_key, the tick noted). */
         if(slot>=2 && (data[0]==UIREP_H_QUICKDOCK || data[0]==UIREP_H_DOCKAT || data[0]==UIREP_H_DOCKREASON) && pvehk_home_key(slot,0xafu)) {
             InterlockedIncrement64(&uirep_calls_applied);break;
         }

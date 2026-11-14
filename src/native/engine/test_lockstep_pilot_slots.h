@@ -646,6 +646,13 @@ static void test_pilot_slots_post(void) {
     pslot_post_swaps=pslot_post_same=pslot_post_taken=pslot_post_unreadable=pslot_post_lost=0;
     printf("pilot slots post: the pilot post's entry inside the scope (written, put back, off, unseated, walking, taken, unreadable, lost) PASS\n");
 }
+/* The HUD's flight control events (phud_*): X4's two dispatch functions and the UI listeners' typed handlers as far as
+ * the module sees them. */
+static unsigned test_phud_passed[2],test_phud_handled[2];
+static void test_phud_pass_started(void *e,void *l,void *s,double t) {(void)e;(void)l;(void)s;(void)t;++test_phud_passed[1];}
+static void test_phud_pass_stopped(void *e,void *l,void *s,double t) {(void)e;(void)l;(void)s;(void)t;++test_phud_passed[0];}
+static void test_phud_on_started(void *l,void *s,double t,void *ship) {(void)l;(void)s;(void)t;(void)ship;++test_phud_handled[1];}
+static void test_phud_on_stopped(void *l,void *s,double t,void *ship) {(void)l;(void)s;(void)t;(void)ship;++test_phud_handled[0];}
 static void test_pilot_slots(void) {
     pstk_focus_forced=1;
     unsigned char *saved_image_base=pnat_base;pnat_fns saved_fns=pnat_fn;pstk_fns saved_pstk=pstk_fn;pslot_fns saved_slots=pslot_fn;
@@ -1508,6 +1515,33 @@ static void test_pilot_slots(void) {
     pstk_aim_tick=0;pstk_aim_valid_replay=0;pstk_aim_installed=0;InterlockedExchange(&pstk_aim_on,0);
     pview_fn=saved_view;if(pview_page) {VirtualFree(pview_page,0,MEM_RELEASE);pview_page=NULL;}pview_installed=0;
     for(unsigned i=0;i<PILOT_SLOTS;i++) InterlockedExchange64(&pview_state[i],0);
+    /* the HUD's flight control events: on a client of slot 2..N a UI listener is noted, slot 1's event does not reach it,
+     * anything else passes; the own slot's replayed edge calls the noted listeners of that class; a listener noted later
+     * gets the state the slot is in; client 1 passes everything; a listener that is gone is dropped */
+    {   static _Alignas(16) unsigned char p1[0x40],other_source[8],plain[0x10];void *ui_started[1],*ui_stopped[1];
+        unsigned char *const was_p1=pslot_p1;const unsigned was_slot=pstk_capture_slot;const int was_installed=phud_installed,was_state=phud_state;
+        phud_dispatch_fn was0=phud_original[0],was1=phud_original[1];const uint64_t id=0x1234;
+        ui_started[0]=region+PHUD_STARTED_UI;ui_stopped[0]=region+PHUD_STOPPED_UI;memset(plain,0,sizeof(plain));memset(p1,0,sizeof(p1));memcpy(p1+8,&id,8);
+        *(void**)(region+PHUD_STARTED_UI+8u*PHUD_STARTED_HANDLER)=(void*)test_phud_on_started;
+        *(void**)(region+PHUD_STOPPED_UI+8u*PHUD_STOPPED_HANDLER)=(void*)test_phud_on_stopped;
+        memset(phud_listeners,0,sizeof(phud_listeners));memset(test_phud_passed,0,sizeof(test_phud_passed));memset(test_phud_handled,0,sizeof(test_phud_handled));
+        phud_original[1]=test_phud_pass_started;phud_original[0]=test_phud_pass_stopped;phud_state=-1;phud_installed=1;pslot_p1=p1;
+        phud_seen=phud_kept=phud_delivered=phud_faults=0;
+        pstk_capture_slot=1;phud_started(NULL,ui_started,p1,1.0);assert(test_phud_passed[1]==1 && !phud_seen && !phud_kept);            /* client 1: X4's */
+        pstk_capture_slot=2;
+        phud_started(NULL,plain,p1,1.0);assert(test_phud_passed[1]==2 && !phud_seen);                                                  /* not a UI listener */
+        phud_started(NULL,ui_started,other_source,1.0);assert(test_phud_passed[1]==3 && phud_seen==1 && !phud_kept && !test_phud_handled[1]);   /* another source */
+        phud_started(NULL,ui_started,p1,1.0);assert(test_phud_passed[1]==3 && phud_seen==1 && phud_kept==1);                           /* slot 1's: kept from the UI */
+        phud_started(NULL,ui_started,(void*)(uintptr_t)id,1.0);assert(test_phud_passed[1]==3 && phud_kept==2);                         /* by its ID */
+        phud_edge(1,1,2.0);phud_edge(3,1,2.0);assert(!test_phud_handled[1] && phud_state==-1);                                         /* not this client's slot */
+        phud_edge(2,1,2.0);assert(test_phud_handled[1]==1 && !test_phud_handled[0] && phud_state==1 && phud_delivered==1);
+        phud_edge(2,0,3.0);assert(test_phud_handled[1]==1 && !test_phud_handled[0] && phud_state==0);                                  /* no stopped listener noted yet */
+        phud_stopped(NULL,ui_stopped,p1,3.0);assert(phud_seen==2 && test_phud_handled[0]==1 && !test_phud_passed[0] && phud_kept==3);  /* noted late: its state */
+        phud_edge(2,0,4.0);assert(test_phud_handled[0]==2);
+        *(void**)ui_started=plain;phud_edge(2,1,5.0);assert(test_phud_handled[1]==1 && !phud_listeners[1][0]);                         /* gone: dropped */
+        phud_original[0]=was0;phud_original[1]=was1;phud_installed=was_installed;phud_state=was_state;pslot_p1=was_p1;pstk_capture_slot=was_slot;
+        memset(phud_listeners,0,sizeof(phud_listeners));phud_seen=phud_kept=phud_delivered=phud_faults=0;
+    }
     if(pslot_page) {VirtualFree(pslot_page,0,MEM_RELEASE);pslot_page=NULL;}
     memset(test_pnat_universe,0,sizeof(test_pnat_universe));memset(test_pnat_player,0,sizeof(test_pnat_player));
     memset(pstk_slot_frames,0,sizeof(pstk_slot_frames));memset(pstk_ring,0,sizeof(pstk_ring));

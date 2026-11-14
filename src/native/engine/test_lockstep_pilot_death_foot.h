@@ -19,6 +19,12 @@ static void test_pdf_frame(uint64_t tick,unsigned count,unsigned id) {
     stats.issued=tick;memset(pstk_slot_frames,0,sizeof(pstk_slot_frames));pstk_slot_frames[1].tick=tick;pstk_slot_frames[1].r.count=count;
     pstk_slot_frames[1].r.events[0]=(pstk_event){PSTK_ACTION,id,0};
 }
+static unsigned test_pdf_faded;
+static void *test_pdf_fade(double a,double b,double c,double d,uint64_t e,uint64_t f,uint64_t g,uint64_t h,uint64_t i) {
+    (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;++test_pdf_faded;return &test_pdf_faded;
+}
+static unsigned test_pdf_entered;
+static void test_pdf_enter(void *player,void *suit,void *room,void *fourth,unsigned char fifth) {(void)player;(void)suit;(void)room;(void)fourth;(void)fifth;++test_pdf_entered;}
 static int test_pdf_events(const char *want) {const char *e=pdeath_take_events();return want?e && !strcmp(e,want):!e;}
 /* The suit's weapons (pvehk_equip): X4's installer, group and active-group calls as far as the module sees them. */
 static unsigned test_pdf_installs,test_pdf_grouped[2],test_pdf_activated[2],test_pdf_ended;static unsigned char test_pdf_weapon[4][16],test_pdf_macro_block[0x10c0];
@@ -230,16 +236,18 @@ static void test_pilot_death_foot_block(unsigned char *region,unsigned char *inp
         assert(pdeath_suit_ship(2,0x2006) && pdeath_pass(141+PDEATH_SUIT_LAG,controller) && d2->out==2 && d2->home==0x2005 && !f->walking && !s->walking &&
                s->seated && s->controller==test_pslot_c2 && s->runtime==0x2006 && !pilot_slots[1].dead && !pdeath_dead && !d2->lost && test_pdf_events("suited:2"));
         {char row[1024];assert(pdeath_status(row,sizeof(row)) && strstr(row,"/out2") && strstr(row," airlock=1/0"));}
-        /* 147: flying its suit, not at home: nothing; its GET_UP and its dock keys ask for the way home and never reach
-         * X4 (no range yet, then too far: far). 148: the suit under its home ship: out of the suit (killed as X4 kills its
+        /* 147: flying its suit, not at home: nothing; its GET_UP is consumed and void, its dock keys are X4's own (not
+         * consumed, the tick noted, counted), whatever the range. 148: the suit under its home ship: out of the suit (killed as X4 kills its
          * player's old suit), seated in the ship it left. */
         *(void**)(test_pslot_ship2+0x70)=NULL;
         assert(pdeath_pass(147,controller) && d2->out==2 && test_pdf_events(NULL));
         assert(pvehk_suited(2) && pvehk_home(2)==0x2005 && !pvehk_home(1) && !pvehk_home_key(2,0x7b) && !pvehk_home_key(1,PFOOT_GET_UP));
         {   LONG64 getups=f->getups;test_pdf_frame(147,1,PFOOT_GET_UP);
-            assert(pslot_replay(147) && f->getups==getups && d2->ask==1 && pdeath_pass(147,controller) && !d2->ask && d2->out==2 && test_pdf_events("far:2"));
-            assert(pvehk_range(2,2500.0) && pvehk_home_key(2,0xaf) && pdeath_pass(147,controller) && d2->out==2 && test_pdf_events("far:2"));
-            assert(pvehk_range(2,-1.0) && pvehk_home_key(2,0xd3) && pdeath_pass(147,controller) && d2->out==2 && test_pdf_events("far:2"));
+            assert(pslot_replay(147) && f->getups==getups && !d2->ask && pdeath_pass(147,controller) && d2->out==2 && test_pdf_events(NULL));
+            stats.issued=147;assert(!pvehk_home_key(2,0xaf) && !d2->ask && d2->dock_tick==147 && pdeath_pass(147,controller) && d2->out==2 && test_pdf_events(NULL));
+            assert(pvehk_range(2,2500.0) && !pvehk_home_key(2,0xaf) && pdeath_pass(147,controller) && d2->out==2 && test_pdf_events(NULL));
+            assert(pvehk_range(2,10.0) && !pvehk_home_key(2,0xd3) && pdeath_pass(147,controller) && d2->out==2 && test_pdf_events(NULL));   /* no teleport by range */
+            assert(!pvehk_taken(2,147) && !pvehk_taken_in);   /* P_2 is not in the ship it left (here: the same test object as its suit) */
             memset(&pstk_build,0,sizeof(pstk_build));}
         *(void**)(test_pslot_ship2+0x70)=test_pslot_ship2;*(uint64_t*)(test_pslot_ship2+8)=0x2005;
         /* Its body sat in the suit's cockpit room (a suit has one; connected once everyone sits): off the room before the
@@ -253,7 +261,7 @@ static void test_pilot_death_foot_block(unsigned char *region,unsigned char *inp
             InterlockedExchange64(&pfbody_kill_late,late);InterlockedExchange64(&pfbody_disconnects,offs);}
         {char row[1024];assert(pdeath_status(row,sizeof(row)) && !strstr(row,"/out") && strstr(row," airlock=1/1/3") && !pvehk_suited(2) && !pvehk_range(2,10.0));}
         *(void**)(test_pslot_ship2+0x70)=parent_was;test_pdeath_ids[2]=0;memset(&pstk_build,0,sizeof(pstk_build));
-        /* again, and home by the key within range (the suit not docked anywhere) */
+        /* again; a key within range is no way home any more (the suit not docked anywhere: still out), the docked suit is */
         test_pdf_frame(149,1,PFOOT_GET_UP);assert(pslot_replay(149) && f->walking);
         /* walking, its dock key is the way out (the airlock without its console); GET_UP is not; a second key is consumed */
         assert(!pvehk_home_key(2,PFOOT_GET_UP) && !pvehk_home_key(2,0x7b) && !d2->out);
@@ -289,8 +297,34 @@ static void test_pilot_death_foot_block(unsigned char *region,unsigned char *inp
             pvehk_fn=fn_was;memcpy(p1+PVEHK_WEAPONS_PRIMARY,saved,sizeof(saved));memcpy(test_pslot_ship2+0x60,macro_was,8);
         }
         *(void**)(test_pslot_ship2+0x70)=NULL;*(uint64_t*)(test_pslot_ship2+8)=0x2005;
-        assert(pvehk_range(2,120.0) && pvehk_home_key(2,PFOOT_GET_UP) && pdeath_pass(149+PDEATH_SUIT_LAG+1,controller) && !d2->out && s->seated &&
+        assert(pvehk_range(2,120.0) && pvehk_home_key(2,PFOOT_GET_UP) && !d2->dock_tick && !pvehk_home_key(2,0xd3) && d2->dock_tick &&
+               pdeath_pass(149+PDEATH_SUIT_LAG+1,controller) && d2->out==2 && test_pdf_events(NULL));
+        /* X4's own entry (0x710390) of the slot's player is noted, never run; of any other player it is X4's. The noted
+         * arrival is the way home at the next pass (no room named, or a room of the ship it left). */
+        {   const pvehk_enter_fn was=pvehk_enter_original;const LONG64 enters=pvehk_enters;
+            test_pdf_entered=0;pvehk_enter_original=test_pdf_enter;
+            pvehk_enter(test_pnat_ship,NULL,NULL,NULL,0);assert(test_pdf_entered==1 && !d2->arrive && pvehk_enters==enters);
+            pvehk_enter(pslots[2].player,NULL,NULL,NULL,0);assert(test_pdf_entered==1 && d2->arrive==1 && pvehk_enters==enters+1);
+            pvehk_enter_original=was;
+        }
+        assert(pdeath_pass(149+PDEATH_SUIT_LAG+2,controller) && !d2->out && !d2->dock_tick && !d2->arrive && s->seated &&
                s->runtime==0x2005 && test_pdeath_kills==kills+2 && test_pdf_events("home:2"));
+        {char row[1024];assert(pdeath_status(row,sizeof(row)) && strstr(row," enter=") && strstr(row," fade="));}
+        /* the fade of an exit or an entry: shown where the action runs for this client's own slot (outside a scope:
+         * slot 1), left out elsewhere with the same answer */
+        {   const pvehk_fade_fn was=pvehk_fade_original;const unsigned own=pstk_capture_slot,scope=pstk_scope_slot;
+            const LONG64 shown=pvehk_fades_shown,kept=pvehk_fades_kept;
+            test_pdf_faded=0;pvehk_fade_original=test_pdf_fade;pvehk_fade_site_test=1;
+            pstk_capture_slot=1;pstk_scope_slot=0;assert(pvehk_fade(1,1,0,0,0,0,1,0,1)==(void*)&test_pdf_faded && test_pdf_faded==1);   /* slot 1's, on client 1 */
+            pstk_capture_slot=2;assert(pvehk_fade(1,1,0,0,0,0,1,0,1)==(void*)(pnat_base+PVEHK_FADE_STATE) && test_pdf_faded==1);        /* slot 1's, on client 2 */
+            pstk_scope_slot=2;assert(pvehk_fade(1,1,0,0,0,0,1,0,1)==(void*)&test_pdf_faded && test_pdf_faded==2);                         /* slot 2's, on client 2 */
+            pstk_capture_slot=1;assert(pvehk_fade(1,1,0,0,0,0,1,0,1)==(void*)(pnat_base+PVEHK_FADE_STATE) && test_pdf_faded==2);        /* slot 2's, on client 1 */
+            assert(pvehk_fades_shown==shown+2 && pvehk_fades_kept==kept+2);
+            /* another caller (the UI's FadeScreen, the game's own): X4's, whoever is running, uncounted */
+            pvehk_fade_site_test=0;pstk_capture_slot=2;pstk_scope_slot=0;
+            assert(pvehk_fade(1,1,0,0,0,0,1,0,1)==(void*)&test_pdf_faded && test_pdf_faded==3 && pvehk_fades_shown==shown+2 && pvehk_fades_kept==kept+2);
+            pvehk_fade_site_test=-1;pvehk_fade_original=was;pstk_capture_slot=own;pstk_scope_slot=scope;
+        }
         *(void**)(test_pslot_ship2+0x70)=parent_was;test_pdeath_ids[2]=0;memset(&pstk_build,0,sizeof(pstk_build));
         /* an asked exit whose suit never came: nothing happens */
         test_pdf_frame(159,1,PFOOT_GET_UP);assert(pslot_replay(159) && f->walking);

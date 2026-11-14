@@ -62,9 +62,11 @@ UI_FILES = ('ui/native_gate_defaults.lua', 'ui/native_gate_inputs_core.lua', 'ui
 MD_FILES = ('md/native_gate_battle.xml', 'md/native_gate_player_identity.xml', 'md/native_gate_ui_replay.xml',
             'md/native_gate_pilot_respawn.xml')
 # Patches of stock MD scripts (X4's own diff loading: the overlay's file has the stock file's name; our lines only):
-# a start's standings arrive quietly (native_gate_player_identity.xml's relation steps).
+# a start's standings arrive quietly (native_gate_player_identity.xml's relation steps); the new-game hint box leaves
+# after its 15 s instead of staying on the crosshair of every player in every session (a fresh profile each time).
 MD_PATCHES = {'md/playerreputation.xml': 'native_gate_quiet_playerreputation.xml',
-              'md/notifications.xml': 'native_gate_quiet_notifications.xml'}
+              'md/notifications.xml': 'native_gate_quiet_notifications.xml',
+              'md/tutorial_global.xml': 'native_gate_hint_timeout.xml'}
 
 TABLE = load()
 ON_KEYS = [e[0] for e in TABLE['on']]

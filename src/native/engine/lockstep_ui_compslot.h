@@ -57,11 +57,29 @@
  *             guard. Its entry is claimed: the target "Use Spacesuit" is a zone (the menu's own test, class 0x6d),
  *             and for a walking slot 2..N that may leave it becomes this module's event with the airlock's class on
  *             the slot's ship: at the apply the slot goes out into its own spacesuit as through the airlock
- *             (lockstep_pilot_death.h pvehk_*). Any other target, and slot 1 (X4's own transport is not replayed yet),
- *             stays refused.
+ *             (lockstep_pilot_death.h pvehk_*). Slot 1 is X4's own player: its terminal opens the menu the same way,
+ *             and its "Use Spacesuit" is the event with the command's own class (U::TransportPlayerToTargetAction,
+ *             vtable 0x2c49cb8), applied on every client by X4's export itself: its execute ef3bf0 finds the zone
+ *             (class 0x6d) and runs the eject 70efd0 at once, the airlock's way, and the walking pass adopts the suit
+ *             (pveh_*). Any other target stays refused for every slot.
+ *   crosshair slot 1's seat at the apply. U::ControlPositionAction's execute (35b8a0) first asks the action's own
+ *             "possible" (its vtable +8, 35b400) and does nothing when that says no. The check reads the crosshair
+ *             of the process it runs in [F]: X4's player's pick record (+0x6c80 the hit, +0x6c88 the component,
+ *             +0x6c90 the element, whose interactable 8c2c00 walks up to) must be on this seat. The record is the
+ *             frame pick of this client's own camera, so on every client but slot 1's the replayed action passed the
+ *             class test here, entered X4's execute and performed nothing. Live 12 Nov (two people): slot 1's click
+ *             applied at 2044, both clients counted it applied, first digest mismatch 2048; the seat's call stack
+ *             (…,716cce,35bdcd) allocated ids on client 1 only. The click was offered by X4 on the capturing
+ *             client with the check true there; what is left of the check is simulation state (the seat's owner,
+ *             the distance) and the same everywhere. So for the apply of this class the check is answered yes on
+ *             every client, slot 1's included: the action object gets a copy of its vtable with the one slot
+ *             replaced for the length of the call and its own back right after (also after a fault); the image and
+ *             the class's real vtable are not touched. Only with both functions pinned and the vtable's two slots
+ *             being them; else X4's execute runs as it is (seat=..:plain).
  * Status UI_REPLAY rows: compslot=on:claimed:captured:refused:applied:stale:passed last=<class RVA of the last peek>
- * seat=<clicks of slots 2..N on their own seat> instant=<PerformAction calls decided here>
- * terminal=<claimed>:<menus opened by X4's own>:<spacesuit asked through the menu>. */
+ * seat=<clicks of slots 2..N on their own seat>:<slot 1's seat applies with the check answered>:<as X4 has it>
+ * instant=<PerformAction calls decided here> terminal=<claimed>:<menus opened by X4's own>:<spacesuit asked through
+ * the menu>. */
 #define UICS_SINGLE_PERFORM 0x3508e0u
 #define UICS_MULTI_PERFORM 0x350d60u
 #define UICS_NAME_MAX 60u
@@ -73,6 +91,13 @@
 #define UICS_DETAILS_SIZE 0x58u
 #define UICS_DETAILS_SHA "05ab4aa71add2181c1018dce0f59aa5190f636ce859a347561a5edc8a79af98c"
 #define UICS_CONTAINER_PERFORM 0x90u      /* a container's vtable: perform(index) */
+#define UICS_CONTROL_POSSIBLE 0x35b400u   /* U::ControlPositionAction: possible (vtable +8), execute (+0x10) */
+#define UICS_CONTROL_POSSIBLE_SIZE 0x49au
+#define UICS_CONTROL_POSSIBLE_SHA "b4e25d68763e96d1be629507cacde97cd1765ea9e4d5a021f4c2325a1e38f0d1"
+#define UICS_CONTROL_EXECUTE 0x35b8a0u
+#define UICS_CONTROL_EXECUTE_SIZE 0x534u
+#define UICS_CONTROL_EXECUTE_SHA "21cf3cb1237650c26747101f4d94f94b8a13205850af9ec3d0bcae9da596d357"
+#define UICS_SHADOW_SLOTS 16u             /* the class has 14; what follows is copied and never called */
 typedef struct {uint64_t poi,component;const char *type,*connection;unsigned char flags[8];} uics_message_details;
 enum {UICS_PASS=0,UICS_PEEK=1,UICS_APPLY=2};
 enum {UICS_SLOT_ONE=1u,UICS_SLOT_OTHERS=2u};
@@ -85,11 +110,13 @@ typedef struct {uint32_t klass;unsigned slots;const char *name;} uics_verdict_ro
 #define UICS_CLASS_AIRLOCK 0x2b45758u
 #define UICS_CLASS_CONTROL 0x2b45548u
 #define UICS_CLASS_TRANSPORTER 0x2b45a38u /* U::ActivateTransporterRoomAction: its execute opens the transporter menu */
+#define UICS_CLASS_TRANSPORT 0x2c49cb8u   /* U::TransportPlayerToTargetAction: the menu's command (slot 1's event) */
 #define UICS_ZONE_CLASS 0x6d              /* a zone: the transporter menu's spacesuit target (IsClass, vtable +0x11e8) */
 #define UICS_TRANSPORT_NAME "transporter" /* the event's connection name for a spacesuit asked through the menu */
 static const uics_verdict_row uics_verdicts[]={
     {UICS_CLASS_AIRLOCK,UICS_SLOT_ONE|UICS_SLOT_OTHERS,"CycleAirlockAction"},
-    {UICS_CLASS_CONTROL,UICS_SLOT_ONE,"ControlPositionAction"}};
+    {UICS_CLASS_CONTROL,UICS_SLOT_ONE,"ControlPositionAction"},
+    {UICS_CLASS_TRANSPORT,UICS_SLOT_ONE,"TransportPlayerToTargetAction"}};
 #define UICS_VERDICTS (sizeof(uics_verdicts)/sizeof(*uics_verdicts))
 typedef struct {uint64_t component;const char *connection;} uics_slot_arg;
 typedef unsigned char (*uics_export_fn)(const uics_slot_arg *,uint32_t);
@@ -106,12 +133,19 @@ static volatile LONG64 uics_seat_clicks,uics_instant,uics_menus,uics_transports;
 static unsigned uics_transport_index=UINT_MAX;   /* the guard's entry of TransportPlayerToTarget, when claimed */
 static int (*uics_lua_original)(void *L);         /* tests: in place of the guard's trampoline of PerformAction */
 static int (*uics_zone_test)(unsigned char *);    /* tests: in place of X4's class test */
+static void (*uics_transport_test)(const void *); /* tests: in place of the guard's trampoline of TransportPlayerToTarget */
 static unsigned uics_action_index=UINT_MAX;   /* the guard's entry of the Lua PerformAction, when claimed */
 static unsigned char *(*uics_message_fn)(uint32_t);                                  /* ad6ec0, or a test's */
 static uics_message_details *(*uics_details_fn)(uics_message_details *,uint32_t);   /* b03b70, or a test's */
 static double (*uics_lua_number)(void *L,int index);                                /* lua_tonumber, set at the arming */
 static uics_export_fn uics_export_test;        /* tests: in place of the guard's trampoline */
 static uics_perform_fn uics_perform_test[2];   /* tests: in place of the hooks' trampolines */
+static int uics_seat_pinned;                   /* possible and execute are the pinned ones (header, crosshair) */
+static uint64_t uics_shadow[1+UICS_SHADOW_SLOTS];   /* the action's vtable for one apply; [0] is what precedes it */
+static unsigned char *uics_shadow_action;      /* the action that has the copy now; NULL none */
+static uint64_t *uics_shadow_vtable;           /* its own */
+static volatile LONG64 uics_seat_forced,uics_seat_plain;
+static unsigned char uics_possible_yes(void *action,void *component) {(void)action;(void)component;return 1;}
 static int uics_hooks_wanted(void) {return uics_on;}
 static unsigned uics_verdict(unsigned slot,uint32_t klass) {
     if(!klass) return 0;
@@ -137,18 +171,45 @@ static int uics_slot_airlock(unsigned k,uint32_t klass,const unsigned char *comp
     if(klass!=UICS_CLASS_AIRLOCK || k<2 || k>PILOT_SLOTS || !pvehk_may(k)) return 0;
     return uics_under(component,pslots[k].ship);
 }
-/* The class of the action a container would perform for index: its vtable's RVA; 0 unreadable or none. */
-static uint32_t uics_class(unsigned char *container,unsigned index,int multi) {
-    unsigned char *action=NULL;void *vtable=NULL;
-    if(!container) return 0;
+/* The action a container would perform for index; NULL unreadable or none. */
+static unsigned char *uics_action(unsigned char *container,unsigned index,int multi) {
+    unsigned char *action=NULL;
+    if(!container) return NULL;
     if(multi) {
         unsigned char **begin=NULL,**end=NULL;
         if(!read_local(container+0x10,&begin,8) || !read_local(container+0x18,&end,8) || !begin || end<begin ||
-           index>=(size_t)(end-begin) || !read_local(begin+index,&action,8)) return 0;
-    } else if(index || !read_local(container+0x10,&action,8)) return 0;
+           index>=(size_t)(end-begin) || !read_local(begin+index,&action,8)) return NULL;
+    } else if(index || !read_local(container+0x10,&action,8)) return NULL;
+    return action;
+}
+/* The class of the action a container would perform for index: its vtable's RVA; 0 unreadable or none. */
+static uint32_t uics_class(unsigned char *container,unsigned index,int multi) {
+    unsigned char *action=uics_action(container,index,multi);void *vtable=NULL;
     if(!action || !read_local(action,&vtable,8) || !pnat_base || (unsigned char *)vtable<pnat_base ||
        (uintptr_t)((unsigned char *)vtable-pnat_base)>0xffffffffu) return 0;
     return (uint32_t)((unsigned char *)vtable-pnat_base);
+}
+/* The action gets its own vtable back (after the call; again after a fault, from uics_call). */
+static void uics_shadow_restore(void) {
+    unsigned char *const action=uics_shadow_action;uint64_t *now=NULL;
+    if(!action) return;
+    uics_shadow_action=NULL;
+    if(read_local(action,&now,8) && now==uics_shadow+1) *(uint64_t **)action=uics_shadow_vtable;
+}
+/* Slot 1's seat at the apply (header, crosshair): X4's perform with the action's check answered yes. */
+static unsigned char uics_perform_seat(uics_perform_fn original,unsigned char *container,unsigned index,int multi) {
+    unsigned char *const action=uics_action(container,index,multi);uint64_t *vtable=NULL;unsigned char done=0;
+    if(!uics_seat_pinned || uics_shadow_action || !action || !read_local(action,&vtable,8) || !vtable ||
+       !read_local(vtable-1,uics_shadow,sizeof(uics_shadow)) ||
+       uics_shadow[2]!=(uint64_t)(uintptr_t)(pnat_base+UICS_CONTROL_POSSIBLE) ||
+       uics_shadow[3]!=(uint64_t)(uintptr_t)(pnat_base+UICS_CONTROL_EXECUTE)) {
+        InterlockedIncrement64(&uics_seat_plain);return original(container,index);
+    }
+    uics_shadow[2]=(uint64_t)(uintptr_t)uics_possible_yes;
+    uics_shadow_vtable=vtable;uics_shadow_action=action;*(uint64_t **)action=uics_shadow+1;
+    done=original(container,index);
+    uics_shadow_restore();
+    InterlockedIncrement64(&uics_seat_forced);return done;
 }
 static unsigned char uics_perform(unsigned which,unsigned char *container,unsigned index) {
     uics_perform_fn original=uics_perform_test[which]?uics_perform_test[which]:
@@ -159,7 +220,8 @@ static unsigned char uics_perform(unsigned which,unsigned char *container,unsign
     uics_seen=klass;
     if(mode==UICS_PEEK) return 0;                       /* asked, not done */
     if(!klass || klass!=uics_expected) return 0;        /* another action now: nothing on any client */
-    uics_ran=1;return original(container,index);
+    uics_ran=1;
+    return klass==UICS_CLASS_CONTROL?uics_perform_seat(original,container,index,(int)which):original(container,index);
 }
 static unsigned char uics_perform_single(void *container,unsigned index) {return uics_perform(0,container,index);}
 static unsigned char uics_perform_multi(void *container,unsigned index) {return uics_perform(1,container,index);}
@@ -173,6 +235,7 @@ static int uics_call(LONG mode,uint64_t component,const char *connection,uint32_
     __try {(void)f(&slot,index);}
     __except(GetExceptionCode()==EXCEPTION_ACCESS_VIOLATION?EXCEPTION_EXECUTE_HANDLER:EXCEPTION_CONTINUE_SEARCH) {fault=1;}
     InterlockedExchange(&uics_mode,UICS_PASS);
+    uics_shadow_restore();   /* a fault inside a seat's apply: the action still has its own vtable after */
     if(fault) InterlockedIncrement64(&uics_faults);
     return !fault;
 }
@@ -211,9 +274,12 @@ static size_t uics_name(const char *from,char name[UICS_NAME_MAX+1]) {
     }
     return 0;
 }
-/* Slot k stands at a transporter terminal of its own ship while it walks (header, terminal). */
+/* A transporter terminal whose menu this client may open: slot 1's (X4's own player and its own tests), or slot k's at a
+ * terminal of its own ship while it walks (header, terminal). */
 static int uics_slot_terminal(unsigned k,uint32_t klass,const unsigned char *component) {
-    if(klass!=UICS_CLASS_TRANSPORTER || k<2 || k>PILOT_SLOTS || !pfslot_own_walking()) return 0;
+    if(klass!=UICS_CLASS_TRANSPORTER) return 0;
+    if(k==1) return 1;
+    if(k<2 || k>PILOT_SLOTS || !pfslot_own_walking()) return 0;
     return uics_under(component,pslots[k].ship);
 }
 static int uics_is_zone(unsigned char *component) {
@@ -267,6 +333,11 @@ static int uics_transport_decide(unsigned index,const uint64_t *frame,uint64_t *
     uics_slot_arg target={0,NULL};const unsigned k=pstk_capture_slot;
     const unsigned char *arg=(const unsigned char *)(uintptr_t)uiguard_arg(frame,0);
     if(!uirep_capture_now() || !pstk_capturing || !arg || !read_local(arg,&target,sizeof(target)) || !target.component) return uics_refuse(index,ret);
+    if(k==1) {   /* X4's own player: the command itself, on every client (header, terminal); a zone only */
+        if(!uics_is_zone(uirep_component(target.component))) return uics_refuse(index,ret);
+        InterlockedIncrement64(&uics_transports);
+        return uics_capture(index,ret,0,target.component,UICS_TRANSPORT_NAME,sizeof(UICS_TRANSPORT_NAME)-1,0,UICS_CLASS_TRANSPORT);
+    }
     if(k<2 || k>PILOT_SLOTS || !pfslot_own_walking() || !pvehk_may(k) || !pslots[k].runtime || !uics_is_zone(uirep_component(target.component)))
         return uics_refuse(index,ret);
     InterlockedIncrement64(&uics_transports);
@@ -289,6 +360,11 @@ static int uics_claim_decide(unsigned index,const uint64_t *frame,uint64_t *ret)
     /* The class, asked of X4 itself: the export as a peek (nothing is performed). */
     InterlockedIncrement64(&uics_peeks);
     if(!uics_call(UICS_PEEK,slot.component,name,(uint32_t)action,0)) return uics_refuse(index,ret);
+    if(uics_slot_terminal(pstk_capture_slot,uics_seen,uirep_component(slot.component))) {   /* the menu: X4's own, this client's UI */
+        uics_last=uics_seen;
+        if(!uics_call(UICS_PASS,slot.component,name,(uint32_t)action,0)) return uics_refuse(index,ret);
+        InterlockedIncrement64(&uics_menus);*ret=1;return 1;
+    }
     return uics_capture(index,ret,1,slot.component,name,length,(unsigned)action,uics_seen);
 }
 static int uics_event_ok(unsigned slot,unsigned op,const unsigned char *data,unsigned n,const char **why) {
@@ -311,6 +387,17 @@ static int uics_run(unsigned slot,const unsigned char *data,const char **why) {
     memcpy(name,data+UIREP_REF+6,length);name[length]=0;
     if(slot>=2) {   /* never X4's action for another player than its own: the slot's way out is the death module's */
         InterlockedIncrement64(uics_slot_airlock(slot,klass,component) && pvehk_ask(slot,stats.issued)?&uics_applied:&uics_stale);
+        return 1;
+    }
+    if(klass==UICS_CLASS_TRANSPORT) {   /* slot 1's "Use Spacesuit": X4's export, its eject (header, terminal) */
+        void (*transport)(const void *)=uics_transport_test?uics_transport_test:
+            (uics_transport_index<UIGUARD_MAX?(void(*)(const void *))uiguard_tramp[uics_transport_index]:NULL);
+        const uics_slot_arg target={runtime,""};int fault=0;
+        if(!transport || !uics_is_zone(component)) {InterlockedIncrement64(&uics_stale);return 1;}
+        __try {transport(&target);}
+        __except(GetExceptionCode()==EXCEPTION_ACCESS_VIOLATION?EXCEPTION_EXECUTE_HANDLER:EXCEPTION_CONTINUE_SEARCH) {fault=1;}
+        if(fault) {InterlockedIncrement64(&uics_faults);*why="ui_compslot_fault";return 0;}
+        InterlockedIncrement64(&uics_applied);pveh_allow(stats.issued);   /* the walking pass may adopt the suit */
         return 1;
     }
     if(!uics_call(UICS_APPLY,runtime,name,data[UIREP_REF],klass)) {*why="ui_compslot_fault";return 0;}
@@ -343,13 +430,17 @@ static int uics_arm(void) {
         if(uiguard_tab[i].kind==UIGUARD_FFI && uiguard_tab[i].name && !strcmp(uiguard_tab[i].name,"TransportPlayerToTarget")) {uics_transport_index=i;break;}
     if(uics_transport_index!=UINT_MAX && !uiguard_claim(uics_transport_index,uics_transport_decide)) uics_transport_index=UINT_MAX;
     uics_menus=uics_transports=0;
+    /* Slot 1's seat at the apply (header, crosshair). */
+    uics_seat_pinned=pnat_base && hash_ok(pnat_base+UICS_CONTROL_POSSIBLE,UICS_CONTROL_POSSIBLE_SIZE,UICS_CONTROL_POSSIBLE_SHA) &&
+        hash_ok(pnat_base+UICS_CONTROL_EXECUTE,UICS_CONTROL_EXECUTE_SIZE,UICS_CONTROL_EXECUTE_SHA);
+    uics_seat_forced=uics_seat_plain=0;uics_shadow_action=NULL;
     uics_captured=uics_refused=uics_applied=uics_stale=uics_passed=uics_peeks=uics_faults=0;uics_last=0;uics_seat_clicks=0;uics_instant=0;
     InterlockedExchange(&uics_mode,UICS_PASS);uics_on=1;uics_armed=1;return 1;
 }
 static int uics_status(char *out,size_t capacity) {
-    int n=snprintf(out,capacity," compslot=%d:%d:%lld:%lld:%lld:%lld:%lld last=%x seat=%lld instant=%d:%lld terminal=%d:%lld:%lld",uics_on,
+    int n=snprintf(out,capacity," compslot=%d:%d:%lld:%lld:%lld:%lld:%lld last=%x seat=%lld:%lld:%lld instant=%d:%lld terminal=%d:%lld:%lld",uics_on,
         uics_index<UIGUARD_MAX && uiguard_claimed[uics_index] && uiguard_claim_by[uics_index]==uics_claim_decide,(long long)uics_captured,
-        (long long)uics_refused,(long long)uics_applied,(long long)uics_stale,(long long)uics_passed,uics_last,(long long)uics_seat_clicks,
+        (long long)uics_refused,(long long)uics_applied,(long long)uics_stale,(long long)uics_passed,uics_last,(long long)uics_seat_clicks,(long long)uics_seat_forced,(long long)uics_seat_plain,
         uics_action_index<UIGUARD_MAX && uiguard_claimed[uics_action_index] && uiguard_claim_by[uics_action_index]==uics_action_decide,(long long)uics_instant,
         uics_transport_index<UIGUARD_MAX && uiguard_claimed[uics_transport_index] && uiguard_claim_by[uics_transport_index]==uics_transport_decide,
         (long long)uics_menus,(long long)uics_transports);

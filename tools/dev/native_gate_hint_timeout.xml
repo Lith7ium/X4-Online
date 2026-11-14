@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The new-game hint goes away by itself in a session.
+     Stock X4 shows "To learn about missions ... open the Tutorials and Help menu" to a player whose profile has not
+     completed a tutorial, with timeout="false": it stays until the player closes it or opens that menu. A session runs in
+     a fresh profile every time, so every player saw it in every session, for as long as the session ran, in the middle of
+     the screen: on foot it sat on the crosshair's label ("Take Command of Ship", "Use Transporter Room"; a playtest
+     report of 11 Nov and the click tests of 12 Nov). With the timeout on, the hint keeps the duration the stock script
+     already gives it (15 s) and then leaves; closing it and the help menu work as before.
+     Our own lines only; the stock script is patched in memory by X4's own diff loading, never on disk. -->
+<diff>
+ <replace sel="/mdscript/cues/cue[@name='Start']/cues/cue[@name='NewGameHint']/cues/cue[@name='NewGameHintShip']/actions/do_if/show_help/@timeout">true</replace>
+ <replace sel="/mdscript/cues/cue[@name='Start']/cues/cue[@name='NewGameHint']/cues/cue[@name='NewGameHintShip']/actions/do_else/show_help/@timeout">true</replace>
+ <replace sel="/mdscript/cues/cue[@name='Start']/cues/cue[@name='NewGameHint2']/cues/cue[@name='NewGameEnterShipHint']/actions/do_if/show_help/@timeout">true</replace>
+ <replace sel="/mdscript/cues/cue[@name='Start']/cues/cue[@name='NewGameHint2']/cues/cue[@name='NewGameEnterShipHint']/actions/do_else/show_help/@timeout">true</replace>
+</diff>

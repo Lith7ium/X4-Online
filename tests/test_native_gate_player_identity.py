@@ -537,10 +537,20 @@ class MdScriptTests(unittest.TestCase):
         self.assertIsNone(steps["$a.$step == 'reputation'"].find('.//add_licence'))   # a pool faction: no player licences
         # The two patches: one condition each on a stock cue, nothing else, and every overlay gets them under the stock names.
         import native_gate_defaults as defaults
-        self.assertEqual(sorted(defaults.MD_PATCHES), ['md/notifications.xml', 'md/playerreputation.xml'])
+        self.assertEqual(sorted(defaults.MD_PATCHES), ['md/notifications.xml', 'md/playerreputation.xml', 'md/tutorial_global.xml'])
         cues = {'md/playerreputation.xml': "/mdscript/cues/cue[@name='TrackPlayerReputation']/cues/cue[@name='Base']/conditions",
                 'md/notifications.xml': "/mdscript/cues/cue[@name='Init']/cues/cue[@name='PlayerDiscountCommission']/conditions"}
+        # The third: the new-game hint's timeout on (four attribute values, one per show_help of the two hint cues), nothing else.
+        hint = ET.fromstring((DEV / defaults.MD_PATCHES['md/tutorial_global.xml']).read_text(encoding='utf-8'))
+        self.assertEqual(hint.tag, 'diff')
+        self.assertEqual([(e.tag, e.text) for e in hint], [('replace', 'true')] * 4)
+        start = "/mdscript/cues/cue[@name='Start']/cues/cue[@name='%s']/cues/cue[@name='%s']/actions/%s/show_help/@timeout"
+        self.assertEqual([e.get('sel') for e in hint],
+                         [start % (outer, inner, branch) for outer, inner in (('NewGameHint', 'NewGameHintShip'), ('NewGameHint2', 'NewGameEnterShipHint'))
+                          for branch in ('do_if', 'do_else')])
         for name, source in defaults.MD_PATCHES.items():
+            if name == 'md/tutorial_global.xml':
+                continue
             diff = ET.fromstring((DEV / source).read_text(encoding='utf-8'))
             self.assertEqual(diff.tag, 'diff')
             self.assertEqual([(e.tag, e.get('sel')) for e in diff], [('add', cues[name])])
@@ -989,8 +999,14 @@ class PlayersBuilderTests(unittest.TestCase):
         self.assertEqual(kill.find('.//set_object_hull').attrib, {'object': '$ship', 'exact': '0'})
         self.assertIsNone(kill.find('.//destroy_object'))   # the hull's own path (the eject), not a script kill
         creates = root.findall('.//create_ship')
-        self.assertEqual([c.get('name') for c in creates], ['$suit', '$ship', '$ship'])
+        # two suits: beside the living ship it leaves (its airlock, its transporter), or where a dead ship was
+        self.assertEqual([c.get('name') for c in creates], ['$suit', '$suit', '$ship', '$ship'])
         self.assertEqual(creates[0].get('macro'), 'player.entity.spacesuitmacro')   # stock's way to an entity's suit
+        self.assertEqual(creates[1].get('macro'), 'player.entity.spacesuitmacro')
+        self.assertEqual(creates[0].find('position').get('object'), '$a.$object')   # relative to the ship, half its size below
+        self.assertIn('$a.$object.size', creates[0].find('position').get('y'))
+        self.assertIsNone(creates[1].find('position').get('object'))
+        creates = [creates[0]] + creates[2:]
         for create in creates:
             self.assertIsNone(create.find('safepos')) # a search draws randomness
         # Slot 1's ship has a free seat (teleport_player refuses a ship with a pilot); slots 2..N's ships have

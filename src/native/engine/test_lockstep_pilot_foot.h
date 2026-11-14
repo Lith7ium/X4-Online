@@ -30,6 +30,10 @@ static void test_pfoot_getup_withdraw(void *at,int context,int requester) {
     unsigned char *set=pfoot_input()+PFOOT_CONTEXT_SET;
     assert(at==pfoot_input()+0x10 && context==(int)PFOOT_GETUP_CONTEXT && requester==6);++test_pfoot_getup_calls[0];memset(set,0,0x30);
 }
+static unsigned test_pfoot_undock_calls;static void *test_pfoot_undock_player;static unsigned char test_pfoot_undock_flag;
+static void test_pfoot_undock_set(void *player,unsigned char withdraw) {++test_pfoot_undock_calls;test_pfoot_undock_player=player;test_pfoot_undock_flag=withdraw;}
+static unsigned test_pfoot_mgr_calls;
+static void test_pfoot_set_player(void *manager,void *player) {++test_pfoot_mgr_calls;memcpy((unsigned char *)manager+PFOOT_UI_MANAGER_PLAYER,&player,8);}
 static void *test_pfoot_canon_controller;   /* what X4's lookup of its own player's PlayerController answers now (client 1's K1) */
 static void *test_pfoot_controller_of(void *key) {(void)key;return test_pfoot_canon_controller;}
 static void test_pfoot_ui_off(void) {++test_pfoot_ui_calls[0];*test_pfoot_ui_flag=0;}
@@ -186,6 +190,14 @@ static void test_pilot_foot(void) {
     {   assert(pstk_frame_text(text,sizeof(text)));char *w=strstr(text,"|W1.1:");assert(w && strlen(w)==6+16 && strcmp(w+6,"0000000000000000"));
         uint64_t h=pfoot_bank_hash();pnat_base[PFOOT_BANK+0x4b]^=1;assert(pfoot_bank_hash()!=h);pnat_base[PFOOT_BANK+0x4b]^=1;
         pnat_base[PFOOT_COUNTER]^=1;assert(pfoot_bank_hash()==h);pnat_base[PFOOT_COUNTER]^=1;   /* the counter is not hashed */
+        /* a negative zero in a look value is a zero (a menu on slot 1's own client); any other value of it is hashed */
+        {   const uint32_t negative=0x80000000u,was_yaw=*(uint32_t*)(pnat_base+0x38f4e48u),was_pitch=*(uint32_t*)(pnat_base+0x38f4e54u);
+            *(uint32_t*)(pnat_base+0x38f4e48u)=0;*(uint32_t*)(pnat_base+0x38f4e54u)=0;const uint64_t zero=pfoot_bank_hash();
+            *(uint32_t*)(pnat_base+0x38f4e54u)=negative;assert(pfoot_bank_hash()==zero);
+            *(uint32_t*)(pnat_base+0x38f4e48u)=negative;assert(pfoot_bank_hash()==zero);
+            *(uint32_t*)(pnat_base+0x38f4e54u)=negative|1u;assert(pfoot_bank_hash()!=zero);
+            *(uint32_t*)(pnat_base+0x38f4e48u)=was_yaw;*(uint32_t*)(pnat_base+0x38f4e54u)=was_pitch;
+        }
         test_pnat_player[PFOOT_PLAYER_FLAG]^=1;assert(pfoot_bank_hash()!=h);test_pnat_player[PFOOT_PLAYER_FLAG]^=1;}
     /* Tick 12: X4 took the player out of the seat: no PlayerController, walking. Flight control may still be the
      * seated state until the replayed SPACE edge: tolerated for PFOOT_GRACE ticks, then it must match. */
@@ -267,20 +279,33 @@ static void test_pilot_foot(void) {
         *(uint32_t*)(region+PNAT_COUNTER)=1;pstk_space(0);   /* a menu on this client: slot 2's own edge */
         assert(pstk_build.count==1 && pstk_build.events[0].kind==PSTK_SPACE && pstk_build.events[0].id==8 && !pstk_build.events[0].value && !pfoot_k1_held);
         *(uint32_t*)(region+PNAT_COUNTER)=0;pstk_space(1);assert(pstk_build.count==2 && pstk_build.events[1].value==1);
-        /* The enabled byte clear, no menu: with slot 1 seated a lock on this client, slot 2's own edge; with slot 1 off its
-         * seat X4's stand-up of slot 1 cleared it (70e48b) and a refresh withdrew the contexts: not slot 2's, the pass
-         * sets the byte again before X4's refresh reads it, and the on edge that answers is not recorded either. */
+        /* The enabled byte clear, no menu, slot 2 holding its controls: X4 cleared it for its own player (slot 1's
+         * stand-up at 70e48b, an eject) and a refresh withdrew the contexts: not slot 2's, whatever slot 1 does now; the
+         * pass sets the byte again before X4's refresh reads it, and the on edge that answers is not recorded either. */
         {   const int state=pfoot_state;const LONG64 en=pfoot_k1_enabled,ig=pfoot_k1_ignored,fx=pfoot_k1_fixed;
-            pfoot_state=PFOOT_SEATED;region[PFOOT_CONTROLS_ENABLED]=0;pstk_space(0);assert(pstk_build.count==3 && !pfoot_k1_held);
-            region[PFOOT_CONTROLS_ENABLED]=1;pstk_space(1);assert(pstk_build.count==4 && pstk_build.events[3].value==1);
+            pfoot_state=PFOOT_SEATED;region[PFOOT_CONTROLS_ENABLED]=0;pstk_space(0);assert(pstk_build.count==2 && pfoot_k1_held==1);   /* slot 1 seated (in its suit) */
+            pfoot_k1_reconcile();assert(region[PFOOT_CONTROLS_ENABLED]==1);pstk_space(1);assert(pstk_build.count==2 && !pfoot_k1_held);
+            *(uint32_t*)(region+PNAT_COUNTER)=1;pstk_space(0);assert(pstk_build.count==3 && !pfoot_k1_held);                        /* a menu: its own */
+            *(uint32_t*)(region+PNAT_COUNTER)=0;pstk_space(1);assert(pstk_build.count==4 && pstk_build.events[3].value==1);
+            /* the canonical player's eject holds one deactivation (its Player+0x6a0e): not a menu of slot 2's, the off edge
+             * is not recorded, nor the on edge that answers; the refresh runs with the count without it and puts it back */
+            {   unsigned char *u=NULL,*pl=NULL;const LONG64 unlocked=pfoot_k1_unlocked;
+                memcpy(&u,region+0x3d198f8u,8);assert(u);memcpy(&pl,u+0x230,8);assert(pl);
+                pl[PFOOT_EJECT_LOCK]=1;*(uint32_t*)(region+PNAT_COUNTER)=1;assert(pfoot_canon_lock());
+                pstk_space(0);assert(pstk_build.count==4 && pfoot_k1_held==1);
+                pfoot_k1_reconcile();assert(*(uint32_t*)(region+PNAT_COUNTER)==1 && pfoot_k1_unlocked==unlocked+1);
+                pstk_space(1);assert(pstk_build.count==4 && !pfoot_k1_held);
+                {const unsigned scope=pstk_scope_slot;pstk_scope_slot=2;assert(!pfoot_canon_lock());pstk_scope_slot=scope;}
+                pl[PFOOT_EJECT_LOCK]=0;*(uint32_t*)(region+PNAT_COUNTER)=0;assert(!pfoot_canon_lock());InterlockedExchange64(&pfoot_k1_unlocked,unlocked);
+            }
+            InterlockedExchange64(&pfoot_k1_enabled,en);InterlockedExchange64(&pfoot_k1_ignored,ig);
             pfoot_state=PFOOT_WALKING;region[PFOOT_CONTROLS_ENABLED]=0;pstk_space(0);
             assert(pstk_build.count==4 && pfoot_k1_held==1 && pfoot_k1_ignored==ig+1 && !region[PFOOT_CONTROLS_ENABLED]);
             pfoot_k1_reconcile();assert(region[PFOOT_CONTROLS_ENABLED]==1 && pfoot_k1_enabled==en+1 && pfoot_k1_held==1);
             pstk_space(1);assert(pstk_build.count==4 && !pfoot_k1_held && pfoot_k1_ignored==ig+2);
             /* ...and without any edge (the usual order: the contexts came back at once, then the byte went): set again. */
             region[PFOOT_CONTROLS_ENABLED]=0;pfoot_k1_reconcile();assert(region[PFOOT_CONTROLS_ENABLED]==1 && pfoot_k1_enabled==en+2);
-            pfoot_state=PFOOT_SEATED;region[PFOOT_CONTROLS_ENABLED]=0;pfoot_k1_reconcile();assert(!region[PFOOT_CONTROLS_ENABLED]);   /* a lock stays */
-            region[PFOOT_CONTROLS_ENABLED]=1;
+            pfoot_state=PFOOT_SEATED;region[PFOOT_CONTROLS_ENABLED]=0;pfoot_k1_reconcile();assert(region[PFOOT_CONTROLS_ENABLED]==1 && pfoot_k1_enabled==en+3);
             /* Slot 1 sits down while slot 2 walks: the on edge is not slot 2's, nor the off edge the pass's refresh gives. */
             pslots[2].controller=NULL;pstk_space(1);assert(pstk_build.count==4 && pfoot_k1_held==-1);
             pfoot_k1_reconcile();assert(!region[PFOOT_CONTROLS_ENABLED] && pfoot_k1_held==-1);
@@ -323,21 +348,59 @@ static void test_pilot_foot(void) {
             pfoot_getup_request=rq;pfoot_context_withdraw=wd;memcpy(set,saved,sizeof(saved));
             InterlockedExchange64(&pfoot_k1_getup_asked,asked);InterlockedExchange64(&pfoot_k1_getup_withdrawn,gone);InterlockedExchange64(&pfoot_k1_getup_unreadable,bad);
         }
+        /* The UI's message manager: its player is X4's own singleton; another one (set inside a slot's scope) is put back
+         * through X4's own setter, outside any scope only; agreeing or unpinned: nothing. */
+        {   static _Alignas(16) unsigned char root[0x400],controller[0x80],manager[0x80];static unsigned char *holder;
+            static unsigned char another[16];unsigned char *p=root,*before=NULL,*universe=test_pnat_universe,*own=test_pnat_player,*other=another,*now=NULL;
+            unsigned char *universe_was=NULL,*own_was=NULL;
+            void (*const setter)(void*,void*)=pfoot_ui_set_player;const LONG64 fixed_was=pfoot_k1_manager_fixed;const unsigned scope=pstk_scope_slot;
+            memcpy(&before,region+PFOOT_UI_ROOT,8);memcpy(&universe_was,region+0x3d198f8u,8);memcpy(&own_was,universe+0x230,8);
+            memcpy(region+0x3d198f8u,&universe,8);memcpy(universe+0x230,&own,8);
+            memset(root,0,sizeof(root));memset(controller,0,sizeof(controller));memset(manager,0,sizeof(manager));holder=controller;
+            memcpy(region+PFOOT_UI_ROOT,&p,8);p=(unsigned char *)&holder;memcpy(root+PFOOT_UI_HOLDER,&p,8);p=manager;memcpy(controller+PFOOT_UI_MANAGER,&p,8);
+            memcpy(manager+PFOOT_UI_MANAGER_PLAYER,&other,8);test_pfoot_mgr_calls=0;pfoot_ui_set_player=test_pfoot_set_player;pstk_scope_slot=0;
+            pfoot_k1_manager();memcpy(&now,manager+PFOOT_UI_MANAGER_PLAYER,8);assert(test_pfoot_mgr_calls==1 && now==own && pfoot_k1_manager_fixed==fixed_was+1);
+            pfoot_k1_manager();assert(test_pfoot_mgr_calls==1);                                                   /* agrees */
+            memcpy(manager+PFOOT_UI_MANAGER_PLAYER,&other,8);pstk_scope_slot=2;pfoot_k1_manager();assert(test_pfoot_mgr_calls==1);   /* inside a scope: later */
+            pstk_scope_slot=0;pfoot_ui_set_player=NULL;pfoot_k1_manager();assert(test_pfoot_mgr_calls==1);        /* not pinned: X4's */
+            {char out[4096];assert(pfoot_status(out,sizeof(out))>0 && strstr(out," k1_mgr="));}
+            pfoot_ui_set_player=setter;pstk_scope_slot=scope;memcpy(region+PFOOT_UI_ROOT,&before,8);InterlockedExchange64(&pfoot_k1_manager_fixed,fixed_was);
+            memcpy(universe+0x230,&own_was,8);memcpy(region+0x3d198f8u,&universe_was,8);
+        }
+        /* The UNDOCK key's context: X4's own routine asked again with this client's own player (slot 1: the singleton, slot
+         * k: P_k while it has a seat), never as a withdrawal by force, outside any scope only; unpinned: nothing. */
+        {   static _Alignas(16) unsigned char uni[0x400],pl[0x40];unsigned char *p=uni,*before=NULL;void *own=pl;
+            void (*const was)(void*,unsigned char)=pfoot_undock_set;const unsigned scope=pstk_scope_slot,slot=pstk_capture_slot;
+            memcpy(&before,region+0x3d198f8u,8);memset(uni,0,sizeof(uni));memcpy(region+0x3d198f8u,&p,8);memcpy(uni+0x230,&own,8);
+            pfoot_undock_set=test_pfoot_undock_set;pstk_scope_slot=0;
+            pstk_capture_slot=1;test_pfoot_undock_calls=0;test_pfoot_undock_flag=9;pfoot_k1_undock();
+            assert(test_pfoot_undock_calls==1 && test_pfoot_undock_player==own && !test_pfoot_undock_flag);
+            pstk_capture_slot=2;test_pfoot_undock_calls=0;pfoot_k1_undock();
+            assert(vpl_slot_player(2)?(test_pfoot_undock_calls==1 && test_pfoot_undock_player==vpl_slot_player(2)):!test_pfoot_undock_calls);
+            pstk_capture_slot=1;test_pfoot_undock_calls=0;pstk_scope_slot=2;pfoot_k1_undock();assert(!test_pfoot_undock_calls);   /* inside a scope: later */
+            pstk_scope_slot=0;pfoot_undock_set=NULL;pfoot_k1_undock();assert(!test_pfoot_undock_calls);                          /* not pinned: X4's */
+            {char out[4096];assert(pfoot_status(out,sizeof(out))>0 && strstr(out," k1_ud=") && strstr(out," k1_lock="));}
+            pfoot_undock_set=was;pstk_scope_slot=scope;pstk_capture_slot=slot;memcpy(region+0x3d198f8u,&before,8);
+        }
         /* The UI's half: the controller's first-person flag follows this client's own slot through X4's own two
          * functions; agreeing: nothing; no controller or no functions: nothing. */
         {   static _Alignas(16) unsigned char root[0x400],controller[0x80];static unsigned char *holder;const int farmed=pfslot_armed;
             const unsigned char walking=(unsigned char)pfslots[2].walking;void (*const f0)(void)=pfoot_fp_ui[0],(*const f1)(void)=pfoot_fp_ui[1];
-            unsigned char *p=root,*before=NULL;memcpy(&before,region+PFOOT_UI_ROOT,8);const LONG64 ui=pfoot_k1_ui_fixed;
+            unsigned char *p=root,*before=NULL;memcpy(&before,region+PFOOT_UI_ROOT,8);const LONG64 ui=pfoot_k1_ui_fixed;const int local=pstk_local_active;
+            pstk_local_active=0;
             memset(root,0,sizeof(root));memset(controller,0,sizeof(controller));holder=controller;
             memcpy(region+PFOOT_UI_ROOT,&p,8);p=(unsigned char *)&holder;memcpy(root+PFOOT_UI_HOLDER,&p,8);
             test_pfoot_ui_flag=controller+PFOOT_UI_FP_FLAG;test_pfoot_ui_calls[0]=test_pfoot_ui_calls[1]=0;
             pfoot_fp_ui[0]=test_pfoot_ui_off;pfoot_fp_ui[1]=test_pfoot_ui_on;pfslot_armed=1;pfslots[2].walking=1;
             pfoot_k1_ui();assert(test_pfoot_ui_calls[1]==1 && !test_pfoot_ui_calls[0] && controller[PFOOT_UI_FP_FLAG]==1 && pfoot_k1_ui_fixed==ui+1);
             pfoot_k1_ui();assert(test_pfoot_ui_calls[1]==1);                                    /* agrees */
-            pfslots[2].walking=0;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==1 && !controller[PFOOT_UI_FP_FLAG]);   /* sat down, or slot 1's walk left it on */
-            controller[PFOOT_UI_FP_FLAG]=1;holder=NULL;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==1);   /* no controller */
-            holder=controller;pfoot_fp_ui[0]=NULL;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==1);      /* not pinned: X4's */
-            pfoot_fp_ui[0]=f0;pfoot_fp_ui[1]=f1;pfslot_armed=farmed;pfslots[2].walking=walking;memcpy(region+PFOOT_UI_ROOT,&before,8);
+            pfslots[2].walking=0;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==1 && !controller[PFOOT_UI_FP_FLAG]);   /* off its feet without flight control (a menu), or slot 1's walk left it on */
+            pstk_local_active=1;pfoot_k1_ui();assert(test_pfoot_ui_calls[1]==2 && controller[PFOOT_UI_FP_FLAG]==1);   /* flying: on, as X4 has it for its own player */
+            pfoot_k1_ui();assert(test_pfoot_ui_calls[1]==2);
+            pstk_local_active=0;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==2 && !controller[PFOOT_UI_FP_FLAG]);     /* a menu took its controls: off */
+            controller[PFOOT_UI_FP_FLAG]=1;holder=NULL;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==2);   /* no controller */
+            holder=controller;pfoot_fp_ui[0]=NULL;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==2);      /* not pinned: X4's */
+            pfoot_fp_ui[0]=f0;pfoot_fp_ui[1]=f1;pfslot_armed=farmed;pfslots[2].walking=walking;memcpy(region+PFOOT_UI_ROOT,&before,8);pstk_local_active=local;
             InterlockedExchange64(&pfoot_k1_ui_fixed,ui);
         }
         /* Client 1: X4's own answers, every edge its slot's; no reconcile. */

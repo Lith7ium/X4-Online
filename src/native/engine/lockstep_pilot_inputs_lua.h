@@ -306,6 +306,26 @@ static int lua_crash_note(lua_State *L) {
     const char *note=p_lua_tolstring(L,1,NULL),*log=p_lua_tolstring(L,2,NULL);
     p_lua_pushnumber(L,crash_note_arm(note,log));return 1;
 }
+/* gate.arm_early(file path, arm second): the launcher's earlier common second to load at. A snapshot session's clients
+ * wait in the start menu for one agreed UTC second (native_gate_arm_at), budgeted before any of them is started. When
+ * all of a PC's clients have reached their menus the launcher writes "<early second> <arm second>" into this file of
+ * every profile; the probe asks every frame while it waits. The early second, or 0: no file, not this session's arm
+ * second, not earlier than it, or unreadable (a file half written reads as 0 this frame and right the next). Reads one
+ * small file; binds to no thread (asked before gate.start). */
+static int lua_arm_early(lua_State *L) {
+    const char *path=p_lua_tolstring(L,1,NULL);const double arm=p_lua_tonumber(L,2);
+    WCHAR wide[MAX_PATH];char text[64];DWORD got=0;double early=0,session=0;
+    memset(text,0,sizeof(text));
+    if(path && *path && isfinite(arm) && MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,path,-1,wide,MAX_PATH)) {
+        HANDLE file=CreateFileW(wide,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+        if(file!=INVALID_HANDLE_VALUE) {
+            if(!ReadFile(file,text,sizeof(text)-1,&got,NULL) || !got || sscanf(text,"%lf %lf",&early,&session)!=2 ||
+               session!=arm || !(early>0) || !(early<arm)) early=0;
+            CloseHandle(file);
+        }
+    }
+    p_lua_pushnumber(L,early);return 1;
+}
 /* gate.pilot_death(delay, suit): a slot ship's death does not end the session (lockstep_pilot_death.h, stop
  * reason 163); delay > 0: the slot comes back after that many ticks, 0: it stays dead; suit 1: a dead
  * slot 2..N waits in a spacesuit. After gate.pilot_stock, before the first tick. 1, or 0 and the reason. */

@@ -212,6 +212,13 @@ static const rid_site_t rid_sites[]={
     RID_BODY(0xb3bad0u,0xb3bb9eu,RID_ROUTE_UI,1),RID_BODY(0x121c1f0u,0x121c25au,RID_ROUTE_UI,0),
     /* UI::ICom: a message and what its start makes, CMessageManager::CreateSource, the message config listener. */
     RID_CALL(0xaddb73u,0xcc220u,RID_ROUTE_VIEW),RID_BODY(0xada7a0u,0xada9e8u,RID_ROUTE_VIEW,0),RID_BODY(0xae9050u,0xae9568u,RID_ROUTE_VIEW,0),RID_CALL(0xae885au,0xcc220u,RID_ROUTE_VIEW),
+    /* CMessageManager's listener of U::POIAddedEvent (0xadacb0; the event from 0xa38bc0 in the simulation's own step): for a
+     * point of interest on an object this client's manager has messages for it asks the object for its action container
+     * (0x7d84d0 -> 0x350ecb: one ID per action). How often depends on what this client's UI has registered. Two people,
+     * 12 Nov: slot 1 out into its suit at 2125, this stack 9 times on client 1 and 13 on client 2 by tick 2400, the next
+     * shared ID four apart from 2144 on and every digest after it. The manager's other two ways to the same container
+     * (0xada7a0, 0xae9050) are the view's already. */
+    RID_BODY(0xadacb0u,0xadb00bu,RID_ROUTE_VIEW,0),
     /* EffectObject, FogVolume, LensFlare, Stardust: the two constructors' Positional calls; EffectObjectCreator. */
     RID_CALL(0x8e1b44u,0x7429c0u,RID_ROUTE_VIEW),RID_CALL(0x8e48a6u,0x7426d0u,RID_ROUTE_VIEW),RID_CALL(0xd9d312u,0x7429c0u,RID_ROUTE_VIEW),RID_CALL(0x8e4bbeu,0x7426d0u,RID_ROUTE_VIEW),
     RID_CALL(0xe233feu,0x7429c0u,RID_ROUTE_VIEW),RID_CALL(0xe233aeu,0x7426d0u,RID_ROUTE_VIEW),RID_CALL(0xe417aeu,0x7429c0u,RID_ROUTE_VIEW),RID_CALL(0xe4175eu,0x7426d0u,RID_ROUTE_VIEW),
@@ -231,6 +238,7 @@ static const struct {unsigned rva,size;const char *sha;} rid_local_bodies[]={
     {0xe186c0u,0x242u,"cde2f87692a83176598cf57485e827c792d09e80bb73847a835620e7a5d39198"},
     {0xe189d0u,0x242u,"d90d3e7d011e4eb2f6e97fc1a34f793d9dbea88a610ede13909650902f40e32c"},
     {0xada7a0u,0x248u,"cc73ccaee5d464051845bbf7d696ff7d5b3afc2622e4e19b78d465dd9c729d39"},
+    {0xadacb0u,0x35bu,"09cf2c62308b1447c09b0d5ba608f9793dc80ee230941592027cfb9e2f9a13e8"},
     {0xae9050u,0x518u,"e82ea5ab07935a100dfdd738182a37ee5ddb73468bd31f570bab71657831c59b"},
     {0xb3bad0u,0xceu,"87a23ed23ef4be0fdf493a983342282860054eb3eb14f2388e134abc88762261"},
     {0x121c1f0u,0x6au,"5d20ad384ae9ce74bb15625b923fd33638ad20d3f9e553c5d9cb7d264b20ed6f"},

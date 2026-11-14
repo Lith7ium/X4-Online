@@ -65,12 +65,26 @@
      <do_if value="@$a.$object.isoperational and @$a.$object.sector.exists">
       <set_value name="$sector" exact="$a.$object.sector"/>
      </do_if>
-     <create_ship name="$suit" macro="player.entity.spacesuitmacro" sector="$sector" seed="$a.$seed">
-      <owner exact="$n.$owner" overridenpc="true"/>
-      <loadout><level exact="1.0"/><variation exact="0"/></loadout>
-      <position x="($a.$x)m" y="($a.$y)m" z="($a.$z)m"/>
-      <rotation yaw="($a.$yaw)deg" pitch="($a.$pitch)deg" roll="($a.$roll)deg"/>
-     </create_ship>
+     <do_if value="@$a.$object.isoperational and @$a.$object.sector.exists">
+      <!-- Out of a living ship (its airlock, its transporter): right beside it, as the plain game puts its own player's
+           suit (seen 13 Nov: the ship fills the view above the suit). Half the ship's size below its centre keeps the
+           suit out of the hull whatever the model. Until 14 Nov it stood 100 m up like a death's suit: a playtest
+           report, the ship was a long way off. -->
+      <create_ship name="$suit" macro="player.entity.spacesuitmacro" sector="$sector" seed="$a.$seed">
+       <owner exact="$n.$owner" overridenpc="true"/>
+       <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+       <position object="$a.$object" y="0m - ($a.$object.size / 2)"/>
+       <rotation yaw="($a.$yaw)deg" pitch="($a.$pitch)deg" roll="($a.$roll)deg"/>
+      </create_ship>
+     </do_if>
+     <do_else>
+      <create_ship name="$suit" macro="player.entity.spacesuitmacro" sector="$sector" seed="$a.$seed">
+       <owner exact="$n.$owner" overridenpc="true"/>
+       <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+       <position x="($a.$x)m" y="($a.$y)m" z="($a.$z)m"/>
+       <rotation yaw="($a.$yaw)deg" pitch="($a.$pitch)deg" roll="($a.$roll)deg"/>
+      </create_ship>
+     </do_else>
     </do_if>
     <do_if value="@$suit.isoperational">
      <set_object_min_hull object="$suit" exact="100"/>

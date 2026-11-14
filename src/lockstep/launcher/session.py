@@ -426,6 +426,15 @@ def run(o: Options, log=print):
                 raise SystemExit(f'client {k} reached the start menu after the common arm time; raise --startup')
             if k != local[-1] or remote or opened:  # X4 refuses to start while another process holds EGOSOFT_X4_INSTANCE
                 log(f'client {k}: released {instance.release_instance_mutex(proc.pid)} instance mutex handle(s)')
+        # The arm time was budgeted before any client started (--startup a client). With every player on this PC they
+        # are all at their start menus now: name an earlier common second in each profile (the probe asks
+        # gate.arm_early every frame), so nobody sits out the rest of the budget. Remote players keep the budget.
+        if arm_at and clients and not remote:
+            early = int(time.time()) + 3
+            if early < arm_at - 2:
+                for _, profile_id, _ in clients:
+                    (profile.profile_dir(profile_id) / 'x4lan-arm.txt').write_text(f'{early} {arm_at}\n')
+                log(f'all clients are at the start menu: they load in 3 s ({arm_at - early} s before the budgeted time)')
         result = (monitor_play if o.play else monitor)(o, run_dir, relay, clients, log)
         if o.checkpoint_at:  # a save may still be writing when the relay ends
             result['checkpoints'] = {f'client{k}': checkpoint_results(profile.profile_dir(profile_id) / f'x4ls-c{k}.log', proc)
@@ -443,6 +452,7 @@ def run(o: Options, log=print):
         time.sleep(2)
         for k, profile_id, _ in clients:
             profile.collect(profile_id, f'x4ls-c{k}.log', run_dir / f'client{k}')
+            (profile.profile_dir(profile_id) / 'x4lan-arm.txt').unlink(missing_ok=True)
             profile.unstage(profile_id)  # every client's: the lane tool shares these profiles (not only hot joins')
         if save_dirs:
             from . import hotjoin

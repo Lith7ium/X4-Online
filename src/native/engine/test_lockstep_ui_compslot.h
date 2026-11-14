@@ -11,6 +11,15 @@ static unsigned char test_uics_export(const uics_slot_arg *slot,uint32_t index) 
     ++test_uics_exports;test_uics_component=slot->component;snprintf(test_uics_connection,sizeof(test_uics_connection),"%s",slot->connection);
     return test_uics_multi?uics_perform_multi(test_uics_container,index):uics_perform_single(test_uics_container,index);
 }
+/* X4's perform of a seat as far as the crosshair matters: the action's own check through its vtable, then its answer. */
+static unsigned test_uics_seat_asked;static unsigned char test_uics_seat_answer;
+static unsigned char test_uics_possible_no(void *action,void *component) {(void)action;(void)component;return 0;}
+static unsigned char test_uics_original_seat(void *container,unsigned index) {
+    unsigned char *action=NULL;void **vtable=NULL;(void)index;
+    memcpy(&action,(unsigned char *)container+0x10,8);memcpy(&vtable,action,8);
+    ++test_uics_seat_asked;test_uics_seat_answer=((unsigned char(*)(void *,void *))vtable[1])(action,NULL);
+    return test_uics_seat_answer;
+}
 static void test_ui_compslot(void) {
     static _Alignas(16) unsigned char region[0x100],single[0x40],multi[0x40],action[3][0x20];static unsigned char *vector[2];
     unsigned char *saved_base=pnat_base;
@@ -33,6 +42,23 @@ static void test_ui_compslot(void) {
         pdeath_armed=1;assert(pveh_adopt_ok(10,NULL) && !pveh_adopt_ok(10,ship));
         pveh_allow(100);assert(pveh_adopt_ok(100+PVEH_WINDOW,ship) && !pveh_adopt_ok(101+PVEH_WINDOW,ship));
         pdeath_armed=armed;pveh_allow_until=until;
+    }
+    /* slot 1 out of its suit: X4 took its player off the suit's controls (no PlayerController) while it lives, the suit
+     * whole or gone: the slot walks without a ship, no death; still at the controls of a whole suit: nothing; not in a
+     * suit, or the player dying with it: not this */
+    {   static _Alignas(16) unsigned char player[0x200],seat[8];pilot_slot s;pdeath_slot d;const void *const was=pdeath_player;
+        const int in=pveh_in_suit,foot=pfoot_armed,fire=pfire_armed;const unsigned state=(unsigned)pfoot_state;const uint64_t lefts=pveh_lefts,ptick=pfoot_transition_tick;
+        unsigned char *const ship=pnat_ship,*const ctl=pnat_controller;
+        memset(player,0,sizeof(player));memset(&s,0,sizeof(s));memset(&d,0,sizeof(d));pdeath_player=player;pfoot_armed=1;pfire_armed=0;
+        pveh_in_suit=0;assert(!pveh_left(&s,&d,7,NULL));                                   /* not in a suit */
+        pveh_in_suit=1;assert(!pveh_left(&s,&d,7,seat) && pveh_in_suit && !d.lost);        /* flying it: nothing (the suit not seen dying) */
+        player[PDEATH_LIFECYCLE]=1;assert(!pveh_left(&s,&d,7,NULL) && pveh_in_suit);       /* the player goes too: a death, not this */
+        player[PDEATH_LIFECYCLE]=0;pfoot_state=PFOOT_SEATED;
+        assert(pveh_left(&s,&d,7,NULL) && !pveh_in_suit && d.lost && !pnat_ship && !pnat_controller && pfoot_state==PFOOT_WALKING &&
+               pveh_lefts==lefts+1);
+        {const char *e=pdeath_take_events();assert(e && strstr(e,"left1:1"));}
+        assert(!pveh_left(&s,&d,8,NULL));                                                   /* once */
+        pdeath_player=was;pveh_in_suit=in;pfoot_armed=foot;pfire_armed=fire;pfoot_state=state;pveh_lefts=lefts;pfoot_transition_tick=ptick;pnat_ship=ship;pnat_controller=ctl;
     }
     /* the on-foot click: refused until this module is armed, then this client's own */
     {   const int foot=pfoot_armed,on=uics_on;
@@ -65,6 +91,30 @@ static void test_ui_compslot(void) {
             pdeath_slots[1]=was;pdeath_armed=darmed;pdeath_suit=dsuit;pslots[2].seated=seated;pslots[2].walking=pwalking;pilot_slot_count=count;pilot_slots[1].dead=dead;
         }
         pslots[2].ship=was_ship;pfslot_armed=armed;pstk_capturing=capturing;pstk_capture_slot=slot;pfslots[2].walking=walking;
+    }
+    /* slot 1's seat at the apply: the action's check (this client's crosshair) is answered yes for the call through a
+     * copy of the action's vtable, and the action has its own again after; not pinned, or a vtable whose two slots are
+     * not the pinned functions: X4's perform as it is (the check says no here: nothing) */
+    {   static _Alignas(16) unsigned char cont[0x40],act[0x20];static void *vt[1+UICS_SHADOW_SLOTS+1];void *q;const int pinned=uics_seat_pinned;
+        const LONG64 forced=uics_seat_forced,plain=uics_seat_plain;void *now=NULL;
+        memset(cont,0,sizeof(cont));memset(act,0,sizeof(act));memset(vt,0,sizeof(vt));
+        vt[1+1]=region+UICS_CONTROL_POSSIBLE;vt[1+2]=region+UICS_CONTROL_EXECUTE;   /* compared, never called */
+        q=&vt[1];memcpy(act,&q,8);q=act;memcpy(cont+0x10,&q,8);
+        test_uics_seat_asked=0;uics_seat_pinned=1;
+        assert(uics_perform_seat(test_uics_original_seat,cont,0,0)==1 && test_uics_seat_asked==1 && test_uics_seat_answer==1);
+        memcpy(&now,act,8);assert(now==(void *)&vt[1] && !uics_shadow_action && uics_seat_forced==forced+1 && uics_seat_plain==plain);
+        assert(vt[1+1]==(void *)(region+UICS_CONTROL_POSSIBLE));                       /* the class's own vtable untouched */
+        /* a fault inside the call: uics_call's restore finds the copy and puts the action's own back */
+        uics_shadow_vtable=(uint64_t *)&vt[1];uics_shadow_action=act;q=uics_shadow+1;memcpy(act,&q,8);
+        uics_shadow_restore();memcpy(&now,act,8);assert(now==(void *)&vt[1] && !uics_shadow_action);
+        uics_shadow_restore();memcpy(&now,act,8);assert(now==(void *)&vt[1]);        /* again: nothing */
+        /* another function in the slot: left to X4 */
+        vt[1+1]=(void *)test_uics_possible_no;
+        assert(uics_perform_seat(test_uics_original_seat,cont,0,0)==0 && test_uics_seat_asked==2 && uics_seat_plain==plain+1 && uics_seat_forced==forced+1);
+        vt[1+1]=region+UICS_CONTROL_POSSIBLE;uics_seat_pinned=0;
+        memcpy(&now,act,8);assert(now==(void *)&vt[1]);
+        uics_seat_pinned=pinned;InterlockedExchange64(&uics_seat_forced,forced);InterlockedExchange64(&uics_seat_plain,plain);
+        {char out[512];assert(uics_status(out,sizeof(out))>0 && strstr(out," seat=") && strstr(out," instant="));}
     }
     uics_perform_test[0]=test_uics_original_single;uics_perform_test[1]=test_uics_original_multi;uics_export_test=test_uics_export;
     test_uics_originals[0]=test_uics_originals[1]=0;test_uics_exports=0;
@@ -117,7 +167,12 @@ static void test_ui_compslot(void) {
         memset(ship,0,sizeof(ship));memset(room,0,sizeof(room));memset(other,0,sizeof(other));p=ship;memcpy(room+0x70,&p,8);
         pslots[2].ship=ship;pfslot_armed=1;pfslots[2].walking=1;pstk_capturing=1;pstk_capture_slot=2;
         assert(uics_slot_terminal(2,UICS_CLASS_TRANSPORTER,room) && uics_slot_terminal(2,UICS_CLASS_TRANSPORTER,ship) &&
-               !uics_slot_terminal(2,UICS_CLASS_TRANSPORTER,other) && !uics_slot_terminal(2,UICS_CLASS_CONTROL,room) && !uics_slot_terminal(1,UICS_CLASS_TRANSPORTER,room));
+               !uics_slot_terminal(2,UICS_CLASS_TRANSPORTER,other) && !uics_slot_terminal(2,UICS_CLASS_CONTROL,room) &&
+               uics_slot_terminal(1,UICS_CLASS_TRANSPORTER,room) && uics_slot_terminal(1,UICS_CLASS_TRANSPORTER,other) &&   /* slot 1: X4's own tests */
+               !uics_slot_terminal(1,UICS_CLASS_CONTROL,room));
+        /* slot 1's command is its own class: slot 1 only, never the action's class as an event */
+        assert(uics_verdict(1,UICS_CLASS_TRANSPORT) && !uics_verdict(2,UICS_CLASS_TRANSPORT) && !uics_verdict(1,UICS_CLASS_TRANSPORTER) &&
+               !uics_verdict(2,UICS_CLASS_TRANSPORTER));
         pfslots[2].walking=0;assert(!uics_slot_terminal(2,UICS_CLASS_TRANSPORTER,room));
         pslots[2].ship=sship;pfslot_armed=farmed;pfslots[2].walking=fwalking;pstk_capturing=capturing;pstk_capture_slot=slot;
         uics_armed=0;uics_transport_index=9;assert(!uics_transport_decide(9,frame,&ret) && !ret);

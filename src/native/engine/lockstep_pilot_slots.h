@@ -596,11 +596,16 @@ static int pslot_can_enter(unsigned k) {
     return s && s->player && s->length && !pstk_scope_slot && !pres_open && pslot_frame_thread() && pnat_base && vpl_reentry_clear(pnat_base) &&
            read_local(pnat_base+VPL_UNIVERSE,&universe,8) && universe && read_local(universe+VPS_SINGLETON,&now,8) && now==pslot_p1;
 }
+static int pslot_controller_has(unsigned char *ship,int cls,const void *which);
+static volatile LONG64 pslot_update_orphans;   /* updates left out because the seat's controller was gone */
 static void pslot_update_slots(double now) {
     for(unsigned k=2;k<=PILOT_SLOTS;k++) {
         pslot_slot *s=&pslots[k];
         if(!s->seated || s->walking) continue;   /* on foot: no PlayerController, its FPC updates at 9fe604 */
         if(pslot_ship_dying(s)) continue;        /* its ship died earlier in this frame: the next pass ends the seat */
+        /* Its ship no longer holds its controller (X4 ended the seat itself earlier in this frame: the controller is
+         * deleted; live 14 Nov, an access violation under d95180 on both clients): the next pass sees to the seat. */
+        if(pslot_controller_has(s->ship,0,s->controller)!=1) {InterlockedIncrement64(&pslot_update_orphans);continue;}
         if(!pslot_enter(k)) {pslot_async("update_scope");return;}
         InterlockedIncrement64(&s->updates);
         int left=0;
@@ -630,6 +635,18 @@ static void pslot_update(void *controller,double now) {
  * position, always executed) is re-pointed too: it answers what X4's lookup answers, and when that is nothing the slots'
  * updates run right there with the frame's time, exactly where they run behind X4's own update otherwise. The pass's
  * fallback stays for an image whose site is not this one (lookup=installed/updates-run-here). */
+/* The bank reset's read of this client's input object, for every take. d84c20 (the PlayerController's bank reset, run by
+ * every ship's take) sets the flight control 0x2f4b828 from THIS client's input object: at d84d9c `mov rax,[input]`,
+ * `cmp byte [rax+0xce0],dl`, `setne [0x2f4b828]`. The takes this module makes itself hold that byte at the slot's own
+ * flight control (pslot_seat_ship, pfslot_sit_down); the takes X4 makes for its own player do not pass here: slot 1
+ * sitting down by a click on its seat (the replayed ControlPositionAction), the seat in the suit after an eject, a
+ * docking's seat. Live 12 Nov (two people, run 123xxx): slot 1's seat click applied at 1409, first digest mismatch 1410:
+ * client 1's object said 0 (its player walked), client 2's said 1 (its player flew). The three instructions are jumped
+ * over while the slots' call site is re-pointed: the flight control keeps the value it has, which is the slot's own
+ * replayed state on every client (in scope k the store's), and its SPACE edge follows in its record as before. */
+#define PSLOT_FLAG_SITE 0xd84d9cu           /* 48 8b 05 ..: mov rax,[rip+..]; the jump goes to d84db0 */
+static const unsigned char pslot_flag_original[2]={0x48,0x8b},pslot_flag_patched[2]={0xeb,0x12};
+static int pslot_flag_installed;
 #define PSLOT_LOOKUP_SITE 0x9fe2a9u         /* UniverseFrameUpdate: call 9fc550 (X4's own player's PlayerController) */
 #define PSLOT_LOOKUP_RVA 0x9fc550u
 #define PSLOT_LOOKUP_STUB 0xe0u             /* on the slots' near page, after the kill guard's (0xc0) */
@@ -797,6 +814,103 @@ static unsigned char *pslot_alloc_page(void) {
         }
     return NULL;
 }
+/* ---- the HUD's flight control events are this client's own slot's ----
+ * The stock crosshair script (crosshair handling.lua) shows its reticle, speed bars and hull/shield bars on the Lua event
+ * flightControlStarted and takes them down on flightControlStopped. Those come from two UI listeners
+ * (XAnark::AnarkFlightControlStartedEventInterface / ...Stopped..., made by the script's registerForEvent) of
+ * U::FlightControlStartedEvent / U::FlightControlStoppedEvent, which X4 posts on the player whose flight control changed
+ * (70eb10 / 70ec00). The listeners are registered by the source's ID, taken from the singleton when the UI loaded:
+ * slot 1's player on every client. So every client's crosshair followed slot 1: a slot 2..N in its suit, or back in its
+ * ship, flew without it until slot 1 next took flight control, and lost it whenever slot 1 stood up (playtest reports
+ * of 12 Nov; seen live 13 Nov: client 2's crosshair came on at the tick slot 1 stood up and the pass told the UI again).
+ * Each event class hands itself to one listener through its vtable's slot +0x10 (9b7060 / 9b7100: the listener's
+ * typed handler, vtable +0xa50 / +0xa58). Both slots are re-pointed here, on a client of slot 2..N only in effect:
+ *   - a UI listener (by its vtable) is noted;
+ *   - slot 1's event (source = the canonical player) does not reach it;
+ *   - at this client's own slot's replayed SPACE edge (pstk_space_replay_slot) the noted listeners of that class get
+ *     their own typed handler called (it only queues the Anark event from the listener's own fields); a listener noted
+ *     later gets the state the slot is in.
+ * Everything else passes: every other listener (MD, the game's own) on every client, and all of it on client 1.
+ * Client local, UI only. Both dispatch functions pinned; else nothing is installed. Status hud=installed/seen/kept from
+ * the UI/delivered/faults. */
+#define PHUD_STARTED_EVENT 0x2ba90b0u     /* U::FlightControlStartedEvent's vtable */
+#define PHUD_STOPPED_EVENT 0x2ba9078u     /* U::FlightControlStoppedEvent's vtable */
+#define PHUD_DISPATCH_SLOT 0x10u
+#define PHUD_STARTED_DISPATCH 0x9b7060u
+#define PHUD_STOPPED_DISPATCH 0x9b7100u
+#define PHUD_DISPATCH_SIZE 0x93u
+#define PHUD_STARTED_SHA "28eb0431bd5be16d4c08b70ee9d8b0d6484d8bb433b17ef032fb786bed9b0a46"
+#define PHUD_STOPPED_SHA "d13fa4a845e90b9a71f69f01f04da6652ea911eaa29b58f1f34eb7195d4f8a3d"
+#define PHUD_STARTED_UI 0x2bd1b10u        /* XAnark::AnarkFlightControlStartedEventInterface's vtable */
+#define PHUD_STOPPED_UI 0x2bd0950u        /* XAnark::AnarkFlightControlStoppedEventInterface's vtable */
+#define PHUD_STARTED_HANDLER (0xa50u/8u)
+#define PHUD_STOPPED_HANDLER (0xa58u/8u)
+#define PHUD_LISTENERS 8u
+typedef void (*phud_dispatch_fn)(void *event,void *listener,void *source,double time);
+typedef void (*phud_handler_fn)(void *listener,void *source,double time,void *ship);
+static int phud_installed,phud_state=-1;            /* the own slot's last replayed edge: 0 off, 1 on, -1 none yet */
+static void *phud_listeners[2][PHUD_LISTENERS];      /* [0] stopped, [1] started */
+static volatile LONG64 phud_seen,phud_kept,phud_delivered,phud_faults;
+static phud_dispatch_fn phud_original[2];            /* the two dispatch functions (tests set their own) */
+static int phud_is_ui(unsigned which,void *listener) {
+    void *vtable=NULL;
+    return listener && pnat_base && read_local(listener,&vtable,8) && vtable==(void*)(pnat_base+(which?PHUD_STARTED_UI:PHUD_STOPPED_UI));
+}
+static void phud_call(unsigned which,void *listener,double now) {
+    int fault=0;
+    __try {(*(phud_handler_fn**)listener)[which?PHUD_STARTED_HANDLER:PHUD_STOPPED_HANDLER](listener,NULL,now,NULL);}
+    __except(GetExceptionCode()==EXCEPTION_ACCESS_VIOLATION?EXCEPTION_EXECUTE_HANDLER:EXCEPTION_CONTINUE_SEARCH) {fault=1;}
+    InterlockedIncrement64(fault?&phud_faults:&phud_delivered);
+}
+static void phud_dispatch(unsigned which,void *event,void *listener,void *source,double time) {
+    if(pstk_capture_slot>=2 && phud_is_ui(which,listener)) {
+        unsigned i=0,known=0;uint64_t id=0;
+        for(;i<PHUD_LISTENERS;i++) if(phud_listeners[which][i]==listener) {known=1;break;}
+        for(i=0;!known && i<PHUD_LISTENERS;i++) if(!phud_listeners[which][i]) {
+            phud_listeners[which][i]=listener;InterlockedIncrement64(&phud_seen);
+            if(phud_state==(int)which) phud_call(which,listener,time);   /* noted late: the state its slot is in */
+            break;
+        }
+        /* the source as X4 hands it on: the canonical player, by object or by ID */
+        if(pslot_p1 && (source==(void*)pslot_p1 || (read_local(pslot_p1+8,&id,8) && id && source==(void*)(uintptr_t)id))) {
+            InterlockedIncrement64(&phud_kept);return;
+        }
+    }
+    phud_original[which](event,listener,source,time);
+}
+static void phud_started(void *event,void *listener,void *source,double time) {phud_dispatch(1,event,listener,source,time);}
+static void phud_stopped(void *event,void *listener,void *source,double time) {phud_dispatch(0,event,listener,source,time);}
+/* This client's own slot's replayed SPACE edge (lockstep_pilot_stock.h): its HUD's listeners of that class. */
+static void phud_edge(unsigned slot,unsigned char active,double now) {
+    if(slot<2 || slot!=pstk_capture_slot) return;
+    const unsigned which=active?1u:0u;
+    phud_state=(int)which;
+    if(!phud_installed) return;
+    for(unsigned i=0;i<PHUD_LISTENERS;i++) {
+        void *listener=phud_listeners[which][i];
+        if(!listener) continue;
+        if(!phud_is_ui(which,listener)) {phud_listeners[which][i]=NULL;continue;}   /* gone (a UI reload) */
+        phud_call(which,listener,now);
+    }
+}
+static int phud_install(void) {
+    if(phud_installed) return 1;
+    if(!pnat_base || !hash_ok(pnat_base+PHUD_STARTED_DISPATCH,PHUD_DISPATCH_SIZE,PHUD_STARTED_SHA) ||
+       !hash_ok(pnat_base+PHUD_STOPPED_DISPATCH,PHUD_DISPATCH_SIZE,PHUD_STOPPED_SHA)) return 0;
+    phud_original[1]=(phud_dispatch_fn)(pnat_base+PHUD_STARTED_DISPATCH);phud_original[0]=(phud_dispatch_fn)(pnat_base+PHUD_STOPPED_DISPATCH);
+    memset(phud_listeners,0,sizeof(phud_listeners));phud_state=-1;
+    if(!pnat_swap8(pnat_base+PHUD_STARTED_EVENT+PHUD_DISPATCH_SLOT,(void*)phud_original[1],(void*)phud_started,1)) return 0;
+    if(!pnat_swap8(pnat_base+PHUD_STOPPED_EVENT+PHUD_DISPATCH_SLOT,(void*)phud_original[0],(void*)phud_stopped,1)) {
+        (void)pnat_swap8(pnat_base+PHUD_STARTED_EVENT+PHUD_DISPATCH_SLOT,(void*)phud_started,(void*)phud_original[1],1);return 0;
+    }
+    phud_installed=1;return 1;
+}
+static int phud_uninstall(void) {
+    if(!phud_installed) return 1;
+    if(!pnat_swap8(pnat_base+PHUD_STARTED_EVENT+PHUD_DISPATCH_SLOT,(void*)phud_started,(void*)phud_original[1],1) ||
+       !pnat_swap8(pnat_base+PHUD_STOPPED_EVENT+PHUD_DISPATCH_SLOT,(void*)phud_stopped,(void*)phud_original[0],1)) return 0;
+    phud_installed=0;memset(phud_listeners,0,sizeof(phud_listeners));return 1;
+}
 static int pslot_hook_install(void) {
     if(pslot_hook_installed) return 1;
     int32_t rel=(int32_t)((intptr_t)(pnat_base+PSLOT_UPDATE_RVA)-(intptr_t)(pnat_base+PSLOT_CALL_SITE+5));
@@ -815,10 +929,19 @@ static int pslot_hook_install(void) {
     /* The lookup before it (header above): where its site is this image's; else the pass's fallback as before. */
     pslot_lookup_installed=pnat_fn.controller==(void*(*)(void*))(pnat_base+PSLOT_LOOKUP_RVA) &&
         pres_site_install(PSLOT_LOOKUP_SITE,PSLOT_LOOKUP_RVA,PSLOT_LOOKUP_STUB,(void*)pslot_lookup,pslot_lookup_patched);
+    /* The bank reset's read of this client's input object (header above): on this image only (the lookup tells). */
+    pslot_flag_installed=pslot_lookup_installed && pview_cas(PSLOT_FLAG_SITE,pslot_flag_original,pslot_flag_patched,2);
+    /* The HUD's flight control events (header above pslot_hook_install): this image only, pinned. */
+    if(pslot_lookup_installed) (void)phud_install();
     return 1;
 }
 static int pslot_hook_uninstall(void) {
     if(!pslot_hook_installed) return 1;
+    if(!phud_uninstall()) return 0;
+    if(pslot_flag_installed) {
+        if(!pview_cas(PSLOT_FLAG_SITE,pslot_flag_patched,pslot_flag_original,2)) return 0;
+        pslot_flag_installed=0;
+    }
     if(pslot_lookup_installed) {
         if(!pres_site_uninstall(PSLOT_LOOKUP_SITE,PSLOT_LOOKUP_RVA,pslot_lookup_patched)) return 0;
         pslot_lookup_installed=0;
@@ -830,6 +953,9 @@ static int pslot_hook_intact(void) {
     unsigned char jump[14];
     if(!pslot_hook_installed || !pslot_page || memcmp(pnat_base+PSLOT_CALL_SITE,pslot_site_patched,5)) return 0;
     if(pslot_lookup_installed && memcmp(pnat_base+PSLOT_LOOKUP_SITE,pslot_lookup_patched,5)) return 0;
+    if(pslot_flag_installed && memcmp(pnat_base+PSLOT_FLAG_SITE,pslot_flag_patched,2)) return 0;
+    if(phud_installed && (*(void*volatile*)(pnat_base+PHUD_STARTED_EVENT+PHUD_DISPATCH_SLOT)!=(void*)phud_started ||
+                          *(void*volatile*)(pnat_base+PHUD_STOPPED_EVENT+PHUD_DISPATCH_SLOT)!=(void*)phud_stopped)) return 0;
     pview_abs_jump(jump,(void*)pslot_update);return !memcmp(pslot_page,jump,14);
 }
 static int pslot_seat_all(uint64_t take) {
@@ -1077,8 +1203,9 @@ static int pslot_status(char *out,size_t capacity) {
             if(more<0) return 0;
             n+=more;}
     }
-    {   int more=n>0 && (size_t)n<capacity?snprintf(out+n,capacity-(size_t)n," upd=%016llx/%016llx/%llu lookup=%d/%lld",(unsigned long long)pslot_hook_now,
-            (unsigned long long)pslot_pass_now,(unsigned long long)pslot_pass_tick,pslot_lookup_installed,(long long)pslot_lookup_empty):-1;
+    {   int more=n>0 && (size_t)n<capacity?snprintf(out+n,capacity-(size_t)n," upd=%016llx/%016llx/%llu lookup=%d/%lld takeflag=%d hud=%d/%lld/%lld/%lld/%lld",(unsigned long long)pslot_hook_now,
+            (unsigned long long)pslot_pass_now,(unsigned long long)pslot_pass_tick,pslot_lookup_installed,(long long)pslot_lookup_empty,
+            pslot_flag_installed,phud_installed,(long long)phud_seen,(long long)phud_kept,(long long)phud_delivered,(long long)phud_faults):-1;
         if(more<0) return 0;
         n+=more;}
     for(unsigned i=0,first=1;n>0 && (size_t)n<capacity && i<PSLOT_VT_SLOTS;i++) {

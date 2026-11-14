@@ -2295,6 +2295,7 @@ local pilot_camera_follow,pilot_camera_stage=false,nil -- this client follows it
 -- pilot firing mode; stock: 'capture' | 'replay' (stock piloting), the stock slots (set), its
 -- pending proposal and scripted events. One table keeps the probe's arming function below LuaJIT's upvalue limit.
 local pilot_view={predict=nil,raw=false,hits=nil,fire=nil,stock=nil,stock_slots=nil,stock_proposal=nil,stock_script=nil}
+pilot_view.arm_file=(savepath:gsub('/save$',''))..'/x4lan-arm.txt'   -- the launcher's early arm second (frame())
 -- Per-tick state of every slot ship (position in sector, hull, shield): the
 -- ships the humans fly enter the declared state every tick, so a desync of a
 -- driven ship (the occupied player ship is not a fixture) reaches the relay at once.
@@ -2579,6 +2580,10 @@ local function death_frame(tick)
    elseif kind=='out' then death_suit(slot,gate.pilot_ship(slot))   -- through the airlock (lockstep_pilot_death.h pvehk_*): a suit at its ship
    elseif kind=='suited' or kind=='home' then
     if pilot_view.hud_ship_changed then pilot_view.hud_ship_changed(kind) end   -- the slot's ship changed with no MD answer at this tick
+    -- The stock crosshair script takes its crosshair, speed bars and hull bars down at this event and puts them back
+    -- `if HasFlightControl()`, which the slot does not have yet (its SPACE edge of the new seat is applied a few ticks
+    -- later): they come back with the flight control event of the client's own slot (lockstep_pilot_slots.h phud_*),
+    -- the order the plain game has. Raising this event again later did not bring them back (trials of 13 Nov).
    elseif kind=='create' then
     local pose=assert(death.poses[slot],'pilot respawn: no start pose for slot '..slot)
     death.built[slot]=(death.built[slot] or 0)+1
@@ -3034,7 +3039,15 @@ local function pilot_frame(s,tick)
   if hud_refresh_at[tick] then hud_refresh_at[tick]=nil;pilot_view.hud_ship_changed('handover') end
   if not pilot_view.hud_listener and RegisterEvent then
    pilot_view.hud_listener=true
-   RegisterEvent('teleportSucceeded',function() log('HUD_SHIP_CHANGED_LUA') end)
+   -- What the stock crosshair script will find (it puts its crosshair, speed bars and hull bars back only with flight
+   -- control and outside the target view), and the two events that switch them later: for a report of a HUD without them.
+   RegisterEvent('teleportSucceeded',function()
+    local function flag(name) local ok,v=pcall(function() return ffi.C[name]() end);return ok and tostring(v) or '?' end
+    log('HUD_SHIP_CHANGED_LUA flight='..tostring(HasFlightControl and HasFlightControl())..' target_view='..flag('IsExternalTargetMode')..
+     ' external='..flag('IsExternalViewActive')..' docked='..flag('IsPlayerOccupiedShipDocked')..' ship='..flag('GetPlayerOccupiedShipID'))
+   end)
+   RegisterEvent('flightControlStarted',function() log('HUD_FLIGHT_CONTROL started') end)
+   RegisterEvent('flightControlStopped',function() log('HUD_FLIGHT_CONTROL stopped') end)
   end
  end
  if pilot_view.death then pilot_view.death_frame(tick) end
@@ -3485,7 +3498,15 @@ local function frame()
   -- the first tick is issued, and that needs every client; a client that loads alone has its reloaded UI refused.
   if snapshot and cfg.native_gate_arm_at then
    pcall(ffi.cdef,'int64_t GetCurrentUTCDataTime(void);')
-   if tonumber(ffi.C.GetCurrentUTCDataTime())<cfg.native_gate_arm_at then return end
+   local at=cfg.native_gate_arm_at
+   -- The budget is made before any client starts (70 s a client by default); on one PC they are all there long before.
+   -- The launcher then names an earlier common second in a file of this profile (gate.arm_early): still one second
+   -- for every client, a few seconds ahead. A session with players on other PCs keeps the budget.
+   if gate.arm_early and pilot_view.arm_file then
+    local early=gate.arm_early(pilot_view.arm_file,at)
+    if type(early)=='number' and early>0 and early<at then at=early end
+   end
+   if tonumber(ffi.C.GetCurrentUTCDataTime())<at then return end
   end
   local data=snapshot and ('SNAPSHOT_BYTES_1|'..snapshot) or sample(0)
   if cfg.native_gate_snapshot_fixture then data=data..'|SNAPSHOT_FIXTURE_1|'..table.concat(cfg.native_gate_snapshot_fixture,',') end
@@ -6465,7 +6486,11 @@ local function frame()
  -- Inside native_gate_trace_window: one DIGEST_PARTS row, the first 16 hex of the SHA-256 of each part the report hashes
  -- (by the data's length after each), so that a digest mismatch (a hot join's replay) names its part (j1-140: every state
  -- row equal, the replay apart from 634 on).
- local parts=ticklog.window and tick>=ticklog.window[1] and tick<=ticklog.window[2] and {{'sample',#data}} or nil
+ -- native_gate_digest_parts={first,last}: the same row alone, without the window's other rows, for a play session whose
+ -- digests part for single ticks (a row of some hundred bytes a tick).
+ local parts_only=cfg.native_gate_digest_parts
+ local parts=((ticklog.window and tick>=ticklog.window[1] and tick<=ticklog.window[2]) or
+  (type(parts_only)=='table' and tick>=parts_only[1] and tick<=parts_only[2])) and {{'sample',#data}} or nil
  if profile then profile.mark('sample') end
  if pilot_receipt then data=data..'|'..pilot_receipt end
  if parts then parts[#parts+1]={'pilot',#data} end
@@ -6578,9 +6603,11 @@ local function frame()
    if p[2]>from then out[#out+1]=p[1]..'='..string.sub((gate.sha256 or X4LAN_SHA256.digest)(data:sub(from+1,p[2])),1,16) end
    from=p[2]
   end
-  log('DIGEST_PARTS tick='..tick..' '..table.concat(out,' ')..' hash='..string.sub(hash,1,16))
+  (type(parts_only)=='table' and ticklog.write or log)('DIGEST_PARTS tick='..tick..' '..table.concat(out,' ')..' hash='..string.sub(hash,1,16))
   -- The input mux's receipt itself (INPUTS_1, small): which section a joiner's differs in.
   if input_state then log('DIGEST_INPUT tick='..tick..' '..input_state) end
+  -- With the parts alone (a play session): the pilot receipt itself, for a tick whose pilot part differs.
+  if type(parts_only)=='table' and pilot_receipt then ticklog.write('DIGEST_PILOT tick='..tick..' '..pilot_receipt) end
  end
  local command=cfg.native_gate_command_test and X4LAN_NATIVE_COMMANDS.proposal(tick) or '00000000'
  if X4LAN_NATIVE_PLAYER_COMMANDS then command=X4LAN_NATIVE_PLAYER_COMMANDS.proposal(tick) end

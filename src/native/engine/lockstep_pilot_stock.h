@@ -155,7 +155,8 @@ static volatile LONG64 pstk_aim_calls,pstk_aim_replaced,pstk_aim_neutral,pstk_ai
 #include "lockstep_pilot_foot.h"   /* slot 1 on foot: its ids and the FIRST_PERSON edge (native_gate_pilot_foot) */
 /* Slots 2..N on foot (lockstep_pilot_foot_slots.h, native_gate_pilot_foot_slots). */
 static int pfslot_get_up(unsigned k,double now);static int pfslot_frame_text(char *out,size_t capacity);static int pfslot_status(char *out,size_t capacity);
-static int pvehk_home_key(unsigned k,unsigned id);   /* lockstep_pilot_death.h: in its suit, GET_UP and the dock keys ask for the way home */
+static void phud_edge(unsigned slot,unsigned char active,double now);   /* lockstep_pilot_slots.h */
+static int pvehk_home_key(unsigned k,unsigned id);   /* lockstep_pilot_death.h: in its suit GET_UP is void (1), the dock keys are X4's (0) */
 static const uint16_t pstk_replay_actions[]={0x7b,0x12f,0x131,0xe1,0xdd,0x105,0x148};
 static const uint16_t pstk_replay_states[]={2,3,4,5,6,7,8,9,0xd,0xe,0xf,0x10,0x11,0x12,0x13,0x5a,0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x50,0x85};
 static const uint16_t pstk_replay_ranges[]={1,2,3,4,5,6,0xa};
@@ -658,6 +659,7 @@ static void pstk_space_replay_slot(unsigned slot,unsigned char active,double now
     if(input) {input[0x9062]=keep62;input[0x9064]=keep64;}
     if(slot>=2) {pstk_slot_frames[slot-1].flight=active?1u:0u;pstk_slot_frames[slot-1].flight_known=1;}
     else {pstk_flight=active?1u:0u;pstk_flight_known=1;}
+    phud_edge(slot,active,now);   /* this client's own slot: its HUD's flight control event (lockstep_pilot_slots.h) */
     InterlockedIncrement64(&pstk_space_replayed);
 }
 static void pstk_space_replay(unsigned char active,double now) {pstk_space_replay_slot(1,active,now);}
@@ -866,7 +868,7 @@ static int pstk_slot_replay(unsigned k,double now) {
     for(unsigned i=0;i<f->r.count;i++) {
         pstk_event *x=&f->r.events[i];
         if(x->kind==PSTK_SPACE) pstk_space_replay_slot(k,(unsigned char)x->value,now);
-        else if(x->kind==PSTK_ACTION && pvehk_home_key(k,x->id)) {}   /* in its suit: the way home, never X4's handler */
+        else if(x->kind==PSTK_ACTION && pvehk_home_key(k,x->id)) {}   /* this module's: GET_UP in its suit (void), a walking slot's dock key */
         else if(pfslot_armed && x->kind==PSTK_ACTION && x->id==PFOOT_GET_UP) {if(!pfslot_get_up(k,now)) return 0;}   /* never 71bac0 for P_k */
         else {pstk_replay_walk(map+0x40*x->kind,x->kind,x->id,x->value);pstk_hold(k,x);}
     }
