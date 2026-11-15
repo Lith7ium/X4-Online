@@ -147,6 +147,42 @@ class WorldTests(unittest.TestCase):
         self.assertEqual(self.engine.actions, ['pause', 'save', 'resume', 'pause'])
         self.assertIsNone(self.world.session.baseline_id)
 
+    def test_interrupted_client_resume_pauses_server_and_preserves_interruption(self):
+        a = self.world.join('a')
+        self.step('pause'); self.step('save')
+        self.confirm(self.world.offer_load(a))
+        failure = KeyboardInterrupt('participant resume interrupted')
+        def interrupt(_handles): raise failure
+        self.participants.resume = interrupt
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            self.world.step()
+        self.assertIs(caught.exception, failure)
+        self.assertTrue(self.engine.paused)
+        self.assertEqual(self.engine.actions, ['pause', 'save', 'resume', 'pause'])
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertIsNone(self.world.session.baseline_id)
+
+    def test_failed_repause_after_interrupted_resume_faults_with_both_errors(self):
+        a = self.world.join('a')
+        self.step('pause'); self.step('save')
+        self.confirm(self.world.offer_load(a))
+        interruption = KeyboardInterrupt('participant resume interrupted')
+        repause_failure = SystemExit('server pause interrupted')
+        def interrupt(_handles): raise interruption
+        def fail_pause():
+            self.engine.actions.append('pause-attempt')
+            raise repause_failure
+        self.participants.resume = interrupt
+        self.engine.pause = fail_pause
+        with self.assertRaisesRegex(RuntimeError, 'server pause is uncertain') as caught:
+            self.world.step()
+        self.assertIs(caught.exception.__cause__, repause_failure)
+        self.assertIs(repause_failure.__context__, interruption)
+        self.assertEqual(self.engine.actions, ['pause', 'save', 'resume', 'pause-attempt'])
+        self.assertFalse(self.engine.paused)  # pause was attempted, not confirmed
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertIsNone(self.world.session.baseline_id)
+
     def test_forged_stale_or_untrusted_load_confirmation_rejected(self):
         a = self.world.join('a')
         self.step('pause')

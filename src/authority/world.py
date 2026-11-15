@@ -110,13 +110,14 @@ class WorldCoordinator:
                 self._engine.resume()
                 try:
                     self._control_participants('resume')
-                except Exception:
+                except BaseException:
                     # The server resume succeeded, but one or more clients may
-                    # be running or uncertain. Attempt to stop server progress;
-                    # the session remains faulted even if this pause succeeds.
+                    # be running or uncertain, including after interruption.
+                    # Attempt to stop server progress; this does not establish
+                    # that the clients stopped. The session remains faulted.
                     try:
                         self._engine.pause()
-                    except Exception as error:
+                    except BaseException as error:
                         raise RuntimeError('client resume failed and server pause is uncertain') from error
                     raise
             elif request.operation == 'save':
