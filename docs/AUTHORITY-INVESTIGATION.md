@@ -175,6 +175,16 @@ or synchronize positions. No clients were admitted and no gameplay was tested.
 The opt-in experiment and its limitations are described in
 `tools/dev/AUTHORITY-SHIP-REGISTRY.md`.
 
+The owner also approved an experiment creating newly spawned ships on clients
+under the server's registry ID. One isolated Linux/Linux run created one
+controlled server fixture after a common checkpoint, forwarded its test
+descriptor over localhost, and created a client fixture with the same index.
+An identical retry returned the existing client reference and a conflicting
+retry faulted the registry. The fixture did not establish automatic discovery,
+complete ship state, autonomous-simulation deduplication, real session
+admission, Windows or internet operation; see
+`tools/dev/AUTHORITY-SHIP-CREATE-RECEIVER.md`.
+
 Ship positions are the first scope; trade and combat follow later. Spacesuits
 and dropped cargo are deferred; missions currently have lower priority.
 Synchronizing positions alone does not imply
