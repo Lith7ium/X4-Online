@@ -58,29 +58,25 @@ class SaveOffers:
                 self.service._authority_offer_id = next_id + 1
             size, digest = self.service.offer(name, checkpoint.path, checkpoint.sha256)
             if size != checkpoint.size:
-                with self.service.lock:
-                    self.service.offered.pop(name, None)
+                self.service.withdraw(name)
                 raise ValueError('stored checkpoint size changed')
             self.names.add(name)
             return SaveOffer(name, digest, size, checkpoint.checkpoint_id)
 
     def invalidate(self):
-        """Withdraw offers; already-started transfers still need admission fencing."""
+        """Withdraw offers and interrupt active transfers; admission fencing still applies."""
         with self._lock:
-            with self.service.lock:
-                for name in self.names:
-                    self.service.offered.pop(name, None)
-                self.names.clear()
+            self.service.withdraw_many(self.names)
+            self.names.clear()
 
     def revoke(self, offer):
-        """Withdraw one owned offer; active transfers still need admission fencing."""
+        """Withdraw one owned offer and interrupt active transfers."""
         if not isinstance(offer, SaveOffer):
             raise ValueError('a validated save offer is required')
         with self._lock:
-            with self.service.lock:
-                if offer.name in self.names:
-                    self.service.offered.pop(offer.name, None)
-                    self.names.remove(offer.name)
+            if offer.name in self.names:
+                self.service.withdraw(offer.name)
+                self.names.remove(offer.name)
 
 
 def receive(host, port, token, slot, offer, new_directory, *, retries=5, timeout=60):

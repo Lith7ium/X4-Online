@@ -65,6 +65,7 @@ class FileService:
         self.slots = frozenset(slots)
         self.offered, self.nonces, self.lock = {}, set(), threading.Lock()
         self.served, self.refused, self.active = [], [], 0
+        self._transfers = {}  # accepted sockets mapped to their offered name
         service = self
 
         class Handler(socketserver.BaseRequestHandler):
@@ -88,8 +89,32 @@ class FileService:
             raise ValueError(f'{path}: SHA-256 {digest[:16]}.. is not the announced {sha[:16]}..')
         size = path.stat().st_size
         with self.lock:
+            self._withdraw_locked(name)
             self.offered[name] = (path, size, digest)
         return size, digest
+
+    def _withdraw_locked(self, name):
+        self.offered.pop(name, None)
+        for conn, offered_name in tuple(self._transfers.items()):
+            if offered_name == name:
+                try:
+                    conn.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass  # peer may already have disconnected
+
+    def withdraw(self, name):
+        """Withdraw an offer and interrupt its accepted, still-active transfers.
+
+        Data already handed to TCP can still reach a peer; a completed download
+        is not an admission confirmation and requires separate epoch fencing.
+        """
+        self.withdraw_many((name,))
+
+    def withdraw_many(self, names):
+        """Withdraw a set of names atomically with respect to new requests."""
+        with self.lock:
+            for name in names:
+                self._withdraw_locked(name)
 
     def start(self):
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.2}, daemon=True)
@@ -155,6 +180,8 @@ class FileService:
                         self.nonces.clear()   # bounded; a replay of a cleared nonce still needs the token's mac
                     self.nonces.add(nonce)
                 entry = self.offered.get(name)
+                if not replay and entry is not None and offset <= entry[1]:
+                    self._transfers[conn] = name
             if replay:
                 return self.refuse(conn, address, 'nonce')
             if entry is None:
@@ -178,6 +205,7 @@ class FileService:
             pass
         finally:
             with self.lock:
+                self._transfers.pop(conn, None)
                 self.active -= 1
 
 

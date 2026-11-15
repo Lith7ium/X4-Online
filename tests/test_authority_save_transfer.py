@@ -1,8 +1,13 @@
 import gzip
+import base64
+from concurrent.futures import ThreadPoolExecutor
+import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from authority.checkpoints import Checkpoint, CheckpointStore  # noqa: E402
@@ -11,6 +16,72 @@ from lockstep.launcher import joinfiles  # noqa: E402
 
 
 class TransferTests(unittest.TestCase):
+    def test_withdraw_interrupts_started_download_and_keeps_other_offers(self):
+        for operation in ('revoke', 'invalidate', 'replace'):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / 'original.xml.gz'
+                source.write_bytes(gzip.compress(b'<savegame>' + base64.b64encode(os.urandom(100_000)) + b'</savegame>'))
+                (root / 'store').mkdir()
+                store = CheckpointStore(root / 'store')
+                checkpoint = store.publish(source)
+                service = joinfiles.FileService('a' * 32, slots=(2,))
+                first_chunk, release = threading.Event(), threading.Event()
+                original_handle = service.handle
+
+                class GatedSocket:
+                    def __init__(self, conn):
+                        self.conn = conn
+                        self.gated = False
+
+                    def __getattr__(self, name):
+                        return getattr(self.conn, name)
+
+                    def sendall(self, data):
+                        self.conn.sendall(data)
+                        if not self.gated and not data.startswith(b'OK|'):
+                            self.gated = True
+                            first_chunk.set()
+                            if not release.wait(5):
+                                raise OSError('test gate timed out')
+
+                service.handle = lambda conn, addr: original_handle(GatedSocket(conn), addr)
+                service.start()
+                try:
+                    offers = SaveOffers(service, store)
+                    target = offers.offer(checkpoint)
+                    other = SaveOffers(service, store).offer(checkpoint)
+                    with patch.object(joinfiles, 'CHUNK', 4096), ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(receive, '127.0.0.1', service.port, 'a' * 32, 2,
+                                             target, root / 'client', retries=0, timeout=5)
+                        try:
+                            self.assertTrue(first_chunk.wait(5), 'download never reached its first chunk')
+                            if operation == 'revoke':
+                                offers.revoke(target)
+                            elif operation == 'invalidate':
+                                offers.invalidate()
+                            else:
+                                service.offer(target.name, checkpoint.path, checkpoint.sha256)
+                        finally:
+                            release.set()
+                        with self.assertRaises(joinfiles.FetchError):
+                            future.result(timeout=5)
+                        self.assertFalse((root / 'client' / 'save.xml.gz').exists())
+                        part = root / 'client' / 'save.xml.gz.part'
+                        self.assertLess(part.stat().st_size, target.size)
+                        if operation != 'replace':
+                            with self.assertRaises(joinfiles.FetchError):
+                                joinfiles.fetch('127.0.0.1', service.port, 'a' * 32, 2,
+                                                target.name, root / 'client' / 'save.xml.gz',
+                                                expect_sha=target.sha256, retries=0, timeout=5, offer_wait_s=0)
+                            self.assertFalse((root / 'client' / 'save.xml.gz').exists())
+                        downloaded = receive('127.0.0.1', service.port, 'a' * 32, 2, other,
+                                             root / 'other', retries=0, timeout=5)
+                        self.assertEqual(downloaded.read_bytes(), source.read_bytes())
+                finally:
+                    release.set()
+                    service.close()
+
     def test_checkpoint_over_existing_tcp_transport(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
