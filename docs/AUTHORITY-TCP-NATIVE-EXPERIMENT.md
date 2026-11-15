@@ -35,3 +35,11 @@ owned process/lock cleanup is checked separately. Passing them does not prove
 the native X4 experiment succeeds. Even a successful isolated native run would
 not establish exact consumed bytes, gameplay, a complete shared universe,
 Windows, an Internet connection or production security.
+
+On 2026-11-15, one isolated Linux/Linux run completed successfully. The server
+created the marked checkpoint and transferred it locally; the second X4 process
+reported loading and pause. The trusted load claim and participant commands used
+the TCP path, and both native processes confirmed resume and the later pause.
+The second join was simulated, the next save remained pending, and the helper
+exited cleanly before owned-process cleanup reported no remaining processes.
+This result is limited to the diagnostic conditions and exclusions above.
