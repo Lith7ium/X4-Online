@@ -76,3 +76,10 @@ proof of their cause. In this one short pair, a position change was reported in
 both modes; the result cannot establish whether jobs were effectively disabled,
 whether AI or any particular subsystem caused movement, or behavior elsewhere
 in the universe. The actor/clock/atomicity and load-byte limitations above apply.
+
+An offline calculation divided each adjacent position displacement by its
+elapsed game time. The angle between the first and last such displacement-rate
+vectors was approximately 22.45° in control and 21.82° in treatment. These
+rates are derived from sampled positions per game second; they are neither
+native velocity measurements nor ship orientation, and do not identify AI or
+any cause of the movement.
