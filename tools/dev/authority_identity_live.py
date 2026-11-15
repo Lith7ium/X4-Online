@@ -53,6 +53,13 @@ def observations(path,phase):
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 << 20:
         raise ValueError('identity log unavailable or too large')
     raw=path.read_bytes()
+    return observations_bytes(raw,phase)
+
+
+def observations_bytes(raw,phase):
+    """Parse already captured identity-log bytes; caller owns snapshot stability."""
+    if type(raw) is not bytes or len(raw) > 256 << 20 or phase not in ('save','load'):
+        raise ValueError('invalid identity observation bytes')
     tag=b'[X4LAN] AUTH_IDENTITY '+phase.encode('ascii')+b' '
     rows=[line.split(tag,1)[1].strip() for line in raw.splitlines() if tag in line]
     pattern=rb'ACTOR ([12]) id=([0-9]+) name=(Authority identity (?:alpha 7181|beta 7182)) macro=(ship_arg_s_fighter_01_a_macro)'
