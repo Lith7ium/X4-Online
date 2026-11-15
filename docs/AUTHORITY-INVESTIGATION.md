@@ -159,7 +159,21 @@ last-departure checkpoint was staged and a load requested; after the native
 load event the same marker was observed and the game was paused. This diagnostic
 does not prove the exact bytes consumed by X4 or zero simulation before pause,
 and it does not integrate recovery into a session or exercise real clients.
-The ship identity strategy remains awaiting the owner's decision.
+The owner approved an experimental server-owned register using persisted X4
+references. In one isolated Linux/Linux save/transfer/load run, a faction-list
+inventory selected 10,054 currently operational ships in 140 observed sectors;
+49 other distinct objects were not confirmed eligible. The test registered and
+resolved each selected ship, re-enrolled it without assigning a new ID, and
+repeated resolution and re-enrollment after loading the checkpoint in a second
+X4 process. Registry epoch and per-index ship macros matched across the run.
+An independent read of the checkpoint found 10,054 distinct saved ship
+components with mutually inverse forward and reverse registry tables; their
+per-index macros matched both processes' observations. Faction
+lists are not proven complete or atomic; the test does not independently bind
+each client runtime object to its saved component, establish lifecycle handling
+or synchronize positions. No clients were admitted and no gameplay was tested.
+The opt-in experiment and its limitations are described in
+`tools/dev/AUTHORITY-SHIP-REGISTRY.md`.
 
 Ship positions are the first scope; trade and combat follow later. Spacesuits
 and dropped cargo are deferred; missions currently have lower priority.
