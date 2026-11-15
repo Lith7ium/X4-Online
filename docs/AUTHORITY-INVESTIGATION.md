@@ -13,6 +13,11 @@ through a localhost UDP process between two X4 instances. Its validator matched
 103 received samples against 150 logged source samples; the sampled coordinates
 were stationary. The overall run still failed its independent fleet scan, and
 does not establish moving-ship synchronization or Internet/Windows operation.
+A subsequent isolated 360-tick Linux/Linux run sent and received positions for
+the same fixture after a test-only movement order. The receiver logged 232
+matching samples and a 1,284 m displacement. No pose was applied in the guest,
+no velocity was transmitted, and the fleet scans still failed; this remains an
+overall failed test, not a multiplayer or smooth-motion acceptance.
 
 ## Question
 
@@ -55,6 +60,21 @@ Ship positions are the first scope; trade and combat follow later. Spacesuits
 and dropped cargo are deferred; missions currently have lower priority.
 Synchronizing positions alone does not imply
 the other game systems already work.
+The owner reports that prior LAN experiments reduced stuttering for player and
+NPC ships by sharing velocity as well as position. Position replication must
+therefore account for velocity and smooth motion between updates. The earlier
+implementation needs to be adapted and validated before claiming that it works
+in this branch or choosing its interpolation/extrapolation behavior.
+The earlier LAN prototype contains time-buffered interpolation and bounded
+extrapolation using both linear and angular rates inferred from consecutive
+poses. It has player-ship velocity application guarded by flight state; its NPC
+path predicted pose rather than setting native NPC velocity. One bounded Linux
+setter experiment used a synthetic counterpart and aligned parent frames; it did
+not establish the coordinate conversion for rotated parents. An older Windows
+playtest report still noted jumps at high speed and some NPCs showing zero
+speed. Later smoothing changes have not been established in this branch. Actual
+sampling age, per-ship update cadence, frame transitions and Windows/Internet
+behavior need independent validation.
 The shared-world acceptance goal also requires players to fight together and
 against each other, attack NPC ships, trade, board ships, and command their
 company's ships, including while players are in different sectors. These are

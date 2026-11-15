@@ -89,7 +89,7 @@ function M.sample(cfg, tick, actors, log, gate)
        if ok_construction and type(value)=='boolean' then construction=value and 'true' or 'false' end
       end
       if status=='false' and shipclass=='true' and construction=='false' then wreck_ui='true'
-      elseif status=='true' or shipclass=='false' or construction=='true' then wreck_ui='false' end
+      elseif status=='true' or construction=='true' then wreck_ui='false' end
      end
     end
     log(string.format('AUTHORITY_NONOP_DIAG tick=%d faction_index=%d ship_index=%d operational_recheck=%s same_fleet_recheck=%s valid=%s construction=%s ship_class=%s wreck_ui=%s saved_private=%s',

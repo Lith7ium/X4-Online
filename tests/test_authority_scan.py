@@ -254,6 +254,8 @@ diag=run(); assert(diag:find('valid=true',1,true) and diag:find('construction=tr
 assert(diag:find('wreck_ui=false',1,true))
 IsComponentConstruction=function() return false end
 diag=run(); assert(diag:find('construction=false',1,true) and diag:find('wreck_ui=true',1,true))
+e.is_ship=function(h) return h~='2' end
+diag=run(); assert(diag:find('ship_class=false',1,true) and diag:find('wreck_ui=unknown',1,true))
 e.fleet=function(f,cap) calls=calls+1; if calls==2 then return {},true end; return originalfleet(f,cap) end
 calls=0; e.valid=function() error('validity checked despite absent membership') end
 gate.saved_identity=function() error('identity checked despite absent membership') end
