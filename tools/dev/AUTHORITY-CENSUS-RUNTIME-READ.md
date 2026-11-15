@@ -47,8 +47,7 @@ the captured inode, size and previously accepted prefix before discarding the
 unstable capture; a changed, replaced, truncated or missing previously observed
 log fails. Protected files and the final stopped-process log remain subject to
 the strict stable-file read. As before, these are sampled checks and cannot rule
-out changes that are made and reversed between observations. The revised watcher
-has not yet been exercised in X4. Focused synthetic checks can be run with:
+out changes that are made and reversed between observations. Focused synthetic checks can be run with:
 
 ```sh
 python3 -m unittest tests.test_authority_census_runtime_read
@@ -58,3 +57,13 @@ These tests use Lua and filesystem doubles, including a 105-entry example;
 they do not execute X4 MD semantics, demonstrate saved-register runtime binding
 or establish native reliability. A native test requires a reviewed isolated
 headless run and can take substantial time for the full register.
+
+On 2026-11-15, the revised watcher completed one isolated native Linux run over
+all 10,054 indices in the archived checkpoint. It recorded 10,052 finite
+positions across 140 local sector handles and classified two entries as docked
+or internally stored, without reading their positions. It reported zero
+unavailable, missing-sector and local-invalid entries, observed pause at the
+checkpoints and reported no remaining owned processes after cleanup. This is a
+paused local read of this particular registry, not a live stream, independently
+proved runtime-to-save binding, complete universe coverage, a native velocity
+measurement, or a multiplayer test.
