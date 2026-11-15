@@ -79,6 +79,11 @@ both non-atomic rechecks completed at tick 70 with 10,070 distinct objects and
 not confirmed operational, and 29 entries without a usable saved identity.
 These counts do not prove universe coverage, and no positions were replicated
 for those inventory rows. The overall run still failed its separate strict scan.
+The 29 unavailable rows specifically passed the diagnostic's operational,
+ship-class and sector checks but lacked the saved ship identity. The probe
+logged only aggregate reasons, so the individual objects and their creation
+times cannot be recovered from this run. The 65 not-confirmed-operational
+objects were not individually classified or position-sampled by this probe.
 
 The diagnostic's `saved_identity` lookup uses an import mapping sealed at the
 first live frame; it cannot acquire mappings for ships created later in that
