@@ -46,6 +46,11 @@ safe.
 high-attention results before saving. A synthetically correct session or
 checkpoint sequence therefore does not establish a consistent game state.
 Real process identity, actual X4 loading, authenticated peer binding, durable
-checkpoint freshness and network operation remain separate work. Tests use a
-fake engine, a fake in-memory service and disposable compressed checkpoint
-copies; no X4 or actual network is involved.
+checkpoint freshness and remote network operation remain separate work. Most
+tests use a fake engine and fake in-memory service. One focused integration
+test uses the actual FileService on an ephemeral `127.0.0.1` port, a fake
+engine and a disposable checkpoint: it round-trips the offer codec, transfers
+and hashes the save, consumes a synthetic receipt and checks that a subsequent
+fetch is refused after withdrawal. It closes and joins its owned server. This
+local test establishes neither X4 load/admission nor Windows, WAN, peer
+authentication, confidentiality or other security properties.
