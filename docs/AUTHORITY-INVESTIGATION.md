@@ -1,7 +1,7 @@
 # Authoritative X4 investigation: initial assessment
 
-Status: initial prototype and assessment, 15 November 2026. A first native
-read-only scanner experiment failed before a valid scan receipt; no native
+Status: initial prototype and assessment, 15 November 2026. Native read-only
+scanner experiments failed before a valid scan receipt; no native
 authority correction experiment has been run. The branch is isolated and based
 on public commit `b80712b39963c179dcdc2d99541cf9a25dacf7de`.
 

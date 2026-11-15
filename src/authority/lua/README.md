@@ -45,12 +45,18 @@ and parent/identity state can change later. A successful result is not proof of
 all ships, a simultaneous universe snapshot, cross-instance agreement, network
 replication, or in-game synchronization. The calling application must timestamp,
 handle lifecycle and missing identities, apply backpressure or batching, and
-validate performance in game before treating the data as usable. Three native
+validate performance in game before treating the data as usable. Four native
 attempts reached the scanner but did not yield an accepted scan receipt. The
 first failed in fixture-ID conversion, the second in faction enumeration with
 the initial buffer, and the third rejected an enumerated object as unavailable
-or not a ship. The more specific diagnostic added afterward has not been run
-in X4. The failed attempts do not establish that every faction or ship was read.
+or not a ship. In the fourth, both local instances observed 148 faction entries
+and rejected a non-operational object at entry 59 of the first faction's fleet.
+This API result does not establish why the object is non-operational, so it is
+not silently skipped. The failed attempts do not establish that every faction
+or ship was read. A wreck is one possible explanation: an earlier independent
+native hot-join test recorded `IsComponentOperational=false` for a saved wreck
+(`reports/LOCKSTEP-HOTJOIN-20261101.txt`). That observation does not identify
+the object in this scan or prove that all such results are wrecks.
 
 ## Disposable Linux fixture integration
 
