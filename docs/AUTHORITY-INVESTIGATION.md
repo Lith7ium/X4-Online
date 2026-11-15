@@ -55,6 +55,12 @@ Ship positions are the first scope; trade and combat follow later. Spacesuits
 and dropped cargo are deferred; missions currently have lower priority.
 Synchronizing positions alone does not imply
 the other game systems already work.
+The shared-world acceptance goal also requires players to fight together and
+against each other, attack NPC ships, trade, board ships, and command their
+company's ships, including while players are in different sectors. These are
+requirements, not capabilities established by the current prototype. Player
+versus player combat and boarding under one shared player faction need explicit
+engine investigation; no implementation semantics have been decided yet.
 All participants initially share one player faction and one company account;
 individual player factions and separate player accounts are later features.
 NPC factions remain part of the simulated world and the ship census. The
