@@ -1,6 +1,7 @@
 """Synthetic checks for the isolated checkpoint load harness; no X4 is launched."""
 import gzip
 import json
+from decimal import Decimal
 from pathlib import Path
 import shutil
 import subprocess
@@ -40,7 +41,8 @@ class LoadHarnessTests(unittest.TestCase):
 
     def setup_store(self, root):
         origin = root/'source'; store_dir = origin/'checkpoints';store_dir.mkdir(parents=True)
-        source = root/'save.gz';source.write_bytes(gzip.compress(b'<savegame><world/></savegame>'))
+        source = root/'save.gz';source.write_bytes(gzip.compress(
+            b'<savegame><info><save name="X4 Authority isolated checkpoint"/><game time="10.250"/></info></savegame>'))
         store = CheckpointStore(store_dir);checkpoint = store.publish(source)
         profile = root/'case/home/.config/EgoSoft/X4/45841';(profile/'save').mkdir(parents=True)
         (profile/'content.xml').write_text('<content/>')
@@ -57,7 +59,7 @@ class LoadHarnessTests(unittest.TestCase):
             root=Path(tmp);store_dir,store,checkpoint,profile=self.setup_store(root)
             actual,target=live.stage_checkpoint(store,checkpoint.checkpoint_id,profile)
             self.assertEqual(actual,checkpoint);self.assertEqual(live.live.sha(target),checkpoint.sha256)
-            live.verify_origin(store_dir,checkpoint,profile)
+            self.assertEqual(live.verify_origin(store_dir,checkpoint,profile),Decimal('10.250'))
             with self.assertRaisesRegex(ValueError,'not empty'):
                 live.stage_checkpoint(store,checkpoint.checkpoint_id,profile)
             with patch.object(live.snapshot,'command_for',return_value=['bwrap','--bind','case','case','--die-with-parent','--','X4']):
@@ -90,7 +92,7 @@ class LoadHarnessTests(unittest.TestCase):
             root=Path(tmp);origin, checkpoints, profile=self.setup_cycles(root)
             store_dir=origin/'checkpoints/cycle-2'
             checkpoint,target=live.stage_checkpoint(CheckpointStore(store_dir),checkpoints[1].checkpoint_id,profile)
-            live.verify_origin(store_dir,checkpoint,profile)
+            self.assertEqual(live.verify_origin(store_dir,checkpoint,profile),Decimal('20'))
             self.assertEqual(live.live.sha(target),checkpoint.sha256)
             with self.assertRaisesRegex(ValueError,'unsupported source'):
                 live.verify_origin(origin/'checkpoints/cycle-1',checkpoints[0],profile)
@@ -152,6 +154,14 @@ class LoadHarnessTests(unittest.TestCase):
                          b'ARMED\n[X4LAN] AUTH_LOAD REQUEST\n[X4LAN] AUTH_LOAD READY time=3\n[X4LAN] AUTH_LOAD ADVANCED time=3'):
                 path.write_bytes(b'[X4LAN] AUTH_LOAD '+rows+b'\n')
                 with self.assertRaises(ValueError):live.LoadWatch(path).poll()
+
+    def test_loaded_time_rejects_regression_and_allows_rounding_and_elapsed_time(self):
+        live.verify_loaded_time(Decimal('10.250'),10.249)
+        live.verify_loaded_time(Decimal('10.250'),15.0)
+        for saved,ready in ((Decimal('10.250'),10.2489), (Decimal('NaN'),3.0),
+                            (Decimal('3'),float('nan')), (Decimal('3'),float('inf'))):
+            with self.subTest(saved=saved,ready=ready), self.assertRaises(ValueError):
+                live.verify_loaded_time(saved,ready)
 
     @unittest.skipUnless(shutil.which('luajit'),'requires LuaJIT')
     def test_lua_load_then_rebuilt_ui_observes_time(self):

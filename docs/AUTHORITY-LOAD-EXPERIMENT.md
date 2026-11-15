@@ -30,6 +30,18 @@ duplicated or out-of-order receipt, incorrect profile, absent slot, changed
 checkpoint or cleanup failure makes the experiment fail. This test does not
 create or expect the LAN battle fixtures or log saved object identities.
 
+The load result also requires the first observed loaded game time to be no
+earlier than the checkpoint's `info/game @time`, allowing one millisecond for
+save rounding. Both values are recorded on success and on comparison failure.
+This is an empirically supported lower bound, not an exact-load identity test:
+eleven earlier private Linux capture logs on the same pinned executable recorded
+`GetCurrentGameTime()` at both save request and save completion, and their saved
+XML time differed by at most 0.000407 seconds. Those eleven observations all
+used early game times around seven seconds. They do not establish behavior for
+all time ranges or platforms. No upper limit is imposed: the time spent loading
+and entering the world is not known in advance. Consequently, a wrong older
+world that advances sufficiently before observation might satisfy the bound.
+
 After checking that the prior `result.json` records successful cleanup, use the
 checkpoint ID from that private result. Set the game path and display to the
 local installation and desktop; choose a new output directory each time:
@@ -56,8 +68,8 @@ which file bytes X4 consumed. The result does not establish recovery of all
 world state, a new join, multi-client synchronization, platform interoperability
 or save distribution. The exact profile-path convention, UI callback lifecycle,
 read-only-file compatibility and X4 load/clock behavior remain native-test
-questions until actually executed. Compare saved and loaded time only after the
-semantics and precision of X4's saved time have been established.
+questions until actually executed. The comparison's empirical assumptions must
+be revisited if the executable or target platform changes.
 
 Synthetic coverage: `python3 -m unittest discover -s tests -p
 "test_authority_load_live.py" -v`. These tests use temporary files and Lua

@@ -5,6 +5,7 @@ The store and output must be beneath this checkout's .local. The chosen checkpoi
 must be CURRENT. A fresh disposable profile is used; no Battle fixture is assumed.
 """
 import argparse
+from decimal import Decimal
 import hashlib
 import json
 import math
@@ -119,16 +120,23 @@ def verify_origin(store_dir, checkpoint, profile):
         result.get('resume_confirmed') is not True or result.get('owned_processes_remaining') != []):
         raise ValueError('source control result does not identify a completed checkpoint')
     if cycle_source:
-        verify_cycle_origin(origin, store_dir, checkpoint, result)
+        saved_time = verify_cycle_origin(origin, store_dir, checkpoint, result)
     elif (result.get('native_save_event') is not True or result.get('file_verified') is not True or
           result.get('checkpoint_id') != checkpoint.checkpoint_id or
           result.get('sha256') != checkpoint.sha256 or result.get('size') != checkpoint.size):
         raise ValueError('source control result does not identify a completed checkpoint')
+    else:
+        evidence = read_cycle_evidence(CheckpointStore(store_dir), checkpoint.checkpoint_id,
+                                       'X4 Authority isolated checkpoint')
+        if (evidence.sha256, evidence.size) != (checkpoint.sha256, checkpoint.size):
+            raise ValueError('source checkpoint evidence changed')
+        saved_time = evidence.game_time
     original = origin/'case/home/.config/EgoSoft/X4/45841/content.xml'
     current = profile/'content.xml'
     if (original.is_symlink() or not original.is_file() or original.stat().st_size > 65536 or
         original.read_bytes() != current.read_bytes()):
         raise ValueError('source and destination extension lists differ')
+    return saved_time
 
 
 def verify_cycle_origin(origin, store_dir, checkpoint, result):
@@ -172,6 +180,20 @@ def verify_cycle_origin(origin, store_dir, checkpoint, result):
         if watch.offset == previous: raise ValueError('incomplete source cycle log')
     if watch.counts != [1] * len(CYCLE_MARKERS):
         raise ValueError('source cycle log incomplete')
+    return two.game_time
+
+
+def verify_loaded_time(saved_time, ready_time):
+    """Reject a clear regression; one millisecond covers observed XML rounding.
+
+    This lower bound is empirical and does not prove the loaded save's identity.
+    There is deliberately no upper bound on normal time spent entering the game.
+    """
+    if (not isinstance(saved_time, Decimal) or not saved_time.is_finite() or saved_time < 0 or
+        type(ready_time) is not float or not math.isfinite(ready_time) or ready_time < 0):
+        raise ValueError('invalid saved or loaded game time')
+    if Decimal(str(ready_time)) + Decimal('0.001') < saved_time:
+        raise ValueError('loaded game time precedes checkpoint time')
 
 
 class LoadWatch:
@@ -284,7 +306,7 @@ def run(args):
     try:
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         checkpoint, target = stage_checkpoint(store, args.checkpoint_id, profile)
-        verify_origin(store_dir, checkpoint, profile)
+        saved_time = verify_origin(store_dir, checkpoint, profile)
         install_probe(case, profile)
         lock_fd, lock_stat = live.create_lock_target(snapshot.LOCK_TARGET, user.pw_uid, user.pw_gid)
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -305,9 +327,12 @@ def run(args):
                 if caught_up and watch.stage == 4:
                     if live.sha(target) != checkpoint.sha256:
                         raise ValueError('staged checkpoint changed during load')
+                    result.update(saved_game_time=str(saved_time), ready_game_time=watch.ready_time,
+                                  advanced_game_time=watch.advanced_time)
+                    verify_loaded_time(saved_time, watch.ready_time)
                     result.update(success=True, checkpoint_id=checkpoint.checkpoint_id, sha256=checkpoint.sha256,
                                   size=checkpoint.size, load_requested=True, game_ready=True,
-                                  ready_game_time=watch.ready_time, advanced_game_time=watch.advanced_time)
+                                  clock_not_before_saved=True)
                     break
                 time.sleep(.1)
     except (Exception, KeyboardInterrupt) as error:
