@@ -80,6 +80,18 @@ not confirmed operational, and 29 entries without a usable saved identity.
 These counts do not prove universe coverage, and no positions were replicated
 for those inventory rows. The overall run still failed its separate strict scan.
 
+The diagnostic's `saved_identity` lookup uses an import mapping sealed at the
+first live frame; it cannot acquire mappings for ships created later in that
+running process. The separate created-object keys were designed around
+lockstep creation order and are not established as stable identities for
+independently simulated worlds. Neither fact proves that the 29 unresolved
+objects in the run above were created after load. The existing MD battle
+fixture persists references to its spawned ships in a cue list and can emit
+them again after load. A focused future experiment can test whether references
+to two distinguishable ships created after startup survive save and reload;
+that would still leave universal spawn discovery, destruction, and cross-client
+binding to be established.
+
 ## Question
 
 Can one running X4 instance own a persistent universe while other X4 instances
