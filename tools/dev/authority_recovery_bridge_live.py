@@ -25,6 +25,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
 import authority_recovery_live as recovery
+import authority_tcp_recovery_source as tcp_source
 import authority_two_x4_live as owned
 import authority_world_bridge_live as bridge_install
 import authority_load_live as load
@@ -145,6 +146,27 @@ class NoTransfers:
     def invalidate(self): pass
 
 
+def verify_selected_source(source_kind, store_dir, checkpoint, profile):
+    """Preserve the original verifier unless the fixed TCP source is requested."""
+    if source_kind == 'marked-bridge':
+        recovery.verify_source(store_dir, checkpoint, profile)
+        return None
+    if source_kind == 'tcp-last-disconnect':
+        return tcp_source.verify(store_dir, checkpoint, profile)
+    raise ValueError('unsupported recovery source type')
+
+
+def install_saved_identity_fixture(case, data):
+    """Copy only verified source bytes into the disposable protected overlay."""
+    if type(data) is not bytes or not data or len(data) > 65536:
+        raise ValueError('invalid saved identity fixture')
+    target = case/'extensions/x4_lan_lab/md/authority_identity_fixture.xml'
+    fd = os.open(target, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(data); stream.flush(); os.fsync(stream.fileno())
+    return target
+
+
 def acquire_lock_with_handlers(handlers, lockbox, uid, gid):
     """Record the lock before delivering signals; caller owns cleanup in finally."""
     signals=(signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
@@ -190,7 +212,8 @@ def run(args):
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage)
-        recovery.verify_source(store_dir, checkpoint, profile)
+        source_kind = getattr(args, 'source_type', 'marked-bridge')
+        fixture = verify_selected_source(source_kind, store_dir, checkpoint, profile)
         target = profile/'save/save_008.xml.gz'
         if any((profile/'save').iterdir()): raise ValueError('new profile save directory not empty')
         os.link(staged, target, follow_symlinks=False); target.chmod(0o400)
@@ -198,6 +221,8 @@ def run(args):
         sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM); sock.bind(('127.0.0.1',0)); sock.settimeout(.25)
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
         protected = install_probe(case, profile, sock.getsockname()[1], lease, epoch)
+        if fixture is not None:
+            protected.append(install_saved_identity_fixture(case, fixture))
         expected = {path:live.sha(path) for path in protected}
         store_path = out/'checkpoints'; store_path.mkdir(mode=0o700)
         store = CheckpointStore(store_path)
@@ -248,6 +273,9 @@ def run(args):
             fresh_checkpoint_id=fresh.checkpoint_id,fresh_sha256=fresh.sha256,
             load_marker_observed=True,pause_observed=True,bridge_activated=True,coordinator_paused=True,
             exact_loaded_file_proven=False,zero_advance_proven=False,client_admitted=False,gameplay_tested=False)
+        if source_kind == 'tcp-last-disconnect':
+            result.update(source_type=source_kind, source_client_disconnect_simulated=True,
+                          saved_identity_fixture_preserved=True, identity_fixture_runtime_proven=False)
     except BaseException as error:
         result.update(success=False,error=str(error) or type(error).__name__)
         if not isinstance(error,(Exception,KeyboardInterrupt)): raise
@@ -315,6 +343,7 @@ def main():
     p.add_argument('--game',type=Path,required=True); p.add_argument('--store',type=Path,required=True)
     p.add_argument('--out',type=Path,required=True); p.add_argument('--display',required=True)
     p.add_argument('--timeout',type=float,default=600); p.add_argument('--seed',type=int,default=276944566)
+    p.add_argument('--source-type',choices=('marked-bridge','tcp-last-disconnect'),default='marked-bridge')
     try: result=run(p.parse_args())
     except (OSError,ValueError,RuntimeError) as error: p.exit(1,'REFUSED: '+str(error)+'\n')
     print(json.dumps(result,indent=2)); return 0 if result['success'] else 1
