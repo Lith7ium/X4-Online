@@ -185,6 +185,19 @@ or synchronize positions. No clients were admitted and no gameplay was tested.
 The opt-in experiment and its limitations are described in
 `tools/dev/AUTHORITY-SHIP-REGISTRY.md`.
 
+A subsequent isolated two-Linux-process diagnostic selected two existing
+ships in distinct sectors and checked their persisted MD reference relationships
+before a checkpoint and after a local transfer/load. Both process logs report
+fixture verification and the marker was observed after load; the original result
+reports a paused client but `success=false` because the checker rejected X4's
+`largefloat` representation of the two integral fixture indices. After fixing
+that parser, an offline reread of the same confirmed checkpoint verified both
+registry mappings and each saved ship's distinct sector ancestor. The original
+failure result remains unchanged; the offline check was not another native run.
+The live checks are MD self-checks, not independent bindings to saved components,
+and neither exact loaded bytes nor multiplayer are established. See
+`tools/dev/AUTHORITY-SECTOR-REFERENCE-FIXTURE.md`.
+
 The owner also approved an experiment creating newly spawned ships on clients
 under the server's registry ID. One isolated Linux/Linux run created one
 controlled server fixture after a common checkpoint, forwarded its test
