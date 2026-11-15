@@ -19,7 +19,7 @@ def document():
 <component class="sector" id="[0xa]"><component class="zone" id="[0xc]"><component class="ship_s" macro="ship_arg_s_fighter_01_a_macro" owner="player" connection="space" id="[0x1]"/></component></component>
 <component class="sector" id="[0xb]"><component class="zone" id="[0xd]"><component class="ship_s" macro="ship_arg_s_fighter_01_a_macro" owner="player" connection="space" id="[0x2]"/></component></component>
 </universe><script><refs type="string"><ref id="1" string="{EPOCH}"/><ref id="2" string="{MARKER}"/></refs></script><md>
-<script name="X4AuthorityCheckpointMarker"><cue name="MarkerState"><vars><value name="$marker" type="string" value="2"/><value name="$loaded" type="integer"/></vars></cue></script>
+<script name="X4AuthorityPlayerFixtureMarker"><cue name="MarkerState"><vars><value name="$marker" type="string" value="2"/><value name="$loaded" type="integer"/></vars></cue></script>
 <script name="X4AuthoritySectorReferenceFixture"><cue name="State"><vars><value name="$epoch" type="string" value="1"/><value name="$sector1" type="component" value="[0xa]"/><value name="$sector2" type="component" value="[0xb]"/></vars></cue></script>
 <script name="X4AuthorityPlayerSectorFixture"><cue name="State"><vars><value name="$epoch" type="string" value="1"/><value name="$sector1" type="component" value="[0xa]"/><value name="$sector2" type="component" value="[0xb]"/><value name="$ship1" type="component" value="[0x1]"/><value name="$ship2" type="component" value="[0x2]"/><value name="$ready" type="integer" value="1"/><value name="$pending" type="integer"/><value name="$faulted" type="integer"/></vars></cue></script>
 </md></savegame>'''
@@ -75,5 +75,7 @@ class FixtureTest(unittest.TestCase):
     def test_rejects_wrong_saved_marker(self):
         with self.assertRaises(ValueError):
             self.check(document().replace(f'string="{MARKER}"','string="'+'e'*32+'"'))
+        with self.assertRaises(ValueError):
+            self.check(document().replace('X4AuthorityPlayerFixtureMarker','X4AuthorityCheckpointMarker'))
 
 if __name__=='__main__':unittest.main()

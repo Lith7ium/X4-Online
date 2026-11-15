@@ -25,7 +25,7 @@ def verify(checkpoint, epoch, marker):
     if (not isinstance(marker,str) or not re.fullmatch(r'[0-9a-f]{32}',marker)
             or checkpoint.marker != marker):
         raise PlayerFixtureEvidenceError('invalid marker')
-    verify_saved_marker(checkpoint, marker, script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState')
+    verify_saved_marker(checkpoint, marker, script_name='X4AuthorityPlayerFixtureMarker', cue_name='MarkerState')
     wanted = {'X4AuthorityPlayerSectorFixture':{'$ready','$pending','$faulted','$epoch','$sector1','$sector2','$ship1','$ship2'},
               'X4AuthoritySectorReferenceFixture':{'$epoch','$sector1','$sector2'}}
     counts = {name:[0,0,0] for name in wanted}; fields={name:{} for name in wanted}
