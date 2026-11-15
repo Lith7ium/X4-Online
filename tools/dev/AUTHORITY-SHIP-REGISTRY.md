@@ -89,3 +89,27 @@ client objects to those components. The logs do not contain per-index sector
 identities. This does not prove that either X4 process consumed the exact file
 bytes, sector completeness, dynamic zone identity, position/velocity
 replication, or operation in different sectors during gameplay.
+
+## Pinned census archive check
+
+`authority_census_archive_provenance.py` checks this specific recorded census
+checkpoint without loading X4 or modifying the archive. It requires equal
+`CURRENT` and `CONFIRMED` pointers, the recorded checkpoint ID, compressed
+SHA-256 and size, the marker in the saved `Store` cue, and the recorded registry
+epoch. The existing structural verifier checks all 10,054 forward and reverse
+entries against distinct saved ship components. The checker does not reread
+the two historical process logs or compare their per-index macro observations;
+the separate command above does that.
+
+File and path identities are sampled around the checks and symlinks are
+rejected. Every marker and registry parsing pass checks the compressed digest.
+These checks detect ordinary changes but do not provide atomic filesystem
+fencing or prove which bytes an X4 process loaded. This legacy checkpoint's
+marker is verified in the save, not bound in the version-1 manifest. It does
+not establish runtime object identity, complete universe coverage, dynamic
+ships, or multiplayer. Run only when this pinned archive needs verification;
+the streaming XML checks reread the large save several times.
+
+```sh
+python tools/dev/authority_census_archive_provenance.py
+```
