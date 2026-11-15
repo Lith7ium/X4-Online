@@ -2530,7 +2530,7 @@ pilot_view.arm_stock,pilot_view.stock_plan=arm_stock_section,stock_script -- rea
 -- A slot ship's death (lockstep_pilot_death.h, stop reason 163; native_gate_pilot_death, default off). The gate
 -- says what changed in this tick's pass; with native_gate_pilot_respawn = delay the probe raises the MD events
 -- (native_gate_pilot_respawn.xml) at those ticks, on every client, and hands the ship MD built to the gate.
-local death={delay=nil,start=0,poses={},built={},suits={}}
+local death={delay=nil,start=0,poses={},built={},suits={},suit_id={},air={}}
 -- MD answers with an object: the gate takes its runtime ID as a decimal string.
 local function death_answer(name,slot,hand)
  RegisterEvent(name..slot,function(_,object)
@@ -2540,6 +2540,7 @@ local function death_answer(name,slot,hand)
    if type(id)~='cdata' then id=ConvertIDTo64Bit(id) end
    id=(tostring(id):gsub('ULL$',''))
   end
+  if name=='X4LAN_PilotRespawn.Suit' then death.suit_id[slot]=id end   -- the suit MD built: its oxygen pause comes later (death_air)
   log(name:gsub('^X4LAN_PilotRespawn.','PILOT_RESPAWN_'):upper()..' slot='..slot..' accepted='..tostring(hand(slot,id)))
   if pilot_view.hud_ship_changed then pilot_view.hud_ship_changed('respawn') end   -- the slot's new ship (MD answers on every client)
  end)
@@ -2569,16 +2570,39 @@ local function death_note(slot)
  death.poses[slot]={x=p.x,y=p.y,z=p.z,yaw=math.deg(p.yaw),pitch=math.deg(p.pitch),roll=math.deg(p.roll)}
  AddUITriggeredEvent('X4LAN_PilotRespawn','Note',{slotname=tostring(slot),object=ConvertStringToLuaID(tostring(runtime))})
 end
+-- A slot in its suit: the oxygen pause and the hull floor (native_gate_pilot_respawn.xml SuitOne for slot 1's own suit,
+-- SuitAir for the suit MD built for a slot 2..N), raised on every client at the tick the gate reports the slot in its
+-- suit and once more DEATH_AIR_AGAIN ticks later: X4 starts a suit's oxygen again when the suit comes into use, which
+-- undid the pause made at the suit's creation (14 Nov: player 2's suit was removed after half an hour, stop 161).
+local DEATH_AIR_AGAIN=60
+-- ...and for good every DEATH_AIR_EVERY ticks (the Air cue fills up and pauses every suit a player is in): X4 clears a
+-- suit's pause at times of its own. By the tick alone, so a client that joined later raises it at the same ticks.
+local DEATH_AIR_EVERY=900
+local function death_air(slot)
+ if slot==1 then AddUITriggeredEvent('X4LAN_PilotRespawn','SuitOne',{})
+ elseif death.suit_id[slot] then
+  AddUITriggeredEvent('X4LAN_PilotRespawn','SuitAir',{slotname=tostring(slot),object=ConvertStringToLuaID(death.suit_id[slot])})
+ end
+end
 local function death_frame(tick)
+ if death.suit and tick%DEATH_AIR_EVERY==0 then AddUITriggeredEvent('X4LAN_PilotRespawn','Air',{}) end
+ for slot=1,#cfg.native_gate_pilot_slots do
+  if death.air[slot]==tick then death.air[slot]=nil death_air(slot) end
+ end
  if (death.delay>0 or death.suit) and tick==death.start then for slot=1,#cfg.native_gate_pilot_slots do death_note(slot) end end
  local events=gate.pilot_death_frame()
  if events then
   ticklog.write('PILOT_DEATH tick='..tick..' '..events) -- rare, and the report's first question: not held by the status stride
+  -- Slot 1 adopted its own spacesuit (the kinds below are letters only; this one ends in a digit): its oxygen and hull
+  -- floor as a slot 2..N's suit has them (death_air), raised on every client at this tick; back in a seat: no second one.
+  if events:find('suit1:1',1,true) then death_air(1) death.air[1]=tick+DEATH_AIR_AGAIN end
+  if events:find('seat1:1',1,true) then death.air[1]=nil end
   for kind,slot in events:gmatch('(%a+):(%d+)') do
    slot=tonumber(slot)
    if kind=='suit' then death_suit(slot)
    elseif kind=='out' then death_suit(slot,gate.pilot_ship(slot))   -- through the airlock (lockstep_pilot_death.h pvehk_*): a suit at its ship
    elseif kind=='suited' or kind=='home' then
+    if kind=='suited' then death_air(slot) death.air[slot]=tick+DEATH_AIR_AGAIN else death.air[slot]=nil end
     if pilot_view.hud_ship_changed then pilot_view.hud_ship_changed(kind) end   -- the slot's ship changed with no MD answer at this tick
     -- The stock crosshair script takes its crosshair, speed bars and hull bars down at this event and puts them back
     -- `if HasFlightControl()`, which the slot does not have yet (its SPACE edge of the new seat is applied a few ticks

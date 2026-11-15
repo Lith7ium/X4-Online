@@ -89,6 +89,7 @@
     <do_if value="@$suit.isoperational">
      <set_object_min_hull object="$suit" exact="100"/>
      <pause_spacesuit_oxygen object="$suit"/>
+     <set_value name="$n.$suit" exact="$suit"/>   <!-- the slot's suit, for the Air cue -->
      <debug_text text="'[X4LAN] PILOT_RESPAWN_SUIT slot=%s macro=%s owner=%s time=%s'.[$a.$slotname, $suit.macro.id, $suit.owner.id, player.age]"/>
      <raise_lua_event name="'X4LAN_PilotRespawn.Suit' + $a.$slotname" param="$suit"/>
      <!-- Its equipment. X4's eject creates its player's suit from a loadout of the player's suit wares; a suit made here
@@ -108,6 +109,72 @@
     <do_else>
      <debug_text text="'[X4LAN] PILOT_RESPAWN_SUIT slot=%s refused=create_failed'.[$a.$slotname]"/>
     </do_else>
+   </actions>
+  </cue>
+  <!-- Slot 1 in its own spacesuit (X4's eject built it; the gate adopts it: PILOT_DEATH suit1). A slot 2..N's suit, built
+       above, has its oxygen paused and a hull floor, because a player killed otherwise than with its ship stops the
+       session for everyone (stop 163). Slot 1's had neither: a suit left floating for half an hour ran out of oxygen and
+       ended a two-player session (14 Nov, tick 81864, both clients). The same two actions for it, on every client at the
+       tick of the adoption. A stopgap like the others' until a death in a suit is a respawn. -->
+  <cue name="SuitOne" instantiate="true">
+   <conditions><event_ui_triggered screen="'X4LAN_PilotRespawn'" control="'SuitOne'"/></conditions>
+   <actions>
+    <do_if value="@player.occupiedship.isclass.spacesuit">
+     <set_object_min_hull object="player.occupiedship" exact="100"/>
+     <pause_spacesuit_oxygen object="player.occupiedship"/>
+     <debug_text text="'[X4LAN] PILOT_RESPAWN_SUIT_ONE macro=%s time=%s'.[player.occupiedship.macro.id, player.age]"/>
+    </do_if>
+    <do_else>
+     <debug_text text="'[X4LAN] PILOT_RESPAWN_SUIT_ONE refused=not_in_a_suit time=%s'.[player.age]"/>
+    </do_else>
+   </actions>
+  </cue>
+  <!-- A slot 2..N in the suit built above. The pause in the Suit cue does not last: X4 starts a suit's oxygen again
+       when the suit comes into use (SpaceSuit 0x7f6110: start = now, pause time = -1, the two oxygen events queued
+       again; reached from three of the suit's own vfuncs), and when the supply is over X4 removes the suit, hull floor
+       or not. Two people, 14 Nov: player 2's suit, made and paused at 65.2 s, was gone at 1865.3 s, half an hour to the
+       tick, and both gates stopped (161 controller_lost). So the probe raises this once the slot is in the suit
+       (PILOT_DEATH suited) and once more two seconds on; the action does nothing to a suit that is already paused. -->
+  <cue name="SuitAir" instantiate="true">
+   <conditions><event_ui_triggered screen="'X4LAN_PilotRespawn'" control="'SuitAir'"/></conditions>
+   <actions>
+    <do_if value="@event.param3.$object.isclass.spacesuit">
+     <set_object_min_hull object="event.param3.$object" exact="100"/>
+     <pause_spacesuit_oxygen object="event.param3.$object"/>
+     <debug_text text="'[X4LAN] PILOT_RESPAWN_SUIT_AIR slot=%s time=%s'.[event.param3.$slotname, player.age]"/>
+    </do_if>
+    <do_else>
+     <debug_text text="'[X4LAN] PILOT_RESPAWN_SUIT_AIR slot=%s refused=no_suit time=%s'.[event.param3.$slotname, player.age]"/>
+    </do_else>
+   </actions>
+  </cue>
+  <!-- The suits' oxygen, every 30 s (the probe raises this on every client at the ticks that divide by 900). A pause
+       alone does not hold: X4 queues a suit's oxygen events again at times of its own (SpaceSuit 0x7f6110 with the old
+       start: the pause time is cleared, the start is kept), so a paused suit ran on from then; seen 14 Nov: player 2's
+       suit, paused at 67.4 s, read unpaused after player 1 had left its own ship. So every suit a player is in is
+       filled up and paused here: player 1's own (X4's player is in it) and each one the Suit cue built that still
+       exists. Nothing in the engine is changed; with 30 s between two of these a suit never falls below 98 %. -->
+  <cue name="Air" instantiate="true">
+   <conditions><event_ui_triggered screen="'X4LAN_PilotRespawn'" control="'Air'"/></conditions>
+   <actions>
+    <set_value name="$count" exact="0"/>
+    <do_if value="@player.occupiedship.isclass.spacesuit">
+     <set_object_min_hull object="player.occupiedship" exact="100"/>
+     <set_spacesuit_oxygen object="player.occupiedship" percent="100"/>
+     <pause_spacesuit_oxygen object="player.occupiedship"/>
+     <set_value name="$count" operation="add"/>
+    </do_if>
+    <do_for_each name="$key" valuename="$n" in="State.$slots">
+     <do_if value="@$n.$suit.isoperational">
+      <set_object_min_hull object="$n.$suit" exact="100"/>
+      <set_spacesuit_oxygen object="$n.$suit" percent="100"/>
+      <pause_spacesuit_oxygen object="$n.$suit"/>
+      <set_value name="$count" operation="add"/>
+     </do_if>
+    </do_for_each>
+    <do_if value="$count">
+     <debug_text text="'[X4LAN] PILOT_RESPAWN_AIR suits=%s time=%s'.[$count, player.age]"/>
+    </do_if>
    </actions>
   </cue>
   <cue name="Respawn" instantiate="true">

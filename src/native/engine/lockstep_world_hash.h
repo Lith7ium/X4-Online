@@ -395,7 +395,23 @@ static int world_nav_index_rebuild(unsigned total);
 static world_hash_item *world_hash_item_at(unsigned index) {
     return world_hash_created_count && index>=world_hash_count?&world_hash_created[index-world_hash_count]:&world_hash_items[index];
 }
+/* A dead object is gone for the census. X4's kill ends an object in the simulation (lifecycle +0xd3 = 2 once
+ * KillRecursive is through, the same tick on every client) but the object leaves the ID map only when its last handle
+ * is given up, and handles are also held by a client's own UI (its target elements, its messages). Two people, 14 Nov:
+ * four U::AdSign objects, dead and parentless, still in client 2's map and gone from client 1's; inputs, IDs and the
+ * pilot receipt equal, the census four objects apart from tick 34200 to the end of the session and the relay calling
+ * it a desync for good. So the census asks through this find: a mapped object whose lifecycle is 2 is not there (its
+ * row reads absent, a created one not yet in the census is not taken up). IDs are never recycled (lockstep_runtime_ids.h),
+ * so when a client frees it does not matter. */
+static world_hash_find_fn world_hash_find_raw;
+static uint64_t world_hash_dead_skipped;
+static void *world_hash_find_live(void *map,uint64_t id,unsigned mode) {
+    unsigned char *object=world_hash_find_raw?world_hash_find_raw(map,id,mode):NULL,life=0;
+    if(object && world_hash_reader(object+0xd3,&life,1) && life==2) {++world_hash_dead_skipped;return NULL;}
+    return object;
+}
 static int world_hash_capture_with(uint64_t tick,unsigned schema,world_hash_find_fn find) {
+    world_hash_find_raw=find;find=world_hash_find_live;
     world_hash_stage="schema";
     if((schema!=1 && schema!=2) || (world_hash_scans && schema!=world_hash_schema)) return 0;
     world_static_now=0;world_static_used=0;world_static_tick=tick;

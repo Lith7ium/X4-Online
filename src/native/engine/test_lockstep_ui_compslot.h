@@ -20,7 +20,17 @@ static unsigned char test_uics_original_seat(void *container,unsigned index) {
     ++test_uics_seat_asked;test_uics_seat_answer=((unsigned char(*)(void *,void *))vtable[1])(action,NULL);
     return test_uics_seat_answer;
 }
+/* The census's find (lockstep_world_hash.h): a mapped object that is dead is not there. */
+static unsigned char test_census_object[0x100];
+static void *test_census_find(void *map,uint64_t id,unsigned mode) {(void)map;(void)mode;return id==7?test_census_object:NULL;}
 static void test_ui_compslot(void) {
+    {   const world_hash_find_fn raw=world_hash_find_raw;const uint64_t skipped=world_hash_dead_skipped;
+        memset(test_census_object,0,sizeof(test_census_object));world_hash_find_raw=test_census_find;
+        assert(world_hash_find_live(NULL,7,4)==(void*)test_census_object && !world_hash_find_live(NULL,8,4));   /* alive; not mapped */
+        test_census_object[0xd3]=1;assert(world_hash_find_live(NULL,7,4)==(void*)test_census_object);              /* dying: still there */
+        test_census_object[0xd3]=2;assert(!world_hash_find_live(NULL,7,4) && world_hash_dead_skipped==skipped+1);  /* dead: gone */
+        world_hash_find_raw=raw;world_hash_dead_skipped=skipped;
+    }
     static _Alignas(16) unsigned char region[0x100],single[0x40],multi[0x40],action[3][0x20];static unsigned char *vector[2];
     unsigned char *saved_base=pnat_base;
     memset(single,0,sizeof(single));memset(multi,0,sizeof(multi));memset(action,0,sizeof(action));
