@@ -35,7 +35,44 @@ static void expect_fatal(pid_t child) {
     assert(waitpid(child, &status, 0) == child);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 223);
 }
+static void check_session_environment_admission(void) {
+    const char *required[] = {
+        "X4MP_UI_CALLBACK_OBSERVER", "X4_DEV_UI_RENDER_LEASE", "X4_DEV_UI_LIVE_POSE_OBSERVER",
+        "X4_DEV_UI_SEAT_QUERY", "X4_DEV_UI_SEAT_CORRECTION", "X4_DEV_STOCK_VIEW_FOV",
+        "X4_DEV_STOCK_VIEW_SHARED", "X4_DEV_STOCK_VIEW_COMPONENT_POLICY", "X4_DEV_VIEW_XS",
+        "X4_DEV_VIEW_ANCESTRY", "X4_DEV_VIEW_COMPONENT_TRACE", "X4_DEV_VIEW_PRECOMPARE_TRACE",
+        "X4_DEV_PLAYER_CURSOR", "X4_DEV_PLAYER_FOCUS"
+    };
+    assert(!setenv("X4_DEV_PLAYER_PHASES", "v1-t40", 1));
+    for (unsigned i = 0; i < sizeof required / sizeof required[0]; ++i)
+        assert(!setenv(required[i], "1", 1));
+    const char *accepted[] = {"900", "1800"};
+    for (unsigned i = 0; i < 2; ++i) {
+        assert(!setenv("X4_DEV_UI_SESSION_FRAMES", accepted[i], 1));
+        assert(player_view_query_environment_valid());
+        assert(preload_session_budget.frames == (i ? 1800u : 900u));
+    }
+    assert(!setenv("X4_DEV_UI_SESSION_FRAMES", "1801", 1));
+    assert(!player_view_query_environment_valid());
+    assert(!setenv("X4_DEV_UI_SESSION_FRAMES", "1800", 1));
+    for (unsigned i = 0; i < sizeof required / sizeof required[0]; ++i) {
+        assert(!unsetenv(required[i]));
+        assert(!player_view_query_environment_valid());
+        assert(!setenv(required[i], "1", 1));
+    }
+    assert(!setenv("X4_DEV_UI_OVERLAY_160", "1", 1));
+    assert(!player_view_query_environment_valid());
+    assert(!unsetenv("X4_DEV_UI_OVERLAY_160"));
+    for (unsigned i = 0; i < sizeof required / sizeof required[0]; ++i)
+        assert(!unsetenv(required[i]));
+    assert(!unsetenv("X4_DEV_UI_SESSION_FRAMES"));
+    assert(!unsetenv("X4_DEV_PLAYER_PHASES"));
+    preload_session_budget = (player_ui_session_budget){0};
+    assert(player_startup_phases_parse(NULL, &preload_startup));
+}
+
 int main(void) {
+    check_session_environment_admission();
     game_render_original = original;
     atomic_store(&owner_tid, current_thread());
     atomic_store(&game_render_installed, 1);
@@ -108,22 +145,22 @@ int main(void) {
         game_render_dispatch((void *)0x1234);
     }
     assert(enters == 170 && leaves == 170 && calls == 170 && x4mp_view_query_game_render_progress() == 3);
-    assert(player_ui_session_parse("18000", &preload_session_budget));
-    assert(preload_session_budget.presentation_count == 17990 &&
-           preload_session_budget.presentation_last == 17998 && preload_session_budget.report_tick == 17999);
+    assert(player_ui_session_parse("1800", &preload_session_budget));
+    assert(preload_session_budget.presentation_count == 1790 &&
+           preload_session_budget.presentation_last == 1798 && preload_session_budget.report_tick == 1799);
     atomic_store(&game_render_binding, 0);
     ui_depth[0] = 1;
     assert(x4mp_view_query_game_render_bind(current_thread(), begin, end));
-    assert(game_render_remaining == 17990 && x4mp_view_query_game_render_activate());
+    assert(game_render_remaining == 1790 && x4mp_view_query_game_render_activate());
     ui_depth[0] = 0;
     enters = leaves = calls = 0;
-    for (unsigned i = 0; i < 17990; ++i) {
+    for (unsigned i = 0; i < 1790; ++i) {
         errno = EINVAL;
         game_render_dispatch((void *)0x1234);
     }
-    assert(enters == 17990 && leaves == 17990 && calls == 17990 && x4mp_view_query_game_render_progress() == 3);
+    assert(enters == 1790 && leaves == 1790 && calls == 1790 && x4mp_view_query_game_render_progress() == 3);
     assert(!player_ui_session_parse("179", &preload_session_budget));
-    assert(!player_ui_session_parse("18001", &preload_session_budget));
+    assert(!player_ui_session_parse("1801", &preload_session_budget));
     assert(!player_ui_session_parse("0180", &preload_session_budget));
     assert(!player_ui_session_parse("99999999999999999999999", &preload_session_budget));
     assert(!player_ui_session_parse("180x", &preload_session_budget));

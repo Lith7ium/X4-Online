@@ -51,6 +51,7 @@ typedef struct {
     unsigned cursor_active_only; /* Strict ACTIVE-only unless separate SPACE opt-in is set. */
     unsigned space_context8; /* Requires independent + cursor; authenticated startup ACTIVE=1. */
     unsigned view_capture; /* Separate opt-in for authenticated local VIEW samples. */
+    unsigned primary_fire; /* Explicit finite human primary replay; secondary stays unsupported. */
 } keyboard_replay_config;
 
 typedef struct {
@@ -175,8 +176,9 @@ static inline int keyboard_replay_space_record_active(const keyboard_replay_conf
     if (!config || !config->space_context8 || !record || !after || before > 1 ||
         record->count > STOCK_INPUT_MAX_EVENTS ||
         (record->flags & ~(STOCK_INPUT_ACTIVE | STOCK_INPUT_CURSOR |
-            (config->view_capture ? STOCK_INPUT_VIEW : 0)))) return 0;
-    if (record->steer) return 0;
+            (config->view_capture ? STOCK_INPUT_VIEW : 0) |
+            (config->primary_fire ? STOCK_INPUT_FIRE : 0)))) return 0;
+    if (record->steer || ((record->flags & STOCK_INPUT_FIRE) && !(record->flags & STOCK_INPUT_ACTIVE))) return 0;
     if (record->flags & STOCK_INPUT_VIEW) {
         if (record->view > 3 || !isfinite(record->fov)) return 0;
     } else if (record->view || record->target || stock_input_float_bits(record->fov)) return 0;
@@ -216,15 +218,19 @@ static inline int keyboard_replay_record_valid(const keyboard_replay *replay,
     if (!length || !stock_input_decode(encoded, length, &decoded) ||
         !linux_stock_record_supported(&replay->queue.config.policy, &decoded)) return 0;
     const keyboard_replay_config *config = &replay->config;
+    if (config->primary_fire && (decoded.flags & STOCK_INPUT_FIRE) &&
+        decoded.capture16 == (uint16_t)config->last_capture) return 0;
     if (config->space_context8) {
         unsigned after;
         return keyboard_replay_space_record_active(config, &decoded, replay->space_active[slot - 1], &after);
     }
-    unsigned view_flags = config->view_capture ? STOCK_INPUT_VIEW : 0;
+    unsigned admitted_flags = config->view_capture ? STOCK_INPUT_VIEW : 0;
+    if (config->primary_fire) admitted_flags |= STOCK_INPUT_FIRE;
+    if ((decoded.flags & STOCK_INPUT_FIRE) && !(decoded.flags & STOCK_INPUT_ACTIVE)) return 0;
     if (config->cursor_active_only ?
             (!(decoded.flags & STOCK_INPUT_ACTIVE) ||
-             (decoded.flags & ~(STOCK_INPUT_ACTIVE | STOCK_INPUT_CURSOR | view_flags))) :
-            (decoded.flags & ~view_flags) != 0) return 0;
+             (decoded.flags & ~(STOCK_INPUT_ACTIVE | STOCK_INPUT_CURSOR | admitted_flags))) :
+            (decoded.flags & ~admitted_flags) != 0) return 0;
     for (unsigned index = 0; index < decoded.count; ++index) {
         const stock_input_event *event = &decoded.events[index];
         if (event->kind != STOCK_INPUT_STATE ||
@@ -263,6 +269,7 @@ static inline keyboard_replay_result keyboard_replay_configure(
     if (replay->configured || config->first_capture < 3 || config->independent_players > 1 ||
         config->scripted_throttle > 1 || (config->scripted_throttle && !config->independent_players) ||
         config->cursor_active_only > 1 || (config->cursor_active_only && !config->independent_players) ||
+        config->primary_fire > 1 || (config->primary_fire && (!config->independent_players || !config->cursor_active_only)) ||
         config->view_capture > 1 || (config->view_capture && !config->independent_players) ||
         config->space_context8 > 1 || (config->space_context8 && (!config->independent_players || !config->cursor_active_only))) {
         return KEYBOARD_REPLAY_ARGUMENT;
@@ -279,6 +286,7 @@ static inline keyboard_replay_result keyboard_replay_configure(
     queue_config.policy = linux_stock_keyboard_policy();
     queue_config.policy.allowed_flags = config->cursor_active_only ? STOCK_INPUT_ACTIVE | STOCK_INPUT_CURSOR : 0;
     if (config->view_capture) queue_config.policy.allowed_flags |= STOCK_INPUT_VIEW;
+    if (config->primary_fire) queue_config.policy.allowed_flags |= STOCK_INPUT_FIRE;
     queue_config.policy.allow_space8 = config->space_context8;
     for (unsigned id = 2; id <= (config->independent_players ? 9u : 5u); ++id) {
         (void)linux_stock_allow_state(&queue_config.policy, id);
@@ -356,8 +364,8 @@ static inline keyboard_replay_result keyboard_replay_consume(
 /* Seal events, cursor and VIEW together. NULL VIEW explicitly means absent
  * for this capture, never reuse of the previous generation's selection/FOV.
  * Native admission must decide where absence is expected or a fatal error. */
-static inline keyboard_replay_result keyboard_replay_seal_presentation(
-        keyboard_replay *replay, const float cursor[3], const linux_stock_view_sample *view,
+static inline keyboard_replay_result keyboard_replay_seal_primary_presentation(
+        keyboard_replay *replay, const float cursor[3], const linux_stock_view_sample *view, unsigned primary_held,
         unsigned char *output, size_t capacity, unsigned *length) {
     keyboard_replay_result ready = keyboard_replay_ready(replay);
     if (ready != KEYBOARD_REPLAY_OK) {
@@ -375,6 +383,10 @@ static inline keyboard_replay_result keyboard_replay_seal_presentation(
     if (view && !replay->config.view_capture) return KEYBOARD_REPLAY_ARGUMENT;
     unsigned flags = cursor_required ? STOCK_INPUT_ACTIVE | STOCK_INPUT_CURSOR : 0;
     if (view) flags |= STOCK_INPUT_VIEW;
+    if (primary_held > 1 || (primary_held && (!replay->config.primary_fire || !cursor_required)))
+        return KEYBOARD_REPLAY_ARGUMENT;
+    /* Finite terminal drain travels through the same delayed record as release. */
+    if (primary_held && replay->tick < replay->config.last_capture) flags |= STOCK_INPUT_FIRE;
     replay->queue_result = linux_stock_capture_with_presentation(
         &replay->queue, flags, cursor, view, output, capacity, length);
     if (replay->queue_result == LINUX_STOCK_BUFFER_SMALL) {
@@ -388,6 +400,13 @@ static inline keyboard_replay_result keyboard_replay_seal_presentation(
     }
     replay->phase = KEYBOARD_REPLAY_SEALED;
     return KEYBOARD_REPLAY_OK;
+}
+
+static inline keyboard_replay_result keyboard_replay_seal_presentation(
+        keyboard_replay *replay, const float cursor[3], const linux_stock_view_sample *view,
+        unsigned char *output, size_t capacity, unsigned *length) {
+    if (replay && replay->config.primary_fire) return KEYBOARD_REPLAY_ARGUMENT;
+    return keyboard_replay_seal_primary_presentation(replay, cursor, view, 0, output, capacity, length);
 }
 
 static inline keyboard_replay_result keyboard_replay_seal_cursor(

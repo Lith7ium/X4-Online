@@ -240,11 +240,11 @@ int main(void) {
     assert(!x4mp_live_pose_finish(&snapshot));
     ++projection_fov_completed;
     assert(x4mp_live_pose_finish(&snapshot));
-    assert(player_ui_session_parse("18000", &preload_session_budget));
+    assert(player_ui_session_parse("1800", &preload_session_budget));
     atomic_store(&live_pose_active, 1);
-    live_pose_last_move = 17997;
-    assert(x4mp_live_pose_tick(17998));
-    assert(!x4mp_live_pose_tick(17999));
+    live_pose_last_move = 1797;
+    assert(x4mp_live_pose_tick(1798));
+    assert(!x4mp_live_pose_tick(1799));
     atomic_store(&live_pose_active, 0);
     return 0;
 }

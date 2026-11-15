@@ -255,8 +255,9 @@ function K.shared_t40(P, expected)
  if type(P)~='table' or type(expected)~='table' or P.mode~='coop' or P.tick~=20 or
     P.occupied~='player' or P.reputation~='mirror' or #P.slots~=2 or
     #P.relations~=0 or #P.starts~=0 or #P.kits~=0 then return false end
+ -- Keep this standalone Lua guard aligned with linux_ui_session_budget.
  if #expected~=3 or not K.saved(expected[1]) or not K.saved(expected[2]) or expected[1]==expected[2] or
-    not integer(expected[3],180,900) then return false end
+    not integer(expected[3],180,1800) then return false end
  for key in pairs(expected) do if key~=1 and key~=2 and key~=3 then return false end end
  for index=1,2 do
   local row=P.slots[index]

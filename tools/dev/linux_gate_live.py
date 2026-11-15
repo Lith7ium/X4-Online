@@ -71,9 +71,11 @@ import linux_view_projection_scope_bundle as projection_scope_bundle
 import linux_selection_parity_bundle as selection_parity_bundle
 import linux_player_view_wire_bundle as view_wire_bundle
 import linux_view_performance_bundle as view_performance_bundle
-import linux_semaphore_observer_bundle as semaphore_bundle
+import linux_human_primary_bundle as semaphore_bundle
 import linux_local_stop as local_stop
 import linux_player_fire_observation as fire_observation
+import linux_player_primary_trigger as primary_trigger
+import linux_player_primary_capture as primary_capture
 import linux_cursor_input_trace as mouse_trace
 import linux_view_precompare_bundle as precompare_trace
 import linux_shared_identity_bundle as shared_identity_bundle
@@ -125,6 +127,7 @@ VIEW_QUERY_SOURCES = (
     'src/native/engine/linux/player_ui_seat_transform.h',
     'src/native/engine/linux/player_ui_escape_guard.cpp',
     'src/native/engine/linux/player_ui_escape_guard.h',
+    'src/native/engine/linux/player_view_failure_receipt.h',
     'src/native/engine/linux/player_view_query_preload_pin.h',
     'src/native/engine/linux/gate_player_view_query.h',
     'src/native/engine/lockstep_sha256.h',
@@ -422,6 +425,7 @@ UI_OVERLAY_SOURCES = (
     'tools/dev/linux_ui_seat_pose_evidence.py',
     'src/native/engine/linux/player_ui_escape_guard.cpp',
     'src/native/engine/linux/player_ui_escape_guard.h',
+    'src/native/engine/linux/player_view_failure_receipt.h',
     'tools/dev/build_player_view_query_preload.py',
     'src/native/engine/linux/player_presentation_overlay.h',
     'src/native/engine/linux/player_view_query_preload.c',
@@ -1537,7 +1541,7 @@ def physics_environment_mode(frames, network=False):
     return 'network-frames-discard' if network else ('bounded-frames-discard' if frames > 1 else 'single-frame-discard')
 
 
-def collect_network_client(arguments, stderr, frames, slot, camera=False, throttle=False, throttle_start_tick=5, presentation=False, session_frames=0, startup=None, cursor=False, space=False, *, allow_view=False, allow_semaphore_checkpoint=False, allow_worker_dispatch=False, bootstrap_checkpoint_tick=None):
+def collect_network_client(arguments, stderr, frames, slot, camera=False, throttle=False, throttle_start_tick=5, presentation=False, session_frames=0, startup=None, cursor=False, space=False, *, allow_view=False, allow_primary=False, allow_semaphore_checkpoint=False, allow_worker_dispatch=False, bootstrap_checkpoint_tick=None):
     kwargs = {'allow_camera': True} if camera else {}
     if bootstrap_checkpoint_tick is not None:
         kwargs['bootstrap_checkpoint_tick'] = bootstrap_checkpoint_tick
@@ -1547,6 +1551,8 @@ def collect_network_client(arguments, stderr, frames, slot, camera=False, thrott
         kwargs['allow_semaphore_checkpoint'] = allow_semaphore_checkpoint
     if allow_view is not False:
         kwargs['allow_view'] = allow_view
+    if allow_primary is not False:
+        kwargs['allow_primary'] = allow_primary
     if cursor:
         kwargs['allow_cursor'] = True
     if space:
@@ -1673,7 +1679,20 @@ def validate_lifecycle_discard(manifest, ticks):
 
 
 def validate_recurring_readiness(manifest, ticks, end):
-    if type(end) is not int or not 5 <= end <= 1000 or ticks <= end:
+    try:
+        session = budget_from_options(manifest)
+        if session:
+            resolve_session_options(manifest)
+            if manifest.get('independent_keyboard_frames') != session['frames']:
+                raise ValueError('session and independent frame budgets differ')
+    except ValueError as error:
+        raise SystemExit('invalid recurring session: ' + str(error)) from error
+    if session:
+        # Physics uses this readiness gate too. Admit only the exact end of
+        # its explicit finite budget, matching the native session guard.
+        if type(end) is not int or end != session['recurring_end'] or ticks <= end:
+            raise SystemExit('--controller-recurring-end must match the finite session and be less than effective --ticks')
+    elif type(end) is not int or not 5 <= end <= 1000 or ticks <= end:
         raise SystemExit('--controller-recurring-end must be 5..1000 and less than effective --ticks')
     if not (manifest.get('stock_keyboard_observer') and manifest.get('serial_pathing')):
         raise SystemExit('--controller-recurring-readiness requires bundled observer and serial pathing')
@@ -2158,6 +2177,8 @@ def bundle(args):
     mouse_trace_enabled = mouse_trace.enabled(vars(args))
     precompare_enabled = precompare_trace.enabled(vars(args), component_trace_enabled, ancestry_enabled, bool(independent_frames))
     fire_observation_enabled = fire_observation.enabled(vars(args))
+    primary_trigger_enabled = primary_trigger.enabled(vars(args))
+    primary_capture_enabled = primary_capture.enabled(vars(args))
     if ancestry_enabled and not presentation_enabled:
         raise SystemExit('VIEW ancestry requires presentation identity evidence')
     ui_overlay_enabled = validate_ui_overlay(vars(args), independent_frames)
@@ -2267,9 +2288,9 @@ def bundle(args):
     command += ['--world-log-mode', args.world_log_mode]
     if args.battle:
         command.append('--snapshot-prebind')
-    for name in ('actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state', 'flight_rng', 'flight_full',
+    for name in ('fixture_body_observe', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state', 'flight_rng', 'flight_full',
                  'avoidance_refresh', 'steering_init', 'agent_full', 'spline_diag', 'spline_refresh', 'spline_state', 'params_init', 'strict_physics', 'body_diag', 'params_diag'):
-        if getattr(args, name):
+        if getattr(args, name, False):
             command.append('--' + name.replace('_', '-'))
     if args.world_rolling_slices is not None:
         command += ['--world-rolling-slices', str(args.world_rolling_slices)]
@@ -2776,6 +2797,7 @@ def bundle(args):
         'portable_created',
         'nav_cadence',
         'nav_params_init',
+        'fixture_body_observe',
         'nav_probe_init',
         'clients',
         'fp_redirect_drones',
@@ -2813,6 +2835,9 @@ def bundle(args):
         'player_selection_parity': selection_parity_enabled,
         'player_selection_parity_evidence_version': 1 if selection_parity_enabled else None,
         'player_fire_observation': fire_observation_enabled,
+        'player_primary_trigger_experiment': args.player_primary_trigger_experiment,
+        'player_primary_capture': primary_capture_enabled,
+        'player_primary_human': args.player_primary_human,
         'player_fire_observation_evidence_version': 2 if fire_observation_enabled else None,
         'cursor_input_trace': mouse_trace_enabled,
         'cursor_input_trace_evidence_version': 1 if mouse_trace_enabled else None,
@@ -3001,6 +3026,137 @@ def stop_owned_process(proc, started):
                     proc.wait(timeout=10)
     except ProcessLookupError:
         pass
+
+
+def owned_process_identity(pid):
+    """Read Linux process identity; names and a bare PID are never authority."""
+    path = Path(f'/proc/{pid}')
+    fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+    return {'pid': pid, 'state': fields[0], 'parent': int(fields[1]),
+            'group': int(fields[2]), 'session': int(fields[3]),
+            'start': int(fields[19]), 'uid': path.stat().st_uid}
+
+
+def record_owned_game(proc, started, home, executable, uid):
+    """Seal launch identity before the leader can exit; only its game may match."""
+    identity = owned_process_identity(proc.pid)
+    if (identity['start'] != started or identity['group'] != proc.pid or
+            identity['session'] != proc.pid):
+        raise RuntimeError('game launch group/session identity unavailable')
+    image = executable.stat()
+    return {'leader': proc.pid, 'start': started, 'group': identity['group'],
+            'session': identity['session'], 'uid': uid, 'home': str(home),
+            'executable': str(executable), 'device': image.st_dev, 'inode': image.st_ino}
+
+
+def authenticate_owned_descendant(pid, launch, expected_start=None):
+    """Require this launch session, private HOME and exact executable inode.
+
+    The caller first opens a pidfd and checks that it has not exited. Repeated
+    /proc reads establish identity, while the pidfd alone is used to signal.
+    A vanished leader is allowed; a replacement leader is never allowed.
+    """
+    try:
+        leader = owned_process_identity(launch['leader'])
+    except FileNotFoundError:
+        leader = None
+    if leader is not None and (leader['start'] != launch['start'] or
+            leader['group'] != launch['group'] or leader['session'] != launch['session']):
+        raise RuntimeError('launch leader identity changed')
+    before = owned_process_identity(pid)
+    if before['state'] in ('Z', 'X'):
+        return None
+    if (pid == launch['leader'] or before['group'] != launch['group'] or
+            before['session'] != launch['session'] or before['uid'] != launch['uid'] or
+            before['start'] < launch['start'] or
+            (expected_start is not None and before['start'] != expected_start)):
+        raise RuntimeError('descendant launch identity changed')
+    path = Path(f'/proc/{pid}')
+    homes = [entry[5:] for entry in (path / 'environ').read_bytes().split(b'\0')
+             if entry.startswith(b'HOME=')]
+    if homes != [os.fsencode(launch['home'])]:
+        raise RuntimeError('descendant private HOME mismatch')
+    image = (path / 'exe').stat()
+    if (image.st_dev, image.st_ino) != (launch['device'], launch['inode']):
+        raise RuntimeError('descendant executable mismatch')
+    after = owned_process_identity(pid)
+    if any(before[key] != after[key] for key in ('pid', 'group', 'session', 'start', 'uid')):
+        raise RuntimeError('descendant identity changed during authentication')
+    return before
+
+
+def stop_owned_game_descendants(launch, timeout=1.0):
+    """Clean orphaned game children individually; preserve unknown survivors.
+
+    No process-group signal is issued after the leader exits. pidfds prevent a
+    checked PID from redirecting a later signal to a newly created process.
+    Refusals remain reviewable even when another process later exits itself.
+    """
+    import select
+    evidence = {'launch': dict(launch), 'processes': [], 'refused': []}
+    targets = []
+    try:
+        for pid in owned_group_members(launch['group'], launch['start']):
+            if pid == launch['leader']:
+                continue
+            row = {'pid': pid, 'signals': []}
+            evidence['processes'].append(row)
+            fd = None
+            try:
+                fd = os.pidfd_open(pid, 0)
+                if select.select([fd], [], [], 0)[0]:
+                    row['outcome'] = 'already_exited'
+                    continue
+                identity = authenticate_owned_descendant(pid, launch)
+                if identity is None:
+                    row['outcome'] = 'already_exited'
+                    continue
+                row['start'] = identity['start']
+                targets.append((fd, row))
+                fd = None
+            except ProcessLookupError:
+                row['outcome'] = 'already_exited'
+            except (OSError, RuntimeError, ValueError, IndexError) as error:
+                row['outcome'] = 'refused'
+                row['reason'] = str(error)
+                evidence['refused'].append(dict(row))
+            finally:
+                if fd is not None:
+                    os.close(fd)
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for fd, row in targets:
+                if row.get('outcome'):
+                    continue
+                try:
+                    if select.select([fd], [], [], 0)[0]:
+                        row['outcome'] = 'exited'
+                        continue
+                    if authenticate_owned_descendant(row['pid'], launch, row['start']) is None:
+                        row['outcome'] = 'exited'
+                        continue
+                    signal.pidfd_send_signal(fd, sig)
+                    row['signals'].append(sig.name)
+                except ProcessLookupError:
+                    row['outcome'] = 'exited'
+                except (OSError, RuntimeError, ValueError, IndexError) as error:
+                    row['outcome'] = 'refused'
+                    row['reason'] = str(error)
+                    evidence['refused'].append(dict(row))
+            deadline = time.monotonic() + timeout
+            while any(not row.get('outcome') for _, row in targets):
+                for fd, row in targets:
+                    if not row.get('outcome') and select.select([fd], [], [], 0)[0]:
+                        row['outcome'] = 'exited'
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.02)
+        for _, row in targets:
+            if not row.get('outcome'):
+                row['outcome'] = 'still_running'
+        return evidence
+    finally:
+        for fd, _ in targets:
+            os.close(fd)
 
 
 def wait_owned_groups(starts, timeout=5):
@@ -3401,6 +3557,8 @@ def run(args):
     semaphore_observer_enabled = semaphore_bundle.enabled(manifest)
     view_wire_enabled = view_wire_bundle.enabled(manifest)
     fire_observation_enabled = fire_observation.enabled(manifest)
+    primary_trigger_enabled = primary_trigger.enabled(manifest)
+    primary_capture_enabled = primary_capture.enabled(manifest)
     space_enabled = space_bundle.enabled(manifest)
     component_trace_enabled = component_trace_bundle.enabled(manifest, ancestry_enabled)
     mouse_trace_enabled = mouse_trace.enabled(manifest)
@@ -3603,6 +3761,10 @@ def run(args):
     memory = memory_available_gib()
     clients = manifest.get('clients', 2)
     external = args.relay_port is not None
+    try:
+        primary_trigger.validate_local_mode(manifest, external)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     if external != bool(args.relay_token) or external != bool(args.local_slots):
         raise SystemExit('--relay-port, --relay-token and --local-slots go together')
     try:
@@ -3732,6 +3894,7 @@ def run(args):
                                          'readiness_only': True, 'other_threads_excluded': False}
     procs, starts, logs, games = [], {}, [], []
     local_stop_channels = []
+    owned_game_launches = {}
     cases_by_slot = {}
     cancelled = []
     # bwrap binds each private lock over this path, and cannot create it in the read-only view.
@@ -3828,6 +3991,8 @@ def run(args):
             env = mouse_trace.environment(env, mouse_trace_enabled)
             env = precompare_trace.environment(env, precompare_enabled)
             env = fire_observation.environment(env, fire_observation_enabled)
+            env = primary_trigger.environment(env, primary_trigger_enabled, primary_trigger.human_enabled(manifest))
+            env = primary_capture.environment(env, primary_capture_enabled)
             env = camera_refill_bundle.environment(env, camera_refill_enabled, slot)
             env.update(presentation_fork_environment(fork_enabled))
             env.update(ui_overlay_environment(ui_overlay_enabled, slot, manifest.get('player_ui_overlay_callbacks', 1), manifest.get('player_ui_session_frames', 0),
@@ -3869,6 +4034,8 @@ def run(args):
 
             process, stop_channel = local_stop.launch_game(
                 slot, env, game_command, launch_game_command, local_stop_enabled)
+            owned_game_launches[process.pid] = record_owned_game(
+                process, starts[process.pid], case / 'home', game / 'X4', user.pw_uid)
             if stop_channel is not None:
                 local_stop_channels.append(stop_channel)
             games_by_slot[slot] = (process, profile)
@@ -3953,6 +4120,16 @@ def run(args):
                 evidence = result['local_stop']['clients'].setdefault(str(channel.slot), dict(channel.evidence))
                 evidence.update(channel.evidence)
                 evidence['returncode_after_fallback'] = channel.process.poll()
+        if owned_game_launches:
+            result['owned_descendant_cleanup'] = {}
+            for pid, launch_identity in owned_game_launches.items():
+                try:
+                    evidence = stop_owned_game_descendants(launch_identity)
+                    result['owned_descendant_cleanup'][str(pid)] = evidence
+                    if evidence['refused']:
+                        result.setdefault('cleanup_errors', []).append('owned descendant identity refused')
+                except (OSError, RuntimeError) as error:
+                    result.setdefault('cleanup_errors', []).append('owned descendants: ' + str(error))
         result['owned_processes_remaining'] = wait_owned_groups(starts)
         if result['owned_processes_remaining']:
             result.setdefault('cleanup_errors', []).append('owned process groups still have members')
@@ -3998,7 +4175,7 @@ def run(args):
                             arguments, stderr, physics_frames, slot,
                             camera=camera_enabled, throttle=bool(throttle_environment),
                             throttle_start_tick=manifest.get('player_throttle_start_tick') or 5,
-                            presentation=presentation_enabled, session_frames=manifest.get('player_ui_session_frames',0), startup=manifest.get('player_startup_phases'), cursor=cursor_enabled, space=space_enabled, allow_view=view_wire_enabled,
+                            presentation=presentation_enabled, session_frames=manifest.get('player_ui_session_frames',0), startup=manifest.get('player_startup_phases'), cursor=cursor_enabled, space=space_enabled, allow_view=view_wire_enabled, allow_primary=primary_trigger.human_enabled(manifest),
                             allow_semaphore_checkpoint=semaphore_observer_enabled,
                             allow_worker_dispatch=manifest.get('worker_dispatch', False),
                             bootstrap_checkpoint_tick=manifest.get('bootstrap_checkpoint_tick'))
@@ -4216,6 +4393,29 @@ def run(args):
             result['view_precompare_trace_error'] = str(error)
             result['pass'] = False
             result.get('physics_discard', {})['pass'] = False
+    if 'player_primary_capture' in manifest:
+        try:
+            bounded = result.get('physics_discard', {})
+            proofs = {str(slot): primary_capture.collect(run_dir / f'game{slot}-stderr.log',
+                      bounded.get('clients', {}).get(str(slot), {}), manifest, slot) for slot in local}
+            result['player_primary_capture_evidence'] = proofs
+            if any(not proof['pass'] for proof in proofs.values()):
+                result['pass'] = False
+        except Exception as error:
+            result['player_primary_capture_error'] = str(error)
+            result['pass'] = False
+    if 'player_primary_trigger_experiment' in manifest:
+        try:
+            bounded = result.get('physics_discard', {})
+            proofs = {str(slot): primary_trigger.collect(run_dir / f'game{slot}-stderr.log',
+                      bounded.get('clients', {}).get(str(slot), {}), manifest) for slot in local}
+            result['player_primary_trigger_evidence'] = proofs
+            if any(not proof['pass'] for proof in proofs.values()):
+                result['pass'] = bounded['pass'] = False
+        except Exception as error:
+            result['player_primary_trigger_error'] = str(error)
+            result['pass'] = False
+            result.get('physics_discard', {})['pass'] = False
     if 'player_fire_observation' in manifest:
         collect_fire_observations(result, local, games, run_dir, fire_observation_enabled, manifest)
     if session:
@@ -4291,6 +4491,12 @@ def main(argv=None):
     shared_identity_bundle.add_arguments(b)
     b.add_argument('--view-ancestry-observer', action='store_true',
                    help='bounded owner-thread VIEW ancestry sampling; requires presentation and view-query observers')
+    b.add_argument('--player-primary-capture', action='store_true',
+                   help='capture native primary held/edges only; suppress native fire; no FIRE wire replay')
+    b.add_argument('--player-primary-human', action='store_true',
+                   help='dev-only finite primary FIRE replay from admitted capture; both local clients use one sealed bundle')
+    b.add_argument('--player-primary-trigger-experiment', action='store_true',
+                   help='dev-only shared six-frame primary burst at ticks 70..75; no human FIRE replay')
     b.add_argument('--player-fire-observation', action='store_true',
                    help='observe the first primary-group P2 gun once in a finite T40 physics session; no firing mutation')
     b.add_argument('--cursor-input-trace', action='store_true',
@@ -4323,7 +4529,7 @@ def main(argv=None):
     b.add_argument('--player-startup-phases', choices=('v1-t40',),
                    help='explicit common startup tuple; requires finite session mode')
     b.add_argument('--player-ui-session-frames', type=int, default=0, metavar='N',
-                   help='explicit finite disposable session, 180..900 frames; implies UI budget and excludes legacy overlay flags')
+                   help='explicit finite disposable session, 180..1800 frames; implies UI budget and excludes legacy overlay flags')
     b.add_argument('--player-cursor-active-flight', action='store_true',
                    help='default-off finite T40 active-flight cursor replay only; excludes context, VIEW, AIM and FIRE')
     b.add_argument('--player-space-context', action='store_true',
@@ -4453,7 +4659,8 @@ def main(argv=None):
                    "(native_gate_mining_camera = 'view')")
     b.add_argument('--battle', action='store_true', help="the battle fixture: native_gate_hash = 'battle' with the snapshot's "
                    'twelve (--mode battle --snapshot-prebind; needs --serial-pathing, --path-determinism 1 or 3 and world identities)')
-    for name, why in (('actor-diag', "the fixture actors' raw native state row (gate.actor)"),
+    for name, why in (('fixture-body-observe', 'observe fixture 6 body bits beside its original getter at ticks 1400..1600 without actor/shield refresh'),
+                      ('actor-diag', "the fixture actors' raw native state row (gate.actor)"),
                       ('strict-state', 'the raw hull, shield and navigation banks in the digest (needs --actor-diag)'),
                       ('shield-refresh', 'GetShieldPercent at the game time before the shield is read (needs --strict-state)'),
                       ('order-state', "the fixture's order queues in the digest"), ('fleet-state', 'their fleet membership in the digest'),

@@ -13,6 +13,11 @@
 #include "player_ui_session_budget.h"
 #include "gate_player_startup_phases.h"
 
+static int player_primary_capture_request(unsigned independent);
+static int player_primary_capture_admit(uint64_t generation);
+static int player_primary_capture_seal(uint64_t generation);
+static inline int player_primary_capture_sample(uint64_t generation, unsigned *held);
+
 static int player_cursor_mode(void);
 static int player_space_mode(void);
 static int player_space_collect_identity(stock_keyboard_identity_sample *sample, unsigned local, unsigned delayed);
@@ -153,7 +158,8 @@ static int keyboard_probe_admit(void) {
     }
     if (keyboard_replay_begin(&keyboard_probe_queue, stats.issued) != KEYBOARD_REPLAY_OK)
         return keyboard_probe_fail("open_capture_tick");
-    return player_space_admit(stats.issued) || keyboard_probe_fail("space_admission");
+    return (player_primary_capture_admit(stats.issued) && player_space_admit(stats.issued)) ||
+        keyboard_probe_fail("space_admission");
 }
 
 static int keyboard_probe_apply_event(void *context, unsigned id, unsigned char state) {
@@ -291,10 +297,14 @@ static int keyboard_probe_apply_slot(void *context, uint64_t generation, unsigne
 /* Check the admitted VIEW route after its transaction has committed and
  * before either player's first native effect. The first check therefore sees
  * the initial bind; later checks also cover the delayed drain frames. */
+static int player_primary_trigger_prepare(uint64_t generation, const uint64_t saved[2],
+                                          const stock_input_record records[2]);
+
 static int keyboard_probe_prepare_independent_slots(void *context, uint64_t generation,
                                                     const uint64_t saved[2],
                                                     const stock_input_record records[2]) {
-    if (!player_input_prepare_slots(context, generation, saved, records)) return 0;
+    if (!player_input_prepare_slots(context, generation, saved, records) ||
+        !player_primary_trigger_prepare(generation, saved, records)) return 0;
     if (!keyboard_view_wire.admitted) return !keyboard_probe_queue.config.view_capture;
     return keyboard_probe_queue.config.view_capture == 1 && keyboard_view_wire.ready &&
         keyboard_view_wire.ready(keyboard_view_wire.context, &keyboard_probe_queue.config,
@@ -439,12 +449,19 @@ static int lua_stock_keyboard_replay_request(lua_State *L) {
         (!independent || config.saved_ship_ids[1] == SEAT_PREFLIGHT_TARGET_SAVED);
     if (valid) valid = player_cursor_request((unsigned)independent);
     if (valid) valid = player_space_request((unsigned)independent);
+    if (valid) valid = player_primary_capture_request((unsigned)independent);
     if (valid) valid = player_stock_view_wire_request();
     if (valid) {
         config.own_slot = (unsigned)slot;
         config.independent_players = (unsigned)independent;
         config.cursor_active_only = (unsigned)player_cursor_mode();
         config.space_context8 = (unsigned)player_space_mode();
+        const char *primary_mode = getenv("X4_DEV_PRIMARY_TRIGGER");
+        config.primary_fire = primary_mode && !strcmp(primary_mode, "human-v1");
+        if (config.primary_fire && (!independent || !requested_session.frames || requested_session.frames > 900 ||
+            !getenv("X4_DEV_PRIMARY_CAPTURE") || strcmp(getenv("X4_DEV_PRIMARY_CAPTURE"), "capture-v1"))) {
+            p_lua_pushnumber(L, 0); return 1;
+        }
         config.scripted_throttle = independent && player_throttle_enabled();
         config.first_capture = independent ? player_startup()->capture : 3;
         config.last_capture = (uint64_t)last;
@@ -507,7 +524,14 @@ static int lua_stock_keyboard_replay_capture(lua_State *L) {
         }
         if (present) presentation = &view;
     }
-    if (keyboard_replay_seal_presentation(&keyboard_probe_queue, sample, presentation,
+    if (!player_primary_capture_seal(stats.issued)) {
+        keyboard_probe_fail("primary_capture_seal"); p_lua_pushnil(L); return 1;
+    }
+    unsigned primary_held = 0;
+    if (keyboard_probe_queue.config.primary_fire && !player_primary_capture_sample(stats.issued, &primary_held)) {
+        keyboard_probe_fail("primary_capture_sample"); p_lua_pushnil(L); return 1;
+    }
+    if (keyboard_replay_seal_primary_presentation(&keyboard_probe_queue, sample, presentation, primary_held,
             bytes, sizeof(bytes), &length) != KEYBOARD_REPLAY_OK) {
         keyboard_probe_fail("capture_seal");
         p_lua_pushnil(L);

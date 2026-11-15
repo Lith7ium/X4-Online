@@ -25,14 +25,15 @@ extern void player_stock_view_engine_bridge(void) __attribute__((visibility("hid
 static unsigned stock_view_component_enter(void) {
     unsigned state = stock_view_policy_enter(&stock_view_component_active, &stock_view_component_inflight);
     unsigned active = state == 1;
-    if (active && stock_view_component_depth++) _exit(223);
+    if (active && stock_view_component_depth++) PLAYER_VIEW_FAILURE("component_nested");
     return active;
 }
 static uint64_t stock_view_component_finish(unsigned active, unsigned site, uintptr_t component, uint64_t raw) {
     if (active) {
         unsigned char result = (unsigned char)raw;
-        if (!stock_view_component_policy(site, component, (unsigned char)raw, &result) ||
-            (result != (unsigned char)raw && result > 1)) _exit(223);
+        if (!stock_view_component_policy(site, component, (unsigned char)raw, &result))
+            PLAYER_VIEW_FAILURE("component_policy");
+        if (result != (unsigned char)raw && result > 1) PLAYER_VIEW_FAILURE("component_result");
         raw = (raw & ~UINT64_C(0xff)) | result;
         --stock_view_component_depth;
     }

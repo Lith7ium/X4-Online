@@ -210,11 +210,10 @@ class ViewWireBundleTests(unittest.TestCase):
             result = original_main(arguments)
             output = Path(arguments[arguments.index('--out') + 1])
             manifest = json.loads((output / 'manifest.json').read_text())
-            self.assertEqual(manifest['view_query_source_version'], 18)
+            self.assertEqual(manifest['view_query_source_version'], live.semaphore_bundle.SOURCE_VERSION)
             self.assertIs(manifest['player_view_wire'], active)
             self.assertEqual(manifest['player_view_wire_evidence_version'], 1 if active else None)
-            import linux_semaphore_observer_bundle as performance
-            performance.validate_bundle(output, manifest, True)
+            live.semaphore_bundle.validate_bundle(output, manifest, True)
             self.assertEqual(manifest['files']['linux_view_xs_bundle.py'], live.sha(output / 'linux_view_xs_bundle.py'))
             seen.append(active)
             return result

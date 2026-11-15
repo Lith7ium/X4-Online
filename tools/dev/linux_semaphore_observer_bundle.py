@@ -30,6 +30,8 @@ EXTRA_SOURCES = tuple('src/native/engine/linux/' + x for x in (
     'test_semaphore_pin_provider.c')) + (
     'tests/test_linux_player_presentation_quiet.py', 'src/native/engine/lockstep_gate_exports.h', 'tests/test_linux_player_dispatch_stop.py', 'tests/test_linux_player_dispatch_fork_park.py', 'tests/test_linux_player_dispatch_log_prefix.py', 'tests/test_linux_player_worker_dispatch_adapter.py', 'tests/test_linux_player_worker_dispatch_contract.py',
     'tools/dev/linux_local_stop.py', 'tests/test_linux_local_stop.py',
+    'tools/dev/native_gate_fixture_body_observer.lua', 'tools/dev/build_native_gate_overlay.py',
+    'tests/test_linux_fixture_body_observer.py',
     'tests/test_linux_semaphore_bootstrap_checkpoint.py',
     'tools/dev/build_linux_semaphore_observer.py', 'tools/dev/linux_semaphore_observer_bundle.py',
     'tools/dev/exec_linux_semaphore_observer.py', 'tests/test_linux_semaphore_original_view.py',

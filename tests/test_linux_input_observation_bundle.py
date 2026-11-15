@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import linux_gate_live as live
 import linux_input_observation_bundle as combined
-import linux_semaphore_observer_bundle as latest
+from linux_gate_live import semaphore_bundle as latest
 import linux_player_space_bundle as space
 import linux_cursor_input_trace as mouse
 import linux_view_precompare_bundle as pre

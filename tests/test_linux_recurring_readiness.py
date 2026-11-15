@@ -1,5 +1,7 @@
 """Recurring readiness protocol checks; no game or native process is launched."""
 import io
+import ast
+import inspect
 import json
 import os
 from pathlib import Path
@@ -20,6 +22,69 @@ def rows(end=30):
 
 
 class RecurringReadinessTests(unittest.TestCase):
+    def session_manifest(self):
+        return dict(stock_keyboard_observer=True, serial_pathing=True,
+                    player_ui_session_frames=1800, independent_keyboard_frames=1800,
+                    player_startup_phases='v1-t40', player_ui_seat_query_probe=True,
+                    player_ui_live_pose_observer=True, player_ui_seat_correction=True,
+                    player_ui_render_lease=True, stock_keyboard_replay_probe=True,
+                    player_factory_probe=True, player_factory_retain_until=60,
+                    player_lifetime_sha256='a' * 64)
+
+    def test_finite_session_exact_end_and_legacy_limit(self):
+        manifest = self.session_manifest()
+        live.validate_recurring_readiness(manifest, 1840, 1839)
+        for end in (1000, 1838, 1840, True, None):
+            with self.subTest(end=end), self.assertRaises(SystemExit):
+                live.validate_recurring_readiness(manifest, 2000, end)
+        with self.assertRaises(SystemExit):
+            live.validate_recurring_readiness(manifest, 1839, 1839)
+        for changes in ({'player_ui_session_frames': 1801},
+                        {'player_ui_session_frames': True},
+                        {'independent_keyboard_frames': 900},
+                        {'player_ui_render_lease': False}):
+            with self.subTest(changes=changes), self.assertRaises(SystemExit):
+                live.validate_recurring_readiness(dict(manifest, **changes), 2000, 1839)
+        legacy = dict(stock_keyboard_observer=True, serial_pathing=True)
+        live.validate_recurring_readiness(legacy, 1001, 1000)
+        with self.assertRaises(SystemExit):
+            live.validate_recurring_readiness(legacy, 2000, 1001)
+
+    def test_actual_physics_prelaunch_path_uses_session_end(self):
+        # Execute the actual contiguous run() admission block. In this path
+        # physics implicitly enables recurring tail readiness; a standalone
+        # readiness helper test would miss that dependency.
+        function = ast.parse(inspect.getsource(live.run)).body[0]
+        start = next(i for i, node in enumerate(function.body)
+                     if isinstance(node, ast.Assign) and any(
+                         isinstance(target, ast.Name) and target.id == 'lifetime_preload'
+                         for target in node.targets))
+        end = next(i for i, node in enumerate(function.body[start:], start)
+                   if isinstance(node, ast.If) and isinstance(node.test, ast.Name)
+                   and node.test.id == 'recurring')
+        block = compile(ast.Module(body=function.body[start:end + 1], type_ignores=[]),
+                        '<actual physics prelaunch admission>', 'exec')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            collector = root / 'linux_player_network_evidence.py'
+            collector.write_text('# sealed collector fixture\n')
+            manifest = dict(self.session_manifest(), files={collector.name: 'fixture'})
+            for requested in (None, 1839, 1838, 1840):
+                scope = dict(vars(live), manifest=manifest, root=root, ticks=1840,
+                             args=SimpleNamespace(controller_physics_discard=True,
+                                                  controller_recurring_end=requested),
+                             physics=True, physics_frames=1800, network_physics=True,
+                             input_lifecycle=False)
+                with self.subTest(requested=requested), mock.patch.object(live.subprocess, 'Popen') as launch:
+                    if requested in (None, 1839):
+                        exec(block, scope)
+                        self.assertTrue(scope['recurring_tail'])
+                        self.assertEqual(scope['recurring_end'], 1839)
+                    else:
+                        with self.assertRaises(SystemExit):
+                            exec(block, scope)
+                    launch.assert_not_called()
+
     def test_complete_window_and_narrow_claim(self):
         for end in (5, 30, 1000):
             evidence = live.recurring_readiness_evidence(rows(end), end)

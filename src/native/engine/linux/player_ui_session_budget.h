@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include "player_startup_phases.h"
 
+/* Finite session admission, shared by native consumers. */
+#define PLAYER_UI_SESSION_MAX_FRAMES 1800u
+
 /* Frames are physics steps, nominally 30 per second. The final six steps
  * drain the guarded presentation lease before the disposable process exits. */
 typedef struct {
@@ -20,9 +23,9 @@ static inline int player_ui_session_parse_phased(const char *text, const player_
     if (!text || !out || !player_startup_phases_valid(phase) || !*text || (*text == '0' && text[1])) return 0;
     uint32_t frames = 0;
     for (const char *cursor = text; *cursor; ++cursor) {
-        if (*cursor < '0' || *cursor > '9' || frames > 18000u / 10u) return 0;
+        if (*cursor < '0' || *cursor > '9' || frames > PLAYER_UI_SESSION_MAX_FRAMES / 10u) return 0;
         frames = frames * 10u + (uint32_t)(*cursor - '0');
-        if (frames > 18000u) return 0;
+        if (frames > PLAYER_UI_SESSION_MAX_FRAMES) return 0;
     }
     if (frames < 180u) return 0;
     uint64_t end = phase->apply + frames - 1u;

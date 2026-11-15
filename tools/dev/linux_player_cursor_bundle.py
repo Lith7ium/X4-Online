@@ -5,7 +5,7 @@ import re
 import struct
 
 import linux_stock_view_fov_observer as previous
-from linux_ui_session_budget import session_budget
+from linux_ui_session_budget import MAX_FRAMES, MIN_FRAMES, session_budget
 
 SOURCE_VERSION = 5
 SOURCES = tuple('src/native/engine/linux/' + name for name in (
@@ -26,7 +26,7 @@ def enabled(options):
     if value and (options.get('player_startup_phases') != 'v1-t40' or
                   options.get('player_view_query_observer') is not True or
                   type(options.get('player_ui_session_frames')) is not int or
-                  not 180 <= options['player_ui_session_frames'] <= 900 or
+                  not MIN_FRAMES <= options['player_ui_session_frames'] <= MAX_FRAMES or
                   options.get('independent_keyboard_frames') != options['player_ui_session_frames']):
         raise ValueError('player cursor requires finite T40 independent physics and sealed preload')
     return value

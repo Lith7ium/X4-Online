@@ -24,6 +24,14 @@ class PlayerStartupPhaseTests(unittest.TestCase):
                        X4LAN_PLAYER_CONTROL_RECURRING_END='939')
             env.pop('X4_DEV_P2_THROTTLE', None)
             self.assertEqual(subprocess.run([str(executable)], env=env, capture_output=True).returncode, 0)
+            longer = dict(env, X4_DEV_UI_SESSION_FRAMES='1800',
+                          X4LAN_PLAYER_CONTROL_RECURRING_END='1839')
+            self.assertEqual(subprocess.run([str(executable)], env=longer, capture_output=True).returncode, 0)
+            for end in ('1838', '1840'):
+                invalid = dict(longer, X4LAN_PLAYER_CONTROL_RECURRING_END=end)
+                result = subprocess.run([str(executable)], env=invalid, capture_output=True)
+                self.assertEqual(result.returncode, 222, end)
+                self.assertIn(b'PLAYER_PHASES_FATAL', result.stderr)
             for name, value in [('X4LAN_PLAYER_CONTROL_RECURRING_END', '904'),
                                 ('X4_DEV_UI_SESSION_FRAMES', 'invalid'),
                                 ('X4_DEV_P2_THROTTLE', 'state13-discard'),

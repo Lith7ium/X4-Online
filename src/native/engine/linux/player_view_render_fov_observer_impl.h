@@ -15,7 +15,7 @@ static unsigned char render_fov_frame[48] __attribute__((aligned(8)));
 __attribute__((visibility("hidden"), noinline)) float player_view_render_fov_dispatch(void *camera) {
     int before = errno;
     unsigned active = stock_view_policy_enter(&render_fov_active, &render_fov_inflight);
-    if (active && render_fov_depth++) _exit(223);
+    if (active && render_fov_depth++) PLAYER_VIEW_FAILURE("render_fov_nested");
     errno = before;
     float result = render_fov_original(camera);
     int after = errno;

@@ -32,7 +32,8 @@ __attribute__((visibility("hidden"), noinline)) int player_stock_view_mode_dispa
     int saved_errno = errno, result = original;
     unsigned state = stock_view_policy_enter(&stock_view_fov_active, &stock_view_fov_inflight);
     if (state == 1) {
-        if (stock_view_fov_depth++ || !stock_view_fov_mode_policy(controller, original, site, &result)) _exit(223);
+        if (stock_view_fov_depth++) PLAYER_VIEW_FAILURE("fov_mode_nested");
+        if (!stock_view_fov_mode_policy(controller, original, site, &result)) PLAYER_VIEW_FAILURE("fov_mode_policy");
         --stock_view_fov_depth;
     }
     stock_view_policy_leave(&stock_view_fov_inflight);
@@ -44,14 +45,14 @@ __attribute__((visibility("hidden"), noinline)) float player_stock_view_fov_disp
     int before = errno;
     unsigned policy = stock_view_policy_enter(&stock_view_fov_active, &stock_view_fov_inflight);
     unsigned observe = stock_view_policy_enter(&stock_view_fov_observe_active, &stock_view_fov_observe_inflight);
-    if ((policy || observe) && stock_view_fov_depth++) _exit(223);
+    if ((policy || observe) && stock_view_fov_depth++) PLAYER_VIEW_FAILURE("fov_value_nested");
     errno = before;
     float original = stock_view_fov_original(camera);
     int after = errno;
     float result = original;
     if (observe) stock_view_fov_observer(controller, (uintptr_t)camera, original);
     errno = after; /* observer must not alter the existing policy input */
-    if (policy && !stock_view_fov_value_policy(controller, original, &result)) _exit(223);
+    if (policy && !stock_view_fov_value_policy(controller, original, &result)) PLAYER_VIEW_FAILURE("fov_value_policy");
     if (policy || observe) --stock_view_fov_depth;
     stock_view_policy_leave(&stock_view_fov_observe_inflight);
     stock_view_policy_leave(&stock_view_fov_inflight);

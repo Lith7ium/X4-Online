@@ -76,11 +76,17 @@ int main(void) {
     errno = 11;
     assert(player_stock_view_fov_dispatch((void *)(uintptr_t)7, 42) == 1.5f && errno == 29);
     assert(original_calls == 3 && observer_calls == 2);
+    int receipt[2]; assert(!pipe(receipt));
     pid_t child = fork();
     assert(child >= 0);
-    if (!child) { stock_view_fov_mode_policy = refuse_mode; player_stock_view_mode_dispatch(42, 7, 1); _exit(1); }
+    if (!child) { close(receipt[0]); assert(dup2(receipt[1], 2) == 2); close(receipt[1]); stock_view_fov_mode_policy = refuse_mode; player_stock_view_mode_dispatch(42, 7, 1); _exit(1); }
     int status = 0;
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 223);
+    close(receipt[1]);
+    char message[128] = {0};
+    const char *expected = "X4 VIEW FATAL reason=fov_mode_policy\n";
+    assert(read(receipt[0], message, sizeof message - 1) == (ssize_t)strlen(expected));
+    assert(!strcmp(message, expected)); close(receipt[0]);
     for (int site = 0; site < 2; ++site) {
         child = fork(); assert(child >= 0);
         if (!child) {

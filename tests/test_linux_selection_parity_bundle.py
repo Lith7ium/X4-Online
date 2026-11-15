@@ -129,11 +129,10 @@ class SelectionParityBundleTests(unittest.TestCase):
             result = original_main(arguments)
             output = Path(arguments[arguments.index('--out') + 1])
             manifest = json.loads((output / 'manifest.json').read_text())
-            self.assertEqual(manifest['view_query_source_version'], 18)
+            self.assertEqual(manifest['view_query_source_version'], live.semaphore_bundle.SOURCE_VERSION)
             self.assertIs(manifest['player_selection_parity'], active)
             self.assertEqual(manifest['player_selection_parity_evidence_version'], 1 if active else None)
-            import linux_semaphore_observer_bundle as component
-            component.validate_bundle(output, manifest, True)
+            live.semaphore_bundle.validate_bundle(output, manifest, True)
             for name in parity.SOURCES:
                 self.assertEqual(manifest['files']['source-receipts/' + name],
                                  live.sha(output / 'source-receipts' / name))

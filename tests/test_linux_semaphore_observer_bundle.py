@@ -275,7 +275,7 @@ class SemaphoreBundleBuildTests(unittest.TestCase):
                     patch.object(live.shutil, 'copy2', side_effect=copy_file):
                 result = original_main(arguments)
             manifest = json.loads((output / 'manifest.json').read_text())
-            self.assertEqual(manifest['view_query_source_version'], 18)
+            self.assertEqual(manifest['view_query_source_version'], live.semaphore_bundle.SOURCE_VERSION)
             for name in ('linux_gate_live.py', 'linux_stock_view_fov_observer.py',
                          'linux_player_frames_evidence.py', 'linux_player_network_evidence.py'):
                 key = 'source-receipts/tools/dev/' + name

@@ -1,8 +1,9 @@
-"""Finite 900 admission, complete synthetic validation, then compact output."""
+"""Finite session admission, complete synthetic validation, then compact output."""
 import copy
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,6 +20,38 @@ import test_linux_ui_render_lease_evidence as render_fixture
 
 
 class SessionAdmissionTests(unittest.TestCase):
+    def test_python_native_budgets_agree_at_long_session_boundary(self):
+        # Compare actual parser output, including the drain/report positions,
+        # instead of matching duplicated constants in source text.
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'budget.c'
+            binary = Path(directory) / 'budget'
+            source.write_text('''
+#include "player_ui_session_budget.h"
+#include <stdio.h>
+int main(int argc, char **argv) {
+    player_startup_phases phase;
+    player_ui_session_budget budget;
+    if (argc != 2 || !player_startup_phases_parse("v1-t40", &phase) ||
+        !player_ui_session_parse_phased(argv[1], &phase, &budget)) return 1;
+    printf("%u %u %u %u %u\\n", budget.last_capture, budget.recurring_end,
+        budget.presentation_count, budget.presentation_last, budget.report_tick);
+    return 0;
+}
+''')
+            subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-I',
+                            str(ROOT / 'src/native/engine/linux'), str(source), '-o', str(binary)], check=True)
+            for frames in (900, 1800):
+                budget = session_budget(frames, 'v1-t40')
+                actual = subprocess.check_output([str(binary), str(frames)], text=True)
+                self.assertEqual(tuple(map(int, actual.split())), tuple(budget[key] for key in
+                    ('last_capture', 'recurring_end', 'callbacks', 'last', 'report_tick')))
+                self.assertEqual(budget['recurring_end'] - budget['last'], 6)
+                self.assertEqual(budget['disk_limit'], (512 << 20) + frames * (256 << 10))
+            self.assertEqual(subprocess.run([str(binary), '1801']).returncode, 1)
+            with self.assertRaises(ValueError):
+                session_budget(1801, 'v1-t40')
+
     def options(self):
         options = render_fixture.RenderLeaseAdmissionTests().options()
         options.update(player_ui_session_frames=900, player_ui_overlay_probe=False,
@@ -31,7 +64,7 @@ class SessionAdmissionTests(unittest.TestCase):
         budget = session_budget(900)
         self.assertEqual((budget['last_capture'],budget['recurring_end'],budget['callbacks'],budget['last'],budget['report_tick']),
                          (902,904,890,898,899))
-        for count in (0,179,901,18000,True,'900'):
+        for count in (0,179,1801,18000,True,'900'):
             with self.subTest(count=count), self.assertRaises(ValueError):
                 session_budget(count)
         options = resolve_session_options(self.options(),cli=True)
@@ -48,7 +81,7 @@ class SessionAdmissionTests(unittest.TestCase):
         self.assertEqual(live.ui_overlay_environment(True,1,890,900),{'X4_DEV_UI_SESSION_FRAMES':'900'})
         self.assertEqual(live.ui_overlay_environment(True,2,890,900),{'X4_DEV_UI_SESSION_FRAMES':'900'})
 
-    def test_bundle_config_source_freeze_and_no_legacy_activation(self):
+    def test_long_bundle_config_source_freeze_and_no_legacy_activation(self):
         original_main = live.main
         def build(arguments):
             enabled = '--player-ui-seat-correction' in arguments
@@ -65,17 +98,17 @@ class SessionAdmissionTests(unittest.TestCase):
                     if token=='--player-ui-overlay-probe':
                         continue
                     cleaned.append(token)
-                arguments=cleaned+['--player-ui-session-frames','900','--ticks','905']
+                arguments=cleaned+['--player-ui-session-frames','1800','--ticks','1805']
             result=original_main(arguments)
             output=Path(arguments[arguments.index('--out')+1])
             manifest=json.loads((output/'manifest.json').read_text())
-            self.assertEqual(manifest['player_ui_session_frames'],900 if enabled else 0)
+            self.assertEqual(manifest['player_ui_session_frames'],1800 if enabled else 0)
             if enabled:
-                self.assertEqual(manifest['independent_keyboard_frames'],900)
-                self.assertEqual(manifest['player_ui_overlay_callbacks'],890)
-                self.assertEqual(manifest['stock_keyboard_replay_last_capture'],902)
+                self.assertEqual(manifest['independent_keyboard_frames'],1800)
+                self.assertEqual(manifest['player_ui_overlay_callbacks'],1790)
+                self.assertEqual(manifest['stock_keyboard_replay_last_capture'],1802)
                 config=(output/'extension/x4_lan_lab/ui/config.lua').read_text()
-                self.assertIn('native_gate_linux_ui_session_frames = 900',config)
+                self.assertIn('native_gate_linux_ui_session_frames = 1800',config)
                 for name in live.SESSION_SOURCES:
                     receipt='source-receipts/'+name
                     self.assertEqual(manifest['files'][receipt],live.sha(output/receipt))
@@ -85,6 +118,16 @@ class SessionAdmissionTests(unittest.TestCase):
 
 
 class SessionPhysicsTests(unittest.TestCase):
+    def test_complete1800_fixture_is_validated_before_compaction(self):
+        rows, stderr, engine = network_fixture.neutral_network(1800)
+        proof = parse_network_physics_evidence(rows, stderr, engine, 223,
+            frame_count=1800, slot=2, session_frames=1800)
+        self.assertTrue(proof['pass'], proof['errors'][:4])
+        self.assertEqual(len(proof['frames']), 1800)
+        compact_validated_result({'physics_discard': {'clients': {'2': proof}}})
+        self.assertEqual(proof['frame_summary']['count'], 1800)
+        self.assertNotIn('frames', proof)
+
     def test_complete900_fixture_validates_before_compaction_and_retains_failures(self):
         rows,stderr,engine=network_fixture.neutral_network(900)
         proof=parse_network_physics_evidence(rows,stderr,engine,223,frame_count=900,slot=2,session_frames=900)
@@ -212,24 +255,25 @@ class SessionResourceAndLuaTests(unittest.TestCase):
         self.assertFalse(live.parse_view_query_evidence([], 2, 900, True)['pass'])
         self.assertFalse(live.parse_ui_callback_evidence([], [], [], 2, 900, True)['pass'])
 
-    def test_lua_uses_session_summary899_and_refuses_invalid_budget(self):
+    def test_lua_keeps_finite_session_summary_and_refuses_invalid_budget(self):
         import test_linux_ui_overlay_runner as overlay_fixture
-        for slot in ('p1', 'p2'):
-            fixture, lua = overlay_fixture.UiOverlayLuaTests().runtime(slot)
-            lua.execute("""
-                cfg.native_gate_linux_ui_session_frames = 900
-                cfg.native_gate_linux_ui_overlay_callbacks = 890
-                cfg.native_gate_stock_keyboard_replay_probe.last_capture = 902
-            """)
-            fixture.start(lua)
-            for tick in range(2, 900):
-                lua.eval(f'probe.frame({tick})')
-            results = [row for row in lua.globals().logs.values()
-                       if 'UI_OVERLAY_RESULT' in row]
-            expected = [] if slot == 'p1' else [
-                'LINUX_UI_OVERLAY_RESULT tick=899 slot=2 overlay fixture']
-            self.assertEqual(results, expected)
-        for value in ('false', '"900"', '179', '901'):
+        for frames in (900, 1800):
+            for slot in ('p1', 'p2'):
+                fixture, lua = overlay_fixture.UiOverlayLuaTests().runtime(slot)
+                lua.execute(f"""
+                    cfg.native_gate_linux_ui_session_frames = {frames}
+                    cfg.native_gate_linux_ui_overlay_callbacks = {frames - 10}
+                    cfg.native_gate_stock_keyboard_replay_probe.last_capture = {frames + 2}
+                """)
+                fixture.start(lua)
+                for tick in range(2, frames):
+                    lua.eval(f'probe.frame({tick})')
+                results = [row for row in lua.globals().logs.values()
+                           if 'UI_OVERLAY_RESULT' in row]
+                expected = [] if slot == 'p1' else [
+                    f'LINUX_UI_OVERLAY_RESULT tick={frames - 1} slot=2 overlay fixture']
+                self.assertEqual(results, expected)
+        for value in ('false', '"900"', '179', '1801'):
             fixture, lua = overlay_fixture.UiOverlayLuaTests().runtime('p2')
             lua.execute('cfg.native_gate_linux_ui_session_frames = ' + value)
             with self.subTest(value=value), self.assertRaises(Exception):

@@ -2,6 +2,7 @@
 #define X4_PLAYER_LIVE_POSE_PRELOAD_IMPL_H
 
 #include <sys/uio.h>
+#include "player_view_failure_receipt.h"
 #include <execinfo.h>
 #include "player_ui_live_correction.h"
 
@@ -115,7 +116,7 @@ __attribute__((noinline)) static uintptr_t live_pose_dispatch(void *self, void *
     ++live_pose_capture.started;
     uint64_t ordinal = live_pose_capture.started;
     unsigned scope = live_pose_scopes.state;
-    if (scope >= PLAYER_LIVE_POSE_SCOPE_COUNT) _exit(223);
+    if (scope >= PLAYER_LIVE_POSE_SCOPE_COUNT) PLAYER_VIEW_FAILURE("live_pose_scope");
     ++live_pose_scopes.counts[scope];
     if (ui_depth[0] && ui_depth[1]) ++live_pose_capture.phase_both;
     else if (ui_depth[0]) ++live_pose_capture.phase_move;

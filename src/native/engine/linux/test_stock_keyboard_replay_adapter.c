@@ -148,6 +148,16 @@ static int player_view_host_capture_start(void) { return 1; }
 static int player_view_host_capture_seal(uint64_t generation) { (void)generation; return 1; }
 static int player_view_render_capture_start(void) { return 1; }
 static int player_view_render_capture_seal(uint64_t generation) { (void)generation; return 1; }
+
+#include "../lockstep_stock_record.h"
+static int player_primary_trigger_prepare(uint64_t generation, const uint64_t saved[2],
+                                          const stock_input_record records[2]) {
+    (void)generation; (void)saved; (void)records; return 1;
+}
+static int player_primary_capture_request(unsigned independent) { (void)independent; return 1; }
+static int player_primary_capture_admit(uint64_t generation) { (void)generation; return 1; }
+static int player_primary_capture_seal(uint64_t generation) { (void)generation; return 1; }
+static inline int player_primary_capture_sample(uint64_t generation, unsigned *held) { (void)generation; (void)held; return 0; }
 #include "gate_stock_keyboard_replay.h"
 static int player_stock_view_wire_request(void) { return 1; }
 static int player_stock_view_wire_read_sealed(uint64_t generation, unsigned slot,
@@ -443,17 +453,17 @@ static void test_request_session_budget(void) {
     request_arguments(&state);
     state.numbers[7] = 1;
     setenv("X4_DEV_PLAYER_PHYSICS", "network-frames-discard", 1);
-    setenv("X4_DEV_UI_SESSION_FRAMES", "18000", 1);
-    state.numbers[2] = 18001;
+    setenv("X4_DEV_UI_SESSION_FRAMES", "1800", 1);
+    state.numbers[2] = 1801;
     lua_stock_keyboard_replay_request(&state);
     assert(state.result == 0 && !keyboard_probe_requested);
-    state.numbers[2] = 18002;
+    state.numbers[2] = 1802;
     state.numbers[7] = 0;
     lua_stock_keyboard_replay_request(&state);
     assert(state.result == 0 && !keyboard_probe_requested);
     state.numbers[7] = 1;
     lua_stock_keyboard_replay_request(&state);
-    assert(state.result == 1 && keyboard_probe_queue.config.last_capture == 18002);
+    assert(state.result == 1 && keyboard_probe_queue.config.last_capture == 1802);
 }
 
 static void test_request_common_phases(void) {

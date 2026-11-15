@@ -112,6 +112,9 @@ static unsigned cursor_mode, view_mode, view_admitted, replay_fault;
 static int player_cursor_mode(void) { return cursor_mode || space_mode; }
 static int player_cursor_tail(uint64_t generation, unsigned final) { (void)generation; (void)final; return 1; }
 #include "gate_player_physics_network.h"
+static void player_primary_trigger_apply(uint64_t generation) {
+    assert(player_network_last == generation && !player_network_busy);
+}
 static stock_input_record coordinated;
 static int keyboard_probe_independent_after_path_join(uint64_t generation) {
     keyboard_replay replay = {0};

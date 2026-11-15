@@ -318,6 +318,8 @@ def main():
     p.add_argument('--region-rng', choices=('key', 'observe'), help='native_gate_region_rng: hazard region updates on per-region streams (needs --world-identities)')
     p.add_argument('--path-determinism', type=int, choices=(1, 2, 3), help='native_gate_path_determinism mask: 1 stamps the nav refresh per frame (needs --serial-pathing), 2 lifts the pathing budget')
     p.add_argument('--seed-rng', action='store_true', help='test-only MoveWorker frame seed')
+    p.add_argument('--fixture-body-observe', action='store_true',
+                   help='observe enrolled fixture 6 bodies around its unchanged position getter at ticks 1400..1600')
     p.add_argument('--actor-diag', action='store_true', help='read-only raw navigation-state diagnostics')
     p.add_argument('--flight-diag', action='store_true', help='read-only per-fixture steering update inputs/outputs')
     p.add_argument('--flight-rng', action='store_true', help='isolate RNG within each fixture steering update')
@@ -415,6 +417,7 @@ def main():
                         'fixtures are always bare (the default stack needs the battle snapshot and the Windows modules)')
     p.add_argument('--out', type=Path, required=True)
     args = p.parse_args()
+    from linux_ui_session_budget import MAX_FRAMES as MAX_SESSION_FRAMES
     from linux_ui_session_budget import budget_from_options, expected_callbacks, resolve_session_options
     try:
         args = argparse.Namespace(**resolve_session_options(vars(args), cli=True))
@@ -488,10 +491,11 @@ def main():
     if args.player_external_camera_probe and args.independent_keyboard_frames < 3:
         p.error('--player-external-camera-probe requires at least 3 independent keyboard frames')
     if args.independent_keyboard_frames != 0:
-        if not (2 <= args.independent_keyboard_frames <= (900 if args.player_ui_session_frames else 600) and args.gate_so and args.snapshot and
+        maximum_frames = MAX_SESSION_FRAMES if args.player_ui_session_frames else 600
+        if not (2 <= args.independent_keyboard_frames <= maximum_frames and args.gate_so and args.snapshot and
                 args.stock_keyboard_observer and args.serial_pathing and args.player_factory_probe and
                 args.stock_keyboard_replay_probe):
-            p.error('independent keyboard frames require 2..600, Linux snapshot, observer, serial pathing, factory and replay')
+            p.error(f'independent keyboard frames require 2..{maximum_frames}, Linux snapshot, observer, serial pathing, factory and replay')
         capture_end = (budget_from_options(vars(args)) or {}).get(
             'last_capture', args.independent_keyboard_frames + 2)
         if args.stock_keyboard_replay_last_capture != capture_end:
@@ -784,7 +788,7 @@ def main():
                    'fp_redirect_drones', 'world_health_ticks', 'fp_attack_capture', 'fp_attack_watch'}
         allowed.add('travel_determinism')
         # The battle fixture on Linux (linux/gate_battle.h, gate_flight.h): the snapshot's twelve, their state row, steering.
-        allowed.update(('snapshot_prebind', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state',
+        allowed.update(('fixture_body_observe', 'snapshot_prebind', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state',
                         'flight_diag', 'flight_rng', 'flight_full', 'avoidance_refresh', 'steering_init', 'agent_full', 'spline_diag', 'spline_refresh', 'spline_state', 'params_init', 'strict_physics', 'body_diag', 'params_diag'))
         allowed.add('path_transform_observe')
         allowed.add('mass_jacobi_order')
@@ -809,6 +813,11 @@ def main():
     shape = args.shape_diag or args.shape_rng or args.shape_initial_refresh
     if (args.flight_diag or args.flight_rng or args.flight_full or args.ai_diag or args.ai_rng or agent or ship or weapon or nav or shape or death or attention or args.mass_diag or args.params_init or args.params_diag or args.velocity_diag) and not args.snapshot:
         p.error('native fixture experiments require snapshot boot without the fixedtick DLL')
+    actor_diag = args.actor_diag or args.flight_diag or args.flight_rng or args.flight_full or args.ai_diag or args.ai_rng or agent or ship or weapon or nav or shape or death or attention or args.mass_diag or args.params_init or args.params_diag or args.strict_state or args.velocity_diag or args.body_diag
+    if args.fixture_body_observe and (not args.gate_so or not args.snapshot or args.mode != 'battle' or not args.snapshot_prebind):
+        p.error('--fixture-body-observe requires Linux snapshot battle with --snapshot-prebind')
+    if args.fixture_body_observe and (actor_diag or args.shield_refresh):
+        p.error('--fixture-body-observe must not enable actor, shield-refresh or general body diagnostics')
     if args.out.exists():
         p.error('output must be a new directory so previous native inputs remain frozen')
     root = Path(__file__).resolve().parents[2]
@@ -824,6 +833,9 @@ def main():
     if args.mode == 'battle':
         shutil.copy2(root/'tools/dev/native_gate_battle.xml', args.out/'md/native_gate_battle.xml')
     ui_files = 'ui/native_gate_probe.lua\n'
+    if args.fixture_body_observe:
+        shutil.copy2(root/'tools/dev/native_gate_fixture_body_observer.lua', args.out/'ui/native_gate_fixture_body_observer.lua')
+        ui_files = 'ui/native_gate_fixture_body_observer.lua\n' + ui_files
     if args.player_probe:
         shutil.copy2(root/'tools/dev/native_gate_player.lua',args.out/'ui/native_gate_player.lua')
         ui_files = 'ui/native_gate_player.lua\n'+ui_files
@@ -1539,7 +1551,10 @@ X4LAN_CONFIG.slot = "@X4LANE_SLOT@"
             config.write('X4LAN_CONFIG.native_gate_docking_shape_rng = true\n')
             config.write('X4LAN_CONFIG.native_gate_docking_extra_shapes = true\n')
             if args.docking_shape_refresh:config.write('X4LAN_CONFIG.native_gate_docking_shape_refresh = true\n')
-    if args.actor_diag or args.flight_diag or args.flight_rng or args.flight_full or args.ai_diag or args.ai_rng or agent or ship or weapon or nav or shape or death or attention or args.mass_diag or args.params_init or args.params_diag or args.strict_state or args.velocity_diag or args.body_diag:
+    if args.fixture_body_observe:
+        with (args.out/'ui/config.lua.append').open('a') as config:
+            config.write('X4LAN_CONFIG.native_gate_fixture_body_observe = true\n')
+    if actor_diag:
         with (args.out/'ui/config.lua.append').open('a') as config:
             config.write('X4LAN_CONFIG.native_gate_actor_diag = true\n')
     if args.flight_diag or args.flight_rng or args.flight_full:

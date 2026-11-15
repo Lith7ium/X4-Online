@@ -244,9 +244,18 @@ static void test_coupled_transaction(native_ui_overlay_probe *probe, float *orig
             ui_game_render_active = 0;
 
             /* Session mappings are distinct and remain unique across both scopes. */
-            assert(player_ui_session_parse("180", &player_session_budget));
+            assert(player_ui_session_parse("1800", &player_session_budget));
             assert(ui_correction_allocate_session());
             assert(!ui_correction_allocate_session());
+            /* Touch the last allocated matrix of each active mapping. The
+             * published scratch remains resident through session completion. */
+            unsigned last_move = player_session_budget.presentation_count *
+                (PLAYER_UI_OVERLAY_MAX_UPDATES + 1u) - 1u;
+            unsigned last_render = player_session_budget.presentation_count - 1u;
+            ui_session_move_scratch[last_move][15] = 7;
+            ui_session_render_scratch[last_render][15] = 9;
+            assert(ui_session_move_scratch[last_move][15] == 7 &&
+                   ui_session_render_scratch[last_render][15] == 9);
             ui_move_correction_applies = ui_render_correction_applies = 0;
             assert(player_ui_overlay_init(&probe->lifecycle, &probe->lifecycle.ops,
                                           probe->lifecycle.owner_tid, probe->object));

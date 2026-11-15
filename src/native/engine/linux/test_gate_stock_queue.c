@@ -101,7 +101,7 @@ static void test_configuration(void) {
                 bad.saved_ships[1] = bad.saved_ships[0];
                 break;
             case 10:
-                bad.policy.allowed_flags = STOCK_INPUT_FIRE;
+                bad.policy.allowed_flags |= STOCK_INPUT_SECONDARY_FIRE;
                 break;
             case 11:
                 bad.policy.allow_space8 = 2;
@@ -215,6 +215,45 @@ static void test_policy(void) {
     assert(linux_stock_capture(queue, 0, bytes, sizeof(bytes), &length) == LINUX_STOCK_CAPTURED);
     assert(linux_stock_stage(queue, 1, bytes, length) == LINUX_STOCK_STAGED);
     free_queue(queue);
+}
+
+static void test_primary_fire_policy(void) {
+    /* The generic queue accepts FIRE only when its caller explicitly admits it.
+     * Higher-level replay admission owns the finite human-mode prerequisites. */
+    for (unsigned allow_primary = 0; allow_primary < 2; ++allow_primary) {
+        for (unsigned secondary = 0; secondary < 2; ++secondary) {
+            linux_stock_config config = config_for(1, 10, 2, 3);
+            if (allow_primary) config.policy.allowed_flags |= STOCK_INPUT_FIRE;
+            unsigned flags = STOCK_INPUT_ACTIVE | (secondary
+                ? STOCK_INPUT_SECONDARY_FIRE : STOCK_INPUT_FIRE);
+            int allowed = allow_primary && !secondary;
+            unsigned char bytes[STOCK_INPUT_MAX_BYTES];
+            unsigned length = 0;
+            linux_stock_queue *queue = make_queue(config);
+            assert(linux_stock_begin_tick(queue, 1) == LINUX_STOCK_OK);
+            assert(linux_stock_capture(queue, flags, bytes, sizeof(bytes), &length)
+                == (allowed ? LINUX_STOCK_CAPTURED : LINUX_STOCK_UNSUPPORTED_INPUT));
+            if (allowed) {
+                stock_input_record decoded;
+                assert(stock_input_decode(bytes, length, &decoded));
+                assert(decoded.flags == flags && decoded.capture16 == 1);
+                assert(linux_stock_stage(queue, 1, bytes, length) == LINUX_STOCK_STAGED);
+            }
+            free_queue(queue);
+
+            /* Remote records must enforce the same policy as local capture. */
+            stock_input_record remote = {0};
+            remote.capture16 = 1;
+            remote.flags = flags;
+            length = stock_input_encode(&remote, bytes, sizeof(bytes));
+            assert(length);
+            queue = make_queue(config);
+            assert(linux_stock_begin_tick(queue, 1) == LINUX_STOCK_OK);
+            assert(linux_stock_stage(queue, 2, bytes, length)
+                == (allowed ? LINUX_STOCK_STAGED : LINUX_STOCK_UNSUPPORTED_INPUT));
+            free_queue(queue);
+        }
+    }
 }
 
 static void test_echo_ordering(void) {
@@ -542,6 +581,7 @@ int main(void) {
     test_configuration();
     test_capture_order_and_overflow();
     test_policy();
+    test_primary_fire_policy();
     test_echo_ordering();
     test_nonfirst_own_slot();
     test_staging_refusals();
@@ -550,6 +590,6 @@ int main(void) {
     test_empty_capture();
     test_missing_transaction();
     test_races();
-    puts("stock queue: 11 offline groups passed; data only, no native replay");
+    puts("stock queue: 12 offline groups passed; data only, no native replay");
     return 0;
 }

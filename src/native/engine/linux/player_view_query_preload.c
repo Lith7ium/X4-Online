@@ -640,23 +640,20 @@ static int session_preload_config(const player_ui_session_budget *budget, const 
         correction && !strcmp(correction, "1");
 }
 
-#ifndef PLAYER_VIEW_QUERY_TEST
-__attribute__((constructor)) static void player_view_query_install(void) {
-    const char *enabled = getenv("X4MP_VIEW_QUERY_OBSERVER");
+/* Shared by the real constructor and its environment admission fixture. */
+static int player_view_query_environment_valid(void) {
     const char *session_text = getenv("X4_DEV_UI_SESSION_FRAMES");
     if (!player_startup_phases_parse(getenv("X4_DEV_PLAYER_PHASES"), &preload_startup) ||
         (preload_startup.version && !session_text) ||
-        (session_text && !player_ui_session_parse_phased(session_text, &preload_startup, &preload_session_budget))) refuse();
+        (session_text && !player_ui_session_parse_phased(session_text, &preload_startup, &preload_session_budget))) return 0;
     if (!session_preload_config(&preload_session_budget, getenv("X4MP_UI_CALLBACK_OBSERVER"),
             getenv("X4_DEV_UI_RENDER_LEASE"), getenv("X4_DEV_UI_LIVE_POSE_OBSERVER"),
             getenv("X4_DEV_UI_SEAT_QUERY"), getenv("X4_DEV_UI_SEAT_CORRECTION"),
             getenv("X4_DEV_UI_OVERLAY"), getenv("X4_DEV_UI_OVERLAY_EIGHT"),
-            getenv("X4_DEV_UI_OVERLAY_160"))) refuse();
+            getenv("X4_DEV_UI_OVERLAY_160"))) return 0;
     const char *xs_view = getenv("X4_DEV_VIEW_XS");
-    const char *projection = getenv("X4_DEV_UI_PROJECTION_FOV_SCOPE");
     const char *view_observe = getenv("X4_DEV_STOCK_VIEW_FOV_OBSERVE");
     const char *view_rewrite = getenv("X4_DEV_STOCK_VIEW_FOV");
-    const char *render_fov = getenv("X4_DEV_RENDER_FOV_OBSERVE");
     const player_view_rewrite_config rewrite_config = {
         .rewrite = view_rewrite, .observe = view_observe,
         .shared = getenv("X4_DEV_STOCK_VIEW_SHARED"), .component = getenv("X4_DEV_STOCK_VIEW_COMPONENT_POLICY"),
@@ -665,7 +662,18 @@ __attribute__((constructor)) static void player_view_query_install(void) {
         .cursor = getenv("X4_DEV_PLAYER_CURSOR"), .focus = getenv("X4_DEV_PLAYER_FOCUS"),
         .startup_version = preload_startup.version, .session_frames = preload_session_budget.frames,
     };
-    if (!player_view_rewrite_config_valid(&rewrite_config)) refuse();
+    return player_view_rewrite_config_valid(&rewrite_config);
+}
+
+#ifndef PLAYER_VIEW_QUERY_TEST
+__attribute__((constructor)) static void player_view_query_install(void) {
+    if (!player_view_query_environment_valid()) refuse();
+    const char *enabled = getenv("X4MP_VIEW_QUERY_OBSERVER");
+    const char *xs_view = getenv("X4_DEV_VIEW_XS");
+    const char *projection = getenv("X4_DEV_UI_PROJECTION_FOV_SCOPE");
+    const char *view_observe = getenv("X4_DEV_STOCK_VIEW_FOV_OBSERVE");
+    const char *view_rewrite = getenv("X4_DEV_STOCK_VIEW_FOV");
+    const char *render_fov = getenv("X4_DEV_RENDER_FOV_OBSERVE");
     if (!enabled) {
         if (view_observe || view_rewrite || render_fov || projection || xs_view) refuse();
         if (getenv("X4_DEV_VIEW_PRECOMPARE_TRACE") || getenv("X4_DEV_STOCK_VIEW_SHARED") || getenv("X4_DEV_PLAYER_CURSOR") || getenv("X4_DEV_VIEW_ANCESTRY") || getenv("X4MP_UI_CALLBACK_OBSERVER") || getenv("X4_DEV_UI_LIVE_POSE_OBSERVER") ||

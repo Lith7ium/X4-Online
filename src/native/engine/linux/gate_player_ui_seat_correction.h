@@ -17,7 +17,7 @@ static float (*ui_session_move_scratch)[16], (*ui_session_render_scratch)[16], (
 static float (*ui_session_projection_scratch)[16];
 static int ui_correction_allocate_session(void) {
     size_t count = player_session_budget.presentation_count;
-    if (!count || count > 17990 || ui_session_move_scratch || ui_session_render_scratch) return 0;
+    if (!count || count > PLAYER_UI_SESSION_MAX_FRAMES - 10u || ui_session_move_scratch || ui_session_render_scratch) return 0;
     size_t move_size = count * (PLAYER_UI_OVERLAY_MAX_UPDATES + 1u) * sizeof *ui_session_move_scratch;
     size_t render_size = count * sizeof *ui_session_render_scratch;
     void *move = mmap(NULL, move_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

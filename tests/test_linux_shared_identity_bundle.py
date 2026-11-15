@@ -17,6 +17,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SharedIdentityBundleTests(unittest.TestCase):
+    def test_prepare_actual1800_overlay_with_matching_finite_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = SharedIdentityOverlayTests().base(directory, frames=1800)
+            output = Path(directory) / 'shared'
+            options = dict(self.options(), player_ui_session_frames=1800,
+                           independent_keyboard_frames=1800)
+            selected, metadata = shared.prepare_overlay(ROOT, base, output, options)
+            self.assertEqual(selected, output)
+            self.assertTrue(metadata['shared_identity_t40'])
+            profile = json.loads((output / 'shared-identity-profile.json').read_text())
+            self.assertEqual(profile['physics_frames'], 1800)
+            self.assertIn('last_capture=1837', (output / 'ui/config.lua.append').read_text())
+            for name in shared.ADAPTERS:
+                self.assertEqual((output / name).read_bytes(), (ROOT / 'tools/dev' / Path(name).name).read_bytes())
+            self.assertFalse((base / 'shared-identity-profile.json').exists())
+            with self.assertRaises(ValueError):
+                shared.prepare_overlay(ROOT, base, Path(directory) / 'over-budget',
+                    dict(options, player_ui_session_frames=1801, independent_keyboard_frames=1801))
+            self.assertFalse((Path(directory) / 'over-budget').exists())
+
     def options(self):
         options = SessionAdmissionTests().options()
         options.update(player_startup_phases='v1-t40', shared_identity_t40=True,

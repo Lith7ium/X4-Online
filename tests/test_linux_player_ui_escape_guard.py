@@ -7,6 +7,14 @@ import unittest
 
 
 class UiEscapeGuardTest(unittest.TestCase):
+    def test_failure_receipt_preserves_errno_and_bounds_write_attempts(self):
+        source = Path(__file__).resolve().parents[1] / 'src/native/engine/linux/test_player_view_failure_receipt.c'
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'receipt-test'
+            subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', str(source),
+                            '-o', str(executable)], check=True, timeout=120)
+            subprocess.run([str(executable)], check=True, timeout=10)
+
     def test_scoped_exceptions_and_longjmp(self):
         root = Path(__file__).resolve().parents[1]
         source = root / 'src/native/engine/linux'

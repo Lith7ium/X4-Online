@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'src'))
 from lockstep.launcher import extension
 import native_gate_player_identity as identity
+from linux_ui_session_budget import session_budget
 
 TARGET = '0000000000175310'
 ADAPTERS = ('ui/native_gate_player_identity_core.lua', 'ui/native_gate_player_identity.lua')
@@ -25,8 +26,7 @@ def build(base, output, p1, p2, frames):
     extension.verify_overlay(base)
     if output.exists() or output.is_symlink():
         raise ValueError('output already exists')
-    if not isinstance(frames, int) or isinstance(frames, bool) or not 180 <= frames <= 900:
-        raise ValueError('invalid shared physics frame count')
+    session_budget(frames, 'v1-t40')  # Match the shared finite session admission.
     if not identity.saved(p1) or p2 != TARGET or p1 == p2:
         raise ValueError('invalid saved ships for the pinned Linux seat')
     if not (base / 'native/x4lan_gate.so').is_file():

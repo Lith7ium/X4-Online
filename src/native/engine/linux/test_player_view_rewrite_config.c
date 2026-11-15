@@ -9,6 +9,10 @@ int main(void) {
         .ancestry="1", .component_trace="1", .precompare_trace="1", .cursor="1", .focus="1",
         .startup_version=1, .session_frames=180};
     assert(player_view_rewrite_config_valid(&config));
+    config.session_frames=900; assert(player_view_rewrite_config_valid(&config));
+    config.session_frames=1800; assert(player_view_rewrite_config_valid(&config));
+    config.session_frames=1801; assert(!player_view_rewrite_config_valid(&config));
+    config.session_frames=180;
     config.observe="1"; assert(!player_view_rewrite_config_valid(&config)); config.observe=0;
     config.precompare_trace=0; assert(!player_view_rewrite_config_valid(&config)); config.precompare_trace="1";
     config.cursor="0"; assert(!player_view_rewrite_config_valid(&config)); config.cursor="1";

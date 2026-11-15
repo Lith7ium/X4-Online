@@ -3352,6 +3352,8 @@ local function pilot_frame(s,tick)
  end
  return receipt
 end
+local fixture_body_observer=cfg.native_gate_fixture_body_observe and
+ assert(X4LAN_FIXTURE_BODY_OBSERVER,'fixture body observer module missing').create(cfg,gate,log) or nil
 local function sample(tick)
  if cfg.native_gate_hash=='clock' then return 'CLOCK_ONLY_1' end
  if not ready then
@@ -3513,7 +3515,12 @@ local function sample(tick)
     end
    end
    local since=profile and gate.qpc_us()
-   local p=ffi.C.GetObjectPositionInSector(object)
+   local p
+   if fixture_body_observer and fixture_body_observer.wanted(tick,i) then
+    p=fixture_body_observer.sample(tick,i,function() return ffi.C.GetObjectPositionInSector(object) end)
+   else
+    p=ffi.C.GetObjectPositionInSector(object)
+   end
    local hull,shield=GetComponentData(object,'hullpercent','shieldpercent')
    assert(type(hull)=='number' and type(shield)=='number','native health sample missing')
    if profile then profile.part('health',since);since=gate.qpc_us() end

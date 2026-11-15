@@ -10,10 +10,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools/dev'))
 import build_shared_identity_overlay as bridge
+from linux_ui_session_budget import MAX_FRAMES, session_budget
 
 
 class SharedIdentityOverlayTests(unittest.TestCase):
-    def base(self, directory):
+    def base(self, directory, frames=900):
         base = Path(directory) / 'base'
         for name in ('native', 'ui', 'md'):
             (base / name).mkdir(parents=True, exist_ok=True)
@@ -25,9 +26,9 @@ class SharedIdentityOverlayTests(unittest.TestCase):
             'X4LAN_CONFIG.native_gate_world_identities = true\n'
             'X4LAN_CONFIG.native_gate_snapshot_sha = "' + 'a' * 64 + '"\n'
             "X4LAN_CONFIG.native_gate_linux_startup_phases = 'v1-t40'\n"
-            'X4LAN_CONFIG.native_gate_linux_ui_session_frames = 900\n'
+            f'X4LAN_CONFIG.native_gate_linux_ui_session_frames = {frames}\n'
             'X4LAN_CONFIG.native_gate_lookahead = 0\n'
-            "X4LAN_CONFIG.native_gate_stock_keyboard_replay_probe = {last_capture=937, neutral_ship='0000000000175310', independent_players=true}\n")
+            f"X4LAN_CONFIG.native_gate_stock_keyboard_replay_probe = {{last_capture={frames + 37}, neutral_ship='0000000000175310', independent_players=true}}\n")
         self.seal(base)
         return base
 
@@ -53,6 +54,41 @@ class SharedIdentityOverlayTests(unittest.TestCase):
             self.seal(base)
             with self.assertRaises(ValueError):
                 bridge.build(base, Path(directory) / 'duplicate', '00000000000ad43a', bridge.TARGET, 900)
+
+    def test_long_shared_overlay_and_lua_agree_with_session_budget(self):
+        from lupa.luajit21 import LuaRuntime
+        for frames in (900, MAX_FRAMES):
+            with self.subTest(frames=frames), tempfile.TemporaryDirectory() as directory:
+                base = self.base(directory, frames)
+                out = Path(directory) / 'out'
+                bridge.build(base, out, '00000000000ad43a', bridge.TARGET, frames)
+                bridge.extension.verify_overlay(out)
+                profile = json.loads((out / 'shared-identity-profile.json').read_text())
+                self.assertEqual(profile['physics_frames'], frames)
+                self.assertIn(f'last_capture={session_budget(frames, "v1-t40")["last_capture"]}',
+                              (out / 'ui/config.lua.append').read_text())
+                # Execute the actual copied core and config. Generating a
+                # manifest alone would miss a Lua-only frame-cap refusal.
+                lua = LuaRuntime()
+                lua.execute((out / bridge.ADAPTERS[0]).read_text())
+                lua.execute('X4LAN_CONFIG = {}')
+                lua.execute((out / 'ui/config.lua.append').read_text())
+                self.assertTrue(lua.eval('''function()
+                    local K=X4LAN_PLAYER_IDENTITY_CORE
+                    return K.shared_t40(assert(K.validate(X4LAN_CONFIG.native_gate_player_identity_plan)),
+                                        X4LAN_CONFIG.native_gate_shared_identity_t40)
+                end''')())
+                lua.globals().invalid_frames = MAX_FRAMES + 1
+                self.assertFalse(lua.eval('''function()
+                    local K=X4LAN_PLAYER_IDENTITY_CORE
+                    X4LAN_CONFIG.native_gate_shared_identity_t40[3]=invalid_frames
+                    return K.shared_t40(assert(K.validate(X4LAN_CONFIG.native_gate_player_identity_plan)),
+                                        X4LAN_CONFIG.native_gate_shared_identity_t40)
+                end''')())
+                with self.assertRaises(ValueError):
+                    bridge.build(base, Path(directory) / 'over-budget',
+                                 '00000000000ad43a', bridge.TARGET, MAX_FRAMES + 1)
+                self.assertFalse((Path(directory) / 'over-budget').exists())
 
     def test_rejects_unsealed_wrong_mode_and_identity(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -106,6 +142,9 @@ class SharedIdentityOverlayTests(unittest.TestCase):
             out = Path(directory) / 'out'
             self.assertEqual(bridge.build_windows(base, out, '00000000000ad43a', bridge.TARGET, 900),
                              'bb588d3e9d290c2339220cbae3b122127427a85d513447a598750e979457fbcd')
+            with self.assertRaises(ValueError):
+                bridge.build_windows(base, Path(directory) / 'unsupported-windows1800',
+                                     '00000000000ad43a', bridge.TARGET, 1800)
             (base / 'ui.xml.files').write_text('\n'.join([bridge.ADAPTERS[1], bridge.ADAPTERS[0], 'ui/native_gate_probe.lua']) + '\n')
             self.seal(base)
             with self.assertRaises(ValueError):

@@ -1,4 +1,5 @@
 #include "player_ui_escape_guard.h"
+#include "player_view_failure_receipt.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <setjmp.h>
@@ -41,7 +42,7 @@ void _longjmp(jmp_buf environment, int value) noexcept {
     jump_function target = __atomic_load_n(&next_longjmp, __ATOMIC_ACQUIRE);
     if (!target && player_ui_escape_guard_prepare())
         target = __atomic_load_n(&next_longjmp, __ATOMIC_ACQUIRE);
-    if (!target) _exit(223);
+    if (!target) PLAYER_VIEW_FAILURE("escape_longjmp_target");
     errno = saved_errno;
     target(environment, value);
     __builtin_unreachable();
@@ -49,17 +50,18 @@ void _longjmp(jmp_buf environment, int value) noexcept {
 
 extern "C" __attribute__((visibility("default"))) void player_ui_escape_guard_call(void (*original)(void *), void *object,
                                  int (*enter)(uintptr_t), int (*leave)(uintptr_t)) {
-    if (!original || !enter || !leave || ui_scope_active ||
-        !__atomic_load_n(&next_longjmp, __ATOMIC_ACQUIRE)) _exit(223);
+    if (!original || !enter || !leave) PLAYER_VIEW_FAILURE("escape_callbacks");
+    if (ui_scope_active) PLAYER_VIEW_FAILURE("escape_nested");
+    if (!__atomic_load_n(&next_longjmp, __ATOMIC_ACQUIRE)) PLAYER_VIEW_FAILURE("escape_longjmp_unprepared");
     int before = errno;
     int after = 0;
     ui_scope_active = 1;
     try {
-        if (!enter(reinterpret_cast<uintptr_t>(object))) _exit(223);
+        if (!enter(reinterpret_cast<uintptr_t>(object))) PLAYER_VIEW_FAILURE("escape_enter");
         errno = before;
         original(object);
         after = errno;
-        if (!leave(reinterpret_cast<uintptr_t>(object))) _exit(223);
+        if (!leave(reinterpret_cast<uintptr_t>(object))) PLAYER_VIEW_FAILURE("escape_leave");
     } catch (...) {
         static const char message[] = "X4 UI OVERLAY FATAL reason=caught_cpp\n";
         (void)write(2, message, sizeof message - 1);

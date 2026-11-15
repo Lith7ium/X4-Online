@@ -13,6 +13,7 @@ static int (*prepare_guard)(void);
 static void (*guard_call)(void (*)(void *), void *, int (*)(uintptr_t), int (*)(uintptr_t));
 struct escape_exception {};
 static int allow(uintptr_t) { errno = EDOM; return 1; }
+static int refuse(uintptr_t) { errno = EINVAL; return 0; }
 static int throws_enter_or_leave(uintptr_t) { throw escape_exception{}; }
 static jmp_buf environment;
 static void ordinary(void *value) { assert(errno == ERANGE); ++*static_cast<int *>(value); errno = EBUSY; }
@@ -40,7 +41,8 @@ static void signal_jump(void *) {
     assert(!raise(SIGUSR1));
 }
 static void expect_exit(void (*callback)(void *), bool use_jump,
-                        int (*enter)(uintptr_t) = allow, int (*leave)(uintptr_t) = allow) {
+                        int (*enter)(uintptr_t) = allow, int (*leave)(uintptr_t) = allow,
+                        const char *receipt = nullptr) {
     int output[2];
     assert(!pipe(output));
     pid_t child = fork();
@@ -61,7 +63,7 @@ static void expect_exit(void (*callback)(void *), bool use_jump,
     int status = 0;
     assert(waitpid(child, &status, 0) == child);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 223);
-    const char *expected = use_jump ? "X4 UI OVERLAY FATAL reason=guarded_longjmp\n" :
+    const char *expected = receipt ? receipt : use_jump ? "X4 UI OVERLAY FATAL reason=guarded_longjmp\n" :
                                       "X4 UI OVERLAY FATAL reason=caught_cpp\n";
     assert(count == static_cast<ssize_t>(strlen(expected)) && !strcmp(message, expected));
 }
@@ -79,6 +81,9 @@ int main() {
     guard_call(ordinary, &calls, allow, allow);
     assert(calls == 1 && errno == EBUSY);
     guard_call(foreign_during_scope, nullptr, allow, allow);
+    expect_exit(noop, false, refuse, allow, "X4 VIEW FATAL reason=escape_enter\n");
+    expect_exit(noop, false, allow, refuse, "X4 VIEW FATAL reason=escape_leave\n");
+    expect_exit(noop, false, nullptr, allow, "X4 VIEW FATAL reason=escape_callbacks\n");
     expect_exit(throws_exception, false);
     expect_exit(jumps, true);
     expect_exit(signal_jump, true);

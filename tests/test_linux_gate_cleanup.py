@@ -1,10 +1,13 @@
 """Offline ownership and cleanup checks; no game process is launched."""
 import importlib.util
+import ctypes
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -17,6 +20,142 @@ spec.loader.exec_module(live)
 
 @unittest.skipUnless(sys.platform == 'linux', 'Linux-only process isolation')
 class CleanupTests(unittest.TestCase):
+    def forked_game(self, root, different_home=False, ignore_term=False):
+        # Adopt test orphans so the actual fork regression leaves no zombies.
+        libc = ctypes.CDLL(None)
+        previous = ctypes.c_int()
+        self.assertEqual(libc.prctl(37, ctypes.byref(previous), 0, 0, 0), 0)
+        self.assertEqual(libc.prctl(36, 1, 0, 0, 0), 0)
+        self.addCleanup(lambda: libc.prctl(36, previous.value, 0, 0, 0))
+        script = r'''
+import json, os, pathlib, sys, time
+children = []
+for index in range(2 if sys.argv[2] == 'two' else 1):
+    pid = os.fork()
+    if not pid:
+        env = dict(os.environ)
+        if index: env['HOME'] += '/other'
+        code = "import pathlib,signal,sys,time; "
+        if sys.argv[3] == 'ignore': code += "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        code += "pathlib.Path(sys.argv[1]).touch(); time.sleep(60)"
+        os.execve(sys.executable, [sys.executable, '-c', code, sys.argv[1] + '/ready' + str(index)], env)
+    children.append(pid)
+print(json.dumps(children), flush=True)
+sys.stdin.readline()
+'''
+        process = subprocess.Popen([sys.executable, '-u', '-c', script, str(root),
+                                    'two' if different_home else 'one', 'ignore' if ignore_term else 'normal'],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=dict(os.environ, HOME=str(root / 'home')), start_new_session=True, text=True)
+        children = json.loads(process.stdout.readline())
+        launch = live.record_owned_game(process, live.start_ticks(process.pid), root / 'home',
+                                        Path(sys.executable), os.getuid())
+        fds = [os.pidfd_open(pid) for pid in children]
+        def finish():
+            process.stdin.close() if not process.stdin.closed else None
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=3)
+            for pid, fd in zip(children, fds):
+                try:
+                    live.signal.pidfd_send_signal(fd, live.signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                finally:
+                    os.close(fd)
+                try:
+                    os.waitpid(pid, 0)
+                except ChildProcessError:
+                    pass
+            process.stdout.close()
+            process.stderr.close()
+        self.addCleanup(finish)
+        deadline = time.monotonic() + 3
+        for index in range(len(children)):
+            while not (root / f'ready{index}').exists():
+                self.assertLess(time.monotonic(), deadline, 'forked child did not exec')
+                time.sleep(.01)
+        process.stdin.write('exit\n')
+        process.stdin.flush()
+        self.assertEqual(process.wait(timeout=3), 0)
+        return process, children, launch
+
+    def test_orphan_game_is_stopped_after_leader_was_reaped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process, children, launch = self.forked_game(Path(directory))
+            # Preserve the existing leader-only guard, then clean its orphan.
+            live.stop_owned_process(process, launch['start'])
+            self.assertNotEqual(live.owned_process_identity(children[0])['state'], 'Z')
+            evidence = live.stop_owned_game_descendants(launch, timeout=.2)
+            self.assertFalse(evidence['refused'])
+            self.assertEqual(evidence['processes'][0]['signals'], ['SIGTERM'])
+            self.assertEqual(evidence['processes'][0]['outcome'], 'exited')
+            os.waitpid(children[0], 0)
+
+    def test_stubborn_owned_orphan_uses_pidfd_kill_after_term(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process, children, launch = self.forked_game(Path(directory), ignore_term=True)
+            evidence = live.stop_owned_game_descendants(launch, timeout=.05)
+            self.assertFalse(evidence['refused'])
+            self.assertEqual(evidence['processes'][0]['signals'], ['SIGTERM', 'SIGKILL'])
+            self.assertEqual(evidence['processes'][0]['outcome'], 'exited')
+            os.waitpid(children[0], 0)
+
+    def test_same_group_wrong_home_and_unrelated_session_are_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process, children, launch = self.forked_game(root, different_home=True)
+            outsider = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                env=dict(os.environ, HOME=launch['home']), start_new_session=True)
+            try:
+                # Even a caller accidentally offering another session's PID
+                # cannot make the authenticated pidfd path signal it.
+                with mock.patch.object(live, 'owned_group_members', return_value=[*children, outsider.pid]):
+                    evidence = live.stop_owned_game_descendants(launch, timeout=.2)
+                refused = {row['pid']: row for row in evidence['refused']}
+                self.assertIn('HOME mismatch', refused[children[1]]['reason'])
+                self.assertIn('launch identity changed', refused[outsider.pid]['reason'])
+                self.assertNotEqual(live.owned_process_identity(children[1])['state'], 'Z')
+                self.assertIsNone(outsider.poll())
+                self.assertEqual(os.waitpid(children[0], 0)[0], children[0])
+            finally:
+                outsider.kill()
+                outsider.wait(timeout=3)
+
+    def test_candidate_start_drift_and_reused_leader_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process, children, launch = self.forked_game(Path(directory))
+            original = live.owned_process_identity
+            reads = 0
+            def changed_start(pid):
+                nonlocal reads
+                value = original(pid)
+                if pid == children[0]:
+                    reads += 1
+                    if reads >= 3:
+                        value['start'] += 1
+                return value
+            with mock.patch.object(live, 'owned_process_identity', side_effect=changed_start), \
+                 mock.patch.object(live.signal, 'pidfd_send_signal') as send:
+                evidence = live.stop_owned_game_descendants(launch, timeout=0)
+            send.assert_not_called()
+            self.assertTrue(evidence['refused'])
+            # Simulate reuse of the absent session leader before any effect.
+            def reused_leader(pid):
+                if pid == launch['leader']:
+                    return dict(pid=pid, start=launch['start'] + 1, group=pid, session=pid)
+                return original(pid)
+            with mock.patch.object(live, 'owned_process_identity', side_effect=reused_leader), \
+                 mock.patch.object(live.signal, 'pidfd_send_signal') as send:
+                evidence = live.stop_owned_game_descendants(launch, timeout=0)
+            send.assert_not_called()
+            self.assertIn('leader identity changed', evidence['refused'][0]['reason'])
+            wrong_image = dict(launch, inode=launch['inode'] + 1)
+            with mock.patch.object(live.signal, 'pidfd_send_signal') as send:
+                evidence = live.stop_owned_game_descendants(wrong_image, timeout=0)
+            send.assert_not_called()
+            self.assertIn('executable mismatch', evidence['refused'][0]['reason'])
+
     def test_lock_refuses_existing_file_and_symlink(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

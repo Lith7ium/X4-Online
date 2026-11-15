@@ -156,7 +156,7 @@ class LocalStopTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
 
-    def cleanup_runner_prefix(self, processes, channels, result, fallback):
+    def cleanup_runner_prefix(self, processes, channels, result, fallback, owned_launches=None):
         # Compile the actual run() finally prefix, including cooperative/fallback order.
         tree = ast.parse(inspect.getsource(live.run))
         body = next(node.finalbody for node in ast.walk(tree)
@@ -174,8 +174,22 @@ class LocalStopTests(unittest.TestCase):
         namespace = {'local_stop_enabled': True, 'result': result,
                      'local_stop': stop, 'local_stop_channels': channels,
                      'procs': processes, 'starts': {p.pid: live.start_ticks(p.pid) for p in processes},
-                     'stop_owned_process': fallback, 'subprocess': subprocess}
+                     'stop_owned_process': fallback, 'subprocess': subprocess, 'owned_game_launches': owned_launches or {},
+                     'stop_owned_game_descendants': live.stop_owned_game_descendants}
         exec(compile(ast.Module(body=prefix, type_ignores=[]), '<actual run cleanup>', 'exec'), namespace)
+
+    def test_actual_runner_preserves_descendant_refusal_evidence(self):
+        process, channel = self.launch(responsive=False)
+        result = {'error': 'original failure'}
+        refusal = {'refused': [{'pid': 123, 'reason': 'private HOME mismatch'}]}
+        with mock.patch.object(stop, 'cooperative_stop', return_value={}), \
+             mock.patch.object(live, 'stop_owned_game_descendants', return_value=refusal) as cleanup:
+            self.cleanup_runner_prefix([process], [channel], result,
+                                       live.stop_owned_process, {process.pid: {'sealed': True}})
+        cleanup.assert_called_once_with({'sealed': True})
+        self.assertEqual(result['owned_descendant_cleanup'][str(process.pid)], refusal)
+        self.assertIn('owned descendant identity refused', result['cleanup_errors'])
+        self.assertEqual(result['error'], 'original failure')
 
     def test_actual_runner_cancel_cooperative_then_fallback_preserves_error(self):
         cooperative, channel = self.launch(slot=2)

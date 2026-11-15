@@ -66,7 +66,7 @@ static int view_wire_runtime_ready(void *context, const keyboard_replay_config *
     (void)context;
     const player_startup_phases *phase = player_startup();
     if (!config || !view_wire_environment() || phase->version != 1 ||
-        player_session_budget.frames < 180 || player_session_budget.frames > 900 ||
+        player_session_budget.frames < 180 || player_session_budget.frames > PLAYER_UI_SESSION_MAX_FRAMES ||
         config->own_slot != stats.slot || !config->independent_players ||
         !config->cursor_active_only || config->scripted_throttle || config->delay != 2 ||
         config->lookahead || config->first_capture != phase->capture ||

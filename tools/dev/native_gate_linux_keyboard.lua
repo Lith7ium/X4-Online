@@ -37,8 +37,8 @@ function X4LAN_LINUX_KEYBOARD.create(gate, config, register_section, ffi, log)
     local session_frames = config.native_gate_linux_ui_session_frames
     if session_frames == nil then session_frames = 0 end
     assert(type(session_frames) == 'number' and session_frames == math.floor(session_frames) and
-        (session_frames == 0 or (session_frames >= 180 and session_frames <= 900)),
-        'session frames must be 0 or 180..900')
+        (session_frames == 0 or (session_frames >= 180 and session_frames <= 1800)),
+        'session frames must be 0 or 180..1800')
     assert(phase_version == 0 or session_frames > 0,
         'common startup phases require an explicit finite session')
     local expected_callbacks = session_frames > 0 and session_frames - 10 or 160

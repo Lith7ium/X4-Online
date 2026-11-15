@@ -150,14 +150,17 @@ static int view_ancestry_admit(unsigned site) {
 __attribute__((visibility("hidden"), noinline)) uintptr_t view_precompare_dispatch(uintptr_t object, uintptr_t ancestor) {
     int before = errno;
     unsigned active = stock_view_policy_enter(&view_precompare_active, &view_precompare_inflight);
-    if (active && (view_precompare_depth++ || !view_precompare_owned())) _exit(223);
+    if (active) {
+        if (view_precompare_depth++) PLAYER_VIEW_FAILURE("precompare_nested");
+        if (!view_precompare_owned()) PLAYER_VIEW_FAILURE("precompare_ownership");
+    }
     errno = before;
     uintptr_t result = view_precompare_original();
     int saved = errno;
     view_component_precompare_observe(object, ancestor, result);
     if (active) {
         uintptr_t routed = result;
-        if (!view_precompare_policy(object, ancestor, result, &routed)) _exit(223);
+        if (!view_precompare_policy(object, ancestor, result, &routed)) PLAYER_VIEW_FAILURE("precompare_policy");
         result = routed;
         --view_precompare_depth;
     }

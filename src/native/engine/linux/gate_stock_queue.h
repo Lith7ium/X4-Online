@@ -56,7 +56,8 @@ typedef enum {
 /* Explicit whitelist, never a promise that X4 implements these controls.
  * ACTIVE, CURSOR and VIEW each require admission by the caller. A queue that
  * transports VIEW does not establish the safety of the native consumers.
- * Ranges, aim and fire remain outside this adapter's policy. */
+ * FIRE requires its separate finite primary opt-in. Ranges, aim and secondary
+ * fire remain outside this adapter's policy. */
 typedef struct {
     uint64_t state_ids[8];
     unsigned allowed_flags;
@@ -176,7 +177,7 @@ static inline int linux_stock_config_valid(const linux_stock_config *config) {
         || config->own_slot > config->slots || config->delay < 2 || config->delay > LINUX_STOCK_DELAY_MAX
         || config->lookahead > LINUX_STOCK_DELAY_MAX - 2 || config->delay < config->lookahead + 2
         || !config->first_capture || config->last_capture < config->first_capture || config->last_capture > LINUX_STOCK_TICK_MAX - config->delay
-        || (config->policy.allowed_flags & ~(STOCK_INPUT_ACTIVE | STOCK_INPUT_CURSOR | STOCK_INPUT_VIEW)) || config->policy.allow_stop_action > 1
+        || (config->policy.allowed_flags & ~(STOCK_INPUT_ACTIVE | STOCK_INPUT_CURSOR | STOCK_INPUT_VIEW | STOCK_INPUT_FIRE)) || config->policy.allow_stop_action > 1
         || config->policy.allow_space8 > 1) {
         return 0;
     }

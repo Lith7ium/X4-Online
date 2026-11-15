@@ -6,6 +6,77 @@ It does not provide the Windows launcher's player input, UI replay or hot-join
 feature set. A passing run is not evidence of Windows/Linux interoperability or
 of a session between different PCs.
 
+## Current checkpoint, 15 November 2026
+
+This branch is still a development harness, not a playable Linux release.
+A later paired Linux run reached all 1,800 requested physics frames
+(ticks 40–1839), after correcting an overly narrow VIEW component guard.
+It **failed world agreement**: the earliest recorded NPC difference was fixture
+ship 3 at tick 1227, with one-ULP pitch and roll differences. The rolling world
+motion digest first differed at tick 1319. These are Linux/Linux results on
+one machine; a Windows/Linux mismatch is not required to reproduce the problem.
+
+Guest input capture and delayed replay matched on both peers, as did all 7,200
+recorded guest-body rows. That narrower agreement does not establish equal NPC
+simulation or hidden world state. For fixture ship 6, a separate read-only
+phase observer found differing angular velocity entering the recorded Jolt
+update at tick 1501. It did not find equal incoming data becoming different
+inside that update. This narrows that observation, without identifying the
+cause of the earlier ship-3 difference or exonerating all physics code.
+
+The same run independently failed evidence collection because each lifecycle
+trace was 35,501,012 bytes, above the unchanged 32 MiB limit. Raw frame counts
+are not a substitute for the rejected validator result. No comparison tolerance
+or trace limit was relaxed. Both games were cleaned up; no OOM was recorded.
+
+The guard correction recognizes the pinned native `ShipExtraSmall` class for
+an authenticated foreign component and preserves its stock return value. It
+retains parent, registry and ancestry checks; it does not rewrite that foreign
+ship as the local player. The later run recorded no VIEW rejection.
+
+Primary fire now has separate default-off scripted, capture-only and human
+capture-to-replay experiments. The human mode uses the existing FIRE bit and is
+restricted to two local clients from the same sealed bundle; it does not yet
+negotiate capability with an external server. Its source has focused test and
+review coverage. The first capture-only native run stopped before input at
+`fire_capture_tree` on both peers. Human firing is therefore **not validated**.
+See [capture](../src/native/engine/linux/player_primary_capture.md) and
+[human replay](../src/native/engine/linux/player_primary_human.md).
+
+The next decision is architectural as well as diagnostic: strict lockstep
+currently has unresolved NPC drift, while an authoritative-server alternative
+still needs implementation and native validation. Existing input, identity,
+rendering and isolated-launch work can inform that experiment. Neither a
+complete Linux client nor an authoritative resynchronization path is claimed.
+
+The final checkpoint passed 54 focused tests. The Linux offline gate check also
+passed after correcting a stale queue-test expectation that rejected even an
+explicit FIRE opt-in. The corrected queue fixture checks default FIRE rejection,
+opt-in acceptance and continued secondary-fire rejection for local capture and
+remote staging. The gate check built the production module with Zig 0.15.2,
+verified the pinned ELF image, exercised the Lua bridge and checked 29 synthetic
+network scenarios, including two expected mismatch refusals. It did not launch
+X4 or validate Windows. These checks do not supersede the native failures above.
+
+## Earlier longer-session and scripted-fire results, 15 November 2026
+
+The first run requesting 1,800 physics frames did **not** complete. Both peers
+exited at tick 1549 without terminal receipts, after 1,509 complete frames.
+The 1,549 recorded rolling-world rows matched, but the separate battle report
+differed at ticks 1513, 1540 and 1547: fixture ship 6 had small float32 Euler-angle
+differences. These partial world samples do not prove that ship's raw orientation
+matched. No memory exhaustion was recorded. Additional failure receipts were
+then implemented. Subsequent runs isolated the VIEW guard failure and confirmed
+real orientation drift, as recorded in the current checkpoint above.
+
+A separate 180-frame scripted primary-trigger run completed. Both ships' two
+guns entered their native firing state at ticks 71..76 on both peers and cleared
+it afterward. Recorded world and player-body fields matched. This is not human
+fire replay or proof of equal projectiles, hits or damage. The shared input codec
+already defines FIRE; Linux input policy rejects that bit unless the separate
+finite human-primary mode is explicitly enabled. See
+[the experiment contract](../src/native/engine/linux/player_primary_trigger.md).
+
 ## Bootstrap observer lifetime, 15 November 2026
 
 The optional `--bootstrap-checkpoint-tick` closes the semaphore observation log
@@ -21,13 +92,50 @@ beyond the observation boundary for that finite run; it does not establish an
 unbounded session. Both games deliberately exited with code 223, leaving the
 overall harness result false. Cleanup left no owned game processes.
 
-The accompanying mouse-input attempts have not yet established steering:
+The first accompanying mouse-input attempts did not establish steering:
 one lost focus before the planned motions; the next sent both motions while
 focused, but native mouse steering was disabled and every cursor sample stayed
 zero. The failed input receipts remain retained. A further Shift+Space
 request also left the native steering state unchanged, so the helper refused
-to send motion. Input delivery in the private test display remains under
-investigation; these runs do not establish a broken game steering function.
+to send motion. These failures remain retained; they do not establish a broken
+game steering function.
+
+## Bounded native mouse steering, 15 November 2026
+
+A later two-instance run completed 420 physics frames at ticks 40–459. All
+459 rolling world-digest rows and 1,680 body-state rows per peer matched.
+Both semaphore observers closed at tick 399 while physics continued through
+459. These recorded fields establish agreement within this finite run, not
+coverage of every hidden world field.
+
+The helper activated native mouse steering once with Shift+Space. A nonzero
+guest cursor sample appeared at tick 154, before either intended motion.
+The subsequent +120-pixel request changed that vector at tick 172; the
+−120-pixel request returned it to the previous vector at tick 202. Each
+captured record was applied exactly two ticks later on both peers. Host
+cursor samples stayed zero. Activating the authenticated host window made
+the guest sample positive zero from tick 232, replayed by both peers at 234.
+Body rotation and angular velocity agreed throughout. Rotation had already
+begun after activation, so the later motion requests do not account for all
+observed turning; neutral input also does not stop inertia immediately.
+
+Input delivery used the task-owned private display. Direct window key events
+and compositor relative-motion requests were checked first with a standalone
+receiver using the installed SDL library. An earlier native attempt activated
+steering but ended with `XI_BadDevice` after its temporary input connection
+closed. The subsequent helper kept the input device connected from before
+game startup until all owned game processes and forks were cleaned up. The
+persistent-device run completed without that error. The earlier failure
+remains failed.
+
+Both games deliberately exited with code 223, and the overall gate result
+remains false. Cleanup found no remaining owned game processes; the input
+service then closed normally, and the Steam client identity was unchanged.
+This is bounded native input capture, replay and state-agreement evidence.
+It does not establish Windows/Linux interoperability, a full human play
+session, or complete aim and firing behavior. An early dark guest image was
+followed by a visible cockpit/HUD in a later capture around tick 900. The cause of the early image is unproven, and those
+captures do not establish consistently correct rendering.
 
 ## Native player-control progress, 14 November 2026
 

@@ -10,6 +10,7 @@
  * Update remains owned by X4. No camera, seat transfer or general input support
  * is implied, and all native storage remains resident until process exit. */
 static int keyboard_probe_independent_after_path_join(uint64_t generation);
+static void player_primary_trigger_apply(uint64_t generation);
 static int keyboard_probe_independent_neutral(void);
 static int keyboard_probe_after_path_join(void);
 static int player_cursor_mode(void);
@@ -191,6 +192,7 @@ static void player_physics_network_begin(uint64_t generation) {
         player_network_busy || !player_physics_identity()) {
         player_recurring_fatal("network_frame_replay");
     }
+    player_primary_trigger_apply(generation);
 }
 
 static void player_physics_network_finish(uint64_t generation, unsigned final) {

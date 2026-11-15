@@ -130,5 +130,23 @@ int main(void) {
     assert(!configure(&config));
     config = setup(2); config.scripted_throttle = 1;
     assert(!configure(&config));
+    /* Both routes admit the longer finite budget and drain exactly two
+     * capture steps. A forged over-budget struct must also be refused. */
+    const char *budgets[] = {"900", "1800"};
+    for (unsigned slot = 1; slot <= 2; ++slot) {
+        for (unsigned i = 0; i < sizeof budgets / sizeof budgets[0]; ++i) {
+            config = setup(slot);
+            assert(player_ui_session_parse_phased(budgets[i], &phase, &player_session_budget));
+            config.last_capture = player_session_budget.last_capture;
+            assert(configure(&config));
+            stock_view_gate_bound = 1;
+            assert(frame(&config, config.last_capture));
+            assert(frame(&config, config.last_capture + 2));
+            assert(!frame(&config, config.last_capture + 3));
+            config = setup(slot);
+            player_session_budget.frames = 1801;
+            assert(!configure(&config));
+        }
+    }
     return 0;
 }

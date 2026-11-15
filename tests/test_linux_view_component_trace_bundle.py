@@ -1,5 +1,5 @@
 """Versioned closure preserves old inventories and freezes every new input."""
-import linux_semaphore_observer_bundle as latest_bundle
+from linux_gate_live import semaphore_bundle as latest_bundle
 import hashlib
 import json
 from pathlib import Path

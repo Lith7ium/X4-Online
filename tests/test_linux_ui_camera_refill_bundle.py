@@ -1,5 +1,5 @@
 """Default-off camera mode and v2/v3 frozen-source dispatch; no native launch."""
-import linux_semaphore_observer_bundle as latest_bundle
+from linux_gate_live import semaphore_bundle as latest_bundle
 import copy
 import hashlib
 import json

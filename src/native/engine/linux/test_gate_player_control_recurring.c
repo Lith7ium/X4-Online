@@ -357,12 +357,12 @@ static void run_case(int which) {
         _exit(0);
     }
     if (which >= 35 && which <= 39) {
-        setenv("X4_DEV_UI_SESSION_FRAMES", which == 37 ? "18001" : "18000", 1);
-        setenv("X4LAN_PLAYER_CONTROL_RECURRING_END", which == 36 ? "18003" : "18004", 1);
+        setenv("X4_DEV_UI_SESSION_FRAMES", which == 37 ? "1801" : "1800", 1);
+        setenv("X4LAN_PLAYER_CONTROL_RECURRING_END", which == 36 ? "1803" : "1804", 1);
         if (which == 38) unsetenv("X4LAN_PLAYER_CONTROL_RECURRING_TAIL");
         if (which == 39) setenv("X4_DEV_PLAYER_PHYSICS", "bounded-frames-discard", 1);
         (void)player_control_boundary_before_frame();
-        assert(which == 35 && player_recurring_end == 18004 && player_session_budget.last_capture == 18002);
+        assert(which == 35 && player_recurring_end == 1804 && player_session_budget.last_capture == 1802);
         _exit(0);
     }
     if (which == 3) setenv("X4_DEV_PLAYER_LIFECYCLE", "take-release-input-discard", 1);

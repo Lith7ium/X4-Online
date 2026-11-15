@@ -1,6 +1,7 @@
 #ifndef X4_PLAYER_VIEW_REWRITE_CONFIG_H
 #define X4_PLAYER_VIEW_REWRITE_CONFIG_H
 #include <string.h>
+#include "player_ui_session_budget.h"
 
 typedef struct {
     const char *rewrite;
@@ -32,6 +33,6 @@ static inline int player_view_rewrite_config_valid(const player_view_rewrite_con
            player_view_rewrite_one(config->precompare_trace) &&
            player_view_rewrite_one(config->cursor) && player_view_rewrite_one(config->focus) &&
            config->startup_version == 1 && config->session_frames >= 180 &&
-           config->session_frames <= 900;
+           config->session_frames <= PLAYER_UI_SESSION_MAX_FRAMES;
 }
 #endif

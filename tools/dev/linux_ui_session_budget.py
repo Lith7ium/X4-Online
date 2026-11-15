@@ -1,13 +1,13 @@
 """Explicit finite disposable-session budgets, separate from legacy probes."""
 MIN_FRAMES = 180
-MAX_FRAMES = 900
+MAX_FRAMES = 1800
 
 from linux_player_startup_phases import startup_phases, phases_from_options
 
 
 def session_budget(frames, startup=None):
     if type(frames) is not int or not MIN_FRAMES <= frames <= MAX_FRAMES:
-        raise ValueError('session frames must be an integer from 180 through 900')
+        raise ValueError('session frames must be an integer from 180 through 1800')
     phase = startup_phases(startup)
     end = phase['apply'] + frames - 1
     last = phase['presentation_first'] + frames - 11

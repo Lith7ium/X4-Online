@@ -16,7 +16,8 @@ __attribute__((visibility("hidden"), noinline)) int player_stock_view_ship_dispa
     int saved_errno = errno, result = original;
     unsigned state = stock_view_policy_enter(&stock_view_ship_active, &stock_view_ship_inflight);
     if (state == 1) {
-        if (stock_view_ship_depth++ || !stock_view_ship_policy(ship, original, &result)) _exit(223);
+        if (stock_view_ship_depth++) PLAYER_VIEW_FAILURE("ship_nested");
+        if (!stock_view_ship_policy(ship, original, &result)) PLAYER_VIEW_FAILURE("ship_policy");
         --stock_view_ship_depth;
     }
     stock_view_policy_leave(&stock_view_ship_inflight);

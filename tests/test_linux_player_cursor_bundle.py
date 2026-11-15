@@ -1,4 +1,4 @@
-import linux_semaphore_observer_bundle as latest_bundle
+from linux_gate_live import semaphore_bundle as latest_bundle
 import hashlib
 from pathlib import Path
 import tempfile
@@ -32,6 +32,16 @@ class CursorBundleTests(unittest.TestCase):
         env = dict(X4_DEV_PLAYER_CURSOR='bad', X4_DEV_PLAYER_FOCUS='bad', OTHER='keep')
         self.assertEqual(cursor.environment(env, False), {'OTHER': 'keep'})
         self.assertEqual(cursor.environment(env, True), dict(OTHER='keep', X4_DEV_PLAYER_CURSOR='1', X4_DEV_PLAYER_FOCUS='1'))
+
+    def test_finite_cursor_budget_does_not_require_optional_input_trace(self):
+        for frames in (900, 1800):
+            options = dict(self.options(), player_ui_session_frames=frames,
+                           independent_keyboard_frames=frames)
+            self.assertTrue(cursor.enabled(options))
+            self.assertNotIn('X4_DEV_CURSOR_INPUT_TRACE', cursor.environment({}, True))
+        with self.assertRaises(ValueError):
+            cursor.enabled(dict(self.options(), player_ui_session_frames=1801,
+                                independent_keyboard_frames=1801))
 
     def test_network_cursor_decode_requires_explicit_flag_and_rejects_other_features(self):
         record = self.record(38, '3f800000')

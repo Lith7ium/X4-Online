@@ -31,8 +31,10 @@ static uintptr_t xs_test_targets[3] = {0x1c90380, 0x1e07020, 0x1c98690};
 #endif
 static unsigned xs_enter(void) {
     unsigned active = stock_view_policy_enter(&xs_active, &xs_inflight);
-    if (active && (xs_depth++ || !xs_still_owned()))
-        _exit(223);
+    if (active) {
+        if (xs_depth++) PLAYER_VIEW_FAILURE("xs_nested");
+        if (!xs_still_owned()) PLAYER_VIEW_FAILURE("xs_ownership");
+    }
     return active;
 }
 static void xs_leave(unsigned active) {
@@ -71,7 +73,7 @@ __attribute__((visibility("hidden"), noinline)) uint64_t player_view_xs_external
         _exit(223);
     }
     if (active && (result & ~UINT64_C(0xff)) != (original & ~UINT64_C(0xff)))
-        _exit(223);
+        PLAYER_VIEW_FAILURE("xs_external_result");
     xs_leave(active);
     errno = after;
     return result;

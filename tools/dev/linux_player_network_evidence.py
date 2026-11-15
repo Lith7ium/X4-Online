@@ -19,12 +19,14 @@ SUPPORTED_STATES = frozenset((2, 3, 4, 5, 6, 7, 8, 9, 13, 14))
 SUPPORTED_HELD_MASK = sum(1 << (event_id - 2) for event_id in SUPPORTED_STATES)
 
 
-def decode_record(text, tick, held, *, scripted_throttle=False, allow_cursor=False, allow_space=False, allow_view=False):
+def decode_record(text, tick, held, *, scripted_throttle=False, allow_cursor=False, allow_space=False, allow_view=False, allow_primary=False):
     """Return the held mask after a canonical, supported version-3 record."""
     if type(allow_space) is not bool or (allow_space and allow_cursor is not True):
         raise ValueError('SPACE requires explicit cursor admission')
     if type(allow_view) is not bool or (allow_view and allow_cursor is not True):
         raise ValueError('VIEW requires explicit cursor admission')
+    if type(allow_primary) is not bool or (allow_primary and allow_cursor is not True):
+        raise ValueError('primary requires explicit cursor admission')
     if type(held) is not int or held < 0 or held & ~SUPPORTED_HELD_MASK:
         raise ValueError('unsupported held-state mask')
     if not re.fullmatch(r'[0-9a-f]+', text) or len(text) % 2:
@@ -35,6 +37,10 @@ def decode_record(text, tick, held, *, scripted_throttle=False, allow_cursor=Fal
     # Strip VIEW only after explicit admission. The original ACTIVE/CURSOR/
     # SPACE policy remains unchanged for every combination of presence flags.
     flags = data[1] & ~8 if allow_view else data[1]
+    if allow_primary:
+        if (data[1] & 16) and not (data[1] & 1):
+            raise ValueError('inactive primary record')
+        flags &= ~16
     allowed = (0, 1, 3) if allow_space else (1, 3)
     if (flags not in allowed if allow_cursor else flags != 0):
         raise ValueError('unsupported record header')
@@ -69,11 +75,13 @@ def decode_record(text, tick, held, *, scripted_throttle=False, allow_cursor=Fal
     return held
 
 
-def parse_network_physics_evidence(lines, stderr_lines, engine_lines, returncode, *, frame_count, slot, allow_camera=False, allow_throttle=False, throttle_start_tick=5, allow_presentation=False, session_frames=0, startup=None, allow_cursor=False, allow_space=False, allow_view=False, allow_semaphore_checkpoint=False, allow_worker_dispatch=False, bootstrap_checkpoint_tick=None):
+def parse_network_physics_evidence(lines, stderr_lines, engine_lines, returncode, *, frame_count, slot, allow_camera=False, allow_throttle=False, throttle_start_tick=5, allow_presentation=False, session_frames=0, startup=None, allow_cursor=False, allow_space=False, allow_view=False, allow_primary=False, allow_semaphore_checkpoint=False, allow_worker_dispatch=False, bootstrap_checkpoint_tick=None):
     result = parse_recurring_physics_evidence(lines, stderr_lines, returncode,
                                                frame_count=frame_count, input_mode='network', allow_camera=allow_camera and str(slot) == '2', allow_throttle=allow_throttle,
                                                throttle_start_tick=throttle_start_tick, presentation_slot=slot if allow_presentation else None, session_frames=session_frames, startup=startup, allow_semaphore_checkpoint=allow_semaphore_checkpoint, allow_worker_dispatch=allow_worker_dispatch, bootstrap_checkpoint_tick=bootstrap_checkpoint_tick)
     errors = result['errors']
+    if type(allow_primary) is not bool or (allow_primary and (allow_cursor is not True or not session_frames or session_frames > 900)):
+        errors.append('human primary requires explicit finite cursor admission')
     if type(allow_space) is not bool or (allow_space and not allow_cursor):
         errors.append('SPACE requires explicit cursor admission')
     if type(allow_cursor) is not bool or (allow_cursor and (startup != 'v1-t40' or not session_frames)):
@@ -120,7 +128,7 @@ def parse_network_physics_evidence(lines, stderr_lines, engine_lines, returncode
             errors.append(f'frame {tick}: missing or reordered P2 network rows')
             continue
         try:
-            after = decode_record(rows[0]['record'], tick, held, scripted_throttle=allow_throttle, allow_cursor=allow_cursor, allow_space=allow_space, allow_view=allow_view)
+            after = decode_record(rows[0]['record'], tick, held, scripted_throttle=allow_throttle, allow_cursor=allow_cursor, allow_space=allow_space, allow_view=allow_view, allow_primary=allow_primary)
             if allow_throttle and tick in (throttle_start_tick, throttle_start_tick + 1) and bytes.fromhex(rows[0]['record'])[42] != 0:
                 raise ValueError('scripted throttle requires empty P2 record')
             if any(row['tick'] != tick or row['record'] != rows[0]['record'] or
@@ -151,7 +159,7 @@ def parse_network_physics_evidence(lines, stderr_lines, engine_lines, returncode
                 raise ValueError('P1 identity, capture or held-before mismatch')
             if saved is not None and identity != saved:
                 raise ValueError('P1 saved identity changed')
-            expected = decode_record(record, tick, held, scripted_throttle=allow_throttle, allow_cursor=allow_cursor, allow_space=allow_space, allow_view=allow_view)
+            expected = decode_record(record, tick, held, scripted_throttle=allow_throttle, allow_cursor=allow_cursor, allow_space=allow_space, allow_view=allow_view, allow_primary=allow_primary)
             if after != expected:
                 raise ValueError('P1 held-after mismatch')
             saved, held = identity, expected
@@ -221,7 +229,7 @@ def parse_network_physics_evidence(lines, stderr_lines, engine_lines, returncode
     return result
 
 
-def collect_network_physics_evidence(trace, retained, engine, output, returncode, *, frame_count, stderr, slot, allow_camera=False, allow_throttle=False, throttle_start_tick=5, allow_presentation=False, session_frames=0, startup=None, allow_cursor=False, allow_space=False, allow_view=False, allow_semaphore_checkpoint=False, allow_worker_dispatch=False, bootstrap_checkpoint_tick=None):
+def collect_network_physics_evidence(trace, retained, engine, output, returncode, *, frame_count, stderr, slot, allow_camera=False, allow_throttle=False, throttle_start_tick=5, allow_presentation=False, session_frames=0, startup=None, allow_cursor=False, allow_space=False, allow_view=False, allow_primary=False, allow_semaphore_checkpoint=False, allow_worker_dispatch=False, bootstrap_checkpoint_tick=None):
     """Retain raw trace before parsing; include the complete generic failure checks."""
     base = collect_recurring_physics_evidence(trace, retained, engine, output, returncode,
                                              frame_count=frame_count, stderr=stderr, input_mode='network', allow_camera=allow_camera and str(slot) == '2', allow_throttle=allow_throttle,
@@ -234,7 +242,7 @@ def collect_network_physics_evidence(trace, retained, engine, output, returncode
         worker = worker_raw.decode('utf-8').splitlines(keepends=True)
         engine_lines = Path(engine).read_text(encoding='utf-8').splitlines(keepends=True)
         result = parse_network_physics_evidence(lines, worker, engine_lines, returncode,
-                                                frame_count=frame_count, slot=slot, allow_camera=allow_camera, allow_throttle=allow_throttle, throttle_start_tick=throttle_start_tick, allow_presentation=allow_presentation, session_frames=session_frames, startup=startup, allow_cursor=allow_cursor, allow_space=allow_space, allow_view=allow_view, allow_semaphore_checkpoint=allow_semaphore_checkpoint, allow_worker_dispatch=allow_worker_dispatch, bootstrap_checkpoint_tick=bootstrap_checkpoint_tick)
+                                                frame_count=frame_count, slot=slot, allow_camera=allow_camera, allow_throttle=allow_throttle, throttle_start_tick=throttle_start_tick, allow_presentation=allow_presentation, session_frames=session_frames, startup=startup, allow_cursor=allow_cursor, allow_space=allow_space, allow_view=allow_view, allow_primary=allow_primary, allow_semaphore_checkpoint=allow_semaphore_checkpoint, allow_worker_dispatch=allow_worker_dispatch, bootstrap_checkpoint_tick=bootstrap_checkpoint_tick)
         for error in base['errors']:
             if error not in result['errors']:
                 result['errors'].append(error)
