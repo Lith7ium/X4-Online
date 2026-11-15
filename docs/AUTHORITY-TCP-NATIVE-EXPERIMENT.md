@@ -51,3 +51,11 @@ the TCP path, and both native processes confirmed resume and the later pause.
 The second join was simulated, the next save remained pending, and the helper
 exited cleanly before owned-process cleanup reported no remaining processes.
 This result is limited to the diagnostic conditions and exclusions above.
+
+A separate `--last-disconnect` run on the same date completed the intermediate
+save after the simulated second join, resumed the remaining participant, and
+observed TCP EOF after its helper exited. The server then paused and wrote a
+new confirmed checkpoint with a different marker; no participants or offers
+remained, and cleanup reported no owned processes. The client game continued
+running until cleanup. This establishes the described control-disconnect
+path only, not a game logout or recovery of this particular checkpoint.

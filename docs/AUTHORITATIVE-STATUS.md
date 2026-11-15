@@ -22,6 +22,10 @@ Native Linux evidence so far:
   through TCP participant control. A second join was simulated. Another run
   loaded a marked checkpoint in a fresh server process and wrote a fresh
   confirmed checkpoint after a synthetic join. Neither run tested gameplay.
+* In a separate two-X4 loopback run, the last control connection closed, after
+  which the server paused and wrote a fresh marked checkpoint. The client game
+  itself stayed open until cleanup; this did not test an actual game logout or
+  a restart from that particular checkpoint.
 
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
