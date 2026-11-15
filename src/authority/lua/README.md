@@ -105,9 +105,10 @@ No component identifier, class, context, component data, or pose is logged or
 queried for that entry. A repeated negative answer does not distinguish a wreck
 from an unavailable or other non-operational object. The later fleet may differ
 even when its counts match; presence or absence at recheck does not establish
-the reason, identity across game processes, or a complete census. The added
-getter and re-enumeration have not yet been validated in a new native run. Lua
-error handling cannot protect against a native crash.
+the reason, identity across game processes, or a complete census. In a later
+local native run both instances repeated the negative operational result and
+found the entry again in the same faction enumeration. This still does not
+identify the reason. Lua error handling cannot protect against a native crash.
 
 The scan then emits one `AUTHORITY_SCAN_FIXTURE` or `AUTHORITY_SCAN_ERROR`
 record. If the scan succeeds, `authority_scan_evidence` includes the distance
@@ -137,7 +138,15 @@ and exact coordinates. This is a read-only local transport observation for one
 enrolled fixture, not a portable identity, full fleet scan, position write,
 server simulation, synchronization acceptance or Windows test. The independent
 `authority_wire_evidence` result does not override a failed fleet scan or the
-overall lockstep verdict. This integration has not been run inside X4 yet.
+overall lockstep verdict.
+
+On 15 November 2026, a 180-tick isolated Linux/Linux native run recorded 150
+source poses and 103 guest receipts, with each receipt matching the recorded
+source sequence and coordinates. The fixture's observed coordinates were
+stationary; this is not evidence of moving-ship replication. The overall run
+failed because both complete fleet scans encountered a non-operational entry.
+Both game processes exited and the runner reported Steam unchanged. No Windows
+or Internet connection was involved.
 
 A candidate owned fixture snapshot was checked read-only on 15 November 2026.
 It has 12 valid saved fixture references; the private test snapshot itself is

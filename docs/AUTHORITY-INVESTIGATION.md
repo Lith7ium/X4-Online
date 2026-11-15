@@ -8,6 +8,11 @@ on public commit `b80712b39963c179dcdc2d99541cf9a25dacf7de`.
 In a later read-only Linux experiment, two local X4 instances each returned the
 same recorded pose for one known fixture at tick 30. The fleet scans in that run
 still failed on a non-operational entry. This does not establish synchronization.
+Another isolated Linux/Linux run transferred one fixture's read-only position
+through a localhost UDP process between two X4 instances. Its validator matched
+103 received samples against 150 logged source samples; the sampled coordinates
+were stationary. The overall run still failed its independent fleet scan, and
+does not establish moving-ship synchronization or Internet/Windows operation.
 
 ## Question
 
