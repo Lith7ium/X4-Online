@@ -12,4 +12,11 @@ When explicitly invoked with a running Steam client, no other X4 instance, a loc
 
 The signal is **only a local test bridge**, not an Internet or production multiplayer protocol. Its lease is private and removed from the test config during cleanup. A control timeout, partial/missing save, invalid file, lost pause, unexpected/duplicate receipt, process failure or changed Steam identity fails the experiment. Log receipts are collected incrementally with bounded memory and a size limit; old markers are not discarded on log growth.
 
-This prepares the experiment but does not run it. In particular, `IsSavingPossible(false)` in the already paused game may refuse the save, and the availability of update callbacks while paused must be established by an actual isolated native run. A successful run would prove only one local pause/save/verification/resume cycle, not repeated campaign saves, reconnects, two-client gameplay, Internet operation or Windows behavior.
+On 15 November 2026 the isolated Linux native run completed this sequence:
+pause was observed, one save emitted its native event, the supervisor verified
+and committed the resulting gzip/XML checkpoint, and game-time progress was
+observed after resume. The owned game exited and the Steam process identity was
+unchanged. This proves only one local cycle in the test world, not repeated
+campaign saves, reloading the resulting checkpoint, reconnects, two-client
+gameplay, Internet operation or Windows behavior. Earlier documentation about
+the one-save-per-process experimental limit still applies.
