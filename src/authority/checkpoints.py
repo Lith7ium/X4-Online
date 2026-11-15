@@ -1,9 +1,11 @@
 """Private checkpoint storage for completed X4 saves; it does not save or load X4.
 
 The caller chooses an existing, separate, private directory and provides a finished
-save. A committed checkpoint is immutable to this module. CURRENT is the sole
-commit point; orphaned directories from an interrupted publish are never adopted.
-Only one publisher may use a store at once. Readers can use it concurrently.
+save. A committed checkpoint is immutable to this module. CURRENT is the publish
+point; CONFIRMED separately records the last checkpoint explicitly confirmed by
+the controller. Neither pointer adopts orphaned directories. A confirmed checkpoint
+is not proof that no simulation occurred afterwards. Only one writer may use a
+store at once. Readers can use it concurrently.
 """
 from dataclasses import dataclass
 import gzip
@@ -221,10 +223,45 @@ class CheckpointStore:
         _validate_save(save)
         return Checkpoint(checkpoint_id, save, digest, size)
 
-    def latest(self):
-        pointer = _json(_read_regular(self.directory / 'CURRENT', 4096))
+    def _pointed_checkpoint(self, contents):
+        pointer = _json(contents)
         if (not isinstance(pointer, dict) or set(pointer) != {'version', 'id', 'manifest_sha256'}
                 or type(pointer['version']) is not int or pointer['version'] != 1
                 or not isinstance(pointer['manifest_sha256'], str) or not _HASH.fullmatch(pointer['manifest_sha256'])):
-            raise CheckpointError('invalid CURRENT pointer')
+            raise CheckpointError('invalid checkpoint pointer')
         return self.get(pointer['id'], manifest_sha256=pointer['manifest_sha256'])
+
+    def latest(self):
+        return self._pointed_checkpoint(_read_regular(self.directory / 'CURRENT', 4096))
+
+    def confirm(self, checkpoint):
+        """Durably record an explicitly controller-confirmed CURRENT checkpoint.
+
+        The caller must first obtain confirmation from the controller. The store
+        cannot verify that assertion. Single-writer serialization also covers
+        publication and confirmation; a stale generation is rejected. On an
+        error after replacement the pointer may already be visible, so callers
+        must fault the session rather than infer that the old pointer survived.
+        """
+        if not isinstance(checkpoint, Checkpoint):
+            raise CheckpointError('expected a checkpoint')
+        pointer = _read_regular(self.directory / 'CURRENT', 4096)
+        if self._pointed_checkpoint(pointer) != checkpoint:
+            raise CheckpointError('only the current checkpoint can be confirmed')
+        fd, name = tempfile.mkstemp(prefix='.confirmed-', dir=self.directory)
+        temp = Path(name)
+        try:
+            with os.fdopen(fd, 'wb') as file:
+                file.write(pointer)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temp, self.directory / 'CONFIRMED')
+            temp = None
+            _sync_dir(self.directory)
+        finally:
+            if temp is not None:
+                temp.unlink(missing_ok=True)
+
+    def latest_confirmed(self):
+        """Verify the separately confirmed checkpoint; never fall back to CURRENT."""
+        return self._pointed_checkpoint(_read_regular(self.directory / 'CONFIRMED', 4096))

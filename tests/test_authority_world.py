@@ -106,6 +106,7 @@ class WorldTests(unittest.TestCase):
         latest = self.store.latest()
         self.assertNotEqual(latest.checkpoint_id, second.save.checkpoint_id)
         self.assertEqual(CheckpointStore(self.store_path).latest(), latest)
+        self.assertEqual(CheckpointStore(self.store_path).latest_confirmed(), latest)
         self.assertEqual(self.engine.actions,
                          ['pause', 'save', 'resume', 'pause', 'save', 'resume', 'pause', 'save'])
         self.assertEqual(self.participants.actions,
@@ -236,7 +237,35 @@ class WorldTests(unittest.TestCase):
         a=self.world.join('a')
         self.step('pause');self.step('save')
         self.assertEqual(len(seen),1)
+        self.assertEqual(CheckpointStore(self.store_path).latest_confirmed(), seen[0])
         self.assertEqual(self.world.offer_load(a).save.checkpoint_id, seen[0].checkpoint_id)
+
+    def test_failed_controller_confirmation_retains_previous_confirmed_checkpoint(self):
+        self.engine.checkpoint_published=lambda _checkpoint: True
+        a=self.world.join('a');self.step('pause');self.step('save')
+        previous=self.store.latest_confirmed()
+        self.confirm(self.world.offer_load(a));self.step('resume')
+        self.world.join('b');self.step('pause')
+        self.engine.checkpoint_published=mock.Mock(side_effect=RuntimeError('confirmation unavailable'))
+        with self.assertRaisesRegex(RuntimeError, 'confirmation unavailable'):
+            self.world.step()
+        restarted=CheckpointStore(self.store_path)
+        self.assertNotEqual(restarted.latest(), previous)
+        self.assertEqual(restarted.latest_confirmed(), previous)
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertIsNone(self.world.session.baseline_id)
+
+    def test_confirm_pointer_failure_faults_after_controller_confirmation(self):
+        self.engine.checkpoint_published=mock.Mock(return_value=True)
+        self.world.join('a');self.step('pause')
+        with mock.patch.object(self.store, 'confirm', side_effect=OSError('pointer failure')):
+            with self.assertRaisesRegex(OSError, 'pointer failure'):
+                self.world.step()
+        self.engine.checkpoint_published.assert_called_once()
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertIsNone(self.world.session.baseline_id)
+        with self.assertRaises(FileNotFoundError):
+            self.store.latest_confirmed()
 
     def test_failed_publication_notification_faults_with_checkpoint_retained(self):
         self.world.join('a');self.step('pause')

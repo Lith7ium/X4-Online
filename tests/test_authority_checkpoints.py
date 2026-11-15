@@ -36,6 +36,46 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(second.sha256, hashlib.sha256(self.source.read_bytes()).hexdigest())
         self.assertNotEqual(first.sha256, second.sha256)
 
+    def test_confirmed_pointer_survives_a_new_unconfirmed_publication(self):
+        self.write_save()
+        first = self.store.publish(self.source)
+        self.store.confirm(first)
+        self.write_save(b'<savegame><info seed="456"/></savegame>')
+        second = self.store.publish(self.source)
+        restarted = CheckpointStore(self.store_dir)
+        self.assertEqual(restarted.latest(), second)
+        self.assertEqual(restarted.latest_confirmed(), first)
+        with self.assertRaises(CheckpointError):
+            restarted.confirm(first)
+        self.assertEqual(restarted.latest_confirmed(), first)
+        restarted.confirm(second)
+        self.assertEqual(CheckpointStore(self.store_dir).latest_confirmed(), second)
+
+    def test_confirmation_replace_failure_keeps_previous_pointer(self):
+        self.write_save()
+        first = self.store.publish(self.source)
+        self.store.confirm(first)
+        self.write_save(b'<savegame><different/></savegame>')
+        second = self.store.publish(self.source)
+        with mock.patch('authority.checkpoints.os.replace', side_effect=OSError('disk failure')):
+            with self.assertRaises(OSError):
+                self.store.confirm(second)
+        self.assertEqual(CheckpointStore(self.store_dir).latest_confirmed(), first)
+        self.assertEqual(self.store.latest(), second)
+        self.assertFalse(list(self.store_dir.glob('.confirmed-*')))
+
+    def test_confirmed_pointer_revalidates_and_never_falls_back(self):
+        self.write_save()
+        first = self.store.publish(self.source)
+        with self.assertRaises(FileNotFoundError):
+            self.store.latest_confirmed()
+        self.store.confirm(first)
+        self.write_save(b'<savegame><different/></savegame>')
+        self.store.publish(self.source)
+        first.path.write_bytes(b'corrupt')
+        with self.assertRaises(CheckpointError):
+            self.store.latest_confirmed()
+
     def test_invalid_gzip_or_xml_never_replaces_previous(self):
         self.write_save()
         previous = self.store.publish(self.source)

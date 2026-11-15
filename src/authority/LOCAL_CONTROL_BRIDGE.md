@@ -37,7 +37,16 @@ engine state uncertain and fault the adapter. Do not call `SessionCoordinator.re
 until the old server and affected client operations have actually been fenced.
 Retry discards readiness and requires a fresh checkpoint and load confirmations. A
 checkpoint can remain published after a later confirmation failure; it is not
-then a confirmed session baseline. Keep a new epoch and lease for every restart.
+then a confirmed session baseline. The coordinator writes a separate durable
+`CONFIRMED` pointer only after the controller accepts publication. `CURRENT`
+continues to identify the latest published checkpoint; it may be newer than
+`CONFIRMED`. `CheckpointStore.latest_confirmed()` revalidates the pointer,
+manifest, hash and save and does not fall back to `CURRENT`. If no confirmation
+was persisted it fails; existing stores are not silently upgraded. A confirmed
+checkpoint does not prove that no later simulation happened before a crash, and
+neither pointer starts or loads X4. An fsync error after pointer replacement can
+leave the new pointer visible while its durability is uncertain. Keep a new epoch
+and lease for every restart.
 
 `tests/test_authority_world_bridge.py` exercises the UI entrypoint, real native
 UDP library and controller with Lua engine doubles across three save cycles, and

@@ -11,6 +11,12 @@ provide checkpoint_published(checkpoint). It must return True only after the nat
 controller has accepted the confirmation; an error or other result faults the session even
 though the verified checkpoint itself remains in the store.
 
+After successful adapter confirmation, the coordinator also persists a separate
+CONFIRMED pointer. Adapters without a publication callback assert completion by
+returning from save(). Failure to write the pointer faults the session. A pointer
+can already be visible when a directory fsync reports an error; it does not prove
+that the simulation stayed stopped or that later progress was saved.
+
 All access must be serialized by the caller. This module neither starts an
 engine nor restores one on restart. Session/client authentication, genuine
 client-side loading, adapter timeouts and engine fencing are external duties.
@@ -126,6 +132,7 @@ class WorldCoordinator:
                         raise ValueError('engine checkpoint publication callback is not callable')
                     if published(checkpoint) is not True:
                         raise ValueError('engine did not confirm checkpoint publication')
+                self._store.confirm(checkpoint)
                 self._baseline = (request.request_id, checkpoint)
             else:
                 raise ValueError('unknown engine operation')
