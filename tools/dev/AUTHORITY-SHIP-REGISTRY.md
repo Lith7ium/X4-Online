@@ -113,3 +113,28 @@ the streaming XML checks reread the large save several times.
 ```sh
 python tools/dev/authority_census_archive_provenance.py
 ```
+
+## Saved sector macro names
+
+`authority_sector_macro_save_evidence.py` checks the same pinned census
+checkpoint without launching X4. It requires matching confirmed/current
+pointers and the recorded checkpoint ID, size and compressed SHA-256, and it
+streams the saved XML through the existing digest-checking parser. It counts
+sector components under the saved universe, rejecting missing or duplicate
+component IDs and missing or duplicate macro names. Macro comparison uses
+case-folding conservatively. Path/file fingerprints are sampled around the
+check; they are not an atomic or adversarial filesystem fence.
+
+One read-only verification on 15 November 2026 found **152 saved sectors, 152
+distinct saved sector IDs, and 152 distinct case-folded sector macro names** in
+the pinned checkpoint. The earlier ship-ancestry analysis found registered
+ships in 140 saved sectors. These two observations do not map local runtime
+handles to saved components, establish cross-process sector frames or prove
+that sector macro names are unique in other worlds, mods, or dynamically
+created sectors. They do not prove which bytes X4 loaded. Do not use the
+result by itself as a multiplayer frame-identity contract.
+
+```sh
+python3 tools/dev/authority_sector_macro_save_evidence.py
+python3 -m unittest tests.test_authority_sector_macro_save_evidence
+```
