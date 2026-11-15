@@ -23,9 +23,8 @@ process as network identities.
 The installed game's `08.cat` contains `libraries/common.xsd` definitions for
 `find_sector` (lines 28259–28281) and `findmultiple` (745–751): `multiple=true`
 requests a list of found objects. The repository's prior
-`native_gate_player_identity.xml` uses a dynamic macro lookup. Their combination
-and the extent of this search must still be tested in X4; syntactic schema and
-synthetic tests do not establish actual engine behaviour. Refusal or an X4 MD
+`native_gate_player_identity.xml` uses a dynamic macro lookup. The bounded native observation below exercises their combination for two
+sectors; schema and synthetic tests alone do not establish engine behaviour. Refusal or an X4 MD
 error makes the run fail rather than creating an object or choosing a result.
 
 Success would calibrate only the two stored fixture sectors in this one loaded
@@ -33,4 +32,27 @@ world. It would not prove general macro uniqueness, equivalent objects on a
 second process, universal sector coverage, byte-exact X4 file consumption,
 network delivery or shared multiplayer. The saved parser's uniqueness check is
 limited to the serialized sectors in this checkpoint; it is not assumed for
-other worlds or later changes. No native result is claimed yet.
+other worlds or later changes.
+
+
+## Native observation: `authority-sector-find-calibration-01`
+
+One isolated Linux X4 run logged the expected load request, saved marker and
+slot-2 read, followed by the paused-load receipt. The two ordered calibration
+rows then named `cluster_33_sector001_macro` and `cluster_45_sector001_macro`
+at the same reported game time; both match the previously independently parsed
+saved fixture fingerprints. The result reports exactly one match per request,
+local FFI checks and no owned processes remaining. The successful row path in
+the installed MD/Lua probes requires correlation, equality with the respective
+saved local sector reference, and valid local ship-sector relationships.
+The logs do not independently expose the local handles or all intermediate
+checks; the conclusion depends on those protected probe scripts.
+
+The current and confirmed pointers and manifest digest agree with the pinned
+checkpoint. The source and private staged slot have the pinned SHA-256; saved
+fixture MD scripts match the archived and installed copies byte-for-byte. The
+engine log shows no identified probe, MD or Lua script failure, but includes
+failed writes to protected `config.xml` and graphics/signature messages. The
+private save directory contains only the staged slot. This is one sampled
+process and two fixture sectors; exact file consumption, continuous pause,
+other sectors and cross-process identity remain unproven.

@@ -22,6 +22,10 @@ Native Linux evidence so far:
 * One running X4 process repeatedly read two registered ships in different
   sectors and observed their positions change. The observed rates were derived
   from position samples, not native velocity readback.
+* One paused isolated Linux X4 resolved two saved fixture sector macros with
+  `find_sector`; each returned one local match agreeing with the stored local
+  sector reference and FFI relationship checks. This calibrates those two
+  sectors only, not universal uniqueness or cross-client identity.
 * Two sequential isolated Linux profiles each read two saved ships in distinct
   sectors and reported ship codes/macros and sector macros matching their
   independently parsed checkpoint attributes. Local handle checks passed; this
@@ -68,6 +72,7 @@ the complete persistent shared-world scenario require actual end-to-end tests.
 Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [saved-registry job attach](../tools/dev/AUTHORITY-JOB-ATTACH.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
+[sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-profile fingerprints](../tools/dev/AUTHORITY-SECTOR-FINGERPRINT.md),
 [marked admission](AUTHORITY-TRUSTED-MARKED-LIVE.md),
 [native TCP control](AUTHORITY-TCP-NATIVE-EXPERIMENT.md),
