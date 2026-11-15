@@ -946,6 +946,28 @@ class SnapshotProbeTests(unittest.TestCase):
         self.lua.execute("X4LAN_CONFIG.native_gate_battle_engage=true")
         with self.assertRaises(LuaError):self.lua.execute(SOURCE)
 
+    def test_authority_motion_is_isolated_opt_in_and_triggers_once(self):
+        for prefix in ('', "X4LAN_CONFIG.native_gate_authority_wire=true;",
+                       "X4LAN_CONFIG.native_gate_authority_wire=true;X4LAN_CONFIG.native_gate_authority_scan=true;"):
+            self.setUp()
+            self.lua.execute(prefix+'X4LAN_CONFIG.native_gate_authority_motion=true')
+            with self.assertRaisesRegex(LuaError, 'isolated, idle fixture wire test'):
+                self.lua.execute(SOURCE)
+        self.setUp()
+        self.lua.execute('''
+          X4LAN_CONFIG.test_profile='45841'
+          X4LAN_CONFIG.native_gate_hash='battle'
+          X4LAN_CONFIG.native_gate_battle_engage=false
+          X4LAN_CONFIG.native_gate_authority_motion=true
+          X4LAN_CONFIG.native_gate_authority_wire=true
+          X4LAN_CONFIG.native_gate_authority_scan=true
+          X4LAN_AUTHORITY_FIXTURE_SCAN_PROBE={sample=function() end}
+          X4LAN_AUTHORITY_FIXTURE_WIRE_PROBE={sample=function() end}
+          events={};AddUITriggeredEvent=function(screen,control) events[#events+1]=control end
+        ''')
+        self.run_admitted([40])
+        self.assertEqual(list(self.lua.globals().events.values()), ['AuthorityMoveFixture'])
+
     def test_travel_snapshot_excludes_inline_mode_and_requires_its_prerequisites(self):
         for serial,mask,inline,value in (('false','3','nil','true'),('true','1','nil','true'),('true','3','true','true'),('true','3','nil',"'1'")):
             self.setUp()

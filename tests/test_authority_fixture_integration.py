@@ -55,6 +55,28 @@ class FixtureWireEvidenceTests(unittest.TestCase):
             self.assertFalse(validate(source, bad, 60)['pass'])
         self.assertFalse(validate(source, guest, 31)['pass'])
 
+    def test_motion_requires_matching_received_post_stimulus_positions(self):
+        source = [
+            '[X4LAN] NATIVE_GATE AUTHORITY_WIRE_SOURCE tick=39 seq=1 x=0 y=0 z=0',
+            '[X4LAN] NATIVE_GATE AUTHORITY_WIRE_SOURCE tick=40 seq=2 x=0 y=0 z=0',
+            '[X4LAN] NATIVE_GATE AUTHORITY_WIRE_SOURCE tick=50 seq=3 x=6 y=8 z=0',
+        ]
+        guest = [
+            '[X4LAN] NATIVE_GATE AUTHORITY_WIRE_RECEIVE tick=41 request=1 seq=1 x=0 y=0 z=0',
+            '[X4LAN] NATIVE_GATE AUTHORITY_WIRE_RECEIVE tick=42 request=2 seq=2 x=0 y=0 z=0',
+            '[X4LAN] NATIVE_GATE AUTHORITY_WIRE_RECEIVE tick=52 request=3 seq=3 x=6 y=8 z=0',
+        ]
+        evidence = validate(source, guest, 120, require_motion=True)
+        self.assertTrue(evidence['pass'])
+        self.assertEqual(evidence['received_motion_m'], 10)
+        self.assertFalse(validate(source, guest[:2], 120, require_motion=True)['pass'])
+        self.assertFalse(validate(source, guest[1:2], 120, require_motion=True)['pass'])
+        self.assertFalse(validate(source, [guest[0], guest[2]], 120, require_motion=True)['pass'])
+        self.assertFalse(validate(source, guest[:-1] + [guest[-1].replace('x=6', 'x=7')], 120, require_motion=True)['pass'])
+        below_source = source[:-1] + [source[-1].replace('y=8', 'y=7')]
+        below_guest = guest[:-1] + [guest[-1].replace('y=8', 'y=7')]
+        self.assertFalse(validate(below_source, below_guest, 120, require_motion=True)['pass'])
+
     def test_daemon_private_pipe_loopback_transfer_and_reap(self):
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
@@ -125,6 +147,34 @@ local function log(s) logs[#logs+1]=s end
 probe.sample(cfg,29,{123},log);probe.sample(cfg,30,{123},log);probe.sample(cfg,31,{123},log)
 assert(calls==2 and #logs==2 and logs[1]:find('AUTHORITY_WIRE_SOURCE tick=30 seq=1',1,true))
 assert(not logs[1]:find(string.rep('a',32),1,true))
+'''
+        result = subprocess.run([shutil.which('luajit'), '-'], input=script, text=True,
+                                cwd=ROOT, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
+    def test_probe_rejects_sector_change_across_ticks(self):
+        script = r'''
+local logs, current_sector = {}, 'first'
+local transport={send=function() return true end,receive=function() end,close=function() end}
+package.loadlib=function() return function() return {open=function() return transport end} end end
+package.loaded.ffi={new=function(_,v) return v end}
+X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return {
+ operational=function() return true end, is_ship=function() return true end,
+ sector=function() return current_sector end, key=function(h) return h end,
+ pose=function() return {x=1,y=2,z=3} end,
+} end}
+X4LAN_AUTHORITY_FIXTURE_WIRE={new=function()
+ return {sent=0,step=function(self) self.sent=self.sent+1 end}
+end}
+local probe=assert(loadfile('src/authority/lua/fixture_wire_probe.lua'))()
+local cfg={native_gate_authority_wire=true,native_gate_authority_wire_port=1234,
+ native_gate_authority_wire_lease=string.rep('a',32),slot='p1',test_profile='45841'}
+local function log(s) logs[#logs+1]=s end
+probe.sample(cfg,30,{123},log)
+current_sector='other'
+probe.sample(cfg,31,{123},log)
+assert(#logs==2 and logs[2]=='AUTHORITY_WIRE_ERROR tick=31')
 '''
         result = subprocess.run([shutil.which('luajit'), '-'], input=script, text=True,
                                 cwd=ROOT, capture_output=True)

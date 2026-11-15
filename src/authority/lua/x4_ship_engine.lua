@@ -10,6 +10,7 @@ function M.new()
  uint32_t GetNumAllFactionShips(const char*);
  uint32_t GetAllFactionShips(UniverseID*,uint32_t,const char*);
  bool IsComponentOperational(UniverseID);
+ bool IsValidComponent(const UniverseID);
  bool IsComponentClass(UniverseID,const char*);
  UniverseID GetContextByClass(UniverseID,const char*,bool);
  UIPosRot GetObjectPositionInSector(UniverseID);
@@ -34,6 +35,9 @@ function M.new()
   end,
   key=function(handle) if handle==nil or handle==0 then return '' end; return tostring(handle) end,
   operational=function(ship) return operational(ship) end,
+  -- Used only by the opt-in isolated diagnostic after the same faction has
+  -- returned the entry twice. Resolve lazily; a census does not require it.
+  valid=function(ship) return C.IsValidComponent(ship) end,
   is_ship=function(ship) return isclass(ship,'ship') end,
   sector=function(ship) local result=context(ship,'sector',false); if result==0 then return nil end; return result end,
   pose=function(ship) local p=position(ship); return {x=tonumber(p.x),y=tonumber(p.y),z=tonumber(p.z),yaw=tonumber(p.yaw),pitch=tonumber(p.pitch),roll=tonumber(p.roll)} end,

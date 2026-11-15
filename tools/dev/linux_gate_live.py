@@ -418,6 +418,14 @@ def validate_authority_scan_bundle(root, manifest):
     assignments = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_wire\s*=\s*(.*?)\s*$', config)
     if assignments != (['true'] if wire else []):
         raise ValueError('authority fixture wire config differs from bundle option')
+    motion = manifest.get('authority_fixture_motion', False)
+    if type(motion) is not bool or (motion and not wire):
+        raise ValueError('invalid authority fixture motion option')
+    assignments = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_motion\s*=\s*(.*?)\s*$', config)
+    if assignments != (['true'] if motion else []):
+        raise ValueError('authority fixture motion config differs from bundle option')
+    if motion and manifest.get('ticks', 0) < 120:
+        raise ValueError('authority fixture motion requires at least 120 ticks')
     if wire:
         if manifest.get('clients') != 2 or manifest.get('ticks', 0) < 60:
             raise ValueError('authority fixture wire requires two local clients and at least 60 ticks')
@@ -2399,6 +2407,10 @@ def bundle(args):
                         '-target', 'x86_64-linux-gnu.2.17', '-fPIC', '-ldl',
                         '-o', str(net)], check=True)
         command += ['--authority-fixture-wire', '--authority-net-so', str(net)]
+    if args.authority_fixture_motion:
+        if not args.authority_fixture_wire or args.ticks < 120:
+            raise SystemExit('--authority-fixture-motion requires --authority-fixture-wire and at least 120 ticks')
+        command.append('--authority-fixture-motion')
     for name in ('fixture_body_observe', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state', 'flight_rng', 'flight_full',
                  'avoidance_refresh', 'steering_init', 'agent_full', 'spline_diag', 'spline_refresh', 'spline_state', 'params_init', 'strict_physics', 'body_diag', 'params_diag'):
         if getattr(args, name, False):
@@ -2914,6 +2926,7 @@ def bundle(args):
         'fixture_body_observe',
         'authority_fixture_scan',
         'authority_fixture_wire',
+        'authority_fixture_motion',
         'nav_probe_init',
         'clients',
         'fp_redirect_drones',
@@ -4654,7 +4667,8 @@ def run(args):
             from authority_fixture_wire_support import validate as validate_fixture_wire
             profiles = {slot: profile for slot, (_, profile) in zip(local, games)}
             evidence = validate_fixture_wire(gate_lines(profiles[1] / 'engine-output.log'),
-                                             gate_lines(profiles[2] / 'engine-output.log'), ticks)
+                                             gate_lines(profiles[2] / 'engine-output.log'), ticks,
+                                             require_motion=manifest.get('authority_fixture_motion', False))
             result['authority_wire_evidence'] = evidence
             if not evidence['pass']:
                 result['pass'] = False
@@ -4887,6 +4901,7 @@ def main(argv=None):
                    'twelve (--mode battle --snapshot-prebind; needs --serial-pathing, --path-determinism 1 or 3 and world identities)')
     b.add_argument('--authority-fixture-scan', action='store_true', help='read-only disposable fixture position scan')
     b.add_argument('--authority-fixture-wire', action='store_true', help='local read-only fixture UDP diagnostic; requires scan')
+    b.add_argument('--authority-fixture-motion', action='store_true', help='move the isolated fixture using an AI order; requires wire')
     for name, why in (('fixture-body-observe', 'observe fixture 6 body bits beside its original getter at ticks 1400..1600 without actor/shield refresh'),
                       ('actor-diag', "the fixture actors' raw native state row (gate.actor)"),
                       ('strict-state', 'the raw hull, shield and navigation banks in the digest (needs --actor-diag)'),

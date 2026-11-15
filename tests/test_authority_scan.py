@@ -220,6 +220,47 @@ end
     def test_game_binding_load_has_no_engine_calls(self):
         self.run_lua("assert(loadfile('src/authority/lua/x4_ship_engine.lua'))()")
 
+    def test_nonoperational_details_are_gated_by_membership_and_validity(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, new=function(_,v) return v end,
+ C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(s) return s end}
+GetCurRealTime=function() return 10 end
+X4LAN_AUTHORITY_SHIP_SCAN=scan; X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local cfg={native_gate_authority_scan=true,native_gate_hash='battle',native_gate_snapshot_fixture={},test_profile='45841'}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+local calls=0
+local originalfleet=e.fleet
+e.operational=function(h) return h~='2' end
+data.a={'a1','2'}
+e.valid=function(h) calls=calls+1; return false end
+IsComponentConstruction=function(h) error('construction on invalid component') end
+ConvertStringTo64Bit=function(h) return h end
+e.is_ship=function(h) assert(h~='2','class on invalid component'); return true end
+local gate={saved_identity=function(h) assert(h=='2'); return '0000000000001234' end}
+local function run()
+ local logs={}; local probe=assert(loadfile('src/authority/lua/fixture_scan_probe.lua'))()
+ probe.sample(cfg,30,{'a1'},function(s) logs[#logs+1]=s end,gate)
+ assert(#logs==3 and logs[3]:find('ship not operational',1,true))
+ return logs[2]
+end
+local diag=run()
+assert(diag:find('valid=false',1,true) and diag:find('construction=unknown',1,true))
+assert(diag:find('wreck_ui=unknown',1,true) and diag:find('saved_private=0000000000001234',1,true))
+assert(calls==1)
+e.valid=function() return true end
+e.is_ship=function() return true end
+IsComponentConstruction=function(h) assert(h=='2'); return true end
+diag=run(); assert(diag:find('valid=true',1,true) and diag:find('construction=true',1,true))
+assert(diag:find('wreck_ui=false',1,true))
+IsComponentConstruction=function() return false end
+diag=run(); assert(diag:find('construction=false',1,true) and diag:find('wreck_ui=true',1,true))
+e.fleet=function(f,cap) calls=calls+1; if calls==2 then return {},true end; return originalfleet(f,cap) end
+calls=0; e.valid=function() error('validity checked despite absent membership') end
+gate.saved_identity=function() error('identity checked despite absent membership') end
+diag=run(); assert(diag:find('same_fleet_recheck=unknown',1,true) and diag:find('valid=unknown',1,true))
+assert(diag:find('construction=unknown',1,true) and diag:find('wreck_ui=unknown',1,true))
+''')
+
     def test_membership_recheck_absence_or_failure_does_not_complete_scan(self):
         self.run_lua('''
 package.loaded.ffi={cdef=function() end, new=function(_,v) return v end,

@@ -1,7 +1,7 @@
 -- Explicitly enabled, read-only fixture diagnostic for the disposable Linux harness.
 local M = {}
 local attempted = false
-function M.sample(cfg, tick, actors, log)
+function M.sample(cfg, tick, actors, log, gate)
  if not cfg.native_gate_authority_scan or attempted or tick < 30 then return end
  attempted = true
  local ok, err = pcall(function()
@@ -55,14 +55,45 @@ function M.sample(cfg, tick, actors, log)
   assert(type(started)=='number' and started==started and started~=math.huge and started~=-math.huge, 'invalid real-time clock')
   local result, why = scanner.scan(engine, identities, {max_factions=1024, max_ships=4096, max_fleet=4096,
    on_nonoperational=function(ship, faction_index, ship_index, recheck_membership)
-    -- Repeat only the same getter that just answered false. No validity, class,
-    -- context, position or component-data call on an unknown component.
+    -- This runs only in the isolated, explicitly enabled fixture probe. Check
+    -- the same faction membership again before any additional component call.
     local valid_ok, valid = pcall(engine.operational, ship)
     local status = valid_ok and type(valid)=='boolean' and (valid and 'true' or 'false') or 'unknown'
     local member_ok, member = pcall(recheck_membership)
     local membership = member_ok and type(member)=='boolean' and (member and 'true' or 'false') or 'unknown'
-    log(string.format('AUTHORITY_NONOP_DIAG tick=%d faction_index=%d ship_index=%d operational_recheck=%s same_fleet_recheck=%s',
-     tick,faction_index,ship_index,status,membership))
+    local exists, construction, shipclass, wreck_ui, saved = 'unknown', 'unknown', 'unknown', 'unknown', 'unknown'
+    if membership=='true' then
+     -- Native X4's IsValidComponent shares IsComponentOperational's index and
+     -- generation checks; X4's own UI declares this same uint64 signature.
+     if type(engine.valid)=='function' then
+      local ok_valid, value=pcall(engine.valid,ship)
+      if ok_valid and type(value)=='boolean' then exists=value and 'true' or 'false' end
+     end
+     -- The identity lookup uses the gate's private runtime-to-save table, not
+     -- a component dereference. Its result is written only to this isolated
+     -- profile's diagnostic log and must not be published.
+     if type(gate)=='table' and type(gate.saved_identity)=='function' then
+      local decimal=tostring(ship):gsub('ULL$','')
+      if decimal:match('^%d+$') then
+       local ok_saved, value=pcall(gate.saved_identity,decimal)
+       if ok_saved and type(value)=='string' and value:match('^[0-9a-f]+$') and #value==16 and value~='0000000000000000' then saved=value end
+      end
+     end
+     -- Follow the order used by X4's UI: only a valid component can be queried
+     -- for class/construction. Do not infer wreck from operational=false alone.
+     if exists=='true' then
+      local ok_class, value=pcall(engine.is_ship,ship)
+      if ok_class and type(value)=='boolean' then shipclass=value and 'true' or 'false' end
+      if type(IsComponentConstruction)=='function' and type(ConvertStringTo64Bit)=='function' then
+       local ok_construction, value=pcall(function() return IsComponentConstruction(ConvertStringTo64Bit(tostring(ship))) end)
+       if ok_construction and type(value)=='boolean' then construction=value and 'true' or 'false' end
+      end
+      if status=='false' and shipclass=='true' and construction=='false' then wreck_ui='true'
+      elseif status=='true' or shipclass=='false' or construction=='true' then wreck_ui='false' end
+     end
+    end
+    log(string.format('AUTHORITY_NONOP_DIAG tick=%d faction_index=%d ship_index=%d operational_recheck=%s same_fleet_recheck=%s valid=%s construction=%s ship_class=%s wreck_ui=%s saved_private=%s',
+     tick,faction_index,ship_index,status,membership,exists,construction,shipclass,wreck_ui,saved))
    end,
    checkpoint=function()
     local now=GetCurRealTime()

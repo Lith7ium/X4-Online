@@ -1,7 +1,7 @@
 -- Disposable Linux diagnostic: read one enrolled fixture and exchange its pose.
 -- No game writes. All local configuration and endpoints are supplied by runner.
 local M={}
-local wire, connection, engine, disabled
+local wire, connection, engine, disabled, pinned_sector
 function M.sample(cfg,tick,actors,log)
  if cfg.native_gate_authority_wire ~= true or disabled or tick < 30 then return end
  local ok = pcall(function()
@@ -22,6 +22,8 @@ function M.sample(cfg,tick,actors,log)
    local ship=ffi.new('UniverseID',actor)
    assert(engine.operational(ship) and engine.is_ship(ship))
    local sector=assert(engine.sector(ship));local key=engine.key(sector)
+   if pinned_sector then assert(key==pinned_sector, 'fixture sector changed during wire test')
+   else pinned_sector=key end
    position=engine.pose(ship)
    assert(engine.operational(ship))
    local after=engine.sector(ship);assert(after and engine.key(after)==key)

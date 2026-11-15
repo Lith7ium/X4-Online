@@ -99,10 +99,11 @@ runner validates this separately under `authority_fixture_evidence`.
 
 On the first non-operational entry, the disposable fixture probe makes one
 additional call to the same `IsComponentOperational` getter and repeats the
-affected faction-fleet enumeration. It logs only the Boolean results (or
-`unknown` on a Lua error), the scan indices, and the tick.
-No component identifier, class, context, component data, or pose is logged or
-queried for that entry. A repeated negative answer does not distinguish a wreck
+affected faction-fleet enumeration. If that same entry remains in the fleet,
+the opt-in probe also checks component validity and, only if valid, class and
+construction status. Its private log can contain the snapshot identity; keep
+it private. It does not query the object's context, component data or pose.
+A repeated negative answer does not distinguish a wreck
 from an unavailable or other non-operational object. The later fleet may differ
 even when its counts match; presence or absence at recheck does not establish
 the reason, identity across game processes, or a complete census. In a later
@@ -184,3 +185,18 @@ status in `.local/authority-scan-01/runs/fixture-scan-01/`. Review each client's
 `run-result.json`: a successful scanner receipt is distinct from the runner's
 lockstep verdict, and a failed or incomplete run remains failed. The launcher
 preflight also checks current Steam, display, lock and memory requirements.
+
+The separate `--authority-fixture-motion` bundle option requires both
+`--authority-fixture-scan` and `--authority-fixture-wire`, two local clients,
+the idle battle fixture, and at least 120 ticks. At tick 40 an MD cue issues a
+native `MoveWait` order to fixture 1 in each disposable game; the position
+observer and UDP transfer remain read-only. The source probe pins one sector
+for its entire observation and fails on a sector change. In this mode the
+wire evidence also requires at least two received source samples taken at or
+after tick 40, with a displacement of at least 10 m in that same sector.
+Every received value must match its independently logged source sequence.
+More ticks may be necessary for the AI order to take effect; a missing order,
+missing samples, insufficient observed movement, or an incomplete run is not
+a pass. The normal fleet-scan and runner requirements remain mandatory.
+This opt-in test has not yet been executed in X4 and does not prove guest-side
+application, multiple ships, remote Internet transport, or gameplay.

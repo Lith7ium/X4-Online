@@ -121,6 +121,11 @@ assert(cfg.native_gate_mass_jacobi_order==nil or type(cfg.native_gate_mass_jacob
 assert(not cfg.native_gate_mass_jacobi_order or cfg.native_gate_snapshot_sha,
  'mass Jacobi order requires the snapshot boot')
 assert(cfg.native_gate_battle_engage==nil or cfg.native_gate_battle_engage==false,'native_gate_battle_engage accepts only false')
+assert(cfg.native_gate_authority_motion==nil or cfg.native_gate_authority_motion==false or cfg.native_gate_authority_motion==true,
+ 'native_gate_authority_motion must be boolean')
+assert(not cfg.native_gate_authority_motion or (cfg.test_profile=='45841' and cfg.native_gate_hash=='battle'
+ and cfg.native_gate_authority_wire==true and cfg.native_gate_authority_scan==true and cfg.native_gate_battle_engage==false),
+ 'authority motion requires the isolated, idle fixture wire test')
 -- Opt-in census scenario fixtures (docs/LOCKSTEP-SCENARIOS.txt): MD events at fixed gated
 -- ticks, identical on every client. native_gate_missions.xml / native_gate_highway.xml.
 -- Published as X4LAN_NATIVE_SCENARIOS; frame() reads that global (the frame is at
@@ -3360,7 +3365,7 @@ local function sample(tick)
   assert(tick<=4,'battle fixture did not spawn');return 'BATTLE_FIXTURE_PENDING_1'
  end
  if cfg.native_gate_authority_scan then
-  assert(X4LAN_AUTHORITY_FIXTURE_SCAN_PROBE,'authority scan probe missing').sample(cfg,tick,actors,ticklog.write)
+  assert(X4LAN_AUTHORITY_FIXTURE_SCAN_PROBE,'authority scan probe missing').sample(cfg,tick,actors,ticklog.write,gate)
  end
  if cfg.native_gate_authority_wire then
   assert(X4LAN_AUTHORITY_FIXTURE_WIRE_PROBE,'authority wire probe missing').sample(cfg,tick,actors,ticklog.write)
@@ -6647,6 +6652,7 @@ local function frame()
   -- native_gate_battle_engage=false keeps the restored fixture idle (default
   -- order Wait) while its rows stay in the declared state: a calm sandbox.
   if tick==10 and cfg.native_gate_battle_engage~=false then AddUITriggeredEvent('X4LAN_NativeGate','Engage',{}) end
+  if tick==40 and cfg.native_gate_authority_motion then AddUITriggeredEvent('X4LAN_NativeGate','AuthorityMoveFixture',{}) end
   -- Opt-in stress fixture (native_gate_bigbattle.xml): faction war and/or 40v40 spawn.
   if cfg.native_gate_big_war and tick==12 then AddUITriggeredEvent('X4LAN_NativeGate','BigWar',{}) end
   if cfg.native_gate_big_spawn and tick==14 then AddUITriggeredEvent('X4LAN_NativeGate','BigSpawn',{}) end

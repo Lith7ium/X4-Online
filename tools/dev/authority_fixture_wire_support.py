@@ -12,7 +12,7 @@ _SOURCE = re.compile(r'^AUTHORITY_WIRE_SOURCE tick=(\d+) seq=(\d+) x=(\S+) y=(\S
 _RECEIVE = re.compile(r'^AUTHORITY_WIRE_RECEIVE tick=(\d+) request=(\d+) seq=(\d+) x=(\S+) y=(\S+) z=(\S+)$')
 
 
-def validate(source_lines, guest_lines, ticks):
+def validate(source_lines, guest_lines, ticks, *, require_motion=False):
     """Check received coordinates against independently logged source sequences."""
     result = {'pass': False, 'source_count': 0, 'receive_count': 0, 'errors': []}
     try:
@@ -39,7 +39,7 @@ def validate(source_lines, guest_lines, ticks):
                     raise ValueError('invalid guest request sequence')
                 previous_seq, previous_request, previous_tick = sequence, request or 0, tick
                 if role == 'source':
-                    source[sequence] = coordinates
+                    source[sequence] = (tick, coordinates)
                 else:
                     received.append((sequence, coordinates))
                 if len(source) + len(received) > 100000:
@@ -47,8 +47,21 @@ def validate(source_lines, guest_lines, ticks):
         result['source_count'], result['receive_count'] = len(source), len(received)
         if not source or not received:
             raise ValueError('missing source or guest receipt')
-        if any(source.get(seq) != pose for seq, pose in received):
+        if any(seq not in source or source[seq][1] != pose for seq, pose in received):
             raise ValueError('guest receipt has no matching source pose')
+        if require_motion:
+            # Only received source samples at or after the scheduled stimulus
+            # qualify. The source probe pins one sector throughout the run.
+            # Two different packets with identical coordinates do not qualify.
+            positions = [pose for seq, pose in received if source[seq][0] >= 40]
+            if len(positions) < 2:
+                raise ValueError('insufficient received post-stimulus samples')
+            distances = [math.dist(positions[0], pose) for pose in positions[1:]]
+            if not all(math.isfinite(distance) for distance in distances):
+                raise ValueError('invalid received movement distance')
+            result['received_motion_m'] = max(distances)
+            if result['received_motion_m'] < 10:
+                raise ValueError('received fixture movement below 10m')
         result['pass'] = True
     except (ValueError, OverflowError) as error:
         result['errors'].append(str(error))

@@ -28,6 +28,21 @@
     </do_if>
    </actions>
    <cues>
+    <!-- Explicit disposable diagnostic: a normal AI order moves only the
+         enrolled fixture. It is never raised in an ordinary battle run. -->
+    <cue name="AuthorityMoveFixture">
+     <conditions><event_ui_triggered screen="'X4LAN_NativeGate'" control="'AuthorityMoveFixture'"/></conditions>
+     <actions>
+      <do_if value="@$ships.{1}.isoperational and $ships.{1}.sector">
+       <create_position name="$destination" space="$ships.{1}.sector" object="$ships.{1}" x="3km"/>
+       <create_order object="$ships.{1}" id="'MoveWait'" immediate="true">
+        <param name="destination" value="[$ships.{1}.sector, $destination]"/>
+        <param name="precise" value="true"/>
+        <param name="noattackresponse" value="true"/>
+       </create_order>
+      </do_if>
+     </actions>
+    </cue>
     <cue name="Engage">
      <conditions><event_ui_triggered screen="'X4LAN_NativeGate'" control="'Engage'"/></conditions>
      <actions>
