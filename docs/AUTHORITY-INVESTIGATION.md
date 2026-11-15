@@ -22,9 +22,13 @@ The non-operational entry was identified in the disposable snapshot as a
 drifting ship wreck. A guarded read in two Linux instances matched an independent
 snapshot/controller calculation to about 1.5 mm for that one object. This does
 not identify other non-operational entries or prove a complete scan. A later
-12-fixture transport run and faction inventory still failed in their respective
-diagnostics; fixes are awaiting a new native run. Inventory diagnostics explicitly
-retain unresolved entries and do not claim complete universe coverage.
+A later 360-tick Linux/Linux run independently matched 2,661 received samples
+covering each of twelve enrolled fixtures, including one moved fixture. That
+read-only local transport diagnostic passed; no guest poses or velocities were
+applied. The overall run failed because the strict census failed and the
+separate inventory encountered the same entry in two faction lists. The meaning
+of that duplicate remains under investigation. Inventory diagnostics retain
+unresolved entries and do not claim complete universe coverage.
 
 ## Question
 
