@@ -37,7 +37,7 @@ Windows, Internet, or gameplay. The saved parser and live MD checks are not
 fully independent: they intentionally refer to the same saved fixture and
 registry. The extra saved component/ancestry and attribute checks are separate
 from the runtime local-handle checks. Sampling can miss changes between checks;
-all relevant game getters and this composition need native verification.
+the native observation below does not validate these getters in other contexts.
 
 For an explicitly authorized native experiment use
 `python tools/dev/authority_sector_fingerprint_live.py --help` and a new
@@ -63,4 +63,32 @@ cleanup reported no remaining processes. This establishes that the queried
 sector getter formatted as `null` in that response, not that all sectors lack
 an ID-code getter. The current diagnostic omits that getter and narrows the
 comparison to ship code, ship macro and sector macro; the older failed runs
-are retained unchanged. A new native result is required for the narrower test.
+are retained unchanged. The subsequent narrower native result is below.
+
+
+## Narrower native observation
+
+On 2026-11-16, `.local/authority-sector-fingerprint-03` completed both
+sequential disposable Linux profiles against the recorded checkpoint. Each
+reported the expected load marker and pause, then four correlated rows in
+slot order 1, 2, 1, 2, at reported game time 3.014. In both profiles, slot 1
+reported ship code `LBT-457`, ship macro `ship_kha_m_fighter_01_a_macro`, and
+sector macro `cluster_33_sector001_macro`; slot 2 reported `ABC-309`, the same
+ship macro, and `cluster_45_sector001_macro`. All rows matched the separately
+parsed saved component/sector fingerprints. Within each profile the Lua probe
+checked the returned local ship/sector handles and their relationship, the
+repeated-handle consistency, distinct slots and the earlier slot-2 handle.
+The result reports no owned processes remaining in either profile; profile 1's
+result was written before profile 2's logged start. Both staged saves currently
+hash to the pinned source digest.
+
+The monitored conversion, arithmetic and probe/MD/Lua errors do not appear in
+these logs. X4 still logged startup errors for the read-only config, Vulkan/FSR3
+queue and missing extension signature; diagnostic receipts themselves use the
+error log level. The fault filter does not cover every engine problem. No
+sector ID-code getter was used in this narrower test: the failed `-02` result
+remains unchanged. These observations support the saved attribute match for
+two slots in two **sequential** instances; they do not independently prove the
+full bytes X4 read, continuous pause, durable general object identity,
+sector-frame equivalence, simultaneous clients, movement replication or
+multiplayer.

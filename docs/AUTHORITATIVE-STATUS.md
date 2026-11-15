@@ -17,6 +17,11 @@ Native Linux evidence so far:
 * One running X4 process repeatedly read two registered ships in different
   sectors and observed their positions change. The observed rates were derived
   from position samples, not native velocity readback.
+* Two sequential isolated Linux profiles each read two saved ships in distinct
+  sectors and reported ship codes/macros and sector macros matching their
+  independently parsed checkpoint attributes. Local handle checks passed; this
+  is bounded evidence for these two slots, not general identity or simultaneous
+  multiplayer.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
   accepted a trusted client load claim over TCP, and confirmed resume and pause
   through TCP participant control. A second join was simulated. Another run
@@ -57,6 +62,7 @@ the complete persistent shared-world scenario require actual end-to-end tests.
 
 Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
+[two-profile fingerprints](../tools/dev/AUTHORITY-SECTOR-FINGERPRINT.md),
 [marked admission](AUTHORITY-TRUSTED-MARKED-LIVE.md),
 [native TCP control](AUTHORITY-TCP-NATIVE-EXPERIMENT.md),
 [TCP departure recovery](AUTHORITY-TCP-RECOVERY-EXPERIMENT.md),
