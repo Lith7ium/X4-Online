@@ -32,6 +32,14 @@ Its result says `ready_under_trusted_client_assumption=True`, while
 `mark_loaded(..., trusted_confirmation=True)` retains its separate exact-byte
 assertion contract. Neither method independently verifies its caller's claim.
 
+An optional `pre_accept` callback runs under the adapter lock after the
+checkpoint checks and immediately before coordinator mutation. It must be
+side-effect-free, must not call back into the adapter, and must return exactly
+`True`; false, a non-callable or an exception prevents the readiness update.
+A native harness can use it for a final process/deadline check. It is a sampled
+caller assertion, not an atomic operating-system fence or a guarantee that a
+process stays alive after the callback.
+
 The owner must serialize all coordinator, offer service and store operations
 with adapter operations, ensure checkpoint and connection lifetime, and fence
 old processes, delayed work and callbacks. The internal lock only serializes

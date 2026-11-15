@@ -93,6 +93,120 @@ def observe_open_save(pid, target):
     return results
 
 
+def spawn_owned_gated(command, log_path, processes):
+    """Capture the child and its start identity before releasing the launcher.
+
+    This must run in the main thread. A signal in the small interval between
+    the final check and the gate write can still permit a brief launch; the
+    deferred signal then aborts the run and invokes owned-process cleanup.
+    """
+    deferred = [None]
+    previous = {}
+    read_fd = write_fd = None
+    def remember(number, _frame):
+        deferred[0] = deferred[0] or number
+    try:
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous[number] = signal.signal(number, remember)
+        read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+        with log_path.open('wb') as log:
+            proc = subprocess.Popen([sys.executable, str(ROOT/'tools/dev/authority_exec_gate.py'),
+                                     str(read_fd), *command], stdin=subprocess.DEVNULL,
+                                    stdout=log, stderr=subprocess.STDOUT,
+                                    start_new_session=True, pass_fds=(read_fd,))
+            processes.append([proc, None])
+        os.close(read_fd); read_fd = None
+        started = live.start_ticks(proc.pid)
+        if type(started) is not int or started < 0:
+            raise RuntimeError('owned launcher start identity unavailable')
+        processes[-1][1] = started
+        if proc.poll() is not None or live.start_ticks(proc.pid) != started:
+            raise RuntimeError('owned launch gate changed')
+        if deferred[0] is not None:
+            raise InterruptedError('signal ' + str(deferred[0]))
+        if os.write(write_fd, b'G') != 1:
+            raise RuntimeError('launch gate refused')
+        os.close(write_fd); write_fd = None
+        if deferred[0] is not None:
+            raise InterruptedError('signal ' + str(deferred[0]))
+    finally:
+        for fd in (read_fd, write_fd):
+            if fd is not None:
+                try: os.close(fd)
+                except OSError: pass
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+    # A signal may have arrived after the last gate check while handlers were
+    # still deferred; inspect it after the original handlers are restored.
+    if deferred[0] is not None:
+        raise InterruptedError('signal ' + str(deferred[0]))
+    return proc, started
+
+
+def start_owned_file_service(token, services):
+    """Register the bound service before starting its thread or raising signals."""
+    deferred = [None]
+    previous = {}
+    def remember(number, _frame):
+        deferred[0] = deferred[0] or number
+    try:
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous[number] = signal.signal(number, remember)
+        service = joinfiles.FileService(token, slots=(1,))
+        try:
+            services.append(service)
+        except BaseException:
+            service.server.server_close()
+            raise
+        if deferred[0] is not None:
+            raise InterruptedError('signal ' + str(deferred[0]))
+        service.start()
+        if deferred[0] is not None:
+            raise InterruptedError('signal ' + str(deferred[0]))
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+    if deferred[0] is not None:
+        raise InterruptedError('signal ' + str(deferred[0]))
+    return service
+
+
+def close_owned_file_service(service):
+    """Avoid shutdown() before serve_forever has actually started."""
+    thread = service.thread
+    try:
+        if thread is not None and thread.is_alive():
+            service.close()
+            thread.join(timeout=2)
+            if thread.is_alive():
+                raise RuntimeError('file service thread remains')
+        else:
+            service.server.server_close()
+    except BaseException:
+        # Even if shutdown failed, attempt to release the owned listener.
+        try: service.server.server_close()
+        except BaseException: pass
+        raise
+
+
+def check_live_context(*, deadline, server_proc, server_started, server_identity,
+                       client_proc, client_started, client_identity, game, home,
+                       uid, steam, target, ticket, expected):
+    """Point-in-time process/Steam and protected-byte checks for opt-in hooks."""
+    def check_identities():
+        if (time.monotonic() >= deadline or
+            client.game_identity(server_proc, server_started, game) != server_identity or
+            client.game_identity(client_proc, client_started, game) != client_identity or
+            live.steam_identity(home, uid) != steam):
+            raise RuntimeError('deadline, process or Steam identity changed')
+    check_identities()
+    if (live.sha(target) != ticket['sha256'] or
+            any(live.sha(path) != digest for path, digest in expected.items())):
+        raise ValueError('client staged save or protected configuration changed')
+    check_identities()
+    return True
+
+
 def run(args, *, experiment=None):
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('unprivileged Linux desktop user required')
@@ -116,6 +230,7 @@ def run(args, *, experiment=None):
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
     result = {'success': False, 'scope': 'two isolated Linux X4 processes; localhost transfer; no admission or gameplay'}
     processes = []
+    services = []
     sock = service = lock_fd = lock_stat = None
     handlers = {}
     config = target = watch = ticket = protected = None
@@ -129,23 +244,19 @@ def run(args, *, experiment=None):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(('127.0.0.1', 0)); sock.settimeout(.25)
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
-        server.install_probe(server_case, sock.getsockname()[1], lease, epoch)
+        marker_required = getattr(experiment, 'marker_required', False) is True
+        if marker_required:
+            server.install_probe(server_case, sock.getsockname()[1], lease, epoch, marker_required=True)
+        else:
+            server.install_probe(server_case, sock.getsockname()[1], lease, epoch)
         (out / 'checkpoints').mkdir(mode=0o700)
         store = CheckpointStore(out / 'checkpoints')
         lock_fd, lock_stat = live.create_lock_target(snapshot.LOCK_TARGET, user.pw_uid, user.pw_gid)
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             handlers[number] = signal.signal(number, snapshot.cancel_capture)
         deadline = time.monotonic() + args.timeout
-        def spawn(command, log_path):
-            with log_path.open('wb') as log:
-                proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log,
-                                        stderr=subprocess.STDOUT, start_new_session=True)
-            # Record the child before any subsequent operation can raise.
-            processes.append([proc, None])
-            processes[-1][1] = live.start_ticks(proc.pid)
-            return proc, processes[-1][1]
-        server_proc, server_started = spawn(snapshot.command_for(server_case, game, server_binds,
-            server_lock, args.display, auth, user.pw_name, args.seed), server_out / 'process.log')
+        server_proc, server_started = spawn_owned_gated(snapshot.command_for(server_case, game, server_binds,
+            server_lock, args.display, auth, user.pw_name, args.seed), server_out / 'process.log', processes)
         server_identity = None
         peer = None
         while peer is None:
@@ -162,10 +273,12 @@ def run(args, *, experiment=None):
                 if server_identity is None: raise RuntimeError('server enrollment without owned X4')
                 peer = address
         adapter = LocalControlBridge(enabled=True, sock=sock, peer=peer, lease=lease, world_epoch=epoch,
-            profile=server_profile, store=store, verify_checkpoint=read_cycle_evidence, timeout=min(130, args.timeout))
-        service = joinfiles.FileService(secrets.token_hex(16), slots=(1,)).start()
+            profile=server_profile, store=store, verify_checkpoint=read_cycle_evidence, timeout=min(130, args.timeout),
+            marker_required=marker_required)
+        service = start_owned_file_service(secrets.token_hex(16), services)
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store), participants=experiment)
-        handle = world.join('isolated-client')
+        join = getattr(experiment, 'join', None)
+        handle = join(world) if callable(join) else world.join('isolated-client')
         for operation in ('pause', 'save'):
             if time.monotonic() >= deadline: raise TimeoutError('server checkpoint timed out')
             if world.session.pending is None or world.session.pending.operation != operation:
@@ -173,7 +286,9 @@ def run(args, *, experiment=None):
             world.step()
             if client.game_identity(server_proc, server_started, game) != server_identity:
                 raise RuntimeError('server X4 changed during checkpoint')
-        ticket, target = offer_and_download(world, service, handle, out, client_profile)
+        transfer = getattr(experiment, 'offer_and_download', None)
+        ticket, target = (transfer(world, service, handle, out, client_profile) if callable(transfer)
+                          else offer_and_download(world, service, handle, out, client_profile))
         if time.monotonic() >= deadline: raise TimeoutError('transfer timed out')
         config = client.install_probe(client_case, client_profile, ticket)
         protected = [config, client_case/'extensions/x4_lan_lab/ui.xml', client_profile/'content.xml',
@@ -188,7 +303,7 @@ def run(args, *, experiment=None):
         pos = command.index('--die-with-parent')
         for path in protected:
             command[pos:pos] = ['--ro-bind', str(path), str(path)]; pos += 3
-        client_proc, client_started = spawn(command, client_out / 'process.log')
+        client_proc, client_started = spawn_owned_gated(command, client_out / 'process.log', processes)
         watch = client.ReceiptWatch(client_profile/'engine-output.log', ticket)
         client_identity = None
         save_fd_offsets = []
@@ -219,6 +334,14 @@ def run(args, *, experiment=None):
                     exact_loaded_file_proven=False, client_admitted=False, gameplay_tested=False)
                 if experiment is not None:
                     extra = {'steam_identity': steam} if getattr(experiment, 'requires_steam_identity', False) else {}
+                    if getattr(experiment, 'requires_verification_context', False) is True:
+                        def check_protected():
+                            return check_live_context(deadline=deadline, server_proc=server_proc,
+                                server_started=server_started, server_identity=server_identity,
+                                client_proc=client_proc, client_started=client_started,
+                                client_identity=client_identity, game=game, home=home,
+                                uid=user.pw_uid, steam=steam, target=target, ticket=ticket, expected=expected)
+                        extra['check_protected'] = check_protected
                     experiment.on_ready(world=world, handle=handle, ticket=ticket, target=target,
                         server_identity=server_identity, server_proc=server_proc, server_started=server_started,
                         client_identity=client_identity, client_proc=client_proc, client_started=client_started,
@@ -226,19 +349,47 @@ def run(args, *, experiment=None):
                 result['success'] = True
                 break
             time.sleep(.1)
-    except (Exception, KeyboardInterrupt) as error:
-        result['error'] = str(error)
+    except BaseException as error:
+        result.update(success=False, error=str(error) or type(error).__name__)
+        if not isinstance(error, (Exception, KeyboardInterrupt)):
+            raise
     finally:
-        if service is not None: service.close()
-        if sock is not None: sock.close()
+        cleanup_errors = []
+        all_stopped = True
+        remaining_owned = []
+        def cleanup_error(message, error=None):
+            cleanup_errors.append(message + ((': ' + type(error).__name__) if error is not None else ''))
+            result['success'] = False
+        # A repeated signal must not strand one of the owned resources.
+        for number in handlers:
+            try: signal.signal(number, signal.SIG_IGN)
+            except BaseException as error: cleanup_error('cannot fence cleanup signals', error)
+        for owned_service in reversed(services):
+            try: close_owned_file_service(owned_service)
+            except BaseException as error: cleanup_error('service cleanup failed', error)
+        if sock is not None:
+            try: sock.close()
+            except BaseException as error: cleanup_error('socket cleanup failed', error)
         for proc, started in reversed(processes):
             try:
                 if started is not None:
                     remaining = snapshot.stop_owned(proc, started)
-                    if remaining: result.update(success=False, cleanup_error='owned processes remain')
-                elif proc.poll() is None:
-                    proc.terminate(); proc.wait(timeout=15)
-            except (OSError, subprocess.TimeoutExpired): result.update(success=False, cleanup_error='process cleanup failed')
+                    if not isinstance(remaining, list) or any(type(pid) is not int or pid <= 0 for pid in remaining):
+                        raise RuntimeError('invalid owned cleanup result')
+                    remaining_owned.extend(remaining)
+                    if remaining:
+                        all_stopped = False
+                        cleanup_error('owned processes remain')
+                else:
+                    # An unrecorded start identity cannot have passed the exec gate.
+                    if proc.poll() is None:
+                        proc.terminate(); proc.wait(timeout=15)
+                    cleanup_error('owned launcher start identity unavailable')
+            except BaseException as error:
+                all_stopped = False
+                cleanup_error('process cleanup failed', error)
+        result['owned_processes_remaining'] = remaining_owned
+        result['owned_cleanup_confirmed'] = all_stopped
         if result['success']:
             try:
                 while True:
@@ -248,24 +399,37 @@ def run(args, *, experiment=None):
                 if (watch.stage != 2 or live.sha(target) != ticket['sha256'] or
                         any(live.sha(path) != digest for path, digest in expected.items())):
                     raise ValueError('final receipt invalid')
-            except (OSError, ValueError): result.update(success=False, error='final receipt or staged state invalid')
+            except BaseException as error:
+                result.update(success=False, error='final receipt or staged state invalid: ' +
+                              (str(error) or type(error).__name__))
         if lock_stat is not None:
-            try: live.release_lock_target(snapshot.LOCK_TARGET, lock_fd, lock_stat)
-            except (OSError, RuntimeError): result.update(success=False, cleanup_error='lock cleanup failed')
-        for number, handler in handlers.items(): signal.signal(number, handler)
+            if all_stopped:
+                try: live.release_lock_target(snapshot.LOCK_TARGET, lock_fd, lock_stat)
+                except BaseException as error: cleanup_error('lock cleanup failed', error)
+            else:
+                cleanup_error('lock retained: owned process stop unconfirmed')
+                try: os.close(lock_fd)
+                except BaseException as error: cleanup_error('lock descriptor close failed', error)
         try:
-            if live.steam_identity(home, user.pw_uid) != steam: result.update(success=False, error='Steam identity changed')
-        except (OSError, ValueError, RuntimeError): result.update(success=False, error='Steam identity unavailable')
+            if live.steam_identity(home, user.pw_uid) != steam:
+                cleanup_error('Steam identity changed')
+        except BaseException as error: cleanup_error('Steam identity unavailable', error)
         server_config = out/'server/case/extensions/x4_lan_lab/ui/config.lua'
-        if server_config.is_file():
-            try:
+        try:
+            if server_config.is_file():
                 text = server_config.read_text(encoding='ascii')
                 redacted, count = re.subn(r'authority_control_lease="[0-9a-f]{32}"',
                                           'authority_control_lease="redacted"', text)
                 if count != 1: raise ValueError('invalid lease')
                 server_config.write_text(redacted, encoding='ascii')
-            except (OSError, UnicodeError, ValueError): result.update(success=False, cleanup_error='lease cleanup failed')
-        (out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
+        except BaseException as error: cleanup_error('lease cleanup failed', error)
+        if cleanup_errors: result['cleanup_error'] = '; '.join(cleanup_errors)
+        try:
+            (out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
+        finally:
+            for number, handler in handlers.items():
+                try: signal.signal(number, handler)
+                except BaseException: pass
     return result
 
 

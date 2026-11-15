@@ -118,8 +118,12 @@ class TrustedMarkerLoadSession:
                 self._failed = True
                 raise
 
-    def accept(self, connection, claim):
-        """Accept one trusted claim for the current connection and current offer."""
+    def accept(self, connection, claim, *, pre_accept=None):
+        """Accept one trusted claim; an optional side-effect-free guard runs last.
+
+        The guard runs under this wrapper's lock after checkpoint checks and
+        must return exactly True. It must not call back into this wrapper.
+        """
         with self._lock:
             self._live()
             peer = self._peer(connection)
@@ -136,6 +140,9 @@ class TrustedMarkerLoadSession:
             # caller owns the store exclusively throughout this operation.
             if self._world._store.latest_marked_confirmed() != bound[1]:
                 raise ValueError('confirmed checkpoint changed')
+            if pre_accept is not None:
+                if not callable(pre_accept) or pre_accept() is not True:
+                    raise ValueError('pre-accept guard did not confirm readiness')
             try:
                 self._world.mark_loaded_trusting_marker(message.world_epoch, message.connection_handle,
                     message.baseline_id, message.load_generation, message.checkpoint_id, message.sha256,

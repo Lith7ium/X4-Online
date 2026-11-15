@@ -135,6 +135,20 @@ class TrustedMarkerSessionTest(unittest.TestCase):
         self.assertEqual(len(self.world.session.ready_players), 1)
         with self.assertRaisesRegex(RuntimeError, 'faulted'): self.adapter.begin(self.b)
 
+    def test_pre_accept_guard_rejects_lost_process_or_exception_before_marking(self):
+        offer = self.adapter.begin(self.a).offer
+        claim = claim_for(offer)
+        def lost_process(): raise RuntimeError('owned process disappeared')
+        for guard in (lambda: False, lambda: None, lost_process):
+            with self.subTest(guard=guard), self.assertRaises((ValueError, RuntimeError)):
+                self.adapter.accept(self.a, claim, pre_accept=guard)
+            self.assertEqual(self.world.session.ready_players, ())
+            self.assertIn(offer.name, self.service.offered)
+        calls = []
+        outcome = self.adapter.accept(self.a, claim, pre_accept=lambda: calls.append('guard') or True)
+        self.assertEqual(calls, ['guard'])
+        self.assertTrue(outcome.ready_under_trusted_client_assumption)
+
 
 if __name__ == '__main__':
     unittest.main()
