@@ -12,6 +12,7 @@ function M.new(o)
  assert(type(o.last)=='number' and o.last>=0 and o.last<=MAX and o.last%1==0)
  assert(type(o.baseline)=='table' and type(o.issue)=='function' and type(o.key)=='function' and type(o.to_md_actor)=='function'
   and type(o.valid)=='function' and type(o.report)=='function')
+ assert(o.expose_actor==nil or type(o.expose_actor)=='boolean')
  local known,indices={},{}
  for actor_key,index in pairs(o.baseline) do
   assert(type(actor_key)=='string' and actor_key~='' and integer(index) and index<=o.last and not indices[index])
@@ -88,8 +89,11 @@ function M.new(o)
    elseif index<=last then classification='previously_unobserved_existing_index'
    else classification='new_registry_entry';last=index end
    known[actor_key]=index;indices[index]=actor_key;last_sequence=sequence
-   local ok,accepted=pcall(o.report,{epoch=o.epoch,sequence=sequence,index=index,
-    classification=classification,delivery_confirmed=false,birth_confirmed=false})
+   local row={epoch=o.epoch,sequence=sequence,index=index,
+    classification=classification,delivery_confirmed=false,birth_confirmed=false}
+   local ok,accepted
+   if o.expose_actor==true then ok,accepted=pcall(o.report,row,actor)
+   else ok,accepted=pcall(o.report,row) end
    if not ok or accepted~=true then return stop('report_failed') end
    sequence,actor,actor_key,index=nil,nil,nil,nil;state='idle';return true
   end

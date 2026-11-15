@@ -1,0 +1,143 @@
+-- Opt-in one-actor, read-only diagnostic. Import registers no events.
+-- One owner must fence the job queue and the matching registry/descriptor callbacks.
+local M={}
+local SCREEN='X4AuthorityJobDescriptorProbe'
+local function token(s) return type(s)=='string' and #s==32 and s:match('^[0-9a-f]+$')~=nil end
+local function integer(n) return type(n)=='number' and n==n and n>=1 and n<=9007199254740991 and n%1==0 end
+local function finite(n) return type(n)=='number' and n==n and n>=0 and n<math.huge end
+local function coord(n) return type(n)=='number' and n==n and math.abs(n)<math.huge end
+local function name(s) return type(s)=='string' and #s>=1 and #s<=128 and s:match('^[%w_%-]+$')~=nil end
+
+function M.new(o)
+ if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
+ assert(token(o.epoch) and token(o.request_id) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
+ assert(type(o.row)=='table' and o.row.epoch==o.epoch and integer(o.row.index) and integer(o.row.sequence)
+  and o.row.classification=='new_registry_entry' and o.actor~=nil)
+ for _,n in ipairs({'issue','clock','game_time','guard','actor_key','hex_key','snapshot'}) do assert(type(o[n])=='function',n..' required') end
+ local state='idle';local busy=false;local generation={};local last,deadline,query_game,actor_key
+ local api={}
+ local function fail(reason) state='failed';generation={};return false,reason end
+ local function call(fn,...)
+  if busy then return fail('reentrant') end
+  local g,p=generation,state;busy=true;local ok,value=pcall(fn,...);busy=false
+  if g~=generation or p~=state then return fail('state_changed') end
+  if not ok then return fail('callback_failed') end
+  return true,value
+ end
+ local function check()
+  if state=='failed' or state=='closed' or state=='done' then return false,'unavailable' end
+  local ok,t=call(o.clock);if not ok then return false,'clock_failed' end
+  if not finite(t) or (last and t<last) or (deadline and t>=deadline) then return fail('clock_or_timeout') end
+  last=t
+  local good,valid=call(o.guard);if not good then return false,'guard_failed' end
+  if valid~=true then return fail('context_lost') end
+  local checked,after=call(o.clock);if not checked then return false,'clock_failed' end
+  if not finite(after) or after<last or (deadline and after>=deadline) then return fail('clock_or_timeout') end
+  last=after
+  return true
+ end
+ function api:start()
+  if state~='idle' then return fail('not_idle') end
+  if not check() then return false end
+  local ok,key=call(o.actor_key,o.actor)
+  if not ok then return false end
+  if type(key)~='string' or not key:match('^[1-9]%d*$') then return fail('actor_id') end
+  actor_key=key
+  local good,game=call(o.game_time)
+  if not good then return false end
+  if not finite(game) then return fail('game_time') end
+  query_game=game;state='waiting';generation={};deadline=last+o.timeout
+  if not finite(deadline) then return fail('deadline') end
+  if not check() then return false end
+  local sent,accepted=call(o.issue,SCREEN,'Read',{epoch=o.epoch,index=o.row.index,request_id=o.request_id})
+  if not sent then return false end
+  if accepted~=true then return fail('dispatch') end
+  return check()
+ end
+ function api:response(value)
+  if state~='waiting' then return fail('unexpected_response') end
+  if not check() then return false end
+  if type(value)~='string' or #value>768 then return fail('response_type') end
+  local rid,epoch,index,status,rest=value:match('^([0-9a-f]+)|([0-9a-f]+)|([0-9]+)|([a-z]+)|?(.*)$')
+  if rid~=o.request_id or epoch~=o.epoch or index~=string.format('%.0f',o.row.index) or status~='ok' then return fail('response_mismatch') end
+  local actor,macro,owner,sector,sector_macro=rest:match('^(0[xX][0-9a-fA-F]+)|([^|]+)|([^|]+)|(0[xX][0-9a-fA-F]+)|([^|]+)$')
+  if not actor or not sector or not name(macro) or not name(owner) or not name(sector_macro) then return fail('descriptor_invalid') end
+  local ok,key=call(o.hex_key,actor);if not ok then return false end
+  if key~=actor_key then return fail('actor_changed') end
+  local sok,sector_key=call(o.hex_key,sector);if not sok then return false end
+  if type(sector_key)~='string' or not sector_key:match('^[1-9]%d*$') then return fail('sector_id') end
+  local good,sample=call(o.snapshot,o.actor,sector)
+  if not good then return false end
+  if (type(sample)~='table' or sample.sector_local~=sector_key or
+      not coord(sample.x) or not coord(sample.y) or not coord(sample.z) or not finite(sample.game_before) or
+      not finite(sample.game_after) or sample.game_before<query_game or sample.game_after<sample.game_before) then
+   return fail('snapshot_invalid')
+  end
+  if not check() then return false end
+  local verified,current=call(o.actor_key,o.actor)
+  if not verified then return false end
+  if current~=actor_key then return fail('actor_changed') end
+  if not check() then return false end
+  state='done';deadline=nil
+  return true,{epoch=o.epoch,index=o.row.index,sequence=o.row.sequence,macro=macro,owner=owner,
+   sector_macro=sector_macro,x=sample.x,y=sample.y,z=sample.z,
+   game_before_request=query_game,game_before_pose=sample.game_before,game_after_pose=sample.game_after,
+   sector_identity_proven=false,descriptor_atomic=false,birth_confirmed=false,delivery_confirmed=false}
+ end
+ function api:tick() if state=='waiting' then return check() end;return fail('not_waiting') end
+ function api:abort() return fail('external_fence') end
+ function api:close() state='closed';generation={};deadline=nil;return true end
+ function api:state() return state end
+ return api
+end
+
+function M.new_x4(cfg)
+ if type(cfg)~='table' or cfg.enabled~=true then return nil,'disabled' end
+ assert(type(cfg.guard)=='function' and type(cfg.expected_save_path)=='string' and cfg.expected_save_path:sub(1,1)=='/'
+  and cfg.expected_save_path:sub(-11)=='/45841/save')
+ for _,n in ipairs({'AddUITriggeredEvent','GetCurRealTime','ConvertIDTo64Bit'}) do assert(type(_G[n])=='function',n..' unavailable') end
+ assert(type(X4LAN_RESOLVE_STRING)=='table' and type(X4LAN_RESOLVE_STRING.actor_u64)=='function'
+  and type(X4LAN_RESOLVE_STRING.parse_hex)=='function')
+ local ffi=require('ffi')
+ if not pcall(ffi.typeof,'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
+ if not pcall(ffi.typeof,'UIPosRot') then ffi.cdef('typedef struct { float x,y,z,yaw,pitch,roll; } UIPosRot;') end
+ ffi.cdef[[bool IsGamePaused(void);bool IsPlayerValid(void);bool IsValidComponent(UniverseID);
+ bool IsComponentOperational(UniverseID);bool IsComponentClass(UniverseID,const char*);
+ UniverseID GetContextByClass(UniverseID,const char*,bool);UIPosRot GetObjectPositionInSector(UniverseID);
+ double GetCurrentGameTime(void);const char* GetSaveFolderPath(void);]]
+ local C=ffi.C;local o={};for k,v in pairs(cfg) do o[k]=v end
+ local function component_key(id)
+  id=X4LAN_RESOLVE_STRING.actor_u64(id);assert(id)
+  local value=tostring(id):gsub('ULL$','');assert(value:match('^[1-9]%d*$'));return value
+ end
+ local function actor_key(actor)
+  local original=X4LAN_RESOLVE_STRING.actor_u64(actor);assert(original)
+  local converted=X4LAN_RESOLVE_STRING.actor_u64(ConvertIDTo64Bit(actor))
+  assert(converted and original==converted)
+  return component_key(converted)
+ end
+ local function live(actor,sector)
+  return C.IsValidComponent(actor) and C.IsComponentOperational(actor) and C.IsComponentClass(actor,'ship')
+   and C.IsValidComponent(sector) and C.IsComponentClass(sector,'sector') and C.GetContextByClass(actor,'sector',false)==sector
+ end
+ o.actor_key=actor_key
+ o.hex_key=function(value) local id=X4LAN_RESOLVE_STRING.parse_hex(value);assert(id);return component_key(id) end
+ o.clock=GetCurRealTime;o.game_time=function() return tonumber(C.GetCurrentGameTime()) end
+ o.guard=function()
+  local p=C.GetSaveFolderPath()
+  return cfg.guard()==true and p~=nil and p~=ffi.NULL and ffi.string(p):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path
+   and C.IsPlayerValid() and not C.IsGamePaused()
+ end
+ o.issue=function(screen,operation,args) return AddUITriggeredEvent(screen,operation,args)~=false end
+ o.snapshot=function(actor,sector_hex)
+  local a=X4LAN_RESOLVE_STRING.actor_u64(actor);local s=X4LAN_RESOLVE_STRING.parse_hex(sector_hex)
+  assert(a and s and o.guard() and live(a,s))
+  local before=tonumber(C.GetCurrentGameTime());local p=C.GetObjectPositionInSector(a)
+  local after=tonumber(C.GetCurrentGameTime())
+  assert(o.guard() and live(a,s))
+  return {sector_local=component_key(s),x=tonumber(p.x),y=tonumber(p.y),z=tonumber(p.z),game_before=before,game_after=after}
+ end
+ return M.new(o)
+end
+X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE=M
+return M

@@ -10,6 +10,7 @@ function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(type(o.epoch)=='string' and #o.epoch==32 and o.epoch:match('^[0-9a-f]+$'))
  assert(type(o.baseline)=='table' and #o.baseline<=64 and natural(o.capacity) and o.capacity>=1 and o.capacity<=1024)
+ assert(o.expose_actor==nil or type(o.expose_actor)=='boolean')
  local attach=o.attach_saved_registry==true
  assert(o.attach_saved_registry==nil or type(o.attach_saved_registry)=='boolean')
  if attach then
@@ -78,9 +79,13 @@ function M.new(o)
  local function begin_observation(t)
   assert(o.can_observe()==true,'source is not running')
   started=t;stop_at=t+o.window;hard_stop=stop_at+o.timeout
-  driver=o.probe.new({enabled=true,epoch=o.epoch,last=initial_last,baseline=baseline,
+  driver=o.probe.new({enabled=true,epoch=o.epoch,last=initial_last,baseline=baseline,expose_actor=o.expose_actor,
    issue=issue,key=actor_key,to_md_actor=md_actor,valid=o.valid,
-   report=function(row) assert(o.report(row)==true);records=records+1;return true end})
+   report=function(row,actor)
+    if o.expose_actor==true then assert(o.report(row,actor)==true)
+    else assert(o.report(row)==true) end
+    records=records+1;return true
+   end})
   status()
  end
  local function handle(screen,name,value)

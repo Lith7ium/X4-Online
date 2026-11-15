@@ -2,18 +2,18 @@ local host=dofile('tools/dev/authority_job_registry_host.lua')
 local probe=dofile('tools/dev/authority_job_registry_probe.lua')
 assert(host.new({enabled=false})==nil)
 assert(host.new_x4({enabled=false})==nil)
-local function scenario(with_event,kind)
+local function scenario(with_event,kind,expose)
  local handlers,queue,issued,rows={}, {}, {}, {}
  local t,last,observed,ack=.0,0,0,0
  local done,fault
  local raw=42
  local function emit(name,value) queue[#queue+1]={name,value} end
- local opts={enabled=true,epoch=string.rep('a',32),baseline={10},capacity=4,window=1,timeout=.3,probe=probe,
+ local opts={enabled=true,expose_actor=expose,epoch=string.rep('a',32),baseline={10},capacity=4,window=1,timeout=.3,probe=probe,
   register=function(name,fn) assert(not handlers[name]);handlers[name]=fn end,
   convert64=function(v) if type(v)=='table' then return v.id end return v end,
   to_lua_id=function(k) if kind=='bad_conversion' then return {id='99'} end return {id=k} end,
   valid=function() return true end,can_observe=function() return kind~='source_stopped' or t<.5 end,clock=function() return t end,
-  report=function(row) rows[#rows+1]=row;return true end,done=function(row) done=row;return true end,
+  report=function(...) local row,actor=...;row._test_argc=select('#',...);row._test_actor=actor;rows[#rows+1]=row;return true end,done=function(row) done=row;return true end,
   fault=function(reason) fault=reason end}
  opts.trigger=function(screen,operation,args)
   issued[#issued+1]={screen=screen,operation=operation,args=args}
@@ -49,6 +49,9 @@ local function scenario(with_event,kind)
 end
 local app,_,rows,result,err=scenario(true)
 assert(app:state()=='done',tostring(err));assert(#rows==1 and rows[1].classification=='new_registry_entry')
+assert(rows[1]._test_argc==1 and rows[1]._test_actor==nil)
+local exposed,_,exposed_rows=scenario(true,nil,true)
+assert(exposed:state()=='done' and exposed_rows[1]._test_argc==2 and exposed_rows[1]._test_actor==42)
 assert(result.observed==1 and result.acknowledged==1 and result.birth_confirmed==false and result.delivery_confirmed==false)
 local empty,_,_,empty_result=scenario(false)
 assert(empty:state()=='done' and empty_result.classification=='inconclusive_no_events')
