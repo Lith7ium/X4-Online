@@ -6,6 +6,10 @@ owner identity (never trust an owner supplied by the remote peer). A unique
 world_epoch must be generated for every new registry/session, including restarts.
 Positions use an opaque coordinate-frame token; producers and consumers must
 agree on its meaning and coordinate units before exchanging game positions.
+An optional linear velocity is part of each full state, in the same frame and
+caller-agreed time units. None means unknown, not stationary. A new position
+without velocity clears the old vector, including on frame changes; an
+authority transfer clears it until the new owner supplies a fresh vector.
 """
 
 from dataclasses import dataclass
@@ -59,6 +63,23 @@ class Position:
 
 
 @dataclass(frozen=True)
+class Velocity:
+    """Linear vector in the same caller-defined frame as its position.
+
+    Units and clock are supplied by the caller; this is not a claim that an
+    X4 native velocity has been sampled or applied.
+    """
+
+    x: float
+    y: float
+    z: float
+
+    def __post_init__(self):
+        for name in ('x', 'y', 'z'):
+            object.__setattr__(self, name, _coordinate(getattr(self, name)))
+
+
+@dataclass(frozen=True)
 class ShipState:
     """One complete current state; owner None means server low attention."""
 
@@ -69,6 +90,7 @@ class ShipState:
     owner: str | None
     sequence: int
     position: Position
+    velocity: Velocity | None = None
 
 
 class ShipRegistry:
@@ -90,11 +112,12 @@ class ShipRegistry:
     def world_epoch(self):
         return self._world_epoch
 
-    def create(self, ship_id, generation, position):
+    def create(self, ship_id, generation, position, velocity=None):
         """Create a server-owned ship with a generation never used for this ID."""
         _token(ship_id, "ship_id")
         _integer(generation, "generation", 1)
         self._check_position(position)
+        self._check_velocity(velocity)
         if ship_id in self._ships:
             raise ValueError("ship already exists")
         previous = self._generations.get(ship_id, 0)
@@ -102,7 +125,7 @@ class ShipRegistry:
             raise ValueError("generation must increase after removal")
         if not previous and len(self._generations) >= self._max_known_ships:
             raise ValueError("known ship limit reached")
-        state = ShipState(self._world_epoch, ship_id, generation, 1, None, 0, position)
+        state = ShipState(self._world_epoch, ship_id, generation, 1, None, 0, position, velocity)
         self._generations[ship_id] = generation
         self._ships[ship_id] = state
         return state
@@ -121,6 +144,11 @@ class ShipRegistry:
         if not isinstance(position, Position):
             raise ValueError("position must be a Position")
 
+    @staticmethod
+    def _check_velocity(velocity):
+        if velocity is not None and not isinstance(velocity, Velocity):
+            raise ValueError('velocity must be a Velocity or None')
+
     def assign(self, ship_id, generation, authority_epoch, owner):
         """Transfer authority; repeat assignment to the same owner is a no-op."""
         state = self._current(ship_id, generation, authority_epoch)
@@ -130,15 +158,17 @@ class ShipRegistry:
         if state.authority_epoch == _MAX_INTEGER:
             raise ValueError("authority epoch exhausted")
         updated = ShipState(self._world_epoch, ship_id, generation,
-                            authority_epoch + 1, owner, 0, state.position)
+                            authority_epoch + 1, owner, 0, state.position, None)
         self._ships[ship_id] = updated
         return updated
 
-    def update(self, world_epoch, ship_id, generation, authority_epoch, owner, sequence, position):
-        """Accept a newer full position from the current authenticated owner.
+    def update(self, world_epoch, ship_id, generation, authority_epoch, owner, sequence, position, velocity=None):
+        """Accept a newer full position and optional velocity from its owner.
 
         Updates can skip sequence numbers, but duplicates and reordered older
-        messages are rejected. Identity is supplied by the trusted caller.
+        messages are rejected. Omitted velocity becomes unknown rather than
+        reusing a vector from an earlier sample. Identity is supplied by the
+        trusted caller.
         """
         if _token(world_epoch, "world_epoch") != self._world_epoch:
             raise ValueError("wrong world epoch")
@@ -146,12 +176,13 @@ class ShipRegistry:
         _owner(owner)
         _integer(sequence, "sequence", 1)
         self._check_position(position)
+        self._check_velocity(velocity)
         if owner != state.owner:
             raise ValueError("sender does not own this ship")
         if sequence <= state.sequence:
             raise ValueError("sequence is not newer")
         updated = ShipState(self._world_epoch, ship_id, generation,
-                            authority_epoch, owner, sequence, position)
+                            authority_epoch, owner, sequence, position, velocity)
         self._ships[ship_id] = updated
         return updated
 

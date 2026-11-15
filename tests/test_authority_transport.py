@@ -7,7 +7,7 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from authority.ship_state import Position  # noqa: E402
+from authority.ship_state import Position, Velocity  # noqa: E402
 from authority.transport import ShipExchange  # noqa: E402
 
 
@@ -86,18 +86,21 @@ class TransportTests(unittest.TestCase):
         server, client = self.peer("server"), self.peer("reader")
         with self.exchange.lock:
             for i in range(130):
-                self.exchange.registry.create(f"s{i:03d}", 1, Position("S", i, 0, 0))
+                self.exchange.registry.create(f"s{i:03d}", 1, Position("S", i, 0, 0),
+                                              Velocity(4, 5, 6) if i == 129 else None)
             self.exchange.revision += 1
         first = client.send({"op": "snapshot", "offset": 0, "revision": None})["value"]
         self.assertEqual(len(first["ships"]), 128)
         message = {"op": "update", "world_epoch": "world-1", "ship_id": "s129", "generation": 1,
                    "authority_epoch": 1, "sequence": 1,
-                   "position": {"sector": "S", "x": 999, "y": 0, "z": 0}}
+                   "position": {"sector": "S", "x": 999, "y": 0, "z": 0},
+                   "velocity": {"x": 8, "y": 9, "z": 10}}
         self.assertTrue(server.send(message)["ok"])
         second = client.send({"op": "snapshot", "offset": first["next_offset"],
                               "revision": first["revision"]})["value"]
         self.assertEqual(second["revision"], first["revision"])
         self.assertEqual(second["ships"][-1]["position"]["x"], 129)
+        self.assertEqual(second["ships"][-1]["velocity"], {"x": 4, "y": 5, "z": 6})
         self.assertIsNone(second["next_offset"])
         fresh = client.send({"op": "snapshot", "offset": 0, "revision": None})["value"]
         self.assertGreater(fresh["revision"], first["revision"])
@@ -122,6 +125,41 @@ class TransportTests(unittest.TestCase):
                                 "generation": 1, "position": {"sector": "S", "x": 0, "y": 0, "z": 0}})
         self.assertFalse(response["ok"])
         self.assertEqual(self.exchange.registry.snapshot(), ())
+
+    def test_velocity_roundtrip_snapshot_frame_change_and_fencing(self):
+        server, client = self.peer('server'), self.peer('client1')
+        pos = {'sector': 'frame-a', 'x': 1, 'y': 2, 'z': 3}
+        velocity = {'x': 4, 'y': -5, 'z': 6}
+        create = {'op': 'create', 'world_epoch': 'world-1', 'ship_id': 'ship1',
+                  'generation': 1, 'position': pos, 'velocity': velocity}
+        self.assertEqual(server.send(create)['value']['ship']['velocity'], velocity)
+        snapshot = server.send({'op': 'snapshot', 'offset': 0, 'revision': None})['value']
+        self.assertEqual(snapshot['ships'][0]['velocity'], velocity)
+        update = {'op': 'update', 'world_epoch': 'world-1', 'ship_id': 'ship1', 'generation': 1,
+                  'authority_epoch': 1, 'sequence': 1, 'position': {**pos, 'sector': 'frame-b'}}
+        changed = server.send(update)
+        self.assertTrue(changed['ok'])
+        self.assertNotIn('velocity', changed['value']['ship'])
+        self.assertEqual(snapshot['ships'][0]['velocity'], velocity)
+        for invalid in ({'x': 1, 'y': 2}, {'x': True, 'y': 2, 'z': 3},
+                        {'x': 1, 'y': 2, 'z': 3, 'extra': 0}, 'not-a-vector'):
+            self.assertFalse(server.send({**update, 'sequence': 2, 'velocity': invalid})['ok'])
+        modern = server.send({**update, 'sequence': 2, 'velocity': velocity})
+        self.assertEqual(modern['value']['ship']['velocity'], velocity)
+        assign = {'op': 'assign', 'world_epoch': 'world-1', 'ship_id': 'ship1', 'generation': 1,
+                  'authority_epoch': 1, 'owner': 'client1'}
+        self.assertNotIn('velocity', server.send(assign)['value']['ship'])
+        self.assertFalse(server.send({**update, 'sequence': 3, 'velocity': velocity})['ok'])
+        guest = client.send({**update, 'authority_epoch': 2, 'sequence': 1, 'velocity': velocity})
+        self.assertEqual(guest['value']['ship']['velocity'], velocity)
+        self.assertNotIn('velocity', client.send({**update, 'authority_epoch': 2, 'sequence': 2,
+                                                  'velocity': None})['value']['ship'])
+        self.assertTrue(client.send({**update, 'authority_epoch': 2, 'sequence': 3, 'velocity': velocity})['ok'])
+        client.close(); self.peers.remove(client)
+        self.wait_until(lambda: 'client1' not in self.exchange.peers)
+        after_disconnect = server.send({'op': 'snapshot', 'offset': 0, 'revision': None})['value']['ships'][0]
+        self.assertNotIn('velocity', after_disconnect)
+        self.assertEqual(after_disconnect['owner'], 'offline:client1')
 
 
 if __name__ == "__main__":

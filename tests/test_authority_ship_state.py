@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from authority import Position, ShipRegistry
+from authority import Position, ShipRegistry, Velocity
 
 
 class ShipRegistryTests(unittest.TestCase):
@@ -99,6 +99,34 @@ class ShipRegistryTests(unittest.TestCase):
         self.assertIs(r.assign('ship-1', 1, 2, 'a'), client)
         with self.assertRaises(ValueError):
             r.assign('ship-1', 1, 1, 'a')
+
+    def test_velocity_is_complete_finite_and_fenced_with_owner(self):
+        r = self.registry
+        velocity = Velocity(1, -2, 3.5)
+        first = r.update('session-1', 'ship-1', 1, 1, None, 1, self.p0, velocity)
+        captured = r.snapshot()
+        self.assertEqual(captured[0].velocity, velocity)
+        with self.assertRaises(AttributeError):
+            captured[0].velocity.x = 5
+        for invalid in (math.nan, math.inf, -math.inf, True, '1', 10**1000):
+            with self.subTest(value=str(invalid)[:20]), self.assertRaises(ValueError):
+                Velocity(invalid, 0, 0)
+        with self.assertRaises(ValueError):
+            r.update('session-1', 'ship-1', 1, 1, None, 2, self.p1, (1, 2, 3))
+        self.assertEqual(r.snapshot(), (first,))
+        assigned = r.assign('ship-1', 1, 1, 'client-a')
+        self.assertIsNone(assigned.velocity)
+        with self.assertRaises(ValueError):
+            r.update('session-1', 'ship-1', 1, 1, None, 2, self.p0, Velocity(9, 9, 9))
+        self.assertEqual(r.snapshot(), (assigned,))
+        current = r.update('session-1', 'ship-1', 1, 2, 'client-a', 1, self.p0, velocity)
+        self.assertEqual(current.velocity, velocity)
+        self.assertIs(r.assign('ship-1', 1, 2, 'client-a'), current)
+        changed_frame = r.update('session-1', 'ship-1', 1, 2, 'client-a', 2, self.p1)
+        self.assertIsNone(changed_frame.velocity)
+        self.assertEqual(captured[0].velocity, velocity)
+        r.update('session-1', 'ship-1', 1, 2, 'client-a', 3, self.p1, velocity)
+        self.assertIsNone(r.update('session-1', 'ship-1', 1, 2, 'client-a', 4, self.p1).velocity)
 
 
 if __name__ == '__main__':

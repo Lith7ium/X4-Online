@@ -4,6 +4,12 @@ This process is a state exchange, not the X4 simulation. One connected engine
 adapter is the server and can delegate individual ships to connected clients.
 No automatic takeover is attempted on disconnect: the engine must reconcile
 the last accepted state before it explicitly changes ownership.
+
+Create and update accept an optional ``velocity`` object with exactly x/y/z,
+in the position's caller-defined frame. Omitting it or sending null means
+unknown; it does not preserve an earlier vector. Responses omit unknown
+velocity for position-only compatibility. This does not define X4 units,
+velocity sampling, game application, Internet transport or clock semantics.
 """
 
 from dataclasses import asdict
@@ -12,7 +18,7 @@ import re
 import socketserver
 import threading
 
-from .ship_state import Position, ShipRegistry
+from .ship_state import Position, ShipRegistry, Velocity
 
 MAX_LINE = 16384
 MAX_PAGE = 128
@@ -28,6 +34,27 @@ def _fields(value, expected):
 def _position(value):
     _fields(value, ("sector", "x", "y", "z"))
     return Position(**value)
+
+
+def _motion_fields(value, required):
+    """Accept legacy position-only or complete position-plus-velocity state."""
+    if not isinstance(value, dict) or set(value) not in (set(required), set(required) | {'velocity'}):
+        raise ValueError('invalid message fields')
+
+
+def _velocity(value):
+    if value is None:
+        return None
+    _fields(value, ('x', 'y', 'z'))
+    return Velocity(**value)
+
+
+def _wire_state(state):
+    """Omit unknown velocity to preserve position-only response shape."""
+    value = asdict(state)
+    if value['velocity'] is None:
+        del value['velocity']
+    return value
 
 
 class ShipExchange(socketserver.ThreadingTCPServer):
@@ -101,26 +128,27 @@ class ShipExchange(socketserver.ThreadingTCPServer):
                 return {"revision": snapshot_revision, "world_epoch": self.registry.world_epoch,
                         "server_online_at_capture": captured_online,
                         "server_online": "server" in self.peers and not self.server_departed,
-                        "ships": [asdict(row) for row in page],
+                        "ships": [_wire_state(row) for row in page],
                         "next_offset": next_offset if next_offset < len(rows) else None}
             if self.server_departed or "server" not in self.peers:
                 raise ValueError("server engine adapter not connected")
             if message.get("world_epoch") != self.registry.world_epoch:
                 raise ValueError("wrong world epoch")
             if op == "update":
-                _fields(message, ("op", "world_epoch", "ship_id", "generation",
-                                  "authority_epoch", "sequence", "position"))
+                _motion_fields(message, ("op", "world_epoch", "ship_id", "generation",
+                                         "authority_epoch", "sequence", "position"))
                 result = self.registry.update(message["world_epoch"], message["ship_id"],
                                               message["generation"], message["authority_epoch"],
                                               None if peer == "server" else peer,
-                                              message["sequence"], _position(message["position"]))
+                                              message["sequence"], _position(message["position"]),
+                                              _velocity(message.get('velocity')))
             else:
                 if peer != "server":
                     raise ValueError("only the server engine may change ownership or lifecycle")
                 if op == "create":
-                    _fields(message, ("op", "world_epoch", "ship_id", "generation", "position"))
+                    _motion_fields(message, ("op", "world_epoch", "ship_id", "generation", "position"))
                     result = self.registry.create(message["ship_id"], message["generation"],
-                                                  _position(message["position"]))
+                                                  _position(message["position"]), _velocity(message.get('velocity')))
                 elif op == "assign":
                     _fields(message, ("op", "world_epoch", "ship_id", "generation", "authority_epoch", "owner"))
                     owner = message["owner"]
@@ -135,7 +163,7 @@ class ShipExchange(socketserver.ThreadingTCPServer):
                 else:
                     raise ValueError("unknown operation")
             self.revision += 1
-            return {"revision": self.revision, "ship": asdict(result) if result is not None else None}
+            return {"revision": self.revision, "ship": _wire_state(result) if result is not None else None}
 
 
 class _Handler(socketserver.StreamRequestHandler):
