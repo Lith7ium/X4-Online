@@ -79,6 +79,7 @@ static void test_pilot_eye(void) {
     pslot_slot s;memset(&s,0,sizeof(s));s.seated=1;s.ship=test_peye_ship2;s.room=test_peye_room2;s.player=test_peye_p2;
     vps_rng_word=test_peye_rng_word;test_peye_rng=0x55;pres_rng_moved=0;test_peye_seats=test_peye_poses=test_peye_slot5=0;
     peye_seat=NULL;peye_fpc_pose=NULL;peye_fpc_stock=NULL;peye_vt_ready=0;peye_reset();
+    peye_own_seat=0;   /* the default is the own seat (below, and asserted before the first test); first the pose with D */
     /* Without X4's functions: off, nothing taken. */
     assert(!peye_update(&s) && !strcmp(peye_stage,"off:functions") && !test_peye_seats);
     peye_seat=test_peye_seat;peye_fpc_pose=test_peye_fpc_pose;peye_fpc_stock=&test_peye_stock[1];
@@ -170,6 +171,18 @@ static void test_pilot_eye(void) {
         assert(peye_update(&r) && peye_on && test_peye_seats==2 && peye_key[3]==test_peye_ship2);
         peye_enter(test_peye_p1,view,1,&r,test_peye_room1);assert(peye_live && peye_published);peye_leave();
         test_peye_room2_expected=test_peye_room2;}
+    /* The default: slot k's own seat whatever slot 1 does (seated in its room here): one seat taken, slot k's, no D. */
+    {   peye_own_seat=1;test_peye_seats=0;test_peye_rng=0x55;
+        assert(peye_update(&s) && !strcmp(peye_stage,"seat") && peye_on && peye_seat_mode && test_peye_seats==1 && test_peye_rng==0x55);
+        assert(peye_key[1]==test_peye_room1 && peye_key[2]==test_peye_ship2 && peye_key[3]==test_peye_room2);
+        peye_enter(test_peye_p1,view,1,&s,test_peye_room1);InterlockedExchange(&pres_open,1);assert(peye_live && peye_published);
+        {   float out[16],want[16];memcpy(want,test_peye_seat2,64);   /* slot k's seat (X4's w lanes), not X4's pose with D */
+            for(unsigned i=0;i<4;i++) want[4*i+3]=test_peye_local[4*i+3];
+            test_peye_call6(out,1);assert(test_peye_close(out,want,16,1e-6f));}
+        InterlockedExchange(&pres_open,0);peye_leave();
+        s.seated=0;assert(!peye_update(&s) && !strcmp(peye_stage,"skip:parent"));s.seated=1;
+    }
+    peye_own_seat=0;
     peye_reset();peye_seat=saved_seat;peye_fpc_pose=saved_pose;peye_fpc_stock=saved_stock;peye_vt_ready=saved_ready;
     pslot_p1=saved_p1;pilot_slots[0]=saved_slot0;vps_rng_word=saved_rng;pres_rng_moved=saved_moved;
     printf("pilot eye: slot k's seat from X4's own seat transform, live and published in the scope, every byte back\n");

@@ -678,7 +678,11 @@ static void pstk_cursor(void *controller) {
     volatile float *out=PNAT_F32(0x2f4b738);
     /* The local device is read in the canonical update only (the slot scopes run on stored banks). */
     /* ...with the focus only: without it the record's cursor is neutral (the focus rule, pstk_aim_take). */
-    if(pstk_capturing && !scope) {
+    /* ...and, when no canonical update ran this tick, in this client's own slot's scope: slot 1 on foot, in a transition or
+     * between ships has no PlayerController, d95180 does not run for it, and a client of slot 2..N then recorded no cursor
+     * at all: its mouse steering was dead for as long as player 1 walked (playtest report of 14 Nov; the records of that
+     * time carry flags without CURSOR). d88a10 reads the device from the process's input object, the same in the scope. */
+    if(pstk_capturing && (!scope || (scope==pstk_capture_slot && !pstk_cursor_live_set))) {
         const int focused=pstk_focused();
         for(unsigned i=0;i<3;i++) pstk_cursor_live[i]=focused?out[i]:0.0f;
         pstk_cursor_live_set=1;

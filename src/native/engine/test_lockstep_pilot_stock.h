@@ -386,6 +386,15 @@ static void test_pilot_stock(void) {
     region[0x2f4b9bf]^=1;assert(pstk_settings_using(region)!=fp);region[0x2f4b9bf]^=1;
     test_pstk_curve_scale=2.0f;assert(pstk_settings_using(region)!=fp);test_pstk_curve_scale=1.0f;
     input[0x912c]=1;assert(pstk_settings_using(region)!=fp);input[0x912c]=0;assert(pstk_settings_using(region)==fp);
+    /* No canonical update in a tick (slot 1 on foot): this client's own slot's scope takes the device's cursor, another
+     * slot's scope never, and not again once the tick has one. */
+    {   const unsigned slot=pstk_capture_slot,scope=pstk_scope_slot;const int set=pstk_cursor_live_set,capturing=pstk_capturing;float keep[3];
+        memcpy(keep,pstk_cursor_live,sizeof(keep));pstk_capturing=1;pstk_capture_slot=2;
+        pstk_cursor_live_set=0;pstk_scope_slot=3;pnat_cursor(controller);assert(!pstk_cursor_live_set);
+        pstk_scope_slot=2;pnat_cursor(controller);assert(pstk_cursor_live_set==1);
+        pstk_cursor_live[0]=7.0f;pnat_cursor(controller);assert(pstk_cursor_live[0]==7.0f);   /* the tick has one already */
+        pstk_capture_slot=slot;pstk_scope_slot=scope;pstk_cursor_live_set=set;pstk_capturing=capturing;memcpy(pstk_cursor_live,keep,sizeof(keep));
+    }
     /* A client that does not capture: replay ids dropped, SPACE local only, no record. */
     pstk_capturing=0;LONG64 dropped=pstk_dropped;test_pstk_call_count=0;
     pnat_dispatch_state(map,0x11,1);pnat_dispatch_action(map,0xa9);pnat_space(8,1);

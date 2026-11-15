@@ -70,6 +70,14 @@ static unsigned char *pfslot_walking_fpc(unsigned k);   /* lockstep_pilot_foot_s
 static __attribute__((aligned(16))) float peye_seat_pose[16];
 static unsigned peye_bank;
 static const char *peye_stage="off";
+/* Slot k's own seat, always (the default). The pose with D applied is X4's own player's pose, and that pose carries its
+ * head movement: the FirstPersonController turns the head of a seated player with what its own ship does (the lean of a
+ * spacesuit that turns: FPC +0x2b0, a rotation of up to 0.13 rad for a full mouse deflection). So client k's view and
+ * HUD swayed with player 1's turns while its own suit lay still (two people, 14 Nov: both in suits, player 1 steering by
+ * mouse; the same camera rotation read on both clients, +0x60 of the local camera, and it followed player 1's cursor).
+ * A slot's own head movement is not simulated (its FirstPersonController runs only while it walks), so client k's eye
+ * rests at its seat: the stage 'seat' that slot 1 on foot already used. 0 keeps the pose with D (the tests of it). */
+static int peye_own_seat=1;
 static unsigned char *peye_key[4];                /* ship 1, room 1, ship k, room k of D */
 static unsigned char *peye_ctl,*peye_block_saved,*volatile *peye_block_at;
 static volatile LONG64 peye_updates,peye_scopes,peye_poses,peye_lost,peye_other;
@@ -161,6 +169,10 @@ static int peye_update(const pslot_slot *s) {
             peye_key[0]=ship1;peye_key[1]=room1;peye_key[2]=s->ship;peye_key[3]=s->room;peye_walk_fpc=walker;
             return peye_set("walk",1);
         }
+    }
+    if(peye_own_seat) {
+        if(!s->seated || !s->ship || !s->room || !s->player || !p1 || !read_local(p1+PRES_PARENT,&room1,8) || !room1) return peye_set("skip:parent",0);
+        return peye_update_seat(s,room1);
     }
     if(!s->seated || !s->ship || !s->room || !s->player || !p1 || !ship1 || !read_local(p1+PRES_PARENT,&room1,8) || !room1)
         return peye_set("skip:parent",0);

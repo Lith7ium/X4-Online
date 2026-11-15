@@ -57,12 +57,27 @@ static int speak_timer_block_ok(void) {
     site=SPEAK_MUTE_ORIGINAL;memcpy(copy+(SPEAK_MUTE_SITE-SPEAK_TIMER_BLOCK),&site,2);
     return hash_ok(copy,sizeof(copy),SPEAK_TIMER_BLOCK_SHA);
 }
+/* Call sites of SpeakNextLine inside the pinned ranges that lockstep_speech_local.h re-points for a player's own lines
+ * (the target readout): while one holds exactly its patched bytes, the range is hashed with the original call there.
+ * The first live run of those sites stopped both clients at the first tick with 139 block_changed (14 Nov). */
+#define SPEAK_TIMER_SITES 4u
+static struct {unsigned rva;unsigned char original[5],patched[5];int on;} speak_timer_sites[SPEAK_TIMER_SITES];
+static int speak_timer_range_ok(unsigned rva,unsigned size,const char *sha) {
+    unsigned char copy[0x600];
+    if(size>sizeof(copy) || !read_local(image+rva,copy,size)) return 0;
+    for(unsigned i=0;i<SPEAK_TIMER_SITES;i++) {
+        const unsigned at=speak_timer_sites[i].rva;
+        if(speak_timer_sites[i].on && at>=rva && at+5u<=rva+size && !memcmp(copy+(at-rva),speak_timer_sites[i].patched,5))
+            memcpy(copy+(at-rva),speak_timer_sites[i].original,5);
+    }
+    return hash_ok(copy,size,sha);
+}
 static int speak_timer_pins(void) {
     return speak_timer_block_ok() &&
-        hash_ok(image+0x563d30u,0x150u,"ed172734d9e208e4362f3ace721a011af63837b3c9a5ee6e34090fd2994b663c") &&
-        hash_ok(image+0x563e90u,0x120u,"6f0439b83aa9f3e49fb13aa9f9d95a8addcbe2da5e5abec96cb851fe4b67e9bb") &&
-        hash_ok(image+0x563fc0u,0x383u,"b1adad699b2f404f4143a80a1c78c96a20767d62515294a19861fc8e2c3dae79") &&
-        hash_ok(image+0x5625a0u,0x523u,"2d2a5cc8133bdd0e89c19a847d072d1b1894dddc66493137a82c18faaffa2c7a") &&
+        speak_timer_range_ok(0x563d30u,0x150u,"ed172734d9e208e4362f3ace721a011af63837b3c9a5ee6e34090fd2994b663c") &&
+        speak_timer_range_ok(0x563e90u,0x120u,"6f0439b83aa9f3e49fb13aa9f9d95a8addcbe2da5e5abec96cb851fe4b67e9bb") &&
+        speak_timer_range_ok(0x563fc0u,0x383u,"b1adad699b2f404f4143a80a1c78c96a20767d62515294a19861fc8e2c3dae79") &&
+        speak_timer_range_ok(0x5625a0u,0x523u,"2d2a5cc8133bdd0e89c19a847d072d1b1894dddc66493137a82c18faaffa2c7a") &&
         hash_ok(image+0x1263650u,0xc3u,"f7cf46737b50cff9608a6a90e7fb2c4a68f92cf75da5d95c5ece5863be8ff04e");
 }
 static uint16_t speak_timer_site(void) {uint16_t v=0;read_local(image+SPEAK_TIMER_SITE,&v,2);return v;}

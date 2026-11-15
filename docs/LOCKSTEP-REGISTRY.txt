@@ -166,8 +166,21 @@ function's entry, must agree with its owner first)
              entry's body at 0x71050d)                                                            those two callers the fade only
                                                                                                    on the client whose own slot the
                                                                                                    action runs for; others pass
+  0x562575   the four calls of U::EntitySpeakData::             lockstep_speech_local.h spl_     calls re-pointed (slots' near page
+  0x5628cb   SpeakNextLine 0x561330 (a queued line's voice     next (native_gate_speech_local)  +0x1a0): for a speaker noted as a
+  0x564108   sound starts in it)                                                                  player's own, the mute site holds
+  0x9f07b4                                                                                        that player's answer for the call;
+                                                                                                   the speak timer's block check
+                                                                                                   reads the sites as the original
+  0x705bc0   U::Player 0x705b80 (the target readout): call      lockstep_speech_local.h spl_     call re-pointed (slots' near page
+             0x1265960, is the option speaktargetname on        option                           +0x180): X4's answer; when on, the
+                                                                                                   player's speaker (0x703ac0) is
+                                                                                                   noted for the slot it runs for
   Called, not patched: 0xaea500 (the UI message manager's player setter; lockstep_pilot_foot.h puts X4's own player back
   when a slot's scope left another one there), 0x730f30 / 0x1252850 (the GET_UP context's request and withdrawal, same file),
+  0x703ac0 (a player's speaker entity among its children; lockstep_speech_local.h), 0xb3be20 / 0xb3be90 (the UI's game plan
+  handlers, now also on client 1: lockstep_pilot_present.h pres_plan_canon), 0x70ecf0 / 0x70ed50 (the UI's first-person half,
+  now also on client 1: lockstep_pilot_foot.h),
   0x730df0 (the UNDOCK key context's keeper, asked again with each client's own player, same file).
 
 4. STOP REASONS (gate finish(reason); stats.reason, the probe's STOP line)

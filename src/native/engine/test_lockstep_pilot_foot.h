@@ -400,6 +400,18 @@ static void test_pilot_foot(void) {
             pstk_local_active=0;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==2 && !controller[PFOOT_UI_FP_FLAG]);     /* a menu took its controls: off */
             controller[PFOOT_UI_FP_FLAG]=1;holder=NULL;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==2);   /* no controller */
             holder=controller;pfoot_fp_ui[0]=NULL;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==2);      /* not pinned: X4's */
+            /* Client 1: its own walk is X4's player's, not a slot 2..N's; another slot's edge left the flag wrong. */
+            {   const unsigned slot=pstk_capture_slot;const int state=pfoot_state,armed=pfoot_armed;
+                pfoot_fp_ui[0]=test_pfoot_ui_off;pfoot_fp_ui[1]=test_pfoot_ui_on;controller[PFOOT_UI_FP_FLAG]=0;
+                const unsigned on=test_pfoot_ui_calls[1],off=test_pfoot_ui_calls[0];
+                pstk_capture_slot=1;pfoot_armed=1;pfoot_state=PFOOT_SEATED;pstk_local_active=0;pfslots[2].walking=1;
+                pfoot_k1_ui();assert(test_pfoot_ui_calls[1]==on && !controller[PFOOT_UI_FP_FLAG]);          /* slot 2 walks: not client 1's */
+                pfoot_state=PFOOT_WALKING;pfoot_k1_ui();assert(test_pfoot_ui_calls[1]==on+1 && controller[PFOOT_UI_FP_FLAG]==1);   /* its player walks: on */
+                pfoot_state=PFOOT_SEATED;pfoot_k1_ui();assert(test_pfoot_ui_calls[0]==off+1 && !controller[PFOOT_UI_FP_FLAG]);     /* seated, no flight control */
+                pstk_local_active=1;pfoot_k1_ui();assert(test_pfoot_ui_calls[1]==on+2 && controller[PFOOT_UI_FP_FLAG]==1);         /* flying: on */
+                pstk_local_active=0;controller[PFOOT_UI_FP_FLAG]=0;
+                pstk_capture_slot=slot;pfoot_state=state;pfoot_armed=armed;
+            }
             pfoot_fp_ui[0]=f0;pfoot_fp_ui[1]=f1;pfslot_armed=farmed;pfslots[2].walking=walking;memcpy(region+PFOOT_UI_ROOT,&before,8);pstk_local_active=local;
             InterlockedExchange64(&pfoot_k1_ui_fixed,ui);
         }

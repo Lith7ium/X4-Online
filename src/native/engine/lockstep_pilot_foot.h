@@ -487,12 +487,18 @@ static void pfoot_k1_undock(void) {
 }
 static volatile LONG64 pfoot_k1_ui_fixed,pfoot_k1_ui_faults;
 static int pfoot_own_walking(void);
+static void pres_plan_canon(void);   /* lockstep_pilot_present.h: client 1's game plan */
 static void pfoot_k1_ui(void) {
     unsigned char *root=NULL,*holder=NULL,*controller=NULL,flag=0;
     if(!pfoot_fp_ui[0] || !pfoot_fp_ui[1]) return;
     if(!read_local(pnat_base+PFOOT_UI_ROOT,&root,8) || !root || !read_local(root+PFOOT_UI_HOLDER,&holder,8) || !holder ||
        !read_local(holder,&controller,8) || !controller || !read_local(controller+PFOOT_UI_FP_FLAG,&flag,1)) return;
-    const int want=pfoot_own_walking()!=0 || pstk_local_active==1;int fault=0;
+    /* Client 1 as well: X4 runs the two functions for its own player, but a slot 2..N's walk and flight edges run them
+     * too, in that slot's scope and on this process's one UI. Two clients, 14 Nov: player 2 left for its suit (scripted)
+     * while player 1 walked to its transporter keypad; client 1's flag read 0 from then on, the keypad showed no "Use
+     * Transporter Room" and the radar stood in the walking view. Its own walk is X4's player's (pfoot_walking). */
+    const int walks=pstk_capture_slot>=2?pfoot_own_walking()!=0:pfoot_walking();
+    const int want=walks || pstk_local_active==1;int fault=0;
     if((flag!=0)==want) return;
     __try {pfoot_fp_ui[want]();}
     __except(GetExceptionCode()==EXCEPTION_ACCESS_VIOLATION?EXCEPTION_EXECUTE_HANDLER:EXCEPTION_CONTINUE_SEARCH) {fault=1;}
@@ -525,8 +531,10 @@ static void pfoot_k1_reconcile(void) {
     }
     pfoot_k1_manager();   /* every client: the UI's manager follows this process's own player */
     pfoot_k1_undock();    /* every client: the UNDOCK key's context by this client's own player */
-    if(pstk_capture_slot<2) {   /* client 1: the walking contexts and the UI's half are X4's own player's, X4's business */
+    if(pstk_capture_slot<2) {   /* client 1: the walking contexts are X4's own player's, X4's business */
         if(*(volatile unsigned char*)(pnat_base+0x2f4b829u)!=flight) InterlockedIncrement64(&pfoot_k1_fixed);
+        pfoot_k1_ui();          /* ...the UI's half is put right after another slot's edge (pfoot_k1_ui) */
+        pres_plan_canon();      /* ...and its game plan (lockstep_pilot_present.h) */
         return;
     }
     if(pfoot_fp_refresh) {

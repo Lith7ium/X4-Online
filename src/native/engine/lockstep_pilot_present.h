@@ -243,6 +243,12 @@ static int pres_pins(void) {
     }
     return pres_pins_checked==1;
 }
+/* The game plan's two handlers, pinned (every client: client 1 uses them too, pres_plan_canon). */
+static void pres_plan_bind(void) {
+    pres_plan_fn[0]=(void(*)(void*))(image+PRES_PLAN_COCKPIT);pres_plan_fn[1]=(void(*)(void*))(image+PRES_PLAN_FIRSTPERSON);
+    pres_plan_state=hash_ok(image+PRES_PLAN_COCKPIT,PRES_PLAN_SIZE,PRES_PLAN_COCKPIT_SHA) &&
+                    hash_ok(image+PRES_PLAN_FIRSTPERSON,PRES_PLAN_SIZE,PRES_PLAN_FIRSTPERSON_SHA)?1:-1;
+}
 static void pres_use_image(void) {
     pres_fn.ui_move=(void(*)(void*))(image+PRES_UI_MOVE);pres_fn.refill=(void(*)(void*))(image+PRES_REFILL);
     pres_fn.anchors=(void(*)(void*))(image+PRES_UI_ANCHORS);
@@ -250,9 +256,7 @@ static void pres_use_image(void) {
     pres_fn.zone=(uint64_t(*)(void))(image+PRES_ZONE);
     pres_fn.ancestor=(void**(*)(void*,void**,int,char))(image+PRES_ANCESTOR);
     pres_fn.pick=(void(*)(void*))(image+PRES_PICK);pres_fn.click=(void(*)(void*))(image+PRES_CLICK);
-    pres_plan_fn[0]=(void(*)(void*))(image+PRES_PLAN_COCKPIT);pres_plan_fn[1]=(void(*)(void*))(image+PRES_PLAN_FIRSTPERSON);
-    pres_plan_state=hash_ok(image+PRES_PLAN_COCKPIT,PRES_PLAN_SIZE,PRES_PLAN_COCKPIT_SHA) &&
-                    hash_ok(image+PRES_PLAN_FIRSTPERSON,PRES_PLAN_SIZE,PRES_PLAN_FIRSTPERSON_SHA)?1:-1;
+    pres_plan_bind();
     peye_seat=(peye_seat_fn)(image+PEYE_SEAT);peye_fpc_pose=(peye_pose_fn)(image+PEYE_FPC_POSE);peye_fpc_stock=(void**)(image+PEYE_FPC_VTABLE);
     pres_foot_list_at=PRES_FOOT_LIST;pres_foot_floor_at=PRES_FOOT_FLOOR;
 }
@@ -307,6 +311,29 @@ static void pres_plan_kick(const pslot_slot *s,uint64_t tick) {
 static void pres_plan_home(void) {
     if(pres_plan_first>=0) pres_plan_set(pres_plan_first,0);
     pres_plan_first=-1;pres_plan_kicked=0;pres_plan_kick_due=0;
+}
+/* Client 1's game plan. X4 sets it for its own player, but a slot 2..N's seat and suit changes run X4's sit-down
+ * handler too, in that slot's scope and on this process's one UI. Two clients, 14 Nov: player 2 took its suit while
+ * player 1 walked to its transporter keypad; client 1's byte read cockpit from then on, with the radar in the walking
+ * view and no "Use Transporter Room" at the keypad. Every live pass on client 1 (lockstep_pilot_foot.h's reconcile):
+ * X4's own player walks (the foot module says so and it holds no control position) and the byte says cockpit, or it
+ * sits (both say so) and the byte says on foot: X4's own handler for the state its player is in. In between (the
+ * stand-up's transition, a suit without a control position) the plan is X4's. Client local, UI only; counted with
+ * the plan's changes. */
+static void pres_plan_canon(void) {
+    unsigned char flag=0,*presenter;int position=0,none=0;
+    if(stats.slot!=1 || pres_plan_state!=1 || !pres_plan_fn[0] || !pres_plan_fn[1] || !pfoot_armed || pstk_scope_slot || !pslot_p1 || !pnat_base) return;
+    if(!read_local(pslot_p1+PEYE_POSITION,&position,4) || !read_local(pnat_base+PEYE_POSITION_NONE,&none,4)) return;
+    const int walks=pfoot_state==PFOOT_WALKING && position==none,sits=pfoot_state==PFOOT_SEATED && position!=none;
+    if(!walks && !sits) return;
+    if(!(presenter=pres_plan_presenter(&flag))) {InterlockedIncrement64(&pres_plan_unreadable);return;}
+    if((flag!=0)==walks) return;
+    int fault=0;uint64_t word=0,*rng=pres_rng_hold(&word);
+    __try {pres_plan_fn[walks](presenter);}
+    __except(GetExceptionCode()==EXCEPTION_ACCESS_VIOLATION?EXCEPTION_EXECUTE_HANDLER:EXCEPTION_CONTINUE_SEARCH) {fault=1;}
+    pres_rng_back(rng,word);
+    if(fault) {InterlockedIncrement64(&pres_plan_faults);pres_plan_state=-1;return;}
+    InterlockedIncrement64(&pres_plan_changes);
 }
 static void pres_stop_presenting(const char *why) {
     pres_active=0;pres_stage="failed";
@@ -704,7 +731,7 @@ static int pres_arm(int hud) {
     if(!pres_armed && stats.slot>=2) {
         if(!pres_pins()) {snprintf(pstk_arm_why,sizeof(pstk_arm_why),"pins_present:%x",pin_failed_rva);return 0;}
         pres_use_image();
-    }
+    } else if(!pres_armed) pres_plan_bind();   /* client 1: the game plan's handlers alone (pres_plan_canon) */
     return pres_arm_using(hud);
 }
 static void pres_restore(void) {

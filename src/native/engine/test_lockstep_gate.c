@@ -1286,6 +1286,9 @@ int main(int argc,char **argv) {
     test_nav_mesh();
     test_character_play();
     test_nav_octree_snapshot();
+    /* The presented eye's default is the slot's own seat (lockstep_pilot_eye.h); the flows below run on images that are not
+     * X4's, where the seat function is not callable: they keep the pose with D, test_pilot_eye covers the own seat. */
+    assert(peye_own_seat==1);peye_own_seat=0;
     test_pilot_inputs();
     test_pilot_native_controls();
     test_pilot_stock();

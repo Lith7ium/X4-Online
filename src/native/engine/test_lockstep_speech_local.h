@@ -2,6 +2,12 @@
 static int test_spl_catching;
 static int test_spl_catching_up(void) {return test_spl_catching;}
 static int test_spl_is_a(void *p,int klass) {return klass==0x58 && ((unsigned char*)p)[0x200]==0x58;}
+static int test_spl_next_seen;
+static void test_spl_next(void *data) {(void)data;test_spl_next_seen=spl_muted;}   /* the mute state the line's sound start finds */
+static unsigned char test_spl_option_value=1,test_spl_entity[0x20];
+static unsigned char test_spl_option(void *config,const char *key,unsigned char fallback) {(void)config;(void)key;(void)fallback;return test_spl_option_value;}
+static void *test_spl_speaker(void *player,void **out) {*out=player?test_spl_entity:NULL;return out;}
+static void *test_spl_player_at(void) {return test_spl_entity;}
 static void test_speech_local(void) {
     uint64_t saved_issued=stats.issued;DWORD saved_ui=ui_thread;uint32_t saved_active=stats.active,saved_slot=stats.slot;
     unsigned char *saved_p1=pslot_p1;pslot_slot saved=pslots[2];
@@ -52,6 +58,23 @@ static void test_speech_local(void) {
      assert(!spl_muted && speak_mute_site()==SPEAK_MUTE_ORIGINAL);
      stats.slot=2;assert(spl_frame()==1);
      assert(spl_status((char[320]){0},320)>0);}
+    /* The target readout: the option check notes the player's speaker (by its ID) for the scope's slot (slot 1 outside
+     * every scope) when the option is on; that speaker's next line is voiced on that slot's client only, the step's
+     * answer back after it; another speaker is nobody's. */
+    {   static unsigned char speaker[0x40],other[0x40];uint64_t id=0x1234,id2=0x77;const unsigned scope=pstk_scope_slot;
+        memcpy(test_spl_entity+8,&id,8);memcpy(speaker+8,&id,8);memcpy(other+8,&id2,8);
+        spl_option_original=test_spl_option;spl_speaker_original=test_spl_speaker;spl_player=test_spl_player_at;spl_next_original=test_spl_next;test_spl_next_seen=-1;
+        spl_lines_noted=spl_lines_played=spl_lines_muted=0;memset(spl_speakers,0,sizeof(spl_speakers));
+        assert(stats.slot==2 && spl_muted==1);
+        test_spl_option_value=0;pstk_scope_slot=2;assert(!spl_option(NULL,"k",1) && !spl_speaker_owner(speaker) && !spl_lines_noted);   /* the option is off */
+        test_spl_option_value=1;assert(spl_option(NULL,"k",1)==1 && spl_speaker_owner(speaker)==2 && !spl_speaker_owner(other) && spl_lines_noted==1);
+        spl_next(speaker);assert(test_spl_next_seen==0 && spl_muted==1 && spl_lines_played==1);   /* its own slot's: voiced */
+        spl_next(other);assert(test_spl_next_seen==1 && spl_lines_played==1);                     /* not noted: the step's answer */
+        pstk_scope_slot=0;(void)spl_option(NULL,"k",1);assert(spl_speaker_owner(speaker)==1);    /* slot 1's selection */
+        assert(spl_set(0));spl_next(speaker);assert(test_spl_next_seen==1 && !spl_muted && spl_lines_muted==1);   /* muted here, the step's answer back */
+        test_spl_catching=1;pstk_scope_slot=2;(void)spl_option(NULL,"k",1);spl_next(speaker);assert(test_spl_next_seen==1 && spl_lines_muted==2);test_spl_catching=0;
+        assert(spl_set(1));pstk_scope_slot=scope;spl_option_original=NULL;spl_speaker_original=NULL;spl_player=NULL;spl_next_original=NULL;memset(spl_speakers,0,sizeof(spl_speakers));
+    }
     /* A site that holds neither value: the speak timer's failure; nothing else moves. */
     {const uint16_t foreign=0xcccc;memcpy(image+SPEAK_MUTE_SITE,&foreign,2);*(unsigned char **)(ship2+0x70)=sector_a;speak_timer_failures=0;
      assert(spl_frame()==1 && speak_timer_failures==1 && !strcmp(speak_timer_stage,"mute_site") && speak_mute_site()==foreign);

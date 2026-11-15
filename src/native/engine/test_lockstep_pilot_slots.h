@@ -997,6 +997,25 @@ static void test_pilot_slots(void) {
         pslots[2].walking=0;pres_plan_follow(&pslots[2]);assert(test_pres_plan_calls==3 && !presenter[PRES_PLAN_FLAG] && pres_plan_changes==3);
         pres_walk_hud=0;pslots[2].walking=1;pres_plan_follow(&pslots[2]);assert(test_pres_plan_calls==3);                     /* switched off */
         pres_walk_hud=1;pres_plan_follow(&pslots[2]);assert(presenter[PRES_PLAN_FLAG]==1);
+        /* Client 1 (pres_plan_canon): its own player walks and the byte says cockpit, or sits and the byte says on foot:
+         * X4's handler, no scope; nothing in the stand-up's transition, without a clear state, on another client. */
+        {   static unsigned char player1[0x7000];unsigned char *const p1=pslot_p1;const unsigned slot=stats.slot;
+            const int farmed=pfoot_armed,fstate=pfoot_state;int none=77,position=77,saved_none=0;
+            const unsigned calls=test_pres_plan_calls,scoped=test_pres_plan_scoped;const LONG64 changes=pres_plan_changes;
+            memcpy(&saved_none,region+PEYE_POSITION_NONE,4);memcpy(region+PEYE_POSITION_NONE,&none,4);
+            memset(player1,0,sizeof(player1));memcpy(player1+PEYE_POSITION,&position,4);pslot_p1=player1;
+            stats.slot=1;pfoot_armed=1;pfoot_state=PFOOT_WALKING;presenter[PRES_PLAN_FLAG]=0;
+            pres_plan_canon();assert(test_pres_plan_calls==calls+1 && test_pres_plan_scoped==scoped && presenter[PRES_PLAN_FLAG]==1 && pres_plan_changes==changes+1);
+            pres_plan_canon();assert(test_pres_plan_calls==calls+1);                                   /* agrees */
+            pfoot_state=PFOOT_LEAVING;presenter[PRES_PLAN_FLAG]=0;pres_plan_canon();assert(test_pres_plan_calls==calls+1);   /* the transition: X4's */
+            pfoot_state=PFOOT_SEATED;presenter[PRES_PLAN_FLAG]=1;pres_plan_canon();assert(test_pres_plan_calls==calls+1);    /* seated, no control position (a suit): X4's */
+            position=3;memcpy(player1+PEYE_POSITION,&position,4);
+            pres_plan_canon();assert(test_pres_plan_calls==calls+2 && !presenter[PRES_PLAN_FLAG]);     /* sits with a position: cockpit */
+            pfoot_state=PFOOT_WALKING;pres_plan_canon();assert(test_pres_plan_calls==calls+2);         /* the foot module says walking, a position held: X4's */
+            stats.slot=2;pfoot_state=PFOOT_SEATED;presenter[PRES_PLAN_FLAG]=1;pres_plan_canon();assert(test_pres_plan_calls==calls+2);   /* a client of slot 2: its own follow */
+            stats.slot=slot;pfoot_armed=farmed;pfoot_state=fstate;pslot_p1=p1;memcpy(region+PEYE_POSITION_NONE,&saved_none,4);
+            presenter[PRES_PLAN_FLAG]=1;InterlockedExchange64(&pres_plan_changes,changes);test_pres_plan_calls=calls;test_pres_plan_scoped=scoped;
+        }
         /* The plan told again while the byte agrees: twice, the second not before its tick; never against the byte. */
         {   const unsigned calls=test_pres_plan_calls,scoped=test_pres_plan_scoped;pres_plan_kicked=0;pres_plan_kick_due=0;pres_plan_kicks=0;
             presenter[PRES_PLAN_FLAG]=0;pres_plan_kick(&pslots[2],100);assert(test_pres_plan_calls==calls && !pres_plan_kicks);   /* walks, byte says cockpit: the follow's */
