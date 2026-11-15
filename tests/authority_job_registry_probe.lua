@@ -44,4 +44,29 @@ assert(no_report:event('Actor','old'));assert(no_report:event('Enrolled',2))
 assert(not no_report:event('Acked',1));assert(no_report:state()=='failed');assert(report_ops[#report_ops].op=='Abort')
 local late,late_ops=setup();assert(late:front());assert(late:event('Sequence',1));assert(late:event('Actor','old'))
 assert(late:event('Enrolled',2));assert(not late:event('Enrolled',2));assert(late_ops[#late_ops].op=='Abort')
+-- At the exact Lua integer limit no Enroll may be dispatched, including a
+-- reactivation already present in the known map. Abort is best effort only.
+for _,actor in ipairs({'known','unknown'}) do
+ local ops={}
+ local bounded=M.new({enabled=true,epoch=string.rep('a',32),last=9007199254740991,
+  baseline={known=9007199254740991},issue=function(screen,op,args) ops[#ops+1]={screen=screen,op=op};return true end,
+  key=function(v) return type(v)=='table' and v.id or v end,to_md_actor=function(v) return {id=v} end,
+  valid=function() return true end,report=function() error('must not report') end})
+ assert(bounded:front());assert(bounded:event('Sequence',1))
+ local ok,reason=bounded:event('Actor',actor)
+ assert(not ok and reason=='index_capacity' and bounded:state()=='failed')
+ assert(#ops==2 and ops[1].op=='Front' and ops[2].op=='Abort')
+ for _,op in ipairs(ops) do assert(op.op~='Enroll') end
+end
+-- The same fence applies after the last valid allocation within this run.
+local edge_ops={}
+local edge=M.new({enabled=true,epoch=string.rep('a',32),last=9007199254740990,baseline={},
+ issue=function(screen,op,args) edge_ops[#edge_ops+1]={op=op};return true end,
+ key=function(v) return type(v)=='table' and v.id or v end,to_md_actor=function(v) return {id=v} end,
+ valid=function() return true end,report=function() return true end})
+item(edge,1,'new',9007199254740991)
+assert(edge:front());assert(edge:event('Sequence',2))
+local ok,reason=edge:event('Actor','new');assert(not ok and reason=='index_capacity')
+local enrolls=0;for _,entry in ipairs(edge_ops) do if entry.op=='Enroll' then enrolls=enrolls+1 end end
+assert(enrolls==1 and edge_ops[#edge_ops].op=='Abort')
 print('job registry diagnostic checks passed')

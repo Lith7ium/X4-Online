@@ -10,6 +10,14 @@ function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(type(o.epoch)=='string' and #o.epoch==32 and o.epoch:match('^[0-9a-f]+$'))
  assert(type(o.baseline)=='table' and #o.baseline<=64 and natural(o.capacity) and o.capacity>=1 and o.capacity<=1024)
+ local attach=o.attach_saved_registry==true
+ assert(o.attach_saved_registry==nil or type(o.attach_saved_registry)=='boolean')
+ if attach then
+  assert(o.exclusive_registry_consumer==true and natural(o.expected_last) and #o.baseline==0 and type(o.can_attach)=='function',
+   'attach requires exclusive consumer, expected last, paused guard and empty local baseline')
+ else
+  assert(o.exclusive_registry_consumer==nil and o.expected_last==nil and o.can_attach==nil, 'attach options require attach mode')
+ end
  for k in pairs(o.baseline) do assert(natural(k) and k>=1 and k<=#o.baseline,'baseline must be a dense array') end
  assert(finite(o.window) and o.window>0 and finite(o.timeout) and o.timeout>0)
  for _,name in ipairs({'register','trigger','convert64','to_lua_id','valid','clock','report','done','fault','can_observe'}) do
@@ -19,6 +27,8 @@ function M.new(o)
  local phase='new';local failed=false;local started,deadline,last_clock
  local baseline,index,seen={},1,{}
  local driver,stop_at,hard_stop,next_poll,stats,records=nil,nil,nil,0,nil,0
+ local initial_last=attach and o.expected_last or #o.baseline
+ local queue_init_attempted=false
  local function now()
   local value=o.clock();assert(finite(value) and (not last_clock or value>=last_clock),'clock invalid')
   last_clock=value;return value
@@ -30,7 +40,7 @@ function M.new(o)
   if not failed then
    failed=true;phase='failed'
    if driver then pcall(function() driver:timeout() end)
-   else pcall(issue,QUEUE,'Abort',{epoch=o.epoch}) end
+   elseif not attach or queue_init_attempted then pcall(issue,QUEUE,'Abort',{epoch=o.epoch}) end
    pcall(o.fault,reason)
   end
  end
@@ -65,13 +75,35 @@ function M.new(o)
  local function status()
   stats={};request(QUEUE,'Status',{},'status')
  end
+ local function begin_observation(t)
+  assert(o.can_observe()==true,'source is not running')
+  started=t;stop_at=t+o.window;hard_stop=stop_at+o.timeout
+  driver=o.probe.new({enabled=true,epoch=o.epoch,last=initial_last,baseline=baseline,
+   issue=issue,key=actor_key,to_md_actor=md_actor,valid=o.valid,
+   report=function(row) assert(o.report(row)==true);records=records+1;return true end})
+  status()
+ end
  local function handle(screen,name,value)
   if failed then return end
   local t=now()
+  if attach and (phase=='registry_status_epoch' or phase=='registry_status_count' or phase=='queue_preflight' or phase=='queue_init') then
+   assert(o.can_attach()==true,'paused attach context lost')
+  end
   if started and o.can_observe()~=true then error('source observation stopped') end
   if hard_stop and t>hard_stop then error('observation drain timeout') end
   if deadline and t>deadline then error('response timeout') end
+  if phase=='queue_preflight' and screen==QUEUE and name=='Uninitialized' then
+   queue_init_attempted=true
+   request(QUEUE,'Initialize',{epoch=o.epoch,capacity=o.capacity},'queue_init');return
+  end
   if name=='Faulted' or name=='Refused' or name=='Unavailable' or name=='Uninitialized' then error('MD fault or refusal') end
+  if phase=='registry_status_epoch' and screen==REG and name=='Epoch' then
+   assert(value==o.epoch,'saved registry epoch mismatch');phase='registry_status_count';return
+  end
+  if phase=='registry_status_count' and screen==REG and name=='Count' then
+   assert(natural(value) and value==o.expected_last,'saved registry count mismatch')
+   request(QUEUE,'Status',{},'queue_preflight');return
+  end
   if phase=='registry_init' and screen==REG and name=='Initialized' then
    assert(value==o.epoch);baseline_next();return
   end
@@ -81,11 +113,10 @@ function M.new(o)
    index=index+1;baseline_next();return
   end
   if phase=='queue_init' and screen==QUEUE and name=='Initialized' then
-   assert(value==o.epoch and o.can_observe()==true,'source is not running');started=t;stop_at=t+o.window;hard_stop=stop_at+o.timeout
-   driver=o.probe.new({enabled=true,epoch=o.epoch,last=#o.baseline,baseline=baseline,
-    issue=issue,key=actor_key,to_md_actor=md_actor,valid=o.valid,
-    report=function(row) assert(o.report(row)==true);records=records+1;return true end})
-   status();return
+   assert(value==o.epoch,'queue epoch mismatch')
+   if attach then phase='attached_wait_running';deadline=t+o.timeout
+   else begin_observation(t) end
+   return
   end
   if phase=='status' and screen==QUEUE then
    local expected=status_order[#stats+1]
@@ -102,7 +133,8 @@ function M.new(o)
    deadline=nil
    if t>=stop_at and depth==0 then
     phase='done'
-    assert(o.done({observed=observed,acknowledged=ack,baseline_count=#o.baseline,
+    assert(o.done({observed=observed,acknowledged=ack,baseline_count=initial_last,
+     registry_mode=attach and 'attached' or 'initialized',baseline_known_count=attach and 0 or #o.baseline,
      classification=observed==0 and 'inconclusive_no_events' or 'local_activations_observed',
      birth_confirmed=false,delivery_confirmed=false,coverage='unknown'})==true)
    else phase='ready_front' end
@@ -119,7 +151,7 @@ function M.new(o)
  function api:start()
   if phase~='new' then fail('repeated start');return false end
   local ok,err=pcall(function()
-   for _,item in ipairs({{REG,'Initialized'},{REG,'Enrolled'},{REG,'Faulted'},{REG,'Refused'},{REG,'Unavailable'},
+   for _,item in ipairs({{REG,'Initialized'},{REG,'Epoch'},{REG,'Count'},{REG,'Uninitialized'},{REG,'Enrolled'},{REG,'Faulted'},{REG,'Refused'},{REG,'Unavailable'},
       {QUEUE,'Initialized'},{QUEUE,'Epoch'},{QUEUE,'Observed'},{QUEUE,'Acknowledged'},
       {QUEUE,'Depth'},{QUEUE,'Inflight'},{QUEUE,'Reason'},{QUEUE,'Healthy'},
       {QUEUE,'Sequence'},{QUEUE,'Actor'},{QUEUE,'Empty'},{QUEUE,'Acked'},
@@ -129,7 +161,8 @@ function M.new(o)
      local good,why=pcall(handle,screen,name,value);if not good then fail(tostring(why)) end
     end)
    end
-   request(REG,'Initialize',{epoch=o.epoch},'registry_init')
+   if attach then assert(o.can_attach()==true,'attach requires paused source');request(REG,'Status',{},'registry_status_epoch')
+   else request(REG,'Initialize',{epoch=o.epoch},'registry_init') end
   end)
   if not ok then fail(tostring(err));return false end
   return true
@@ -141,7 +174,12 @@ function M.new(o)
    if started and not o.can_observe() then error('source observation stopped') end
    if hard_stop and t>hard_stop then error('observation drain timeout') end
    if deadline and t>deadline then error('response timeout') end
-   if phase=='waiting' and t>=next_poll then
+   if phase=='attached_wait_running' then
+    if o.can_observe()==true then begin_observation(t)
+    else assert(o.can_attach()==true,'paused attach context lost') end
+   elseif attach and (phase=='registry_status_epoch' or phase=='registry_status_count' or phase=='queue_preflight' or phase=='queue_init') then
+    assert(o.can_attach()==true,'paused attach context lost')
+   elseif phase=='waiting' and t>=next_poll then
     -- Recheck queue and registry fault status at least once per polling turn.
     status()
    elseif phase=='ready_front' then
@@ -178,6 +216,13 @@ function M.new_x4(cfg)
   local current=C.GetSaveFolderPath()
   return current~=nil and current~=ffi.NULL and ffi.string(current):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path
    and C.IsPlayerValid() and not C.IsGamePaused()
+ end
+ if opts.attach_saved_registry then
+  opts.can_attach=function()
+   local current=C.GetSaveFolderPath()
+   return current~=nil and current~=ffi.NULL and ffi.string(current):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path
+    and C.IsPlayerValid() and C.IsGamePaused()
+  end
  end
  opts.valid=function(actor)
   local id=ffi.new('UniverseID',ConvertIDTo64Bit(actor))

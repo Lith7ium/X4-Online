@@ -63,3 +63,12 @@ schema describes `event_job_ship_activated` for job ships activated after a
 space spawn or shipyard completion; it does not prove universal creation-event
 coverage. Additional independent evidence would be required to identify an
 actual birth or establish how complete this observation is.
+
+
+At the largest exactly representable Lua integer (`2^53 - 1`) the driver
+refuses **before every `Enroll` dispatch**, including known reactivations. The
+MD `Enroll` action can allocate before returning an index, so waiting to reject
+an out-of-range response would be too late. This conservative capacity fence
+also means no further existing actors can be processed by this driver once the
+boundary is reached. It does not establish native exhaustion behavior or a
+recovery path.

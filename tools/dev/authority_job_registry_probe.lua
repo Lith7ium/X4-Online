@@ -66,6 +66,9 @@ function M.new(o)
    if not converted or md_actor==nil or md_actor==false or md_actor==0 then return stop('actor_conversion_failed') end
    local roundtrip,md_key=pcall(o.key,md_actor)
    if not roundtrip or md_key~=actor_key or not current_actor() then return stop('actor_conversion_mismatch') end
+   -- Enroll can allocate before reporting its index. At the exact-integer
+   -- boundary refuse even known actors, before any registry mutation attempt.
+   if last>=MAX then return stop('index_capacity') end
    state='enroll'
    return send('X4AuthorityShipRegistry','Enroll',{epoch=o.epoch,ship=md_actor})
   end

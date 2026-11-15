@@ -53,3 +53,51 @@ is produced by this host.
 `tests/authority_job_registry_host.lua` uses synthetic asynchronous MD
 responses, including queue fault and timeout. The companion fake-X4 FFI test
 checks the actor conversion at baseline enrollment. Neither is a native X4 run.
+
+## Experimental attach to a saved register
+
+The host now has a separate, default-off attach mode for a saved register; its
+existing fresh-register mode remains unchanged. This is an offline-tested
+adapter only, not a live recovery, delivery, or client-creation protocol. A
+caller supplies `attach_saved_registry=true`, `expected_last` from a separately
+verified checkpoint, `exclusive_registry_consumer=true`, and an empty local
+`baseline`. It must fence all other registry request/response consumers,
+including permanent census/resolve listeners, and own the single UI update
+handler. The boolean is a caller assertion, not an enforced process lock.
+
+Attach starts only in a verified paused local context. It sends the existing
+registry `Status` request and requires the ordered epoch and exact last index;
+it never sends registry `Initialize` or enrolls baseline ships. The existing
+`Status` cue is a limited state check, not an independent full-table or saved
+object bijection validation. Checkpoint marker, bytes, save provenance,
+registry mappings, process/profile identity and absence of competing writers
+must be established independently by the caller. A changed epoch/count,
+missing/uninitialized/faulted registry, unexpected event, timeout or lost pause
+fails the attempt.
+
+It next checks that the job event queue reports `Uninitialized` and only then
+attempts its one-shot `Initialize` while still paused. An already initialized
+or faulted queue is refused; it is not reinitialized or aborted during this
+preflight. Lost/uncertain initialization permanently fences the case. Once
+initialization is acknowledged, the host waits for a confirmed running context
+before the bounded observation window; resume is the external supervisor's
+responsibility and a pause-to-resume timeout fails. Queue activations before
+initialization are missed; activations after initialization but before the
+nominal window can be drained and have no timestamps. The queue is not durable.
+
+The job driver receives the checkpoint's actual last index, not the number of
+locally known actors. The attach baseline is deliberately empty, so an actor
+mapped to any existing index is `previously_unobserved_existing_index`, not a
+newly created ship. A newly allocated next index means only
+`new_registry_entry`; neither classification establishes birth, complete
+coverage, client delivery or duplicate freedom. After a local queue
+initialization attempt, an error may send best-effort `Abort`; the caller must
+discard the disposable case after any uncertain response and must not save it.
+Do not attach to or recover a previously active queue under this contract.
+
+`tests/authority_job_registry_attach.lua` exercises status ordering, a large
+saved last index, old/new/repeated actors, queue preflight, pause transitions,
+refusals and timeouts using synthetic event callbacks. The fake-X4 adapter test
+checks the paused/running guard with a fake FFI library. These do not establish
+X4 callback timing, queue serialization after a real save, complete identity,
+network delivery or a client counterpart.

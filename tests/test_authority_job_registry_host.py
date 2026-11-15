@@ -14,6 +14,11 @@ class JobRegistryHostTest(unittest.TestCase):
         subprocess.run(['luajit', 'tests/authority_job_registry_host.lua'], cwd=ROOT,
                        check=True, capture_output=True, text=True, timeout=5)
 
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
+    def test_attach_saved_registry_without_reset(self):
+        subprocess.run(['luajit', 'tests/authority_job_registry_attach.lua'], cwd=ROOT,
+                       check=True, capture_output=True, text=True, timeout=5)
+
     @unittest.skipUnless(shutil.which('cc') and shutil.which('luajit'), 'C compiler and LuaJIT required')
     def test_x4_adapter_normalizes_event_value_before_baseline_enroll(self):
         with tempfile.TemporaryDirectory() as directory:
