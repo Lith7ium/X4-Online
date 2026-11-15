@@ -14,6 +14,11 @@ Native Linux evidence so far:
   finite positions in 140 local sectors, with two docked or internally stored
   entries excluded from position reads. This is one saved registry, not proof
   of complete universe coverage, live replication or cross-client identity.
+* One isolated Linux X4 process attached a job observer to the saved 10,054
+  entry registry while paused, resumed, and reported 23 locally acknowledged
+  activations with new registry indices before pausing again. First registry
+  allocation does not prove ship construction or delivery, and this is not
+  complete event coverage or replication.
 * One running X4 process repeatedly read two registered ships in different
   sectors and observed their positions change. The observed rates were derived
   from position samples, not native velocity readback.
@@ -61,6 +66,7 @@ before saves. Combat, trading, boarding, cross-platform Internet operation and
 the complete persistent shared-world scenario require actual end-to-end tests.
 
 Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
+[saved-registry job attach](../tools/dev/AUTHORITY-JOB-ATTACH.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [two-profile fingerprints](../tools/dev/AUTHORITY-SECTOR-FINGERPRINT.md),
 [marked admission](AUTHORITY-TRUSTED-MARKED-LIVE.md),

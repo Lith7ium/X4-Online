@@ -34,6 +34,26 @@ Events may also arrive between the final empty queue observation and the
 confirmed pause, so that observation is not a complete end-of-window census.
 Even a successful run does not prove exact X4 file consumption, no game advance
 before the first pause, complete universe coverage, client creation, Windows,
-Internet connectivity, or multiplayer gameplay. MD queue freshness and resume
-behaviour remain unproven until a native run succeeds. No normal profile or
-saves are used.
+Internet connectivity, or multiplayer gameplay. This does not establish general
+MD queue freshness or resume behaviour beyond the bounded run below. No normal
+profile or saves are used.
+
+## Native observation: `authority-job-attach-01`
+
+One isolated Linux X4 run requested `save_009` and logged the expected
+marker and pause, then READY with the stored registry epoch and baseline 10,054
+before RESUMED. In a configured 60-second observation it reported 23 sequential
+local events and ACKs, all classified as first registry allocations, indices
+10,055 through 10,077. The summary and final pause were logged in order; the
+result reports no owned processes remaining. All 23 event records agree with
+the engine log. This does not establish that the corresponding ships were newly
+built or delivered to a client.
+
+The confirmed source pointer and staged save SHA-256 agree with the pinned
+checkpoint; the three saved MD scripts agree byte-for-byte with the archive
+and the code used in the private overlay. The private save directory contains
+only the staged slot after the run. The engine log contains no identified
+probe, MD or Lua script fault; it does contain failed writes to the protected
+`config.xml` and graphics/signature messages. The evidence remains sampled and
+does not prove exact file consumption or uninterrupted pause. The in-memory
+registry changes were discarded with the disposable process.
