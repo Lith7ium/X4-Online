@@ -42,6 +42,8 @@ c:sample({source_sequence=1,x=1,y=2,z=3});assert(writes==0)
 c:sample(a);assert(writes==1 and pos.x==1.5)
 c:sample({source_sequence=2,x=2,y=2,z=3,vx=5,vy=0,vz=0});assert(writes==2 and pos.x==2.5)
 c:sample(nil);assert(#logs==4 and logs[2]:match('OBSERVE'))
+c:sample({source_sequence=3,x=3,y=2,z=3,vx=0,vy=0,vz=0});assert(writes==3 and pos.x==3)
+c:sample(nil);assert(#logs==6 and logs[6]:match('OBSERVE'))
 '''
         subprocess.run(['luajit', '-'], input=script, cwd=ROOT, text=True, check=True, capture_output=True)
 
@@ -123,6 +125,12 @@ local warp={native_gate_authority_motion=true,native_gate_authority_wire_warp=tr
             guest.append(f'AUTHORITY_CONTINUOUS_WRITE seq={i} x={x} y=0 z=0 vx=10 vy=0 vz=0 target_x={x+1} target_y=0 target_z=0 before_x={x-10} before_y=0 before_z=0')
             guest.append(f'AUTHORITY_CONTINUOUS_OBSERVE seq={i} x={x+1} y=0 z=0')
         self.assertTrue(validate(iter(source), iter(guest))['pass'])
+        stop_source = source + ['AUTHORITY_CONTINUOUS_SOURCE seq=11 vx=0 vy=0 vz=0',
+                                'AUTHORITY_WIRE_SOURCE tick=41 seq=11 x=100 y=0 z=0']
+        stop_guest = guest + ['AUTHORITY_WIRE_RECEIVE tick=41 request=11 seq=11 x=100 y=0 z=0',
+                              'AUTHORITY_CONTINUOUS_WRITE seq=11 x=100 y=0 z=0 vx=0 vy=0 vz=0 target_x=100 target_y=0 target_z=0 before_x=101 before_y=0 before_z=0',
+                              'AUTHORITY_CONTINUOUS_OBSERVE seq=11 x=100 y=0 z=0']
+        self.assertTrue(validate(stop_source, stop_guest)['pass'])
         self.assertFalse(validate(source, guest[:-1])['pass'])
         swapped = guest.copy()
         first_write = next(i for i, row in enumerate(swapped) if 'CONTINUOUS_WRITE seq=1 ' in row)

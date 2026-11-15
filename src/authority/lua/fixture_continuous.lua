@@ -19,7 +19,9 @@ function M.new(env)
   local vx,vy,vz=packet.vx,packet.vy,packet.vz
   if not finite(vx) or not finite(vy) or not finite(vz) then return end
   local speed=math.sqrt(vx*vx+vy*vy+vz*vz)
-  if not finite(speed) or speed<.1 or speed>5000 then return end
+  -- A stationary update is still authoritative: dropping it can leave the
+  -- replica at an earlier predicted position after the source has stopped.
+  if not finite(speed) or speed>5000 then return end
   -- 100 ms prediction, capped by speed check and only for this fresh packet.
   local target={x=current.x+vx*.1,y=current.y+vy*.1,z=current.z+vz*.1}
   if distance(before,target)>10000 then return end

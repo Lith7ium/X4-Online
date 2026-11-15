@@ -77,7 +77,7 @@ def validate(source_lines, guest_lines):
                 raise ValueError('missing or unordered source')
             previous = seq
             velocity = tuple(row[k] for k in ('vx','vy','vz'))
-            if velocity != rates[seq] or not .1 <= math.dist(velocity, (0,0,0)) <= 5000:
+            if velocity != rates[seq] or not 0 <= math.dist(velocity, (0,0,0)) <= 5000:
                 raise ValueError('source rate mismatch')
             position = tuple(row[k] for k in ('x','y','z'))
             if sent.get(seq) != position or received.get(seq) != position:

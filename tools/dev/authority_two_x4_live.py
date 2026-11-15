@@ -93,7 +93,7 @@ def observe_open_save(pid, target):
     return results
 
 
-def run(args):
+def run(args, *, experiment=None):
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('unprivileged Linux desktop user required')
     out = snapshot.output_path(args.out)
@@ -164,7 +164,7 @@ def run(args):
         adapter = LocalControlBridge(enabled=True, sock=sock, peer=peer, lease=lease, world_epoch=epoch,
             profile=server_profile, store=store, verify_checkpoint=read_cycle_evidence, timeout=min(130, args.timeout))
         service = joinfiles.FileService(secrets.token_hex(16), slots=(1,)).start()
-        world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
+        world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store), participants=experiment)
         handle = world.join('isolated-client')
         for operation in ('pause', 'save'):
             if time.monotonic() >= deadline: raise TimeoutError('server checkpoint timed out')
@@ -180,6 +180,8 @@ def run(args):
                      client_profile/'config.xml']
         protected += [client_case/'extensions/x4_lan_lab/ui'/name for name in
                       ('client_load_barrier.lua', 'x4_client_load_engine.lua', 'authority_download_load_probe.lua')]
+        if experiment is not None:
+            protected += experiment.protected(client_case)
         expected = {path: live.sha(path) for path in protected}
         command = load.readonly_save_command(client_case, game, client_binds, client_lock,
                     args.display, auth, user.pw_name, args.seed, target)
@@ -210,11 +212,17 @@ def run(args):
                 if world.session.state != 'paused' or world.session.ready_players:
                     raise RuntimeError('unexpected server state or admission')
                 if live.sha(target) != ticket['sha256']: raise ValueError('staged checkpoint changed')
-                result.update(success=True, server_checkpoint_verified=True, transfer_verified=True,
+                result.update(server_checkpoint_verified=True, transfer_verified=True,
                     client_load_requested=True, client_pause_observed=True, server_state='paused',
                     client_save_fd_observed=bool(save_fd_offsets),
                     client_save_fd_max_offset=max(save_fd_offsets) if save_fd_offsets else None,
                     exact_loaded_file_proven=False, client_admitted=False, gameplay_tested=False)
+                if experiment is not None:
+                    experiment.on_ready(world=world, handle=handle, ticket=ticket, target=target,
+                        server_identity=server_identity, server_proc=server_proc, server_started=server_started,
+                        client_identity=client_identity, client_proc=client_proc, client_started=client_started,
+                        game=game, out=out, deadline=deadline, result=result)
+                result['success'] = True
                 break
             time.sleep(.1)
     except (Exception, KeyboardInterrupt) as error:
