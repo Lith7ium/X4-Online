@@ -24,6 +24,12 @@ class PreparationTests(unittest.TestCase):
   for value in ('$last == 2','not md.X4AuthorityShipCreateReceiver.State.$epoch?', '$index1 == 1','$index2 == 2','$byship','.$receipts','.$macros','.$sectors','.$owners','.$seeds','.$xs','.$ys','.$zs','.$pending == false','$s1 != player.sector or $s2 != player.sector'):
    self.assertIn(value,conditions)
   self.assertFalse(root.findall('.//create_ship'))
+ def test_fake_x4_owner_driver_integration(self):
+  for mode in ('ok','mismatch'):
+   with self.subTest(mode=mode):subprocess.run(['luajit','tests/authority_sector_create_integration.lua',mode],cwd=ROOT,check=True,capture_output=True)
+ def test_owner_fake_x4(self):
+  for mode in ('ok','disabled','late_event','registration','registration_false','registration_callback','bad_path','unpaused','invalid_actor','invalid_candidate','wrong_sector','pause_during_pose','time_during_pose','nan','fleet_changed','fleet_cut','fleet_duplicate','conversion','bad_macro'):
+   with self.subTest(mode=mode):subprocess.run(['luajit','tests/authority_sector_create_owner.lua',mode],cwd=ROOT,check=True,capture_output=True)
  def test_state_machine(self):
   for mode in ('ok','disabled','guard','dispatch','reentrant','bad_count','wrong_index','bad_correlation','bad_snapshot','changed','duplicate','no_remote','report','timeout','slow_guard','slow_count','slow_issue','pause_lost_issue','slow_snapshot','slow_report','pause_lost_report','duplicate_final'):
    with self.subTest(mode=mode):subprocess.run(['luajit','tests/authority_sector_create_driver.lua',mode],cwd=ROOT,check=True,capture_output=True)

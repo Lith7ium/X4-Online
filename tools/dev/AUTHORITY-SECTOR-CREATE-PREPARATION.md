@@ -1,9 +1,9 @@
 # Two-sector receiver experiment: preparation only
 
 This default-off preparation is **not a runnable or native-start-ready
-experiment**. No harness currently installs it, owns the single X4 update/event
-dispatcher, implements or tests its native FFI readback adapter, fences a
-process, or validates a final log. Do not load these scripts into X4 until
+experiment**. No process harness currently installs it, integrates the single
+X4 update/event dispatcher, fences a process, or validates a final log. The
+FFI adapter is tested with a fake X4 API, not a native X4 process. Do not load these scripts into X4 until
 those missing pieces are implemented and independently reviewed.
 
 `authority_sector_create_receiver.xml` is a test-only copy of the existing
@@ -33,15 +33,24 @@ its deadline after the context guard and again after dispatch and reporting. A
 dispatch that already sent a Create before a timeout or pause loss remains
 indeterminate; the owner must discard the process and never retry it.
 
-The future owner must implement the driver dependencies with one update owner
-and one serialized consumer: confirm the pinned checkpoint/marker and pause,
-securely identify the disposable profile and owned process, route each event
-exactly once, enforce bounded stable argon fighter candidate enumeration, and
-check actor and sector validity/class/relationship before and after a real
-`GetObjectPositionInSector` read while paused. It must independently inspect
-and test all X4 FFI signatures and handle conversions, fence timeouts and
-cleanup, reject stock MD/Lua errors, protect overlay files and archive bytes,
-and use a fresh output/profile with no save. It must also recheck save-derived
+`authority_sector_create_owner.lua` is an opt-in event owner and FFI adapter. It
+registers no events on import and installs no `onUpdate`: an external owner
+must call `start()` once and `update()` from the sole update hook. It checks
+profile/pause/game time, local sector and ship handles and position before and
+after the read. It bounds the argon faction list, checks truncation, list/count
+stability, valid unique local handles, exact ID round trips and macro lookup.
+Fake-X4 tests exercise these checks, but the adapter has not run against real
+X4. The enumeration is faction-wide for one macro; it is not a sector census,
+complete universe coverage or proof against every autonomous duplicate.
+
+Driver completion is `pending_fence`, never a final success: a late event
+permanently fails it. A future process harness must fence and check callbacks,
+logs and owned-process cleanup before publishing any successful result. The
+harness must confirm the pinned checkpoint/marker and pause, securely identify
+the disposable profile and owned process, guarantee exclusive event routing,
+independently inspect and test the X4 FFI signatures and handle conversions,
+fence timeouts and cleanup, reject stock MD/Lua errors, protect overlay files
+and archive bytes, and use a fresh output/profile with no save. It must also recheck save-derived
 fixture macros and initial registry baseline. Pending or ambiguous mutation
 requires discarding the process; there is no rollback or crash consistency.
 
