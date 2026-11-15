@@ -94,7 +94,7 @@ class FleetEvidenceTests(unittest.TestCase):
 local ffi=require('ffi');ffi.cdef('typedef uint64_t UniverseID;')
 X4LAN_SHA256={digest=function() return string.rep('a',64) end}
 local logs={};local net={send=function() return true end,receive=function() end,close=function() end}
-package.loadlib=function() return function() return {open=function(host,port) assert(host=='127.0.0.1' and port==1234);return net end} end end
+package.loadlib=function() return function() return {monotonic=function() return 100 end,open=function(host,port) assert(host=='127.0.0.1' and port==1234);return net end} end end
 X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return {
  key=function(h) return tostring(h) end,operational=function() return true end,is_ship=function() return true end,
  sector=function() return ffi.new('uint64_t',99) end,
@@ -129,7 +129,7 @@ X4LAN_SHA256={digest=function() return string.rep('a',64) end}
 local fault=''
 local net={send=function() return true end,receive=function() end,close=function() end}
 package.loadlib=function() if fault=='transport_initial' then error('secret-transport') end
- return function() return {open=function() return net end} end end
+ return function() return {monotonic=function() return 100 end,open=function() return net end} end end
 X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return {
  key=function(h) return tostring(h) end,operational=function() return true end,is_ship=function() return true end,
  sector=function() if fault=='sector_handle' then error('secret-sector') end return ffi.new('uint64_t',99) end,
@@ -171,42 +171,37 @@ end
     def test_clock_failures_and_regression_are_fail_closed(self):
         script = r'''
 local fault,calls='',0
-local ffi={cdef=function() end,typeof=function() return true end,
- new=function(kind,value)
-  if kind=='struct x4lan_fleet_timespec[1]' then return {[0]={sec=0,nsec=0}} end
-  return value
- end}
-function ffi.load(name)
- assert(name=='libc.so.6')
- if fault=='clock_library' then error('secret-library-error') end
- if fault=='clock_symbol' then return {} end
- return {clock_gettime=function(id,t)
-  assert(id==1);calls=calls+1
-  if fault=='clock_call' then error('secret-call-error') end
-  if fault=='clock_status' then return -1 end
-  t[0].sec=(fault=='clock_regression' and calls>1) and 99 or 100
-  t[0].nsec=fault=='clock_value' and 1000000000 or 0
-  return 0
- end}
-end
+local ffi={new=function(kind,value) return value end}
 package.loaded.ffi=ffi
 X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return {
  key=function(h) return tostring(h) end,operational=function() return true end,is_ship=function() return true end,
  sector=function() return 99 end,pose=function() return {x=1,y=2,z=3} end,
 } end}
 local net={close=function() end}
-package.loadlib=function() return function() return {open=function() return net end} end end
+package.loadlib=function() return function()
+ if fault=='clock_symbol' then return {open=function() return net end} end
+ return {open=function() return net end,monotonic=function()
+  calls=calls+1
+  if fault=='clock_call' then error('secret-call-error') end
+  if fault=='clock_value' then return nil end
+  if fault=='clock_nan' then return 0/0 end
+  if fault=='clock_inf' then return math.huge end
+  if fault=='clock_regression' and calls>1 then return 99 end
+  return 100
+ end}
+end end
 X4LAN_AUTHORITY_FIXTURE_FLEET_WIRE={new=function() return {step=function() return {},{} end} end}
 X4LAN_SHA256={digest=function() return string.rep('a',64) end}
 local gate={saved_identity=function(v) local n=tonumber(v);if n==99 then return string.rep('a',16) end;return string.format('%016x',n) end}
 local cfg={native_gate_authority_fleet=true,test_profile='45841',slot='p1',native_gate_authority_fleet_port=1234,
  native_gate_authority_fleet_lease=string.rep('c',32),native_gate_snapshot_fixture={}}
 local actors={};for i=1,12 do actors[i]=i;cfg.native_gate_snapshot_fixture[i]=string.format('%016x',i) end
-for _,expected in ipairs({'clock_library','clock_symbol','clock_call','clock_status','clock_value','clock_regression'}) do
+for _,expected in ipairs({'clock_symbol','clock_call','clock_value','clock_nan','clock_inf','clock_regression'}) do
  fault=expected;calls=0;local logs={};local probe=assert(loadfile('src/authority/lua/fixture_fleet_probe.lua'))()
  probe.sample(cfg,30,actors,function(s) logs[#logs+1]=s end,gate)
  local ordinal=expected=='clock_regression' and 1 or 0
- assert(#logs==1 and logs[1]==string.format('AUTHORITY_FLEET_ERROR tick=30 stage=%s fixture=%d',expected,ordinal),table.concat(logs,'\n'))
+ local phase=(expected=='clock_nan' or expected=='clock_inf') and 'clock_value' or expected
+ assert(#logs==1 and logs[1]==string.format('AUTHORITY_FLEET_ERROR tick=30 stage=%s fixture=%d',phase,ordinal),table.concat(logs,'\n'))
  assert(not logs[1]:find('secret',1,true))
 end
 '''

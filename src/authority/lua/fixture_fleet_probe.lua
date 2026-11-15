@@ -1,6 +1,6 @@
 -- Explicit disposable Linux fixture experiment; all game object calls are reads.
 local M={}
-local wire, connection, engine, clock, clock_library, disabled, enrolled
+local wire, connection, engine, clock, disabled, enrolled
 local clock_phase
 local keys, sectors, frames = {}, {}, {}
 local function id(i) return string.format('fixture-%02d',i) end
@@ -13,28 +13,17 @@ function M.sample(cfg,tick,actors,log,gate)
   if not wire then
    assert(cfg.test_profile=='45841' and (cfg.slot=='p1' or cfg.slot=='p2'))
    assert(type(gate.saved_identity)=='function' and #cfg.native_gate_snapshot_fixture==12)
-   stage='clock_declaration'
-   local ffi=require('ffi')
-   if not pcall(ffi.typeof,'struct x4lan_fleet_timespec') then
-    ffi.cdef[[struct x4lan_fleet_timespec { long sec; long nsec; };]]
-   end
-   ffi.cdef[[int clock_gettime(int, struct x4lan_fleet_timespec*);]]
-   local t=ffi.new('struct x4lan_fleet_timespec[1]')
-   stage='clock_library'
-   clock_library=ffi.load('libc.so.6')
+   stage='transport_initial'
+   local net=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
    stage='clock_symbol'
-   local monotonic=assert(clock_library.clock_gettime)
+   local monotonic=assert(net.monotonic)
+   assert(type(monotonic)=='function')
    local last_clock
    clock=function()
     clock_phase='clock_call'
-    local status=monotonic(1,t)
-    clock_phase='clock_status'
-    assert(status==0)
+    local value=monotonic()
     clock_phase='clock_value'
-    local sec,nsec=tonumber(t[0].sec),tonumber(t[0].nsec)
-    assert(sec and nsec and sec>=0 and nsec>=0 and nsec<1000000000)
-    local value=sec+nsec/1000000000
-    assert(value>=0 and value==value and value<math.huge)
+    assert(type(value)=='number' and value>=0 and value==value and value<math.huge)
     clock_phase='clock_regression'
     assert(not last_clock or value>=last_clock)
     last_clock=value
@@ -47,7 +36,6 @@ function M.sample(cfg,tick,actors,log,gate)
    engine=assert(X4LAN_AUTHORITY_SHIP_ENGINE).new()
    for i=1,12 do frames[id(i)]='test-frame' end
    stage='transport_initial'
-   local net=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
    connection=net.open('127.0.0.1',cfg.native_gate_authority_fleet_port)
    stage='wire_initial'
    wire=assert(X4LAN_AUTHORITY_FIXTURE_FLEET_WIRE).new(connection,

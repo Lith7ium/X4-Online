@@ -3,6 +3,9 @@
  * Lua ABI: https://www.lua.org/source/5.1/lua.h.html and lauxlib.h.
  * Only the already-loaded Lua runtime is used.
  */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -20,6 +23,7 @@ typedef SOCKET net_socket;
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 typedef int net_socket;
 #define INVALID_NET (-1)
@@ -37,6 +41,7 @@ API(int, luaL_error, (lua_State*, const char*, ...));
 API(void*, lua_newuserdata, (lua_State*, size_t));
 API(void, lua_pushboolean, (lua_State*, int));
 API(void, lua_pushnil, (lua_State*));
+API(void, lua_pushnumber, (lua_State*, double));
 API(void, lua_pushlstring, (lua_State*, const char*, size_t));
 API(void, lua_pushcclosure, (lua_State*, lua_CFunction, int));
 API(void, lua_pushvalue, (lua_State*, int));
@@ -56,7 +61,7 @@ static int resolve_lua(void) {
 #endif
     RESOLVE(luaL_checklstring); RESOLVE(luaL_checknumber); RESOLVE(luaL_checkudata);
     RESOLVE(luaL_newmetatable); RESOLVE(luaL_error); RESOLVE(lua_newuserdata);
-    RESOLVE(lua_pushboolean); RESOLVE(lua_pushnil); RESOLVE(lua_pushlstring);
+    RESOLVE(lua_pushboolean); RESOLVE(lua_pushnil); RESOLVE(lua_pushnumber); RESOLVE(lua_pushlstring);
     RESOLVE(lua_pushcclosure); RESOLVE(lua_pushvalue); RESOLVE(lua_setfield);
     RESOLVE(lua_getfield); RESOLVE(lua_setmetatable); RESOLVE(lua_createtable);
     RESOLVE(lua_settop);
@@ -108,6 +113,29 @@ static int net_receive(lua_State* L) {
     int received = (int)recv(conn->fd, buffer, sizeof(buffer), 0);
     if (received <= 0 || received > MAX_PACKET) { p_lua_pushnil(L); return 1; }
     p_lua_pushlstring(L, buffer, (size_t)received);
+    return 1;
+}
+
+/* Seconds on this host's monotonic clock. A nil return is a hard failure;
+ * callers must never substitute wall-clock or process-CPU time. On Linux this
+ * is the same CLOCK_MONOTONIC as Python time.monotonic() in the same time
+ * namespace. Windows uses QPC; no cross-host epoch agreement is implied. */
+static int net_monotonic(lua_State* L) {
+#ifdef _WIN32
+    LARGE_INTEGER counter, frequency;
+    if (!QueryPerformanceCounter(&counter) || !QueryPerformanceFrequency(&frequency) ||
+        counter.QuadPart < 0 || frequency.QuadPart <= 0) {
+        p_lua_pushnil(L); return 1;
+    }
+    p_lua_pushnumber(L, (double)counter.QuadPart / (double)frequency.QuadPart);
+#else
+    struct timespec value;
+    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0 || value.tv_sec < 0 ||
+        value.tv_nsec < 0 || value.tv_nsec >= 1000000000L) {
+        p_lua_pushnil(L); return 1;
+    }
+    p_lua_pushnumber(L, (double)value.tv_sec + (double)value.tv_nsec / 1000000000.0);
+#endif
     return 1;
 }
 
@@ -166,7 +194,8 @@ EXPORT int luaopen_x4lan_net(lua_State* L) {
     method(L, "send", net_send); method(L, "receive", net_receive);
     method(L, "close", net_close); method(L, "__gc", net_close);
     p_lua_settop(L, -2);
-    p_lua_createtable(L, 0, 1);
+    p_lua_createtable(L, 0, 2);
     method(L, "open", net_open);
+    method(L, "monotonic", net_monotonic);
     return 1;
 }
