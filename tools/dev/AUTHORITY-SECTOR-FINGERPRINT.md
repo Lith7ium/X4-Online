@@ -43,3 +43,14 @@ For an explicitly authorized native experiment use
 private `.local` output outside the source experiment. Two subdirectories and a
 pair result are retained; no existing source result is rewritten. Offline
 synthetic tests do not run X4. Importing the runner starts nothing.
+
+On 2026-11-15, the first profile of `.local/authority-sector-fingerprint-01`
+loaded the checkpoint, reported the expected marker and pause, and completed
+the initial slot-2 read. Its first fingerprint callback then failed with
+`ERROR sample`; the diagnostic at that time did not identify the failing
+check. No fingerprint row was accepted, the second profile was not started,
+and owned-process cleanup reported no remaining processes. This run does not
+establish whether a getter was unavailable, a field had an unexpected format,
+or a local binding failed. Callback diagnostics now report the failing check
+and, for invalid tokens or rows, limited non-sensitive shape information;
+they do not weaken the checks or turn this failed run into evidence of identity.

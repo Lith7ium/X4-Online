@@ -47,4 +47,8 @@ for _=1,500 do
 end
 if mode=='ok' then assert(done and paused and resumes==0 and pauses==0 and issued==4 and logs[#logs]:find('DONE samples=4',1,true))
 else assert(not done and logs[#logs]:find('ERROR',1,true)) end
+if mode=='missing_sector' then assert(logs[#logs]:find('ERROR sample_sector_code shape_null',1,true)) end
+if mode=='bad_hex' then assert(logs[#logs]:find('ERROR sample_row_format bytes_',1,true) and logs[#logs]:find('_separators_8',1,true)) end
+if mode=='wrong_id' then assert(logs[#logs]:find('ERROR sample_request_id',1,true)) end
+if mode=='pause_loss' then assert(logs[#logs]:find('ERROR sample_observe',1,true)) end
 print('fingerprint synthetic '..mode..' passed')
