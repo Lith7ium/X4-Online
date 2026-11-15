@@ -8,7 +8,35 @@ The observer reports after its local queue acknowledgement. This probe is **not 
 
 MD fields and FFI coordinates are separately sampled while the universe runs; the time bracket does not make them atomic or prove a stable trajectory. The result only concerns one local observation: `new_registry_entry` means a new register entry, not a newly born ship. Neither a descriptor nor a queue acknowledgement proves complete universe coverage, client delivery, successful reconstruction, cross-process object identity, Windows or Internet operation. Runtime source and sector handles must not be sent to another process or persisted as identity.
 
-Synthetic Lua tests exercise wrong IDs, stale request, deadline, context loss, invalid descriptors, reentrancy, and the default/opt-in callback contracts. A fake-X4 FFI library exercises an exact uint64 actor above 2^53 and rejects an unsafe double. These do not establish the actual MD output, live X4 callback ordering, object identity, or queue behavior. An actual X4 run has not been performed for this descriptor.
+Synthetic Lua tests exercise wrong IDs, stale request, deadline, context loss, invalid descriptors, reentrancy, and the default/opt-in callback contracts. A fake-X4 FFI library exercises an exact uint64 actor above 2^53 and rejects an unsafe double. These tests alone do not establish actual MD output, live X4 callback ordering, object identity, or queue behavior.
+
+## Isolated Linux observation
+
+On 2026-11-16, `.local/authority-job-descriptor-01` completed one disposable
+Linux X4 run. The log records the load request, expected saved marker, pause,
+registry-attach READY and resume in that order. The first acknowledged job
+event was sequence 1 / new registry index 10055. Before the next event, the
+descriptor callback reported `ship_gen_m_tugboat_01_a_macro`, owner
+`pioneers`, sector macro `cluster_115_sector001_macro`, and sector-relative
+position `(-132217.203125, 6004.3818359375, 169081.265625)` metres. Its game
+times were 13.122914898 before the request and 13.130593159 before and after
+the position read. These are separately sampled attributes and coordinates,
+not an atomic state or a measured velocity.
+
+The log then reports sequences 2–23 / indices 10056–10077, followed by
+`observed=23 acknowledged=23` and the final pause. The result reports no
+owned processes remaining. The archived source save and staged copy both
+currently hash to `64a233ac6a85194b8276212709e78a6c48bbcc0f73c19842622aa098f1408cb8`;
+that does not independently establish the bytes X4 consumed. The monitored
+conversion/arithmetic and probe/MD/Lua error patterns do not appear in the
+engine log, although startup logs contain read-only config, graphics-queue and
+missing-signature errors. The filter is not a complete engine-error detector.
+
+This records a single local descriptor for a newly allocated *registry entry*;
+it does not establish ship birth, a complete event stream, durable delivery,
+unique sector identity or another client's object. Activations may also occur
+between the last queue status and final pause. No client, reconstruction,
+cross-sector replication, Windows, Internet or gameplay was tested.
 
 ## Isolated attach diagnostic
 

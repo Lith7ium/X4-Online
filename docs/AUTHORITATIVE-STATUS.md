@@ -19,6 +19,9 @@ Native Linux evidence so far:
   activations with new registry indices before pausing again. First registry
   allocation does not prove ship construction or delivery, and this is not
   complete event coverage or replication.
+* A separate isolated run attached to that registry and sampled a non-atomic
+  macro, owner, sector macro and position for its first newly registered job
+  actor. No client received or recreated the ship.
 * One running X4 process repeatedly read two registered ships in different
   sectors and observed their positions change. The observed rates were derived
   from position samples, not native velocity readback.
@@ -71,6 +74,7 @@ the complete persistent shared-world scenario require actual end-to-end tests.
 
 Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [saved-registry job attach](../tools/dev/AUTHORITY-JOB-ATTACH.md),
+[local job descriptor](../tools/dev/AUTHORITY-JOB-DESCRIPTOR-PROBE.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-profile fingerprints](../tools/dev/AUTHORITY-SECTOR-FINGERPRINT.md),
