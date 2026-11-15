@@ -149,6 +149,39 @@ class WorldTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.world.offer_load(1)
 
+    def test_native_controller_is_notified_after_checkpoint_publication(self):
+        seen=[]
+        def published(checkpoint):
+            self.assertTrue(self.engine.paused)
+            self.assertEqual(self.store.latest(), checkpoint)
+            seen.append(checkpoint)
+            return True
+        self.engine.checkpoint_published=published
+        a=self.world.join('a')
+        self.step('pause');self.step('save')
+        self.assertEqual(len(seen),1)
+        self.assertEqual(self.world.offer_load(a).save.checkpoint_id, seen[0].checkpoint_id)
+
+    def test_failed_publication_notification_faults_with_checkpoint_retained(self):
+        self.world.join('a');self.step('pause')
+        self.engine.checkpoint_published=mock.Mock(side_effect=RuntimeError('confirmation unavailable'))
+        with self.assertRaisesRegex(RuntimeError,'confirmation unavailable'):
+            self.world.step()
+        self.assertEqual(self.world.session.state,'faulted')
+        self.assertIsNone(self.world.session.baseline_id)
+        self.assertTrue(self.store.latest().path.is_file())
+        self.assertTrue(self.engine.paused)
+        with self.assertRaises(ValueError):self.world.offer_load(1)
+
+    def test_nonaffirmative_publication_notification_faults(self):
+        self.world.join('a');self.step('pause')
+        self.engine.checkpoint_published=lambda _checkpoint: None
+        with self.assertRaisesRegex(ValueError,'did not confirm'):
+            self.world.step()
+        self.assertEqual(self.world.session.state,'faulted')
+        self.assertIsNone(self.world.session.baseline_id)
+        self.assertTrue(self.store.latest().path.is_file())
+
     def test_adapter_failure_faults_without_executing_next_action(self):
         self.world.join('a')
         with mock.patch.object(self.engine, 'pause', side_effect=RuntimeError('uncertain')):

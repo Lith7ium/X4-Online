@@ -6,6 +6,11 @@ completed; save() must return the path of a completed, stable save outside the
 checkpoint store. An exception means an indeterminate engine state. A caller
 must not retry until all old operations have actually been fenced or settled.
 
+An engine that requires an explicit confirmation after durable publication may
+provide checkpoint_published(checkpoint). It must return True only after the native
+controller has accepted the confirmation; an error or other result faults the session even
+though the verified checkpoint itself remains in the store.
+
 All access must be serialized by the caller. This module neither starts an
 engine nor restores one on restart. Session/client authentication, genuine
 client-side loading, adapter timeouts and engine fencing are external duties.
@@ -76,6 +81,12 @@ class WorldCoordinator:
             elif request.operation == 'save':
                 source = self._engine.save()
                 checkpoint = self._store.publish(source)
+                published = getattr(self._engine, 'checkpoint_published', None)
+                if published is not None:
+                    if not callable(published):
+                        raise ValueError('engine checkpoint publication callback is not callable')
+                    if published(checkpoint) is not True:
+                        raise ValueError('engine did not confirm checkpoint publication')
                 self._baseline = (request.request_id, checkpoint)
             else:
                 raise ValueError('unknown engine operation')

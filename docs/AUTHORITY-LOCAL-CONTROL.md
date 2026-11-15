@@ -1,6 +1,6 @@
 # Experimental local X4 control
 
-This is a disabled-by-default prototype for an **isolated test profile**, without a network listener, launcher, save transfer, client admission, automatic event registration or game loop. It does not call `QuitGame`, `LoadGame` or change the user's normal saves. It is not connected to `WorldCoordinator`. The included tests use injected Lua doubles; this code has not been run in X4 or validated on Windows.
+This is a disabled-by-default prototype for an **isolated test profile**, without a network listener, launcher, save transfer, client admission, automatic event registration or game loop. It does not call `QuitGame`, `LoadGame` or change the user's normal saves. It is not connected to `WorldCoordinator`. Its repeat-save mode completed one isolated Linux X4 experiment; it has not been validated on Windows or as a multiplayer lifecycle.
 
 The approach reuses the earlier LAN experiment's `IsGamePaused`, `Pause`, `IsSavingPossible(false)`, `SaveGame` and `gameSaved` mechanisms. It also uses `Unpause` and observed game time. Unlike the earlier one-time pristine-world capture, it never exits X4 and never declares a save complete from an event alone.
 
@@ -8,9 +8,10 @@ The approach reuses the earlier LAN experiment's `IsGamePaused`, `Pause`, `IsSav
 
 `control_state.lua` exposes the inert factory as `X4LAN_AUTHORITY_CONTROL_STATE` for X4 UI loading; it contains a pure state machine. `new({enabled=false}, ...)`, an absent config, or any value other than boolean `true` returns disabled without touching the engine. An enabled configuration supplies `owner`, `world_epoch`, `timeout_seconds` (default 30), and `pause_settle_seconds` (default 0.1). Owner and epoch are local fencing labels, **not authentication**. The caller must exclusively own this specific X4 process and serialize every call. Creating another state machine for the same process would defeat the one-save fence; it must be forbidden by the future supervisor.
 By default the state machine retains the one-save-per-process restriction. An
-explicit `enable_verified_reuse=true` opts into a separate, synthetic-tested
-repeated-save lifecycle; it has not been run in X4. Repeated joins and last
-departures need this or another verified multi-save integration.
+explicit `enable_verified_reuse=true` opts into a repeated-save lifecycle. One
+isolated Linux X4 experiment completed three independently verified saves in
+the same slot; see `AUTHORITY-REPEATED-CHECKPOINT.md`. Repeated joins and last
+departures still need an integrated multi-save lifecycle and real admission.
 
 `x4_control_engine.lua` exposes the separate explicit factory as `X4LAN_AUTHORITY_X4_CONTROL_ENGINE`. `new({enabled=true, test_profile='45841'})` resolves the required X4 UI functions and confirms that X4 reports a save directory ending in `/45841/save` (either slash convention). The caller must additionally establish that this profile and its game process are disposable and exclusively owned. Nothing in a profile suffix proves process ownership. The binding does not start, stop, load or save the game at construction. `register_save_event(config, state, RegisterEvent)` must be called explicitly once; it registers `gameSaved` and treats a registration error as indeterminate rather than allowing a duplicate retry. Integrate `state:on_update()` into an existing X4 UI update callback: do not install a second competing `SetScript` handler.
 
@@ -40,9 +41,10 @@ supervisor's assertion. A verified previously used slot may be requested again
 only with `overwrite_verified_owned_slot=true`; a new slot still requires
 `empty_owned_slot=true`. The supervisor remains responsible for exclusive
 ownership and actual slot contents. A false verification, lost pause, or foreign
-save event faults the state. The Lua tests use doubles; this option is not
-connected to the coordinator and does not establish native repeated slot reuse.
+save event faults the state. The Lua tests use doubles; the native three-save
+experiment used a separate test supervisor and did not connect this option to
+the coordinator.
 
-The report callback receives `{world_epoch, request_id, operation, status, reason}`. An exception from the callback faults the instance. Pause/resume reports use `status='confirmed'`; a native save event is never `confirmed`. For `WorldCoordinator`, a future supervisor must wait asynchronously without blocking the X4 UI thread, validate the exact newly created save, ensure completion and stability, then publish it through `CheckpointStore` before its synchronous `save()` returns. A matching receipt must identify the same owner, epoch and request, and an error/timeout must fail the coordinator closed. `WorldCoordinator.mark_loaded(..., trusted_confirmation=true)` still requires an independent native load receipt; delivery of bytes is not readiness.
+The report callback receives `{world_epoch, request_id, operation, status, reason}`. An exception from the callback faults the instance. Pause/resume reports use `status='confirmed'`; a native save event is never `confirmed`. For `WorldCoordinator`, a future supervisor must wait asynchronously without blocking the X4 UI thread and make its synchronous `save()` return only the exact completed, stable save. The coordinator then publishes it through `CheckpointStore` and, if the adapter supplies `checkpoint_published(checkpoint)`, invokes that callback before acknowledging the save or proceeding. The callback can bind the published checkpoint to the waiting native request and issue `confirm_save`; it must explicitly return `True` after successful confirmation. An exception or any other return value faults the coordinator while retaining the published checkpoint. A matching receipt must identify the same owner, epoch and request, and an error/timeout must fail the coordinator closed. This interface has only been tested with doubles and is not yet connected to the native probe. `WorldCoordinator.mark_loaded(..., trusted_confirmation=true)` still requires an independent native load receipt; delivery of bytes is not readiness.
 
 Open native questions include whether `IsSavingPossible(false)` succeeds once already paused, the precise behavior of nested pause ownership, the availability of UI callbacks while paused in this integration, and the meaning of `gameSaved` under concurrent or delayed saves. The old pristine-world capture checked saving availability **before** pausing; its success does not answer the first question. No Internet, multi-client or persistent-world outcome follows from this prototype.

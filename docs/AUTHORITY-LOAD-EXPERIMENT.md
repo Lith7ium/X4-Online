@@ -4,7 +4,8 @@
 experiment. It is not a multiplayer loader, server implementation or admission
 protocol. Importing it never starts X4. It requires an already completed
 `authority_control_live.py` run or an already completed two-cycle
-`authority_cycle_live.py` run, and the checkpoint selected by the appropriate
+`authority_cycle_live.py` run, or a completed `authority_reuse_live.py` run,
+and the checkpoint selected by the appropriate
 `CURRENT` pointer. Close all X4 processes first. It uses a newly created private profile
 under this checkout's `.local` and refuses the player's normal save locations.
 
@@ -19,7 +20,9 @@ For a two-cycle run, it accepts only `checkpoints/cycle-2` as the source: it
 revalidates both cycle checkpoints against their own `CURRENT` pointers, their
 private cycle ID and saved titles, their ordered save times, the cycle result,
 and the complete ordered cycle log. The first cycle cannot be selected as the
-load source. Source receipts and save identity remain local to the private run.
+load source. For a three-save reuse run it similarly accepts only
+`checkpoints/cycle-3` and rechecks all three checkpoints. Source receipts and
+save identity remain local to the private run.
 
 The UI probe requests `save_009` from the start menu after save-list refresh.
 X4 recreates the UI on load: the external log watcher requires exactly ordered
@@ -72,6 +75,12 @@ world state, a new join, multi-client synchronization, platform interoperability
 or save distribution. The profile path, UI callback lifecycle, read-only file
 and clock checks worked for this isolated Linux run. The comparison's empirical
 assumptions must be revisited if the executable or target platform changes.
+
+The loader also accepts the third checkpoint of the isolated same-slot
+three-save experiment after independently verifying all three source versions
+and their ordered receipts. One separate Linux X4 process completed that load
+and advanced game time; the same file-descriptor and world-state limitations
+apply. See `AUTHORITY-REPEATED-CHECKPOINT.md`.
 
 Synthetic coverage: `python3 -m unittest discover -s tests -p
 "test_authority_load_live.py" -v`. These tests use temporary files and Lua

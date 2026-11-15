@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO / 'tools/dev'))
 from authority.checkpoints import CheckpointStore
 from authority_control_cycle_evidence import read_cycle_evidence
 from authority_cycle_live import ControlLogWatch as CycleLogWatch, MARKERS as CYCLE_MARKERS
+from authority_reuse_live import ControlLogWatch as ReuseLogWatch, MARKERS as REUSE_MARKERS
 from lockstep.launcher import extension
 import linux_gate_live as live
 import linux_snapshot_capture as snapshot
@@ -103,13 +104,16 @@ def stage_checkpoint(store, checkpoint_id, profile):
 
 
 def verify_origin(store_dir, checkpoint, profile):
-    """Independently verify a completed single or two-cycle private source."""
+    """Independently verify a completed single, two-cycle or three-save reuse source."""
     if store_dir.name == 'checkpoints':
         origin = store_dir.parent
-        cycle_source = False
+        source_kind = 'single'
     elif store_dir.name == 'cycle-2' and store_dir.parent.name == 'checkpoints':
         origin = store_dir.parent.parent
-        cycle_source = True
+        source_kind = 'cycle'
+    elif store_dir.name == 'cycle-3' and store_dir.parent.name == 'checkpoints':
+        origin = store_dir.parent.parent
+        source_kind = 'reuse'
     else:
         raise ValueError('unsupported source checkpoint store path')
     result_path = origin/'result.json'
@@ -119,8 +123,10 @@ def verify_origin(store_dir, checkpoint, profile):
     if (not isinstance(result, dict) or result.get('success') is not True or
         result.get('resume_confirmed') is not True or result.get('owned_processes_remaining') != []):
         raise ValueError('source control result does not identify a completed checkpoint')
-    if cycle_source:
+    if source_kind == 'cycle':
         saved_time = verify_cycle_origin(origin, store_dir, checkpoint, result)
+    elif source_kind == 'reuse':
+        saved_time = verify_reuse_origin(origin, store_dir, checkpoint, result)
     elif (result.get('native_save_event') is not True or result.get('file_verified') is not True or
           result.get('checkpoint_id') != checkpoint.checkpoint_id or
           result.get('sha256') != checkpoint.sha256 or result.get('size') != checkpoint.size):
@@ -181,6 +187,54 @@ def verify_cycle_origin(origin, store_dir, checkpoint, result):
     if watch.counts != [1] * len(CYCLE_MARKERS):
         raise ValueError('source cycle log incomplete')
     return two.game_time
+
+
+
+def verify_reuse_origin(origin, store_dir, checkpoint, result):
+    """Verify all three independently stored same-slot saves and ordered receipts."""
+    rows = result.get('cycles')
+    if (not isinstance(rows, list) or len(rows) != 3 or
+        any(not isinstance(row, dict) for row in rows) or
+        any(type(row.get('cycle')) is not int for row in rows) or
+        [row.get('cycle') for row in rows] != [1, 2, 3] or
+        any(row.get('file_verified') is not True for row in rows)):
+        raise ValueError('source reuse result is incomplete')
+    config = origin/'case/extensions/x4_lan_lab/ui/config.lua'
+    if config.is_symlink() or not config.is_file() or config.stat().st_size > 65536:
+        raise ValueError('source reuse configuration unavailable')
+    text = config.read_text(encoding='ascii')
+    ids = re.findall(r'authority_cycle_id="([0-9a-f]{32})"', text)
+    if len(ids) != 1 or text.count('authority_cycle_id') != 1:
+        raise ValueError('source reuse identity unavailable')
+    cycle_id = ids[0]
+    seen = set()
+    previous_time = None
+    for cycle, row in enumerate(rows, 1):
+        folder = store_dir.parent/f'cycle-{cycle}'
+        if folder.is_symlink() or not folder.is_dir():
+            raise ValueError('source reuse store unavailable')
+        store = CheckpointStore(folder)
+        current = store.latest()
+        if current.checkpoint_id in seen or (cycle == 3 and current != checkpoint):
+            raise ValueError('source reuse checkpoint mismatch')
+        seen.add(current.checkpoint_id)
+        evidence = read_cycle_evidence(store, current.checkpoint_id,
+                                       f'X4 Authority {cycle_id} {3*cycle-1}',
+                                       previous_game_time=previous_time)
+        if (row.get('checkpoint_id') != evidence.checkpoint_id or row.get('sha256') != evidence.sha256 or
+            type(row.get('size')) is not int or row.get('size') != evidence.size or
+            row.get('game_time') != str(evidence.game_time)):
+            raise ValueError('source reuse evidence differs from checkpoint')
+        previous_time = evidence.game_time
+    log = origin/'case/home/.config/EgoSoft/X4/45841/engine-output.log'
+    watch = ReuseLogWatch(log)
+    while True:
+        previous = watch.offset
+        if watch.poll(): break
+        if watch.offset == previous: raise ValueError('incomplete source reuse log')
+    if watch.counts != [1] * len(REUSE_MARKERS):
+        raise ValueError('source reuse log incomplete')
+    return previous_time
 
 
 def verify_loaded_time(saved_time, ready_time):
