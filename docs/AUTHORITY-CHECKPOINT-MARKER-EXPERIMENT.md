@@ -23,8 +23,9 @@ does not cryptographically prove which bytes X4 consumed, the state of all
 world objects, honest client behavior, gameplay, Windows, or Internet transport.
 One native attempt failed because the client queried the marker while X4 was
 still in the second loading pass; the player-valid signal alone was too early.
-The probe now retries a missing marker/load-event flag at bounded intervals for
-up to 60 seconds, including when an inspect request goes unanswered. Only a
+The probe retries an explicit missing marker/load-event response at bounded
+intervals for up to 60 seconds. An unanswered inspect request is not retried;
+the experiment instead fails when its deadline expires. Only a
 successful inspect after the MD load event is accepted. In a second isolated
 Linux/Linux run on 2026-11-15, the client returned the same marker after the
 load event, the saved fixture checks and checkpoint transfer passed, and the
