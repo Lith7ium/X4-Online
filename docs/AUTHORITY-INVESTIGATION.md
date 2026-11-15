@@ -198,6 +198,18 @@ The live checks are MD self-checks, not independent bindings to saved components
 and neither exact loaded bytes nor multiplayer are established. See
 `tools/dev/AUTHORITY-SECTOR-REFERENCE-FIXTURE.md`.
 
+An isolated follow-up attempted a correlated registry ResolveV2 response as a
+single MD table containing a request ID and actor. Its native result was
+`success=false`: the Lua handler ran but saw nil in the expected table argument,
+then stopped. It did not reach the unavailable/null case. The local X4 9.00
+`preparation/game-schemas/libraries/common.xsd` documents this event's parameter
+as a string, number or component, so the proposed table is outside that API's
+documented contract; the nil observation is consistent with that limitation.
+This does not establish the behavior of every MD-to-Lua interface. The diagnostic
+and possible next controls are documented in
+`tools/dev/AUTHORITY-REGISTRY-RESOLVE-V2.md`; no correlated transport or
+multiplayer result follows from this attempt.
+
 The owner also approved an experiment creating newly spawned ships on clients
 under the server's registry ID. One isolated Linux/Linux run created one
 controlled server fixture after a common checkpoint, forwarded its test
