@@ -29,3 +29,20 @@ running until cleanup. Even a successful recovery experiment would not prove
 every byte consumed by X4, no simulation before pause, client re-admission,
 gameplay, cross-platform behavior, or full persistent-world correctness.
 Source file identity checks are point-in-time checks, not an adversarial lock.
+
+The isolated native Linux run `.local/authority-tcp-recovery-01` succeeded.
+Its source was the TCP departure checkpoint
+`checkpoint-5e8e1f852bc84f8b90f6c30c24bd3432`, SHA-256
+`71042e25b0d2560f35fbc44fc6f0bcdd688936c153b0d9f7c2fe71fc03cffc1e`.
+The staged save's SHA-256 matched that source. The X4 log records the request to
+load `save_008`, both load passes, the expected saved marker after the game-load
+event, and a pause observation in that order. The runner then recorded bridge
+activation and a paused coordinator after a synthetic waiting join, with a new
+confirmed marked checkpoint `checkpoint-cdbae20de21c4a47901061374a196c70`,
+SHA-256 `36833a68e8549c6b5ca105db3dbcbc183c0a0257aa9b0a30ff212639d2e2f018`.
+Its `CURRENT` and `CONFIRMED` pointers match, and the runner reported no owned
+processes remaining. An independent offline check verified the fresh marker in
+the saved bytes. The installed identity fixture's bytes match the archived
+source. No client was admitted and no gameplay was tested. The startup log also
+reports read-only `config.xml` write failures, an FSR3 queue error, and a missing
+extension icon signature; these messages did not prevent the recorded run.

@@ -23,9 +23,12 @@ Native Linux evidence so far:
   loaded a marked checkpoint in a fresh server process and wrote a fresh
   confirmed checkpoint after a synthetic join. Neither run tested gameplay.
 * In a separate two-X4 loopback run, the last control connection closed, after
-  which the server paused and wrote a fresh marked checkpoint. The client game
-  itself stayed open until cleanup; this did not test an actual game logout or
-  a restart from that particular checkpoint.
+  which the server paused and wrote a fresh marked checkpoint. A later isolated
+  Linux X4 process loaded that checkpoint, reported its saved marker and pause,
+  and produced another confirmed checkpoint after a synthetic waiting join.
+  The original client game stayed open until cleanup; neither run tested an
+  actual game logout, client re-admission or gameplay after restart. Exact X4
+  file consumption and zero simulation before pause are not proven.
 
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
@@ -50,5 +53,6 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [marked admission](AUTHORITY-TRUSTED-MARKED-LIVE.md),
 [native TCP control](AUTHORITY-TCP-NATIVE-EXPERIMENT.md),
+[TCP departure recovery](AUTHORITY-TCP-RECOVERY-EXPERIMENT.md),
 [recovered-world bridge](../tools/dev/AUTHORITY-RECOVERY-BRIDGE.md),
 and [experimental local host](AUTHORITY-EXPERIMENTAL-LOCAL-HOST.md).
