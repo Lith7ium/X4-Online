@@ -72,6 +72,16 @@ class SaveOffers:
                     self.service.offered.pop(name, None)
                 self.names.clear()
 
+    def revoke(self, offer):
+        """Withdraw one owned offer; active transfers still need admission fencing."""
+        if not isinstance(offer, SaveOffer):
+            raise ValueError('a validated save offer is required')
+        with self._lock:
+            with self.service.lock:
+                if offer.name in self.names:
+                    self.service.offered.pop(offer.name, None)
+                    self.names.remove(offer.name)
+
 
 def receive(host, port, token, slot, offer, new_directory, *, retries=5, timeout=60):
     """Receive into a newly created directory owned exclusively by the caller.

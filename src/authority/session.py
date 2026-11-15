@@ -206,16 +206,27 @@ class SessionCoordinator:
         self._resume_baseline = None
         self._reconcile()
 
-    def retry(self, *, engine_fenced):
+    def retry(self, *, engine_fenced, clients_fenced=False):
         """Re-establish pause only once old commands cannot take effect later.
 
         The trusted adapter must fence or settle the previous request, including
         after a timeout. Ignoring its late callback alone is not a fence: a late
-        resume could still restart the actual simulation behind this model.
+        resume could still restart the actual simulation behind this model. It
+        must also stop or fence all possibly affected clients, including clients
+        that have disconnected, before asserting clients_fenced. Their former
+        readiness and loads are discarded: after a fresh checkpoint, every
+        connected client must load and confirm that baseline again.
         """
         if self._state != "faulted":
             raise ValueError("retry is only allowed after an engine failure")
         if engine_fenced is not True:
             raise ValueError("old engine operations must be fenced before retry")
+        if clients_fenced is not True:
+            raise ValueError("old client operations must be fenced before retry")
+        self._ready.clear()
+        self._loads.clear()
+        self._baseline_id = None
+        self._resume_baseline = None
+        self._save_required = True
         self._state = "unknown"
         self._request("pause")

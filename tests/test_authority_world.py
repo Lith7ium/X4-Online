@@ -169,6 +169,30 @@ class WorldTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.confirm(ticket)
 
+    def test_replaced_and_disconnected_offers_are_withdrawn_individually(self):
+        a, b = self.world.join('a'), self.world.join('b')
+        self.step('pause'); self.step('save')
+        old = self.world.offer_load(a)
+        other = self.world.offer_load(b)
+        replacement = self.world.offer_load(a)
+        with self.assertRaises(joinfiles.FetchError):
+            receive('127.0.0.1', self.service.port, 'a' * 32, 2, old.save,
+                    self.root / 'old', retries=0, timeout=3)
+        current = receive('127.0.0.1', self.service.port, 'a' * 32, 2, other.save,
+                          self.root / 'other', retries=0, timeout=3)
+        self.assertEqual(current.read_bytes(), self.store.latest().path.read_bytes())
+        self.world.disconnect(a)
+        with self.assertRaises(joinfiles.FetchError):
+            receive('127.0.0.1', self.service.port, 'a' * 32, 2, replacement.save,
+                    self.root / 'disconnected', retries=0, timeout=3)
+        current = receive('127.0.0.1', self.service.port, 'a' * 32, 2, other.save,
+                          self.root / 'other-again', retries=0, timeout=3)
+        self.assertEqual(current.read_bytes(), self.store.latest().path.read_bytes())
+        self.confirm(other)
+        with self.assertRaises(joinfiles.FetchError):
+            receive('127.0.0.1', self.service.port, 'a' * 32, 2, other.save,
+                    self.root / 'confirmed', retries=0, timeout=3)
+
     def test_multiple_joiners_get_the_same_confirmed_checkpoint(self):
         a = self.world.join('a')
         self.step('pause')

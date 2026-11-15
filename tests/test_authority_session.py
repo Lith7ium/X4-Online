@@ -154,14 +154,50 @@ class SessionTests(unittest.TestCase):
             self.session.complete(failed.world_epoch, failed.request_id, True)
         with self.assertRaises(ValueError):
             self.session.retry(engine_fenced=False)
-        self.session.retry(engine_fenced=True)
+        with self.assertRaisesRegex(ValueError, 'client operations'):
+            self.session.retry(engine_fenced=True)
+        self.session.retry(engine_fenced=True, clients_fenced=True)
         self.finish('pause')
         self.finish('save', False)
         self.assertTrue(self.session.save_required)
-        self.session.retry(engine_fenced=True)
+        self.session.retry(engine_fenced=True, clients_fenced=True)
         self.finish('pause')
         self.finish('save')
         self.ready(b)
+        self.finish('resume')
+
+    def test_retry_invalidates_client_readiness_and_old_loads(self):
+        a = self.start_running()
+        b = self.session.join('b')
+        self.finish('pause', False)
+        self.session.retry(engine_fenced=True, clients_fenced=True)
+        self.assertEqual(self.session.ready_players, ())
+        self.finish('pause')
+        baseline = self.finish('save').request_id
+        self.assertEqual(self.session.state, 'paused')
+        generation = self.session.begin_load(b, baseline)
+        self.session.mark_ready('world-1', b, generation, baseline)
+        self.assertIsNone(self.session.pending)
+        self.assertEqual(self.session.ready_players, ((b, 'b'),))
+        self.ready(a)
+        self.finish('resume')
+
+    def test_retry_after_uncertain_resume_does_not_resume_old_ready_clients(self):
+        a = self.session.join('a')
+        self.finish('pause')
+        baseline = self.finish('save').request_id
+        generation = self.session.begin_load(a, baseline)
+        self.session.mark_ready('world-1', a, generation, baseline)
+        self.finish('resume', False)
+        self.session.retry(engine_fenced=True, clients_fenced=True)
+        self.finish('pause')
+        new_baseline = self.finish('save').request_id
+        self.assertNotEqual(baseline, new_baseline)
+        with self.assertRaises(ValueError):
+            self.session.mark_ready('world-1', a, generation, baseline)
+        self.assertEqual(self.session.state, 'paused')
+        self.assertIsNone(self.session.pending)
+        self.ready(a)
         self.finish('resume')
 
     def test_invalid_callbacks_do_not_consume_pending_request(self):

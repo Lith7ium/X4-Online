@@ -57,7 +57,9 @@ class WorldCoordinator:
 
     def disconnect(self, connection_handle):
         self.session.disconnect(connection_handle)
-        self._load_offers.pop(connection_handle, None)
+        previous = self._load_offers.pop(connection_handle, None)
+        if previous is not None:
+            self._offers.revoke(previous.save)
 
     def _control_participants(self, operation):
         handles = tuple(handle for handle, _ in self.session.ready_players)
@@ -112,6 +114,10 @@ class WorldCoordinator:
                         raise RuntimeError('client resume failed and server pause is uncertain') from error
                     raise
             elif request.operation == 'save':
+                # A new save supersedes every previously offered baseline.
+                # Already-started transfers remain fenced by load generation.
+                self._offers.invalidate()
+                self._load_offers.clear()
                 source = self._engine.save()
                 checkpoint = self._store.publish(source)
                 published = getattr(self._engine, 'checkpoint_published', None)
@@ -145,7 +151,9 @@ class WorldCoordinator:
             raise ValueError('checkpoint changed')
         generation = self.session.begin_load(connection_handle, baseline_id)
         # Invalidate a previous attempt even if creating the new offer fails.
-        self._load_offers.pop(connection_handle, None)
+        previous = self._load_offers.pop(connection_handle, None)
+        if previous is not None:
+            self._offers.revoke(previous.save)
         save = self._offers.offer(checkpoint)
         result = LoadOffer(self.session.world_epoch, connection_handle, baseline_id, generation, save)
         self._load_offers[connection_handle] = result
@@ -166,5 +174,6 @@ class WorldCoordinator:
                 or load_generation != offer.load_generation or checkpoint_id != offer.save.checkpoint_id
                 or sha256 != offer.save.sha256):
             raise ValueError('load confirmation does not match current offer')
+        self._offers.revoke(offer.save)
         self.session.mark_ready(world_epoch, connection_handle, load_generation, baseline_id)
         del self._load_offers[connection_handle]

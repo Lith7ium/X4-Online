@@ -34,7 +34,8 @@ Packets are local experimental control messages protected by a per-run secret,
 not a security boundary against a same-user process. There are no retries. Loss,
 timeout, malformed receipts, verification failure, and process failure leave the
 engine state uncertain and fault the adapter. Do not call `SessionCoordinator.retry`
-until the old process and all its commands have actually been fenced. A
+until the old server and affected client operations have actually been fenced.
+Retry discards readiness and requires a fresh checkpoint and load confirmations. A
 checkpoint can remain published after a later confirmation failure; it is not
 then a confirmed session baseline. Keep a new epoch and lease for every restart.
 
