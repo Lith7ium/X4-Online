@@ -1,4 +1,22 @@
-# X4 Online: deterministic lockstep multiplayer for X4: Foundations
+# X4 Online: authoritative-world experiment
+
+This development branch explores an alternative architecture for X4: one X4
+instance owns a shared, persistent world; a designated client may simulate an
+overlapping high-attention area and report results back. The first milestone is
+ship positions. When a player joins, the intended flow pauses the world, saves,
+transfers the checkpoint and resumes after the player has loaded it. The world
+also stops and saves when the last player leaves. All players initially share
+one player faction and one company account; separate factions and accounts are
+deferred.
+
+**Experimental status:** the new components are prototypes and are not a
+playable authoritative multiplayer implementation. Position replication,
+client-side high-attention authority, native server saving/recovery, and
+Windows/Linux sessions have not been demonstrated. The original lockstep work
+below remains the historical base of this branch. See
+[the investigation](docs/AUTHORITY-INVESTIGATION.md) for evidence and limits.
+
+## Original lockstep project
 
 Every player runs the whole X4 universe from the same starting snapshot. Only
 player inputs travel over the network. An opt-in native gate makes the

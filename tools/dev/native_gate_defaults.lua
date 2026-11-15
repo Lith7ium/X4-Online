@@ -228,6 +228,8 @@ D.FAMILY_NEEDS={missiles='native_gate_pilot_fire',missions='guard:missions',conv
  inventory='guard'}
 -- Diagnostics and measurement: off by default (they only log, capture, trace, profile, watch or measure). {'key','why'}.
 D.DIAGNOSTIC={
+ {'native_gate_authority_scan','read-only isolated Linux fixture fleet scan'},
+ {'native_gate_fixture_body_observe','read-only Linux fixture body observation'},
  {'native_gate_navmesh_post_observe','Linux navmesh post attempts during startup and a bounded live tick window'},
  {'native_gate_economy_watch','Linux saved-station deadline observation'},
  {'native_gate_economy_watch_window','Inclusive station deadline observation window'},

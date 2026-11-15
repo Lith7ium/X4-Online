@@ -1,0 +1,126 @@
+"""Experimental coordinator tying session, saved checkpoints and join offers.
+
+This is not an X4 integration. The caller supplies a trusted, synchronous
+engine adapter. pause()/resume() may return only after the operation really
+completed; save() must return the path of a completed, stable save outside the
+checkpoint store. An exception means an indeterminate engine state. A caller
+must not retry until all old operations have actually been fenced or settled.
+
+All access must be serialized by the caller. This module neither starts an
+engine nor restores one on restart. Session/client authentication, genuine
+client-side loading, adapter timeouts and engine fencing are external duties.
+"""
+from dataclasses import dataclass
+
+from .save_transfer import SaveOffer
+from .session import SessionCoordinator
+
+
+@dataclass(frozen=True)
+class LoadOffer:
+    """A checkpoint offer tied to one connection and one load attempt."""
+
+    world_epoch: str
+    connection_handle: int
+    baseline_id: int
+    load_generation: int
+    save: SaveOffer
+
+
+class WorldCoordinator:
+    """Execute one engine action at a time and bind join loads to saved bytes."""
+
+    def __init__(self, world_epoch, engine, store, offers):
+        self.session = SessionCoordinator(world_epoch)
+        self._engine = engine
+        self._store = store
+        self._offers = offers
+        self._baseline = None  # (session-local save request id, Checkpoint)
+        self._load_offers = {}
+
+    def join(self, player_id):
+        return self.session.join(player_id)
+
+    def disconnect(self, connection_handle):
+        self.session.disconnect(connection_handle)
+        self._load_offers.pop(connection_handle, None)
+
+    def step(self):
+        """Run the currently pending operation, or return None if there is none.
+
+        Save acknowledgement follows successful checkpoint publication. If any
+        operation fails, the session is faulted and the exception is re-raised.
+        Another pending action may be created; the caller must step it separately.
+        """
+        request = self.session.pending
+        if request is None:
+            return None
+        if request.operation == 'resume' and (
+            not self.session.ready_players
+            or len(self.session.ready_players) != len(self.session.players)
+            or self.session.save_required
+        ):
+            # This synchronous adapter call has not been entered yet. Do not
+            # use this cancellation for a resume already sent asynchronously.
+            self.session.cancel_unstarted_resume(engine_not_started=True)
+            return None
+        try:
+            if request.operation == 'pause':
+                self._engine.pause()
+            elif request.operation == 'resume':
+                # Already-started transfers still require external admission
+                # fencing; revocation only prevents new downloads.
+                self._offers.invalidate()
+                self._load_offers.clear()
+                self._engine.resume()
+            elif request.operation == 'save':
+                source = self._engine.save()
+                checkpoint = self._store.publish(source)
+                self._baseline = (request.request_id, checkpoint)
+            else:
+                raise ValueError('unknown engine operation')
+        except BaseException:
+            try:
+                self._offers.invalidate()
+                self._load_offers.clear()
+            finally:
+                self.session.complete(request.world_epoch, request.request_id, False)
+            raise
+        self.session.complete(request.world_epoch, request.request_id, True)
+        return request
+
+    def offer_load(self, connection_handle):
+        """Offer the paused, confirmed baseline for one explicit load attempt."""
+        baseline_id = self.session.baseline_id
+        if baseline_id is None or self._baseline is None or self._baseline[0] != baseline_id:
+            raise ValueError('no confirmed checkpoint for this baseline')
+        if self.session.state != 'paused':
+            raise ValueError('world is not paused')
+        checkpoint = self._store.get(self._baseline[1].checkpoint_id)
+        if checkpoint != self._baseline[1]:
+            raise ValueError('checkpoint changed')
+        generation = self.session.begin_load(connection_handle, baseline_id)
+        # Invalidate a previous attempt even if creating the new offer fails.
+        self._load_offers.pop(connection_handle, None)
+        save = self._offers.offer(checkpoint)
+        result = LoadOffer(self.session.world_epoch, connection_handle, baseline_id, generation, save)
+        self._load_offers[connection_handle] = result
+        return result
+
+    def mark_loaded(self, world_epoch, connection_handle, baseline_id, load_generation,
+                    checkpoint_id, sha256, *, trusted_confirmation):
+        """Accept a trusted confirmation of the exact offered bytes having loaded.
+
+        True is an assertion by the calling integration, not independent proof
+        of download or of an X4 load. Old connections, load attempts, sessions,
+        baseline IDs and different bytes cannot complete the current attempt.
+        """
+        if trusted_confirmation is not True:
+            raise ValueError('a trusted explicit load confirmation is required')
+        offer = self._load_offers.get(connection_handle)
+        if (offer is None or world_epoch != offer.world_epoch or baseline_id != offer.baseline_id
+                or load_generation != offer.load_generation or checkpoint_id != offer.save.checkpoint_id
+                or sha256 != offer.save.sha256):
+            raise ValueError('load confirmation does not match current offer')
+        self.session.mark_ready(world_epoch, connection_handle, load_generation, baseline_id)
+        del self._load_offers[connection_handle]

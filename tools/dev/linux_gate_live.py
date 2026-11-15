@@ -328,6 +328,63 @@ def compose_extension_template(overlay, target, extension_base=None):
         (target / 'ui.xml').write_text(extension.ui_xml([*extension.BASE_UI, *overlay_files]), encoding='utf-8')
 
 
+def parse_authority_scan(lines, ticks):
+    """Validate one bounded observation; this is separate from lockstep evidence."""
+    records = [line.split('NATIVE_GATE ', 1)[-1].strip() for line in lines
+               if 'NATIVE_GATE AUTHORITY_SCAN_' in line]
+    result = {'pass': False, 'errors': [], 'position_readback_delta_m': None}
+    if len(records) != 1 or not records[0].startswith('AUTHORITY_SCAN_FIXTURE '):
+        result['errors'].append('missing, duplicate, or failed authority scan receipt')
+        return result
+    parts = records[0].split()
+    try:
+        fields = dict(part.split('=', 1) for part in parts[1:])
+        expected = {'tick', 'identity', 'sector', 'ships', 'consistency',
+                    'x','y','z','yaw','pitch','roll',
+                    'read_x','read_y','read_z','read_yaw','read_pitch','read_roll'}
+        if len(parts)-1 != len(expected) or set(fields) != expected:
+            raise ValueError('field set')
+        if (not fields['tick'].isdigit() or not 30 <= int(fields['tick']) <= ticks or
+            fields['identity'] != 'test-only-fixture-1' or
+            not re.fullmatch(r'test-only-sector-[1-9][0-9]*', fields['sector']) or
+            not fields['ships'].isdigit() or not 1 <= int(fields['ships']) <= 4096 or
+            fields['consistency'] != 'membership_rechecked_non_atomic'):
+            raise ValueError('metadata')
+        numbers = {k: float(fields[k]) for k in expected - {'tick','identity','sector','ships','consistency'}}
+        if not all(math.isfinite(x) for x in numbers.values()):
+            raise ValueError('non-finite values')
+        result.update(pass_=True, tick=int(fields['tick']), ships=int(fields['ships']),
+                      position_readback_delta_m=math.dist([numbers[k] for k in ('x','y','z')],
+                                                         [numbers[k] for k in ('read_x','read_y','read_z')]))
+        if not math.isfinite(result['position_readback_delta_m']):
+            raise ValueError('readback distance overflow')
+        result['pass'] = result.pop('pass_')
+    except (ValueError, OverflowError):
+        result['errors'].append('invalid authority scan receipt')
+    return result
+
+
+def validate_authority_scan_bundle(root, manifest):
+    """Require the opt-in and its frozen, read-only Lua modules to agree."""
+    enabled = manifest.get('authority_fixture_scan', False)
+    if type(enabled) is not bool:
+        raise ValueError('invalid authority fixture scan option')
+    config = (root / 'extension/x4_lan_lab/ui/config.lua').read_text()
+    values = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_scan\s*=\s*(.*?)\s*$', config)
+    if values != (['true'] if enabled else []):
+        raise ValueError('authority fixture scan config differs from bundle option')
+    if enabled:
+        if manifest.get('ticks', 0) < 30 or not manifest.get('battle'):
+            raise ValueError('authority fixture scan requires battle and at least 30 ticks')
+        engage = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_battle_engage\s*=\s*(.*?)\s*$', config)
+        if engage != ['false']:
+            raise ValueError('authority fixture scan requires idle battle fixture')
+        for name in ('ship_scan.lua', 'x4_ship_engine.lua', 'fixture_scan_probe.lua'):
+            rel = 'extension/x4_lan_lab/ui/' + name
+            if rel not in manifest.get('files', {}) or not (root / rel).is_file():
+                raise ValueError('authority fixture scan module missing: ' + name)
+
+
 def validate_factory_retention(retain_until, factory_probe, ticks):
     """Require the owned P2 reference to be released before session STOP."""
     if retain_until is None:
@@ -2288,6 +2345,10 @@ def bundle(args):
     command += ['--world-log-mode', args.world_log_mode]
     if args.battle:
         command.append('--snapshot-prebind')
+    if args.authority_fixture_scan:
+        if not args.battle or args.ticks < 30:
+            raise SystemExit('--authority-fixture-scan requires --battle and at least 30 ticks')
+        command.append('--authority-fixture-scan')
     for name in ('fixture_body_observe', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state', 'flight_rng', 'flight_full',
                  'avoidance_refresh', 'steering_init', 'agent_full', 'spline_diag', 'spline_refresh', 'spline_state', 'params_init', 'strict_physics', 'body_diag', 'params_diag'):
         if getattr(args, name, False):
@@ -2798,6 +2859,7 @@ def bundle(args):
         'nav_cadence',
         'nav_params_init',
         'fixture_body_observe',
+        'authority_fixture_scan',
         'nav_probe_init',
         'clients',
         'fp_redirect_drones',
@@ -2814,6 +2876,7 @@ def bundle(args):
             ['git', '-C', str(repo), 'status', '--porcelain'],
             check=True, capture_output=True, text=True).stdout),
         'ticks': args.ticks,
+        'battle': bool(args.battle),
         'stride': args.stride,
         'snapshot_sha256': snapshot_sha,
         'wire_crypto': bool(args.wire_crypto),
@@ -3194,6 +3257,19 @@ def steam_shared_memory(shm, uid):
         return False
 
 
+def prepare_game_stderr_log(run_dir, slot, recurring):
+    """Expose the actual stderr to collectors in both game logging modes.
+
+    Non-recurring games merge stderr into stdout. A relative alias keeps
+    collectors reading that complete stream; it does not invent an empty log.
+    Recurring games retain their independent stderr file.
+    """
+    stderr = run_dir / f'game{slot}-stderr.log'
+    if not recurring:
+        stderr.symlink_to(f'game{slot}-stdout.log')
+    return stderr if recurring else None
+
+
 def bounded_tail(path, limit=1 << 20):
     try:
         with open(path, 'rb') as stream:
@@ -3523,6 +3599,10 @@ def run(args):
             or not (root / MARKER).is_file() or root.stat().st_uid not in (0, user.pw_uid)):
         raise SystemExit(f'{root} is not a staged live-test root under {userhome} with {MARKER}')
     manifest = json.loads((root / 'manifest.json').read_text())
+    try:
+        validate_authority_scan_bundle(root, manifest)
+    except (OSError, ValueError) as error:
+        raise SystemExit('authority fixture scan bundle refused: ' + str(error)) from error
     try:
         local_stop_enabled = local_stop.validate_option(getattr(args, 'local_stop', False), manifest)
     except ValueError as error:
@@ -4030,7 +4110,7 @@ def run(args):
 
             def launch_game_command(command, **options):
                 return launch(f'game{slot}-stdout', command,
-                              stderr_path=run_dir / f'game{slot}-stderr.log' if recurring else None, **options)
+                              stderr_path=prepare_game_stderr_log(run_dir, slot, recurring), **options)
 
             process, stop_channel = local_stop.launch_game(
                 slot, env, game_command, launch_game_command, local_stop_enabled)
@@ -4435,6 +4515,16 @@ def run(args):
         except Exception as error:
             result['session_evidence_error'] = str(error)
             result.get('physics_discard', {})['pass'] = False
+    if manifest.get('authority_fixture_scan'):
+        try:
+            scans = {str(slot): parse_authority_scan(gate_lines(profile / 'engine-output.log'), ticks)
+                     for slot, (_, profile) in zip(local, games)}
+            result['authority_scan_evidence'] = scans
+            if not scans or any(not observation['pass'] for observation in scans.values()):
+                result['pass'] = False
+        except Exception as error:
+            result['authority_scan_error'] = str(error)
+            result['pass'] = False
     (run_dir / 'run-result.json').write_text(json.dumps(result, indent=2, default=str) + '\n')
     print('LINUX_GATE_LIVE ' + json.dumps({k: result.get(k) for k in ('name', 'pass', 'lifecycle_discard', 'physics_discard', 'recurring_readiness', 'error', 'postprocessing_error', 'stops', 'world_identity', 'world_capture_problems', 'portable_math_active', 'world_hash_ticks',
                                                                     'world_hash_first_difference', 'evidence_errors', 'steam_unchanged', 'x4_left')}))
@@ -4659,6 +4749,7 @@ def main(argv=None):
                    "(native_gate_mining_camera = 'view')")
     b.add_argument('--battle', action='store_true', help="the battle fixture: native_gate_hash = 'battle' with the snapshot's "
                    'twelve (--mode battle --snapshot-prebind; needs --serial-pathing, --path-determinism 1 or 3 and world identities)')
+    b.add_argument('--authority-fixture-scan', action='store_true', help='read-only disposable fixture position scan')
     for name, why in (('fixture-body-observe', 'observe fixture 6 body bits beside its original getter at ticks 1400..1600 without actor/shield refresh'),
                       ('actor-diag', "the fixture actors' raw native state row (gate.actor)"),
                       ('strict-state', 'the raw hull, shield and navigation banks in the digest (needs --actor-diag)'),

@@ -181,10 +181,12 @@ class FileService:
 OFFER_WAIT_S = 180   # the relay answers saved before the host has read the notice and hashed the files: 'name' is retried this long
 
 
-def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progress=None, timeout=TIMEOUT_S, offer_wait_s=OFFER_WAIT_S):
+def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progress=None, timeout=TIMEOUT_S, offer_wait_s=OFFER_WAIT_S, expect_size=None):
     """Download name from the host into dest (resuming dest.part); returns the SHA-256. Raises FetchError."""
     if not NAME.fullmatch(name):
         raise FetchError(f'not a join file name: {name}')
+    if expect_size is not None and (type(expect_size) is not int or expect_size <= 0):
+        raise FetchError('invalid expected file size')
     dest = Path(dest)
     part = dest.with_name(dest.name + '.part')
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -221,6 +223,8 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
                 if len(f) != 3 or f[0] != 'OK' or not f[1].isdigit() or not HEX64.fullmatch(f[2]):
                     raise FetchError(f'{name}: bad answer {head[:80]!r}')
                 size, digest = int(f[1]), f[2]
+                if expect_size is not None and size != expect_size:
+                    raise FetchError(f'{name}: the host offers {size} bytes, not the expected {expect_size}')
                 if expect_sha and digest != expect_sha:
                     raise FetchError(f'{name}: the host offers SHA-256 {digest[:16]}.., not the announced {expect_sha[:16]}..')
                 if offset > size:

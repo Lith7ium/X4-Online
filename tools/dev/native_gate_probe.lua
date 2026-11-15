@@ -3359,6 +3359,9 @@ local function sample(tick)
  if not ready then
   assert(tick<=4,'battle fixture did not spawn');return 'BATTLE_FIXTURE_PENDING_1'
  end
+ if cfg.native_gate_authority_scan then
+  assert(X4LAN_AUTHORITY_FIXTURE_SCAN_PROBE,'authority scan probe missing').sample(cfg,tick,actors,ticklog.write)
+ end
  local rows={}
  local dockships,dockanchors
  if cfg.native_gate_docking_state then dockships,dockanchors=assert(X4LAN_NATIVE_DOCKING,'native docking reader missing')(actors,tick,gate) end

@@ -152,6 +152,7 @@ def main():
                    "(native_gate_warp_rng; needs --world-identities)")
     p.add_argument('--tempzone-order', action='store_true', help="the Linux gate: the pathing pass's tempzone requests granted "
                    "in a portable order (native_gate_tempzone_order = 'order', on by default on Windows; needs --travel-snapshot)")
+    p.add_argument('--authority-fixture-scan', action='store_true', help='read-only disposable fixture position scan')
     p.add_argument('--probes-diag', action='store_true', help='PROBES rows: the fixture ships obstacle probe ranges and vectors (native_gate_probes_diag)')
     p.add_argument('--pursuit-speed', action='store_true', help="the Linux gate: the pursuit behaviour's speed factor with Windows' folded constant (native_gate_pursuit_speed)")
     p.add_argument('--avoid-angle', action='store_true', help="the Linux gate: the obstacle avoidance's angle divisions by pi and pi/2 as "
@@ -787,6 +788,7 @@ def main():
                    'fork_save', 'fork_save_budget_ms', 'fork_save_watchdog', 'fork_save_every', 'fork_save_slot', 'world_identities', 'world_hash_stride', 'world_hash_schema', 'world_hash_watch', 'world_hash_shields',
                    'fp_redirect_drones', 'world_health_ticks', 'fp_attack_capture', 'fp_attack_watch'}
         allowed.add('travel_determinism')
+        allowed.add('authority_fixture_scan')
         # The battle fixture on Linux (linux/gate_battle.h, gate_flight.h): the snapshot's twelve, their state row, steering.
         allowed.update(('fixture_body_observe', 'snapshot_prebind', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state',
                         'flight_diag', 'flight_rng', 'flight_full', 'avoidance_refresh', 'steering_init', 'agent_full', 'spline_diag', 'spline_refresh', 'spline_state', 'params_init', 'strict_physics', 'body_diag', 'params_diag'))
@@ -814,6 +816,8 @@ def main():
     if (args.flight_diag or args.flight_rng or args.flight_full or args.ai_diag or args.ai_rng or agent or ship or weapon or nav or shape or death or attention or args.mass_diag or args.params_init or args.params_diag or args.velocity_diag) and not args.snapshot:
         p.error('native fixture experiments require snapshot boot without the fixedtick DLL')
     actor_diag = args.actor_diag or args.flight_diag or args.flight_rng or args.flight_full or args.ai_diag or args.ai_rng or agent or ship or weapon or nav or shape or death or attention or args.mass_diag or args.params_init or args.params_diag or args.strict_state or args.velocity_diag or args.body_diag
+    if args.authority_fixture_scan and (not args.gate_so or not args.snapshot or args.mode != 'battle' or not args.snapshot_prebind):
+        p.error('--authority-fixture-scan requires Linux snapshot battle with --snapshot-prebind')
     if args.fixture_body_observe and (not args.gate_so or not args.snapshot or args.mode != 'battle' or not args.snapshot_prebind):
         p.error('--fixture-body-observe requires Linux snapshot battle with --snapshot-prebind')
     if args.fixture_body_observe and (actor_diag or args.shield_refresh):
@@ -833,6 +837,10 @@ def main():
     if args.mode == 'battle':
         shutil.copy2(root/'tools/dev/native_gate_battle.xml', args.out/'md/native_gate_battle.xml')
     ui_files = 'ui/native_gate_probe.lua\n'
+    if args.authority_fixture_scan:
+        for name in ('ship_scan.lua', 'x4_ship_engine.lua', 'fixture_scan_probe.lua'):
+            shutil.copy2(root/'src/authority/lua'/name, args.out/'ui'/name)
+        ui_files = 'ui/ship_scan.lua\nui/x4_ship_engine.lua\nui/fixture_scan_probe.lua\n' + ui_files
     if args.fixture_body_observe:
         shutil.copy2(root/'tools/dev/native_gate_fixture_body_observer.lua', args.out/'ui/native_gate_fixture_body_observer.lua')
         ui_files = 'ui/native_gate_fixture_body_observer.lua\n' + ui_files
@@ -1551,6 +1559,10 @@ X4LAN_CONFIG.slot = "@X4LANE_SLOT@"
             config.write('X4LAN_CONFIG.native_gate_docking_shape_rng = true\n')
             config.write('X4LAN_CONFIG.native_gate_docking_extra_shapes = true\n')
             if args.docking_shape_refresh:config.write('X4LAN_CONFIG.native_gate_docking_shape_refresh = true\n')
+    if args.authority_fixture_scan:
+        with (args.out/'ui/config.lua.append').open('a') as config:
+            config.write('X4LAN_CONFIG.native_gate_authority_scan = true\n')
+            config.write('X4LAN_CONFIG.native_gate_battle_engage = false\n')
     if args.fixture_body_observe:
         with (args.out/'ui/config.lua.append').open('a') as config:
             config.write('X4LAN_CONFIG.native_gate_fixture_body_observe = true\n')

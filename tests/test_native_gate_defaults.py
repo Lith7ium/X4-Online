@@ -294,6 +294,20 @@ class TableTests(unittest.TestCase):
         self.assertEqual(sorted(keys - known), [])
         self.assertEqual(sorted(known - keys), ['native_gate_world_timing_fields'])   # Play42P sets it, nothing reads it
 
+    def test_isolated_fixture_observers_are_diagnostics_and_default_off(self):
+        keys = ('native_gate_authority_scan', 'native_gate_fixture_body_observe')
+        values, rep = defaults.apply(defaults.parse(SESSION))
+        lua = lua_session()
+        for key in keys:
+            self.assertIn(key, defaults.DIAGNOSTIC_KEYS)
+            self.assertNotIn(key, defaults.ON_KEYS)
+            self.assertNotIn(key, values)
+            self.assertNotIn(key, rep['applied'])
+            self.assertIsNone(lua.globals().X4LAN_CONFIG[key])
+        explicit = lua_session(',native_gate_authority_scan=true,native_gate_fixture_body_observe=true')
+        for key in keys:
+            self.assertIs(explicit.globals().X4LAN_CONFIG[key], True)
+
     def test_diagnostics_stay_off(self):
         for key in ('native_gate_frame_timing', 'native_gate_probe_profile', 'native_gate_sample_profile', 'native_gate_world_hash_watch',
                     'native_gate_bullet_diag', 'native_gate_view_points_mask', 'native_gate_hybrid', 'native_gate_physics_trace', 'native_gate_pilot_capture'):
