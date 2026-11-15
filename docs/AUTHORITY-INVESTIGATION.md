@@ -87,10 +87,10 @@ lockstep creation order and are not established as stable identities for
 independently simulated worlds. Neither fact proves that the 29 unresolved
 objects in the run above were created after load. The existing MD battle
 fixture persists references to its spawned ships in a cue list and can emit
-them again after load. A focused future experiment can test whether references
-to two distinguishable ships created after startup survive save and reload;
-that would still leave universal spawn discovery, destruction, and cross-client
-binding to be established.
+them again after load. A separate [focused experiment](AUTHORITY-NEW-SHIPS-IDENTITY.md)
+observed two distinguishable ships created after startup through a save and
+reload, with their runtime IDs changing. Universal spawn discovery, destruction,
+and cross-client binding remain to be established.
 
 ## Question
 
