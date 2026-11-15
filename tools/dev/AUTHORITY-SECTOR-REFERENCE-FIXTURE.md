@@ -75,3 +75,35 @@ not prove the exact bytes X4 consumed. Fleet enumeration and its first large
 faction list can exceed the bounded deadline; a timeout does not by itself
 indicate an identity failure. No player is admitted, and no gameplay, Internet
 operation or universe-wide coverage is established.
+
+## Archived candidate provenance
+
+`authority_sector_archive_provenance.py` is a read-only, checkpoint-specific
+checker for the archived `authority-sector-reference-01` candidate. It pins the
+recorded checkpoint ID, compressed SHA-256 and size, and the marker and registry
+epoch reported by the original server log. It requires identical `CURRENT` and
+`CONFIRMED` pointers and verifies `CheckpointStore.latest_confirmed()`, the saved
+marker and the two saved ship/sector registry relationships. It rejects symlinks
+in the checked paths and compares path/file fingerprints before and after the
+checks. This is a legacy version-1 checkpoint: its marker is verified inside the
+SHA-identified save, not bound in its manifest. The filesystem checks sample
+`lstat` and paths and detect ordinary changes; they are not adversarially secure,
+do not use directory file descriptors to bind path traversal, and do not prevent
+an ABA replacement between samples. They do not prove continuous immutability.
+Before using this evidence in a real loader, that loader needs separately designed
+file-descriptor-based fencing across validation and use.
+
+This checker does not consult or rewrite the original `result.json`, whose
+failed historical result remains unchanged. It neither starts X4 nor proves
+which bytes an X4 process loaded, a live actor binding, or sector-wide coverage.
+Run it only when this specific offline validation is needed; it streams the
+large save repeatedly. Its synthetic tests mock the marker and sector evidence
+and do not themselves validate the archived save.
+
+On 15 November 2026, a read-only run with the updated ancestor-identity check
+confirmed the pinned checkpoint, matching pointers, marker and both saved
+ship/sector ancestry slots. An earlier attempt refused because some sampled
+path metadata changed; it did not record which path. Unrelated `.codex`
+directory metadata changed during that interval, a plausible but unproven
+explanation. The updated checker compares ancestor identity rather than
+unrelated ancestor timestamps. Neither run started X4 or changed the archive.
