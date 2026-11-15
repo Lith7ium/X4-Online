@@ -3,7 +3,7 @@
 local cfg=X4LAN_CONFIG
 if not cfg or cfg.authority_control_probe~=true then return end
 local ffi=require('ffi');local C=ffi.C
-ffi.cdef[[bool IsPlayerValid(void);bool IsSaveListLoadingComplete(void);void ReloadSaveList(void);]]
+ffi.cdef[[bool IsPlayerValid(void);bool IsSaveListLoadingComplete(void);void ReloadSaveList(void);bool IsFullscreenCutsceneActive(void);]]
 local stage='waiting';local failed=false;local state,net,next_hello,loaded_at,binding,paused_at_save
 local function log(text) DebugError('[X4LAN] AUTH_CONTROL '..text) end
 local function fail(reason)
@@ -66,6 +66,9 @@ local function frame()
   for _,entry in pairs(entries) do
    assert(entry.filename~='save_009','owned slot not empty')
   end
+  -- Save eligibility may change when X4 pauses; this is only the preflight.
+  -- The control state checks it again after pause has been confirmed.
+  if C.IsFullscreenCutsceneActive() or not binding.saving_possible() then return end
   stage='pausing';submit(1,'pause')
  elseif stage=='paused' then
   stage='saving';submit(2,'save',{slot='save_009',exclusive_owner=true,empty_owned_slot=true})

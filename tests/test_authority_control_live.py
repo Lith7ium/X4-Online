@@ -88,11 +88,15 @@ class ControlLiveTests(unittest.TestCase):
     def test_ui_driver_refuses_to_resume_before_verification(self):
         script=r'''
 local paused,now,game=false,0,10
+local cutscene,saving_ready=true,false
+local reject_after_pause=os.getenv("AUTH_TEST_REJECT_POST_PAUSE")=="1"
+local eligibility_checks={}
 local calls={pause=0,save=0,resume=0};local logs={};local events={};local frames={};local incoming={}
 local lease=string.rep('a',32)
 X4LAN_CONFIG={authority_control_probe=true,test_profile='45841',authority_control_port=12345,authority_control_lease=lease}
 local ffi={cdef=function() end,C={IsPlayerValid=function() return true end,
- IsSaveListLoadingComplete=function() return true end,ReloadSaveList=function() end}}
+ IsSaveListLoadingComplete=function() return true end,ReloadSaveList=function() end,
+ IsFullscreenCutsceneActive=function() return cutscene end}}
 package.loaded.ffi=ffi
 GetCurRealTime=function() return now end
 GetSaveList=function() return {} end
@@ -106,15 +110,23 @@ local engine={ready=function() return true end,is_paused=function() return pause
  game_time=function() return game end,real_time=function() return now end,
  pause=function() calls.pause=calls.pause+1;paused=true end,
  resume=function() calls.resume=calls.resume+1;paused=false end,
- saving_possible=function() return true end,
+ saving_possible=function() eligibility_checks[#eligibility_checks+1]=paused;return saving_ready and not (paused and reject_after_pause) end,
  save=function(slot) assert(slot=='save_009');calls.save=calls.save+1 end}
 X4LAN_AUTHORITY_CONTROL_STATE=assert(loadfile('src/authority/lua/control_state.lua'))()
 X4LAN_AUTHORITY_X4_CONTROL_ENGINE={new=function() return engine end,
  register_save_event=function(_,state,reg) reg('gameSaved',function(_,v) state:on_game_saved(v) end);return true end}
 assert(loadfile('tools/dev/authority_control_probe.lua'))()
-frames.update();now=3.1;frames.update();assert(calls.pause==1 and calls.save==0)
-incoming={'VERIFIED|'..lease};now=3.21;frames.update();assert(calls.resume==0)
-now=3.3;frames.update();assert(calls.save==1)
+frames.update();now=3.1;frames.update();assert(calls.pause==0 and #eligibility_checks==0)
+cutscene=false;now=3.11;frames.update();assert(calls.pause==0 and #eligibility_checks==1 and eligibility_checks[1]==false)
+saving_ready=true;now=3.12;frames.update();assert(calls.pause==1 and calls.save==0)
+incoming={'VERIFIED|'..lease};now=3.23;frames.update();assert(calls.resume==0)
+now=3.3;frames.update();assert(eligibility_checks[3]==true)
+if reject_after_pause then
+ assert(calls.save==0 and calls.resume==0)
+ assert(table.concat(logs,'\n'):find('AUTH_CONTROL ERROR code=submit_saving_unavailable',1,true))
+ return
+end
+assert(calls.save==1)
 events.gameSaved(nil,true);now=3.4;frames.update()
 for i=1,5 do now=now+.1;frames.update() end
 assert(calls.resume==0)
@@ -124,8 +136,11 @@ game=11;now=4.2;frames.update()
 assert(table.concat(logs,'\n'):find('AUTH_CONTROL COMPLETE',1,true))
 assert(calls.pause==1 and calls.save==1 and calls.resume==1)
 '''
-        result=subprocess.run(['luajit','-'],input=script,text=True,cwd=ROOT,capture_output=True,timeout=5)
-        self.assertEqual(result.returncode,0,result.stderr)
+        for reject in ('0','1'):
+            with self.subTest(reject_after_pause=reject):
+                env={**os.environ,'AUTH_TEST_REJECT_POST_PAUSE':reject}
+                result=subprocess.run(['luajit','-'],input=script,text=True,cwd=ROOT,capture_output=True,timeout=5,env=env)
+                self.assertEqual(result.returncode,0,result.stderr)
 
 
 if __name__=='__main__': unittest.main()
