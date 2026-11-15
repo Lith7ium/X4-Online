@@ -121,6 +121,52 @@ for i=1,12 do assert(seen[string.format('fixture-%02d',i)]) end
         result = subprocess.run(['luajit', '-'], input=script, text=True, cwd=ROOT, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
+    def test_probe_error_stages_are_bounded_and_never_log_exceptions(self):
+        script = r'''
+local ffi=require('ffi');ffi.cdef('typedef uint64_t UniverseID;')
+X4LAN_SHA256={digest=function() return string.rep('a',64) end}
+local fault=''
+local net={send=function() return true end,receive=function() end,close=function() end}
+package.loadlib=function() if fault=='transport_initial' then error('secret-transport') end
+ return function() return {open=function() return net end} end end
+X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return {
+ key=function(h) return tostring(h) end,operational=function() return true end,is_ship=function() return true end,
+ sector=function() if fault=='sector_handle' then error('secret-sector') end return ffi.new('uint64_t',99) end,
+ pose=function() if fault=='sample_position' then error('secret-position') end return {x=1,y=2,z=3} end,
+} end}
+X4LAN_AUTHORITY_FIXTURE_FLEET_WIRE={new=function() return {step=function()
+ if fault=='wire_step' then error('secret-wire') end;return {},{} end} end}
+local gate={saved_identity=function(v)
+ local n=tonumber(v)
+ if n==99 then
+  if fault=='sector_saved_lookup' then error('secret-lookup') end
+  if fault=='sector_saved_validate' then return string.rep('0',16) end
+  return string.rep('a',16)
+ end
+ if fault=='actor_saved_match' then return string.rep('b',16) end
+ return string.format('%016x',n)
+end}
+local cfg={native_gate_authority_fleet=true,test_profile='45841',slot='p1',native_gate_authority_fleet_port=1234,
+ native_gate_authority_fleet_lease=string.rep('c',32),native_gate_snapshot_fixture={}}
+local actors={};for i=1,12 do actors[i]=i;cfg.native_gate_snapshot_fixture[i]=string.format('%016x',i) end
+for _,expected in ipairs({'transport_initial','actor_saved_match','sector_handle','sector_saved_lookup',
+                         'sector_saved_validate','sample_position','wire_step'}) do
+ fault=expected;local logs={};local probe=assert(loadfile('src/authority/lua/fixture_fleet_probe.lua'))()
+ probe.sample(cfg,29,actors,function(s) logs[#logs+1]=s end,gate)
+ probe.sample(cfg,30,actors,function(s) logs[#logs+1]=s end,gate)
+ local n=#logs;assert(n>=1)
+ local failure=logs[n]
+ local fixture=(expected=='transport_initial' or expected=='wire_step') and 0 or 1
+ assert(failure==string.format('AUTHORITY_FLEET_ERROR tick=30 stage=%s fixture=%d',expected,fixture),failure)
+ for _,row in ipairs(logs) do assert(not row:find('secret',1,true) and not row:find(string.rep('c',32),1,true)) end
+ probe.sample(cfg,31,actors,function(s) logs[#logs+1]=s end,gate)
+ assert(#logs==n)
+end
+'''
+        result = subprocess.run(['luajit', '-'], input=script, text=True, cwd=ROOT, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()
