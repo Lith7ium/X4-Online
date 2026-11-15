@@ -55,3 +55,37 @@ uses a separate saved counter rather than the number of currently present
 entries, so intended no-reuse does not rely on table compaction; destructive
 lifecycle behavior requires native verification. This experimental code must
 not be used as a production gameplay adapter.
+
+## Saved sector ancestry
+
+An additional read-only check of the archived `authority-registry-census-01`
+confirmed checkpoint reports 10,054 distinct registered saved ships with
+sector and zone ancestors. Their ancestors contain 140 distinct saved sector
+component IDs. Two registered ships lie below a docking bay and have a
+non-zone nearest component parent, showing why direct-parent-is-zone is not a
+general rule. The checkpoint, archived server save and archived client save
+had identical SHA-256 values when checked:
+`64a233ac6a85194b8276212709e78a6c48bbcc0f73c19842622aa098f1408cb8`.
+
+The check uses the existing checkpoint verifier, which verifies gzip contents,
+the checkpoint digest, the bijective forward/reverse tables, registered ship
+components and per-index macro rows from the server and client logs. To repeat
+the analysis against a retained local archive, supply its epoch from the unique
+`AUTH_REGISTRY save EPOCH` log line:
+
+```sh
+python tools/dev/authority_registry_save_evidence.py \
+  --store .local/authority-registry-census-01/checkpoints \
+  --expected-epoch EPOCH_FROM_SERVER_LOG --expected-count 10054 \
+  --server-log .local/authority-registry-census-01/server/case/home/.config/EgoSoft/X4/45841/engine-output.log \
+  --client-log .local/authority-registry-census-01/client/case/home/.config/EgoSoft/X4/45841/engine-output.log \
+  --sector-parents
+```
+
+The checker reads the confirmed checkpoint; comparing the two archived save
+files to the reported checkpoint hash is a separate filesystem check. These
+are relationships in the stored XML, not an independent runtime binding of
+client objects to those components. The logs do not contain per-index sector
+identities. This does not prove that either X4 process consumed the exact file
+bytes, sector completeness, dynamic zone identity, position/velocity
+replication, or operation in different sectors during gameplay.

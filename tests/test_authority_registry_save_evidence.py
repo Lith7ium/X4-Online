@@ -47,4 +47,30 @@ class RegistryEvidenceTests(unittest.TestCase):
     def test_ambiguous_duplicate_table_reference(self):
         with self.assertRaises(M.RegistryEvidenceError): self.check(xml().replace('</refs></script>', '<ref id="2"/></refs></script>'))
 
+    def test_sector_ancestor_and_nested_dockingbay(self):
+        source=xml().replace(
+            '<component class="ship_s" id="[0x1]" macro="ship_a"/><component class="ship_l" id="[0x2]" macro="ship_b"/>',
+            '<component class="sector" id="[0xa]" macro="sector_a"><component class="zone" id="[0xb]">'
+            '<component class="ship_s" id="[0x1]" macro="ship_a"/>'
+            '<component class="ship_xl" id="[0xc]"><component class="dockingbay" id="[0xd]">'
+            '<component class="ship_l" id="[0x2]" macro="ship_b"/>'
+            '</component></component></component></component>')
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'save.xml.gz';path.write_bytes(gzip.compress(source.encode()))
+            data=path.read_bytes(); checkpoint=M.Checkpoint('checkpoint-'+'a'*32,path,hashlib.sha256(data).hexdigest(),len(data))
+            result=M.verify(checkpoint,EPOCH,2,include_sector_parents=True)
+        self.assertEqual(result['saved_sector_ancestor_count'],1)
+        self.assertEqual(result['ships_with_sector_ancestor'],2)
+        self.assertEqual(result['ships_with_zone_ancestor'],2)
+        self.assertEqual(result['ships_with_non_zone_component_parent'],1)
+        self.assertEqual(result['ships_under_dockingbay'],1)
+        self.assertFalse(result['sector_runtime_mapping_proven'])
+
+    def test_missing_sector_is_reported_not_fabricated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'save.xml.gz';path.write_bytes(gzip.compress(xml().encode()))
+            data=path.read_bytes(); checkpoint=M.Checkpoint('checkpoint-'+'a'*32,path,hashlib.sha256(data).hexdigest(),len(data))
+            result=M.verify(checkpoint,EPOCH,2,include_sector_parents=True)
+        self.assertEqual(result['ships_without_sector_ancestor'],2)
+
 if __name__=='__main__': unittest.main()
