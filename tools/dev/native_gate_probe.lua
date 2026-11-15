@@ -3362,6 +3362,9 @@ local function sample(tick)
  if cfg.native_gate_authority_scan then
   assert(X4LAN_AUTHORITY_FIXTURE_SCAN_PROBE,'authority scan probe missing').sample(cfg,tick,actors,ticklog.write)
  end
+ if cfg.native_gate_authority_wire then
+  assert(X4LAN_AUTHORITY_FIXTURE_WIRE_PROBE,'authority wire probe missing').sample(cfg,tick,actors,ticklog.write)
+ end
  local rows={}
  local dockships,dockanchors
  if cfg.native_gate_docking_state then dockships,dockanchors=assert(X4LAN_NATIVE_DOCKING,'native docking reader missing')(actors,tick,gate) end

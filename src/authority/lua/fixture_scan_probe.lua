@@ -54,6 +54,16 @@ function M.sample(cfg, tick, actors, log)
   local started=GetCurRealTime()
   assert(type(started)=='number' and started==started and started~=math.huge and started~=-math.huge, 'invalid real-time clock')
   local result, why = scanner.scan(engine, identities, {max_factions=1024, max_ships=4096, max_fleet=4096,
+   on_nonoperational=function(ship, faction_index, ship_index, recheck_membership)
+    -- Repeat only the same getter that just answered false. No validity, class,
+    -- context, position or component-data call on an unknown component.
+    local valid_ok, valid = pcall(engine.operational, ship)
+    local status = valid_ok and type(valid)=='boolean' and (valid and 'true' or 'false') or 'unknown'
+    local member_ok, member = pcall(recheck_membership)
+    local membership = member_ok and type(member)=='boolean' and (member and 'true' or 'false') or 'unknown'
+    log(string.format('AUTHORITY_NONOP_DIAG tick=%d faction_index=%d ship_index=%d operational_recheck=%s same_fleet_recheck=%s',
+     tick,faction_index,ship_index,status,membership))
+   end,
    checkpoint=function()
     local now=GetCurRealTime()
     assert(type(now)=='number' and now==now and now>=started and now-started<=2, 'scan time budget exceeded')

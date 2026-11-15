@@ -16,6 +16,15 @@ present it and submit player actions, without requiring identical simulation of
 the entire universe? A network relay by itself is not such a server. The
 candidate server is initially a full X4 instance; headless operation, Linux and
 Windows interoperability, and an eventual 4–6-player session remain unproven.
+The owner's first target is to host the X4 server and play on the same Linux PC
+while a friend on Windows connects directly over the Internet, without a VPN or
+virtual LAN. The current local-only transport tests do not meet that target.
+Players must be able to play simultaneously in different sectors anywhere in
+the same universe and session; sharing a sector is not a prerequisite. This
+requires concurrent, independently located high-attention regions, while the
+server keeps their consequences in one shared world. The actual mapping of
+those regions to X4 engine state and the reconciliation of their results remain
+unproven. A successful local fixture exchange does not establish this behavior.
 
 The requested model puts background/low-attention simulation on the server and
 delegates high-attention results to a client. The server accepts results rather
@@ -38,7 +47,8 @@ associated identity/authority metadata. None of these engine operations is
 established by the prototype coordinator.
 
 Ship positions are the first scope; trade and combat follow later. Spacesuits
-and dropped cargo are deferred. Synchronizing positions alone does not imply
+and dropped cargo are deferred; missions currently have lower priority.
+Synchronizing positions alone does not imply
 the other game systems already work.
 All participants initially share one player faction and one company account;
 individual player factions and separate player accounts are later features.

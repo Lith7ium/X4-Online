@@ -38,6 +38,16 @@ handles, unavailable objects/sectors, non-finite coordinates, and duplicate or
 missing portable identities. It checks that a ship remains operational and in
 the same sector immediately after its pose is read.
 
+An optional `on_nonoperational(local_handle, faction_index, ship_index, recheck_membership)` callback
+is called immediately after the first negative operational check. It is for
+private diagnostics only: the handle is process-local, not a portable identity,
+and must not be published. Regardless of what the callback returns or whether
+it raises a Lua error, the scanner still fails and returns no partial rows. The
+callback is absent by default; its caller is responsible for any engine calls.
+If invoked, `recheck_membership()` uses the existing bounded faction-fleet
+enumeration and checks whether the same process-local key occurs once. It can
+raise on incomplete or changing enumeration. The observation is not atomic.
+
 This is a sequential, **non-atomic** census. A same-count replacement or move
 that occurs and reverses between reads may go undetected; samples have different
 times, faction enumeration semantics and eligibility are not proven exhaustive,
@@ -87,6 +97,18 @@ fixture read does not depend on a successful fleet scan. It never queries the
 position of an unknown fleet object that failed the operational check. The
 runner validates this separately under `authority_fixture_evidence`.
 
+On the first non-operational entry, the disposable fixture probe makes one
+additional call to the same `IsComponentOperational` getter and repeats the
+affected faction-fleet enumeration. It logs only the Boolean results (or
+`unknown` on a Lua error), the scan indices, and the tick.
+No component identifier, class, context, component data, or pose is logged or
+queried for that entry. A repeated negative answer does not distinguish a wreck
+from an unavailable or other non-operational object. The later fleet may differ
+even when its counts match; presence or absence at recheck does not establish
+the reason, identity across game processes, or a complete census. The added
+getter and re-enumeration have not yet been validated in a new native run. Lua
+error handling cannot protect against a native crash.
+
 The scan then emits one `AUTHORITY_SCAN_FIXTURE` or `AUTHORITY_SCAN_ERROR`
 record. If the scan succeeds, `authority_scan_evidence` includes the distance
 between its fixture sample and an independent immediate readback. The distance
@@ -94,6 +116,28 @@ is an observation, not a position-equality acceptance threshold. A valid fixture
 read does not establish fleet coverage or world synchronization. Missing,
 malformed, duplicate, or error receipts fail the run independently of the
 existing lockstep validation.
+
+## Local one-fixture UDP diagnostic
+
+The separate `--authority-fixture-wire` bundle option requires
+`--authority-fixture-scan`, two local clients and at least 60 ticks. Slot 1
+repeatedly reads the enrolled fixture's position, while slot 2 receives it over
+a dedicated UDP process bound to `127.0.0.1` and records the received values.
+The runner supplies a fresh ephemeral port and independent random role leases;
+the leases travel through a private pipe to the UDP process and through each
+case's mode-0600 configuration to the game, and are removed from case configs
+during ordinary cleanup. The runner owns and stops the UDP process along with
+its other test processes. A forced termination of the runner can leave the
+mode-0600 private configurations behind. Keep test directories and raw logs
+private.
+
+The bundle seals the Lua modules, local transport library, UDP adapter and
+collector. Receipt validation matches each guest value to its source sequence
+and exact coordinates. This is a read-only local transport observation for one
+enrolled fixture, not a portable identity, full fleet scan, position write,
+server simulation, synchronization acceptance or Windows test. The independent
+`authority_wire_evidence` result does not override a failed fleet scan or the
+overall lockstep verdict. This integration has not been run inside X4 yet.
 
 A candidate owned fixture snapshot was checked read-only on 15 November 2026.
 It has 12 valid saved fixture references; the private test snapshot itself is

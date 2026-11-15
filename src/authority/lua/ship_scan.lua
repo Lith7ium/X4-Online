@@ -19,6 +19,7 @@ local function scan(engine, identities, options)
  options = options or {}
  local checkpoint = options.checkpoint or function() end
  assert(type(checkpoint) == 'function', 'checkpoint must be a function')
+ assert(options.on_nonoperational == nil or type(options.on_nonoperational) == 'function', 'invalid diagnostic callback')
  checkpoint()
  local max_factions = integer(options.max_factions or 256, 4096, 'faction limit')
  local max_ships = integer(options.max_ships or 250000, 1000000, 'ship limit')
@@ -64,7 +65,24 @@ local function scan(engine, identities, options)
    membership[key] = faction
    local where = ' faction_index=' .. faction_index .. '/' .. #first_factions ..
     ' ship_index=' .. ship_index .. '/' .. #ships .. ' scanned=' .. #rows
-   if not engine.operational(ship) then fail('ship not operational' .. where) end
+   if not engine.operational(ship) then
+    -- Optional private, read-only diagnostics must never turn an incomplete
+    -- census into success or replace its original failure. The handle is
+    -- process-local; it must not become a network identity or public log.
+    if options.on_nonoperational then
+     local function recheck_membership()
+      local matches=0
+      for _, candidate in ipairs(fleet(faction)) do
+       checkpoint()
+       if id(engine.key(candidate), 'local object key') == key then matches=matches+1 end
+      end
+      if matches > 1 then fail('duplicate ship handle during diagnostic') end
+      return matches == 1
+     end
+     pcall(options.on_nonoperational, ship, faction_index, ship_index, recheck_membership)
+    end
+    fail('ship not operational' .. where)
+   end
    if not engine.is_ship(ship) then fail('enumerated object not ship class' .. where) end
    local sector = engine.sector(ship)
    if not sector then fail('ship sector unavailable') end

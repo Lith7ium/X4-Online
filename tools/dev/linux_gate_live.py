@@ -412,6 +412,19 @@ def validate_authority_scan_bundle(root, manifest):
             rel = 'extension/x4_lan_lab/ui/' + name
             if rel not in manifest.get('files', {}) or not (root / rel).is_file():
                 raise ValueError('authority fixture scan module missing: ' + name)
+    wire = manifest.get('authority_fixture_wire', False)
+    if type(wire) is not bool or (wire and not enabled):
+        raise ValueError('invalid authority fixture wire option')
+    assignments = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_wire\s*=\s*(.*?)\s*$', config)
+    if assignments != (['true'] if wire else []):
+        raise ValueError('authority fixture wire config differs from bundle option')
+    if wire:
+        if manifest.get('clients') != 2 or manifest.get('ticks', 0) < 60:
+            raise ValueError('authority fixture wire requires two local clients and at least 60 ticks')
+        for rel in ('extension/x4_lan_lab/ui/fixture_wire.lua', 'extension/x4_lan_lab/ui/fixture_wire_probe.lua',
+                    'extension/x4_lan_lab/native/x4lan_net.so', 'fixture_udp.py', 'authority_fixture_wire_support.py'):
+            if rel not in manifest.get('files', {}) or not (root / rel).is_file():
+                raise ValueError('authority fixture wire artifact missing: ' + rel)
 
 
 def validate_factory_retention(retain_until, factory_probe, ticks):
@@ -2378,6 +2391,14 @@ def bundle(args):
         if not args.battle or args.ticks < 30:
             raise SystemExit('--authority-fixture-scan requires --battle and at least 30 ticks')
         command.append('--authority-fixture-scan')
+    if args.authority_fixture_wire:
+        if not args.authority_fixture_scan or args.clients != 2 or args.ticks < 60:
+            raise SystemExit('--authority-fixture-wire requires --authority-fixture-scan, two clients and at least 60 ticks')
+        net = work / 'x4lan_net.so'
+        subprocess.run([str(args.zig.resolve()), 'cc', '-O2', '-Wall', '-Wextra', '-Werror', '-shared', str(repo / 'src/native/net.c'),
+                        '-target', 'x86_64-linux-gnu.2.17', '-fPIC', '-ldl',
+                        '-o', str(net)], check=True)
+        command += ['--authority-fixture-wire', '--authority-net-so', str(net)]
     for name in ('fixture_body_observe', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state', 'flight_rng', 'flight_full',
                  'avoidance_refresh', 'steering_init', 'agent_full', 'spline_diag', 'spline_refresh', 'spline_state', 'params_init', 'strict_physics', 'body_diag', 'params_diag'):
         if getattr(args, name, False):
@@ -2696,6 +2717,9 @@ def bundle(args):
     (out / 'snapshot').mkdir()
     shutil.copy2(args.snapshot, out / 'snapshot' / SLOT_SAVE)
     shutil.copy2(repo / 'tools/dev/native_gate_relay.py', out / 'native_gate_relay.py')
+    if args.authority_fixture_wire:
+        shutil.copy2(repo / 'src/authority/fixture_udp.py', out / 'fixture_udp.py')
+        shutil.copy2(repo / 'tools/dev/authority_fixture_wire_support.py', out / 'authority_fixture_wire_support.py')
     shutil.copy2(Path(__file__), out / 'linux_gate_live.py')
     shutil.copy2(Path(__file__).with_name('linux_ui_seat_pose_evidence.py'), out / 'linux_ui_seat_pose_evidence.py')
     shutil.copy2(Path(__file__).with_name('linux_ui_plan_kick_evidence.py'), out / 'linux_ui_plan_kick_evidence.py')
@@ -2889,6 +2913,7 @@ def bundle(args):
         'nav_params_init',
         'fixture_body_observe',
         'authority_fixture_scan',
+        'authority_fixture_wire',
         'nav_probe_init',
         'clients',
         'fp_redirect_drones',
@@ -3577,6 +3602,20 @@ def completed_client_evidence(engine_log, process_output):
                 yield line
 
 
+def retain_wire_safe_config(source, destination):
+    """Export a wire case config only after removing strictly shaped private lines."""
+    destination.unlink(missing_ok=True)
+    kept = []
+    for line in source.read_text(encoding='utf-8').splitlines(keepends=True):
+        if 'native_gate_authority_wire_lease' in line or 'native_gate_authority_wire_port' in line:
+            if not (re.fullmatch(r'X4LAN_CONFIG\.native_gate_authority_wire_lease = "[0-9a-f]{32}"\s*', line) or
+                    re.fullmatch(r'X4LAN_CONFIG\.native_gate_authority_wire_port = [0-9]+\s*', line)):
+                raise ValueError('cannot safely redact private wire config')
+        else:
+            kept.append(line)
+    destination.write_text(''.join(kept), encoding='utf-8')
+
+
 def collect_run_evidence(run_dir, slots, cases, ticks, manifest, writers_closed):
     """Retain both logs and installed config, then validate the complete evidence."""
     result = {}
@@ -3587,7 +3626,12 @@ def collect_run_evidence(run_dir, slots, cases, ticks, manifest, writers_closed)
         log = profile / 'engine-output.log'
         retained_log = client / 'engine-output.log'
         retain_gate_log(log, retained_log, run_dir / f'game{slot}.log', writers_closed)
-        shutil.copyfile(case / 'extensions/x4_lan_lab/ui/config.lua', client / 'installed/x4_lan_lab-config.lua')
+        config_source = case / 'extensions/x4_lan_lab/ui/config.lua'
+        config_target = client / 'installed/x4_lan_lab-config.lua'
+        if manifest.get('authority_fixture_wire'):
+            retain_wire_safe_config(config_source, config_target)
+        else:
+            shutil.copyfile(config_source, config_target)
         if (case / 'portable-math.log').is_file():
             shutil.copyfile(case / 'portable-math.log', client / 'portable-math.log')
         process_output = run_dir / f'game{slot}-stdout.log'
@@ -3888,6 +3932,8 @@ def run(args):
     local = sorted({int(part) for part in args.local_slots.split(',')}) if external else list(range(1, clients + 1))
     if not local or any(not 1 <= slot <= clients for slot in local):
         raise SystemExit(f'--local-slots must name slots of 1..{clients}')
+    if manifest.get('authority_fixture_wire') and (external or local != [1, 2] or ticks < 60):
+        raise SystemExit('authority fixture wire requires two local clients, the local relay, and at least 60 ticks')
     guest = validate_external_guest(getattr(args, 'external_player_guest', False), external, local, clients,
                                     network_physics, manifest, getattr(args, 'target_snapshot_sha256', None),
                                     getattr(args, 'target_protocol', None), declared_relay_host, arm_at,
@@ -4002,6 +4048,7 @@ def run(args):
         result['recurring_readiness'] = {'pass': False, 'end': recurring_end, 'tail': recurring_tail, 'clients': {},
                                          'readiness_only': True, 'other_threads_excluded': False}
     procs, starts, logs, games = [], {}, [], []
+    wire_private_configs = []
     local_stop_channels = []
     owned_game_launches = {}
     cases_by_slot = {}
@@ -4036,6 +4083,40 @@ def run(args):
         procs.append(proc)
         return proc
     try:
+        wire_process = None
+        if manifest.get('authority_fixture_wire'):
+            source_lease, guest_lease = secrets.token_hex(16), secrets.token_hex(16)
+            while guest_lease == source_lease:
+                guest_lease = secrets.token_hex(16)
+            read_fd, write_fd = os.pipe()
+            try:
+                wire_process = launch('authority-wire', [sys.executable, str(root / 'authority_fixture_wire_support.py'),
+                                      '--config-fd', str(read_fd)], as_user=True, pass_fds=(read_fd,))
+                os.close(read_fd); read_fd = None
+                with os.fdopen(write_fd, 'w', encoding='ascii') as pipe:
+                    write_fd = None
+                    json.dump({'source': source_lease, 'guest': guest_lease}, pipe)
+            finally:
+                if read_fd is not None: os.close(read_fd)
+                if write_fd is not None: os.close(write_fd)
+            deadline = time.monotonic() + 10
+            while True:
+                match = re.search(r'(?m)^AUTHORITY_WIRE_READY port=([0-9]+)$', bounded_tail(run_dir / 'authority-wire.log'))
+                if match:
+                    wire_port = int(match.group(1))
+                    if not 1 <= wire_port <= 65535:
+                        raise RuntimeError('authority wire process reported invalid port')
+                    break
+                if wire_process.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError('authority wire process did not start')
+                time.sleep(.1)
+            for slot, lease in ((1, source_lease), (2, guest_lease)):
+                config = by_slot[slot][0] / 'extensions/x4_lan_lab/ui/config.lua'
+                config.chmod(0o600)
+                wire_private_configs.append(config)
+                with config.open('a', encoding='utf-8') as handle:
+                    handle.write(f'\nX4LAN_CONFIG.native_gate_authority_wire_port = {wire_port}\n')
+                    handle.write(f'X4LAN_CONFIG.native_gate_authority_wire_lease = "{lease}"\n')
         relay = None
         if not external:
             relay = launch('relay', [sys.executable, str(root / 'native_gate_relay.py'), '--port', str(port), '--token', token,
@@ -4158,6 +4239,8 @@ def run(args):
         while True:
             if cancelled:
                 raise RuntimeError('cancelled')
+            if wire_process is not None and wire_process.poll() is not None:
+                raise RuntimeError('authority wire process exited early')
             if time.monotonic() > deadline:
                 raise RuntimeError('timeout (loading or relay); see the client logs')
             if steam_identity(steam_home, user.pw_uid) != steam:
@@ -4224,6 +4307,13 @@ def run(args):
                 stop_owned_process(proc, starts[proc.pid])
             except (OSError, subprocess.TimeoutExpired) as error:
                 result.setdefault('cleanup_errors', []).append(str(error))
+        for config in wire_private_configs:
+            try:
+                lines = config.read_text(encoding='utf-8').splitlines(keepends=True)
+                config.write_text(''.join(line for line in lines if not line.startswith(
+                    ('X4LAN_CONFIG.native_gate_authority_wire_port = ', 'X4LAN_CONFIG.native_gate_authority_wire_lease = '))), encoding='utf-8')
+            except OSError:
+                result.setdefault('cleanup_errors', []).append('could not remove private wire configuration')
         if local_stop_enabled:
             for channel in local_stop_channels:
                 evidence = result['local_stop']['clients'].setdefault(str(channel.slot), dict(channel.evidence))
@@ -4559,6 +4649,18 @@ def run(args):
         except Exception as error:
             result['authority_scan_error'] = str(error)
             result['pass'] = False
+    if manifest.get('authority_fixture_wire'):
+        try:
+            from authority_fixture_wire_support import validate as validate_fixture_wire
+            profiles = {slot: profile for slot, (_, profile) in zip(local, games)}
+            evidence = validate_fixture_wire(gate_lines(profiles[1] / 'engine-output.log'),
+                                             gate_lines(profiles[2] / 'engine-output.log'), ticks)
+            result['authority_wire_evidence'] = evidence
+            if not evidence['pass']:
+                result['pass'] = False
+        except (KeyError, OSError, ValueError) as error:
+            result['authority_wire_evidence'] = {'pass': False, 'errors': [str(error)]}
+            result['pass'] = False
     (run_dir / 'run-result.json').write_text(json.dumps(result, indent=2, default=str) + '\n')
     print('LINUX_GATE_LIVE ' + json.dumps({k: result.get(k) for k in ('name', 'pass', 'lifecycle_discard', 'physics_discard', 'recurring_readiness', 'error', 'postprocessing_error', 'stops', 'world_identity', 'world_capture_problems', 'portable_math_active', 'world_hash_ticks',
                                                                     'world_hash_first_difference', 'evidence_errors', 'steam_unchanged', 'x4_left')}))
@@ -4784,6 +4886,7 @@ def main(argv=None):
     b.add_argument('--battle', action='store_true', help="the battle fixture: native_gate_hash = 'battle' with the snapshot's "
                    'twelve (--mode battle --snapshot-prebind; needs --serial-pathing, --path-determinism 1 or 3 and world identities)')
     b.add_argument('--authority-fixture-scan', action='store_true', help='read-only disposable fixture position scan')
+    b.add_argument('--authority-fixture-wire', action='store_true', help='local read-only fixture UDP diagnostic; requires scan')
     for name, why in (('fixture-body-observe', 'observe fixture 6 body bits beside its original getter at ticks 1400..1600 without actor/shield refresh'),
                       ('actor-diag', "the fixture actors' raw native state row (gate.actor)"),
                       ('strict-state', 'the raw hull, shield and navigation banks in the digest (needs --actor-diag)'),

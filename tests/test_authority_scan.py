@@ -75,6 +75,18 @@ assert(err:find('faction_index=2/2 ship_index=1/1 scanned=2',1,true))
 assert(not err:find('b1',1,true))
 ''')
 
+    def test_nonoperational_diagnostic_is_opt_in_and_cannot_change_failure(self):
+        self.run_lua('''
+e.operational=function(h) return h~='a2' end
+local observed
+local r,err=scan.scan(e,ids,{on_nonoperational=function(h,f,s)
+ observed={h,f,s}; error('private diagnostic failure')
+end})
+assert(not r and err:find('ship not operational',1,true))
+assert(not err:find('private diagnostic failure',1,true) and not err:find('a2',1,true))
+assert(observed[1]=='a2' and observed[2]==1 and observed[3]==2)
+''')
+
     def test_truncated_faction_count_and_capacity_are_diagnostic(self):
         self.run_lua('''
 e.factions=function(cap) return {},true,cap end
@@ -145,8 +157,10 @@ local probe=assert(loadfile('src/authority/lua/fixture_scan_probe.lua'))()
 local cfg={native_gate_authority_scan=true,native_gate_hash='battle',native_gate_snapshot_fixture={},test_profile='45841'}
 for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
 local logs={};probe.sample(cfg,30,{'a1'},function(s) logs[#logs+1]=s end)
-assert(#logs==2 and logs[1]:find('AUTHORITY_FIXTURE_READ') and logs[2]:find('AUTHORITY_SCAN_ERROR'))
-assert(logs[2]:find('ship not operational',1,true))
+assert(#logs==3 and logs[1]:find('AUTHORITY_FIXTURE_READ') and logs[2]:find('AUTHORITY_NONOP_DIAG') and logs[3]:find('AUTHORITY_SCAN_ERROR'))
+assert(logs[2]:find('operational_recheck=false',1,true) and not logs[2]:find('a2',1,true))
+assert(logs[2]:find('same_fleet_recheck=true',1,true))
+assert(logs[3]:find('ship not operational',1,true))
 assert(#reads==2 and reads[1]=='a1' and reads[2]=='a1')
 ''')
 
@@ -178,8 +192,62 @@ local logs={};probe.sample(cfg,30,{1},function(s) logs[#logs+1]=s end)
 assert(#logs==2 and logs[1]:find('AUTHORITY_FIXTURE_READ') and logs[2]:find('AUTHORITY_SCAN_FIXTURE'), logs[1] or 'missing receipt')
 ''')
 
+    def test_recheck_is_diagnostic_only_even_if_status_changes_or_throws(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, new=function(_,v) return v end,
+ C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(s) return s end}
+GetCurRealTime=function() return 10 end
+X4LAN_AUTHORITY_SHIP_SCAN=scan; X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local cfg={native_gate_authority_scan=true,native_gate_hash='battle',native_gate_snapshot_fixture={},test_profile='45841'}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+for _,status in ipairs({'true','unknown'}) do
+ local calls=0
+ e.operational=function(h)
+  if h~='a2' then return true end
+  calls=calls+1
+  if calls==1 then return false end
+  if status=='unknown' then error('private failure') end
+  return true
+ end
+ local logs={};local probe=assert(loadfile('src/authority/lua/fixture_scan_probe.lua'))()
+ probe.sample(cfg,30,{'a1'},function(s) logs[#logs+1]=s end)
+ assert(#logs==3 and logs[2]:find('operational_recheck='..status,1,true))
+ assert(logs[3]:find('ship not operational',1,true) and not logs[3]:find('private failure',1,true))
+ assert(not logs[2]:find('a2',1,true))
+end
+''')
+
     def test_game_binding_load_has_no_engine_calls(self):
         self.run_lua("assert(loadfile('src/authority/lua/x4_ship_engine.lua'))()")
+
+    def test_membership_recheck_absence_or_failure_does_not_complete_scan(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, new=function(_,v) return v end,
+ C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(s) return s end}
+GetCurRealTime=function() return 10 end
+X4LAN_AUTHORITY_SHIP_SCAN=scan; X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local cfg={native_gate_authority_scan=true,native_gate_hash='battle',native_gate_snapshot_fixture={},test_profile='45841'}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+local original_fleet=e.fleet
+for _,status in ipairs({'false','unknown'}) do
+ data.a={'a1','a2'}
+ local calls=0
+ e.fleet=function(f,cap)
+  calls=calls+1
+  if calls==2 and status=='unknown' then error('private failure') end
+  return original_fleet(f,cap)
+ end
+ e.operational=function(h)
+  if h=='a2' and status=='false' then data.a={'a1'} end
+  return h~='a2'
+ end
+ local logs={};local probe=assert(loadfile('src/authority/lua/fixture_scan_probe.lua'))()
+ probe.sample(cfg,30,{'a1'},function(s) logs[#logs+1]=s end)
+ assert(#logs==3 and logs[2]:find('same_fleet_recheck='..status,1,true))
+ assert(logs[3]:find('ship not operational',1,true) and not logs[3]:find('private failure',1,true))
+ assert(not logs[2]:find('a2',1,true))
+end
+''')
 
 class OverlayIntegrationTests(unittest.TestCase):
     def test_fixture_receipt_is_independent_and_strict(self):
@@ -257,6 +325,29 @@ class OverlayIntegrationTests(unittest.TestCase):
             live.validate_authority_scan_bundle(bundle,manifest)
             manifest['authority_fixture_scan']=False
             with self.assertRaisesRegex(ValueError,'config differs'): live.validate_authority_scan_bundle(bundle,manifest)
+
+            bundle = root/'wire-bundle'; forwarded.clear()
+            original_command = command
+            def wire_command(arguments, **kwargs):
+                if len(arguments)>1 and arguments[1]=='cc':
+                    Path(arguments[arguments.index('-o')+1]).write_bytes(b'fake net')
+                    return mock.Mock(stdout='',returncode=0)
+                return original_command(arguments, **kwargs)
+            with mock.patch.object(live.subprocess,'run',side_effect=wire_command), contextlib.redirect_stdout(io.StringIO()):
+                live.main(['bundle','--zig','/unused','--snapshot',str(snapshot),'--out',str(bundle),
+                           '--ticks','60','--battle','--serial-pathing','--path-determinism','1',
+                           '--authority-fixture-scan','--authority-fixture-wire'])
+            self.assertIn('--authority-fixture-wire',forwarded)
+            manifest=json.loads((bundle/'manifest.json').read_text())
+            self.assertTrue(manifest['authority_fixture_wire'])
+            live.validate_authority_scan_bundle(bundle,manifest)
+            for name in ('fixture_wire.lua','fixture_wire_probe.lua'):
+                self.assertIn('extension/x4_lan_lab/ui/'+name, manifest['files'])
+            self.assertIn('extension/x4_lan_lab/native/x4lan_net.so', manifest['files'])
+            self.assertNotIn('native_gate_authority_wire_lease',
+                             (bundle/'extension/x4_lan_lab/ui/config.lua').read_text())
+            manifest['authority_fixture_wire']=False
+            with self.assertRaisesRegex(ValueError,'wire config differs'): live.validate_authority_scan_bundle(bundle,manifest)
 
 if __name__ == '__main__':
     unittest.main()
