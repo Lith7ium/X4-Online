@@ -154,9 +154,12 @@ opt-in local controller now sets a fresh marker before each save, binds its
 assertion to the checkpoint manifest and checks the observed MD string reference
 in the saved bytes before confirming. One isolated Linux X4 run completed
 three successive marked saves, with two simulated client admissions and a
-final paused checkpoint. Restart recovery and real clients were not exercised.
-A marker in the bytes alone does not prove that an X4 process loaded the
-checkpoint. The ship identity strategy remains awaiting the owner's decision.
+final paused checkpoint. In a separate isolated Linux X4 process, the confirmed
+last-departure checkpoint was staged and a load requested; after the native
+load event the same marker was observed and the game was paused. This diagnostic
+does not prove the exact bytes consumed by X4 or zero simulation before pause,
+and it does not integrate recovery into a session or exercise real clients.
+The ship identity strategy remains awaiting the owner's decision.
 
 Ship positions are the first scope; trade and combat follow later. Spacesuits
 and dropped cargo are deferred; missions currently have lower priority.

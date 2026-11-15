@@ -87,8 +87,13 @@ Before native save confirmation, the bridge verifies the typed MD reference,
 marker string and observed false representation of the load flag in the saved
 bytes. One isolated Linux X4 run completed three successive marked saves while
 paused and confirmed the final checkpoint; an independent read verified three
-different markers. Recovery after loading is not implemented.
+different markers. A separate isolated Linux X4 process requested a load of
+the confirmed last checkpoint, observed its marker after the native load event,
+and paused. It did not prove exactly which bytes X4 consumed or zero simulation
+before pause. Automatic recovery and session admission are not implemented.
 
 For a disposable one-process diagnostic, the existing live harness accepts
 `--marker-required`; its participant load confirmations remain fake. The
-saved-byte check is not a native reload. No game runs on import.
+saved-byte check is not a native reload. The separate opt-in
+`tools/dev/authority_recovery_live.py` exercises the limited restart observation.
+No game runs on import.

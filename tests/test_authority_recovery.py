@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from authority.checkpoints import CheckpointError, CheckpointStore
+from authority.marker_evidence import MarkerEvidenceError
 from authority.recovery import stage_confirmed_recovery
 
 
@@ -24,6 +25,12 @@ class RecoveryStagingTests(unittest.TestCase):
         self.source = self.root / 'source.gz'
 
     def publish(self, text, marker='a' * 32):
+        if marker is not None:
+            marker_xml = (b'<script><refs type="string"><ref id="42" string="' + marker.encode('ascii') +
+                          b'"/></refs></script><md><script name="X4AuthorityCheckpointMarker">'
+                          b'<cue name="MarkerState"><vars><value name="$marker" type="string" value="42"/>'
+                          b'<value name="$loaded" type="integer"/></vars></cue></script></md>')
+            text = text.replace(b'</savegame>', marker_xml + b'</savegame>').replace(b'<savegame/>', b'<savegame>' + marker_xml + b'</savegame>')
         self.source.write_bytes(gzip.compress(text))
         return self.store.publish(self.source, marker=marker)
 
@@ -44,6 +51,14 @@ class RecoveryStagingTests(unittest.TestCase):
             stage_confirmed_recovery(self.store, self.profile)
         self.store.confirm(checkpoint)
         with self.assertRaises(CheckpointError):
+            stage_confirmed_recovery(self.store, self.profile)
+        self.assertEqual(list(self.profile.iterdir()), [])
+
+    def test_manifest_assertion_without_saved_marker_is_not_recoverable(self):
+        self.source.write_bytes(gzip.compress(b'<savegame/>'))
+        checkpoint = self.store.publish(self.source, marker='a' * 32)
+        self.store.confirm(checkpoint)
+        with self.assertRaises(MarkerEvidenceError):
             stage_confirmed_recovery(self.store, self.profile)
         self.assertEqual(list(self.profile.iterdir()), [])
 

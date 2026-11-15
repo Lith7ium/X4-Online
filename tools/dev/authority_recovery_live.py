@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""One opt-in isolated Linux X4 restart observation; no clients or admission.
+
+Copies the last marked CONFIRMED save to a new disposable profile, starts one
+owned X4 process, observes its MD load marker and pause, then stops the process.
+The marker is evidence of saved MD state after X4's load event, not proof of all
+loaded bytes or zero simulation before pause. Importing this file starts nothing.
+"""
+import argparse
+import json
+import math
+import os
+from pathlib import Path
+import pwd
+import re
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+ROOT=Path(__file__).resolve().parents[2]
+sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
+from authority.checkpoints import CheckpointStore
+from authority.recovery import stage_confirmed_recovery
+from lockstep.launcher import extension
+import authority_download_load_live as prior
+import authority_load_live as base
+import linux_gate_live as live
+import linux_snapshot_capture as snapshot
+
+RECOVERY=b'[X4LAN] AUTH_RECOVERY '
+MARKER=b'[X4LAN] AUTH_MARKER load '
+
+
+class RecoveryWatch(base.LoadWatch):
+    """Require one ordered request, matching marker and pause in the same log."""
+    def __init__(self,path,marker):
+        super().__init__(path)
+        if not isinstance(marker,str) or not re.fullmatch(r'[0-9a-f]{32}',marker):
+            raise ValueError('invalid expected marker')
+        self.expected=(b'REQUEST', b'INSPECTED '+marker.encode('ascii'), b'PAUSED')
+
+    def poll(self):
+        try: fd=os.open(self.path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+        except FileNotFoundError: return False
+        try:
+            info=os.fstat(fd);identity=(info.st_dev,info.st_ino)
+            if not stat.S_ISREG(info.st_mode) or info.st_size<self.offset or info.st_size>self.MAX_LOG:
+                raise ValueError('recovery log changed or exceeded limit')
+            if self.identity is not None and self.identity!=identity: raise ValueError('recovery log replaced')
+            self.identity=identity;os.lseek(fd,self.offset,os.SEEK_SET)
+            for _ in range(4):
+                chunk=os.read(fd,1<<20)
+                if not chunk: break
+                self.offset+=len(chunk);lines=(self.carry+chunk).split(b'\n');self.carry=lines.pop()
+                if len(self.carry)>self.MAX_LINE: raise ValueError('recovery line too long')
+                for line in lines:
+                    if len(line)>self.MAX_LINE: raise ValueError('recovery line too long')
+                    if RECOVERY in line: row=line.split(RECOVERY,1)[1].strip()
+                    elif MARKER in line: row=line.split(MARKER,1)[1].strip()
+                    else: continue
+                    if self.stage>=3 or row!=self.expected[self.stage]:
+                        raise ValueError('unexpected, duplicate, mismatched or out-of-order recovery receipt')
+                    self.stage+=1
+            return self.offset==os.fstat(fd).st_size and not self.carry
+        finally: os.close(fd)
+
+
+def install_probe(case,profile):
+    lab=case/'extensions/x4_lan_lab';ui=lab/'ui'
+    if lab.is_symlink() or not lab.is_dir(): raise ValueError('private extension missing')
+    (ui/'native_gate_snapshot.lua').unlink();(lab/'md/native_gate_battle.xml').unlink()
+    for source,target in ((ROOT/'src/authority/md/checkpoint_marker.xml',lab/'md/authority_checkpoint_marker.xml'),
+                          (ROOT/'tools/dev/authority_checkpoint_marker_probe.lua',ui/'authority_checkpoint_marker_probe.lua'),
+                          (ROOT/'tools/dev/authority_recovery_probe.lua',ui/'authority_recovery_probe.lua')):
+        shutil.copyfile(source,target)
+    files=[*extension.BASE_UI,'ui/authority_checkpoint_marker_probe.lua','ui/authority_recovery_probe.lua']
+    (lab/'ui.xml').write_text(extension.ui_xml(files),encoding='utf-8')
+    config=ui/'config.lua';config.chmod(0o600)
+    config.write_text('X4LAN_CONFIG = {enabled=false,test_profile="45841",authority_recovery_probe=true,'
+      'authority_marker_phase="load",authority_load_save_path='+base.lua_literal(str(profile/'save'))+'}\n',encoding='ascii')
+    return config
+
+
+def verify_source(store_dir,checkpoint,profile):
+    """Bind this diagnostic to a completed marked bridge experiment's output."""
+    if store_dir.name!='checkpoints': raise ValueError('unsupported source store')
+    origin=store_dir.parent
+    result_path=origin/'result.json'
+    if result_path.is_symlink() or not result_path.is_file() or result_path.stat().st_size>65536:
+        raise ValueError('source result unavailable')
+    result=json.loads(result_path.read_text(encoding='utf-8'))
+    if (not isinstance(result,dict) or result.get('success') is not True or
+        result.get('marked_saves_checked') is not True or result.get('owned_processes_remaining') != []):
+        raise ValueError('source marked bridge did not finish cleanly')
+    last=result.get('lifecycle',{}).get('last_departure_checkpoint',{})
+    if last.get('checkpoint_id')!=checkpoint.checkpoint_id or last.get('sha256')!=checkpoint.sha256:
+        raise ValueError('CONFIRMED differs from last-departure checkpoint')
+    source_profile=origin/'case/home/.config/EgoSoft/X4/45841'
+    for source,target in ((source_profile/'content.xml',profile/'content.xml'),
+                          (origin/'case/extensions/x4_lan_lab/md/authority_checkpoint_marker.xml',ROOT/'src/authority/md/checkpoint_marker.xml')):
+        if source.is_symlink() or not source.is_file() or source.stat().st_size>65536 or source.read_bytes()!=target.read_bytes():
+            raise ValueError('source and recovery extension configuration differs')
+
+
+def run(args):
+    if sys.platform!='linux' or os.geteuid()==0: raise ValueError('unprivileged Linux user required')
+    out=snapshot.output_path(args.out);store_dir=base.local_directory(args.store);store=CheckpointStore(store_dir)
+    game=args.game.resolve(strict=True)
+    if live.sha(game/'X4')!=live.EXE_SHA or not (game/'extensions').is_dir() or not shutil.which('bwrap'):
+        raise ValueError('pinned X4 or bubblewrap unavailable')
+    if live.x4_executables(): raise ValueError('another X4 process is running')
+    if not re.fullmatch(r':[0-9]+(?:\.[0-9]+)?',args.display): raise ValueError('local X11 display required')
+    auth=Path(os.environ.get('XAUTHORITY',''))
+    if not auth.is_file() or not os.access(auth,os.R_OK): raise ValueError('readable XAUTHORITY required')
+    auth=auth.resolve(strict=True)
+    if not math.isfinite(args.timeout) or args.timeout<=0 or not 0<=args.seed<=0xffffffff: raise ValueError('invalid timeout or seed')
+    user=pwd.getpwuid(os.geteuid());home=Path(user.pw_dir);steam=live.steam_identity(home,user.pw_uid)
+    out.mkdir(mode=0o700,parents=True,exist_ok=False)
+    result={'success':False,'scope':'one isolated Linux X4 restart; no client, admission, multiplayer or gameplay'}
+    proc=started=lock_fd=lock_stat=None;handlers={}
+    try:
+        case,profile,binds,lock=snapshot.prepare_case(out,game,home)
+        stage=out/'staged-profile';stage.mkdir(mode=0o700)
+        checkpoint,staged=stage_confirmed_recovery(store,stage)
+        verify_source(store_dir,checkpoint,profile)
+        target=profile/'save'/'save_008.xml.gz'
+        if any(p.name!='steam_autocloud.vdf' for p in target.parent.iterdir()):
+            raise ValueError('new isolated save directory is not empty')
+        os.link(staged,target,follow_symlinks=False);target.chmod(0o400)
+        if live.sha(target)!=checkpoint.sha256: raise ValueError('staged checkpoint changed')
+        config=install_probe(case,profile);lab=case/'extensions/x4_lan_lab'
+        protected=[config,lab/'ui.xml',profile/'content.xml',profile/'config.xml',
+                   lab/'md/authority_checkpoint_marker.xml',lab/'ui/authority_checkpoint_marker_probe.lua',
+                   lab/'ui/authority_recovery_probe.lua']
+        expected={path:live.sha(path) for path in protected}
+        lock_fd,lock_stat=live.create_lock_target(snapshot.LOCK_TARGET,user.pw_uid,user.pw_gid)
+        for number in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP): handlers[number]=signal.signal(number,snapshot.cancel_capture)
+        command=base.readonly_save_command(case,game,binds,lock,args.display,auth,user.pw_name,args.seed,target)
+        pos=command.index('--die-with-parent')
+        for path in protected:
+            command[pos:pos]=['--ro-bind',str(path),str(path)];pos+=3
+        with (out/'process.log').open('wb') as log:
+            proc=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+            started=live.start_ticks(proc.pid);deadline=time.monotonic()+args.timeout
+            watch=RecoveryWatch(profile/'engine-output.log',checkpoint.marker);seen_game=None
+            while True:
+                if time.monotonic()>=deadline: raise TimeoutError('recovery observation timed out')
+                identity=prior.game_identity(proc,started,game)
+                if identity is not None:
+                    if seen_game is not None and identity!=seen_game: raise RuntimeError('X4 process changed')
+                    seen_game=identity
+                elif seen_game is not None: raise RuntimeError('X4 process disappeared')
+                if any(live.sha(path)!=digest for path,digest in expected.items()): raise ValueError('protected configuration changed')
+                if live.steam_identity(home,user.pw_uid)!=steam: raise RuntimeError('Steam identity changed')
+                caught_up=watch.poll()
+                if watch.stage and seen_game is None: raise RuntimeError('receipt without owned X4 process')
+                if caught_up and watch.stage==3:
+                    if live.sha(target)!=checkpoint.sha256: raise ValueError('staged checkpoint changed')
+                    result.update(success=True,checkpoint_id=checkpoint.checkpoint_id,sha256=checkpoint.sha256,
+                                  load_requested=True,marker_after_game_loaded=True,pause_observed=True,
+                                  exact_loaded_file_proven=False,zero_advance_proven=False,admitted=False)
+                    break
+                time.sleep(.1)
+    except (Exception,KeyboardInterrupt) as error: result['error']=str(error)
+    finally:
+        if proc is not None and started is None and proc.poll() is None:
+            try: proc.terminate();proc.wait(timeout=15)
+            except (OSError,subprocess.TimeoutExpired): result.update(success=False,cleanup_error='launcher cleanup failed')
+        if started is not None:
+            try:
+                remaining=snapshot.stop_owned(proc,started);result['owned_processes_remaining']=remaining
+                if remaining: result.update(success=False,cleanup_error='owned processes remain')
+            except (OSError,subprocess.TimeoutExpired): result.update(success=False,cleanup_error='process cleanup failed')
+        if result['success']:
+            try:
+                while True:
+                    old=watch.offset
+                    if watch.poll(): break
+                    if old==watch.offset: raise ValueError('incomplete receipt')
+                if (watch.stage!=3 or live.sha(target)!=checkpoint.sha256 or
+                    any(live.sha(path)!=digest for path,digest in expected.items())): raise ValueError('final state invalid')
+            except (OSError,ValueError): result.update(success=False,error='final receipt or staged state invalid')
+        if lock_stat is not None:
+            try: live.release_lock_target(snapshot.LOCK_TARGET,lock_fd,lock_stat)
+            except (OSError,RuntimeError): result.update(success=False,cleanup_error='lock cleanup failed')
+        for number,handler in handlers.items(): signal.signal(number,handler)
+        try:
+            if live.steam_identity(home,user.pw_uid)!=steam: result.update(success=False,error='Steam identity changed')
+        except (OSError,ValueError,RuntimeError): result.update(success=False,error='Steam identity unavailable')
+        (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+    return result
+
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--game',type=Path,required=True);p.add_argument('--store',type=Path,required=True)
+    p.add_argument('--out',type=Path,required=True);p.add_argument('--display',required=True)
+    p.add_argument('--timeout',type=float,default=600);p.add_argument('--seed',type=int,default=276944566)
+    try: result=run(p.parse_args())
+    except (OSError,ValueError,RuntimeError) as error: p.exit(1,'REFUSED: '+str(error)+'\n')
+    print(json.dumps(result,indent=2));return 0 if result['success'] else 1
+
+if __name__=='__main__': sys.exit(main())

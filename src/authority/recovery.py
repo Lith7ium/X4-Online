@@ -10,6 +10,7 @@ from pathlib import Path
 import stat
 
 from .checkpoints import CHUNK, CheckpointError, CheckpointStore
+from .marker_evidence import verify_saved_marker
 
 
 def stage_confirmed_recovery(store, private_profile):
@@ -20,8 +21,8 @@ def stage_confirmed_recovery(store, private_profile):
     profile and not any normal X4 profile. This function cannot fence processes.
     It creates ``save/`` and exclusively creates ``save_008.xml.gz``; slot 009
     remains free for the normal experimental save controller. The returned pair
-    is (verified checkpoint metadata, staged path). A marker in metadata is an
-    assertion, not evidence of its presence in the save or a completed load.
+    is (verified checkpoint metadata, staged path). The saved marker and its
+    reset load flag are checked, but no X4 load is performed or proven.
     """
     if not isinstance(store, CheckpointStore):
         raise ValueError('checkpoint store required')
@@ -43,6 +44,8 @@ def stage_confirmed_recovery(store, private_profile):
         if os.listdir(root_fd):
             raise ValueError('private profile must be empty')
         checkpoint = store.latest_marked_confirmed()
+        verify_saved_marker(checkpoint, checkpoint.marker,
+                            script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState')
         os.mkdir('save', 0o700, dir_fd=root_fd)
         created_dir = True
         save_fd = os.open('save', flags, dir_fd=root_fd)
