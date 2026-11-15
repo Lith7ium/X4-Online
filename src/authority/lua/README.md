@@ -45,7 +45,7 @@ and parent/identity state can change later. A successful result is not proof of
 all ships, a simultaneous universe snapshot, cross-instance agreement, network
 replication, or in-game synchronization. The calling application must timestamp,
 handle lifecycle and missing identities, apply backpressure or batching, and
-validate performance in game before treating the data as usable. Four native
+validate performance in game before treating the data as usable. Five native
 attempts reached the scanner but did not yield an accepted scan receipt. The
 first failed in fixture-ID conversion, the second in faction enumeration with
 the initial buffer, and the third rejected an enumerated object as unavailable
@@ -57,6 +57,12 @@ or ship was read. A wreck is one possible explanation: an earlier independent
 native hot-join test recorded `IsComponentOperational=false` for a saved wreck
 (`reports/LOCKSTEP-HOTJOIN-20261101.txt`). That observation does not identify
 the object in this scan or prove that all such results are wrecks.
+
+In the fifth run, the independently enrolled fixture position was successfully
+read in each of two native Linux instances at tick 30, with matching recorded
+pose values for this fixture. The complete run still failed: both fleet scans
+again rejected the non-operational entry. This is a bounded read-only API
+observation, not position replication, authority or full-world acceptance.
 
 ## Disposable Linux fixture integration
 
@@ -74,13 +80,20 @@ diagnostic; it does not integrate with authority transport or apply positions.
 The one scan makes two sequential universe fleet enumerations. It fails closed
 at 1,024 faction buffer entries, 4,096 ships, or two elapsed seconds, checked
 between API calls. A single blocked native API call cannot be preempted by the
-Lua deadline. Output consists of one bounded fixture line or one bounded error
-line per instance. On a successful receipt the runner stores a separate
-`authority_scan_evidence` entry with the distance between the scan and an
-independent immediate fixture position readback. That is an observation, not a
-position-equality acceptance threshold; a valid receipt does not establish
-world synchronization. Missing, malformed, duplicate, or error receipts fail
-the run in addition to the existing independent lockstep validation.
+Lua deadline. Each instance first reads the enrolled fixture directly, checking operation,
+ship class, sector presence, finite pose and unchanged sector, and writes one
+bounded `AUTHORITY_FIXTURE_READ` or `AUTHORITY_FIXTURE_ERROR` record. This
+fixture read does not depend on a successful fleet scan. It never queries the
+position of an unknown fleet object that failed the operational check. The
+runner validates this separately under `authority_fixture_evidence`.
+
+The scan then emits one `AUTHORITY_SCAN_FIXTURE` or `AUTHORITY_SCAN_ERROR`
+record. If the scan succeeds, `authority_scan_evidence` includes the distance
+between its fixture sample and an independent immediate readback. The distance
+is an observation, not a position-equality acceptance threshold. A valid fixture
+read does not establish fleet coverage or world synchronization. Missing,
+malformed, duplicate, or error receipts fail the run independently of the
+existing lockstep validation.
 
 A candidate owned fixture snapshot was checked read-only on 15 November 2026.
 It has 12 valid saved fixture references; the private test snapshot itself is

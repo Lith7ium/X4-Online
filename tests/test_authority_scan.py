@@ -128,8 +128,26 @@ probe.sample(cfg,30,{'a1'},log); assert(#logs==0)
 cfg.native_gate_authority_scan=true
 probe.sample(cfg,29,{'a1'},log); assert(#logs==0)
 probe.sample(cfg,30,{'a1'},log); probe.sample(cfg,31,{'a1'},log)
-assert(#logs==1 and logs[1]:find('AUTHORITY_SCAN_FIXTURE') and logs[1]:find('test%-only%-fixture%-1'))
-assert(logs[1]:find('ships=3') and not logs[1]:find('a1'))
+assert(#logs==2 and logs[1]:find('AUTHORITY_FIXTURE_READ') and logs[2]:find('AUTHORITY_SCAN_FIXTURE'))
+assert(logs[2]:find('test%-only%-fixture%-1') and logs[2]:find('ships=3') and not logs[2]:find('a1'))
+''')
+
+    def test_fixture_read_survives_fleet_failure_without_unknown_position_read(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, new=function(_,v) return v end,
+ C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(s) return s end}
+GetCurRealTime=function() return 10 end
+local reads={}; local original=e.pose
+e.pose=function(ship) reads[#reads+1]=ship; return original(ship) end
+e.operational=function(ship) return ship~='a2' end
+X4LAN_AUTHORITY_SHIP_SCAN=scan; X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local probe=assert(loadfile('src/authority/lua/fixture_scan_probe.lua'))()
+local cfg={native_gate_authority_scan=true,native_gate_hash='battle',native_gate_snapshot_fixture={},test_profile='45841'}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+local logs={};probe.sample(cfg,30,{'a1'},function(s) logs[#logs+1]=s end)
+assert(#logs==2 and logs[1]:find('AUTHORITY_FIXTURE_READ') and logs[2]:find('AUTHORITY_SCAN_ERROR'))
+assert(logs[2]:find('ship not operational',1,true))
+assert(#reads==2 and reads[1]=='a1' and reads[2]=='a1')
 ''')
 
     def test_fixture_probe_uses_real_ffi_new_without_extra_assert_arguments(self):
@@ -143,6 +161,7 @@ GetCurRealTime=function() return 10 end
 local engine={
  key=function(h) return tostring(h) end,
  operational=function() return true end,
+ is_ship=function() return true end,
  sector=function() return nativeffi.new('UniverseID',2) end,
  pose=function() return {x=1,y=2,z=3,yaw=0,pitch=0,roll=0} end,
 }
@@ -156,13 +175,26 @@ local probe=assert(loadfile('src/authority/lua/fixture_scan_probe.lua'))()
 local cfg={native_gate_authority_scan=true,native_gate_hash='battle',native_gate_snapshot_fixture={},test_profile='45841'}
 for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
 local logs={};probe.sample(cfg,30,{1},function(s) logs[#logs+1]=s end)
-assert(#logs==1 and logs[1]:find('AUTHORITY_SCAN_FIXTURE'), logs[1] or 'missing receipt')
+assert(#logs==2 and logs[1]:find('AUTHORITY_FIXTURE_READ') and logs[2]:find('AUTHORITY_SCAN_FIXTURE'), logs[1] or 'missing receipt')
 ''')
 
     def test_game_binding_load_has_no_engine_calls(self):
         self.run_lua("assert(loadfile('src/authority/lua/x4_ship_engine.lua'))()")
 
 class OverlayIntegrationTests(unittest.TestCase):
+    def test_fixture_receipt_is_independent_and_strict(self):
+        sys.path.insert(0,str(ROOT/'tools/dev'))
+        import linux_gate_live as live
+        line=('[X4LAN] NATIVE_GATE AUTHORITY_FIXTURE_READ tick=30 identity=test-only-fixture-1 '
+              'operational=1 sector_present=1 x=1 y=2 z=3 yaw=0 pitch=0 roll=0')
+        scan_error='[X4LAN] NATIVE_GATE AUTHORITY_SCAN_ERROR tick=30 why=ship not operational'
+        result=live.parse_authority_fixture_read([line,scan_error],60)
+        self.assertTrue(result['pass']);self.assertEqual(result['pose']['x'],1)
+        self.assertFalse(live.parse_authority_scan([line,scan_error],60)['pass'])
+        for lines in ([], [line,line], [line.replace('x=1','x=nan')],
+                      ['[X4LAN] NATIVE_GATE AUTHORITY_FIXTURE_ERROR tick=30 why=bad']):
+            self.assertFalse(live.parse_authority_fixture_read(lines,60)['pass'])
+
     def test_receipt_is_required_strict_and_separate_from_simulation(self):
         sys.path.insert(0,str(ROOT/'tools/dev'))
         import linux_gate_live as live

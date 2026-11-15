@@ -12,11 +12,30 @@ function M.sample(cfg, tick, actors, log)
   ffi.cdef[[const char* GetSaveFolderPath(void);]]
   local path = ffi.string(ffi.C.GetSaveFolderPath()):gsub('\\','/'):gsub('/+$','')
   assert(cfg.test_profile=='45841' and path:sub(-#'/45841/save')=='/45841/save', 'isolated profile required')
-  local scanner = assert(X4LAN_AUTHORITY_SHIP_SCAN, 'scanner missing')
   local engine = assert(X4LAN_AUTHORITY_SHIP_ENGINE, 'engine adapter missing').new()
   local actor = assert(actors[1], 'fixture 1 unavailable')
   local fixture = ffi.new('UniverseID', actor)
   local fixture_key = engine.key(fixture)
+  -- This read is independent of the fleet census. Only the enrolled fixture
+  -- is queried; never call a position getter on an unknown failed fleet entry.
+  local read_ok, read_error = pcall(function()
+   assert(engine.operational(fixture), 'fixture not operational')
+   assert(engine.is_ship(fixture), 'fixture is not a ship')
+   local parent=assert(engine.sector(fixture), 'fixture sector unavailable')
+   local parent_key=engine.key(parent)
+   local p=engine.pose(fixture)
+   for _, name in ipairs({'x','y','z','yaw','pitch','roll'}) do
+    local v=p[name]
+    assert(type(v)=='number' and v==v and v~=math.huge and v~=-math.huge, 'invalid fixture pose')
+   end
+   assert(engine.operational(fixture), 'fixture no longer operational')
+   local after=engine.sector(fixture)
+   assert(after and engine.key(after)==parent_key, 'fixture sector changed')
+   log(string.format('AUTHORITY_FIXTURE_READ tick=%d identity=test-only-fixture-1 operational=1 sector_present=1 x=%.9g y=%.9g z=%.9g yaw=%.9g pitch=%.9g roll=%.9g',
+    tick,p.x,p.y,p.z,p.yaw,p.pitch,p.roll))
+  end)
+  if not read_ok then log('AUTHORITY_FIXTURE_ERROR tick='..tostring(tick)..' why='..tostring(read_error):gsub('[\r\n]',' '):sub(1,300)) end
+  local scanner = assert(X4LAN_AUTHORITY_SHIP_SCAN, 'scanner missing')
   local ship_ids, sector_ids, next_ship, next_sector = {}, {}, 0, 0
   local identities = {
    ship=function(ship)

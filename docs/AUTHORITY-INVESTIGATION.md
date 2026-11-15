@@ -5,6 +5,10 @@ scanner experiments failed before a valid scan receipt; no native
 authority correction experiment has been run. The branch is isolated and based
 on public commit `b80712b39963c179dcdc2d99541cf9a25dacf7de`.
 
+In a later read-only Linux experiment, two local X4 instances each returned the
+same recorded pose for one known fixture at tick 30. The fleet scans in that run
+still failed on a non-operational entry. This does not establish synchronization.
+
 ## Question
 
 Can one running X4 instance own a persistent universe while other X4 instances

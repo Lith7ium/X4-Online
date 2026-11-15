@@ -328,6 +328,35 @@ def compose_extension_template(overlay, target, extension_base=None):
         (target / 'ui.xml').write_text(extension.ui_xml([*extension.BASE_UI, *overlay_files]), encoding='utf-8')
 
 
+def parse_authority_fixture_read(lines, ticks):
+    """Validate one fixture getter receipt without inferring fleet coverage."""
+    records = [line.split('NATIVE_GATE ', 1)[-1].strip() for line in lines
+               if 'NATIVE_GATE AUTHORITY_FIXTURE_' in line]
+    result = {'pass': False, 'errors': []}
+    if len(records) != 1 or not records[0].startswith('AUTHORITY_FIXTURE_READ '):
+        result['errors'].append('missing, duplicate, or failed fixture read receipt')
+        return result
+    parts = records[0].split()
+    try:
+        fields = dict(part.split('=', 1) for part in parts[1:])
+        names = {'x', 'y', 'z', 'yaw', 'pitch', 'roll'}
+        expected = names | {'tick', 'identity', 'operational', 'sector_present'}
+        if len(parts)-1 != len(expected) or set(fields) != expected:
+            raise ValueError('field set')
+        if (not fields['tick'].isdigit() or not 30 <= int(fields['tick']) <= ticks or
+            fields['identity'] != 'test-only-fixture-1' or fields['operational'] != '1' or
+            fields['sector_present'] != '1'):
+            raise ValueError('metadata')
+        pose = {name: float(fields[name]) for name in names}
+        if not all(math.isfinite(value) for value in pose.values()):
+            raise ValueError('non-finite pose')
+        result.update(tick=int(fields['tick']), pose=pose)
+        result['pass'] = True
+    except (ValueError, OverflowError):
+        result['errors'].append('invalid fixture read receipt')
+    return result
+
+
 def parse_authority_scan(lines, ticks):
     """Validate one bounded observation; this is separate from lockstep evidence."""
     records = [line.split('NATIVE_GATE ', 1)[-1].strip() for line in lines
@@ -4517,10 +4546,15 @@ def run(args):
             result.get('physics_discard', {})['pass'] = False
     if manifest.get('authority_fixture_scan'):
         try:
+            fixtures = {str(slot): parse_authority_fixture_read(gate_lines(profile / 'engine-output.log'), ticks)
+                        for slot, (_, profile) in zip(local, games)}
             scans = {str(slot): parse_authority_scan(gate_lines(profile / 'engine-output.log'), ticks)
                      for slot, (_, profile) in zip(local, games)}
+            result['authority_fixture_evidence'] = fixtures
             result['authority_scan_evidence'] = scans
-            if not scans or any(not observation['pass'] for observation in scans.values()):
+            if (not fixtures or not scans or
+                any(not observation['pass'] for observation in fixtures.values()) or
+                any(not observation['pass'] for observation in scans.values())):
                 result['pass'] = False
         except Exception as error:
             result['authority_scan_error'] = str(error)
