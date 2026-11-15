@@ -1,6 +1,7 @@
 -- Explicit disposable Linux fixture experiment; all game object calls are reads.
 local M={}
-local wire, connection, engine, clock, disabled, enrolled
+local wire, connection, engine, clock, clock_library, disabled, enrolled
+local clock_phase
 local keys, sectors, frames = {}, {}, {}
 local function id(i) return string.format('fixture-%02d',i) end
 function M.sample(cfg,tick,actors,log,gate)
@@ -19,10 +20,25 @@ function M.sample(cfg,tick,actors,log,gate)
    end
    ffi.cdef[[int clock_gettime(int, struct x4lan_fleet_timespec*);]]
    local t=ffi.new('struct x4lan_fleet_timespec[1]')
+   stage='clock_library'
+   clock_library=ffi.load('libc.so.6')
+   stage='clock_symbol'
+   local monotonic=assert(clock_library.clock_gettime)
+   local last_clock
    clock=function()
-    assert(ffi.C.clock_gettime(1,t)==0)
-    local value=tonumber(t[0].sec)+tonumber(t[0].nsec)/1000000000
+    clock_phase='clock_call'
+    local status=monotonic(1,t)
+    clock_phase='clock_status'
+    assert(status==0)
+    clock_phase='clock_value'
+    local sec,nsec=tonumber(t[0].sec),tonumber(t[0].nsec)
+    assert(sec and nsec and sec>=0 and nsec>=0 and nsec<1000000000)
+    local value=sec+nsec/1000000000
     assert(value>=0 and value==value and value<math.huge)
+    clock_phase='clock_regression'
+    assert(not last_clock or value>=last_clock)
+    last_clock=value
+    clock_phase=nil
     return value
    end
    stage='clock_initial'
@@ -96,6 +112,7 @@ function M.sample(cfg,tick,actors,log,gate)
  if not ok then
   disabled=true
   if connection then pcall(function() connection:close() end) end
+  if clock_phase then stage=clock_phase end
   log(string.format('AUTHORITY_FLEET_ERROR tick=%d stage=%s fixture=%d',tick,stage,ordinal))
  end
 end
