@@ -109,6 +109,19 @@ class FileServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not the announced'):
             self.service.offer('j600.x4join', self.dir / 'j600.x4join', '1' * 64)
 
+    def test_oversized_partial_is_restarted_after_offset_refusal(self):
+        dest = self.dir / 'stale-download'
+        part = dest.with_name(dest.name + '.part')
+        part.write_bytes(self.data + b'stale bytes')
+        with mock.patch.object(joinfiles.time, 'sleep'):
+            digest = joinfiles.fetch('127.0.0.1', self.service.port, TOKEN, 3,
+                                     'j600.x4join', dest, expect_sha=self.sha,
+                                     expect_size=len(self.data), retries=1)
+        self.assertEqual(digest, self.sha)
+        self.assertEqual(dest.read_bytes(), self.data)
+        self.assertFalse(part.exists())
+        self.assertEqual(self.service.served[-1][2:], (0, len(self.data)))
+
     def test_waits_for_the_offer(self):
         """The relay says saved before the host offers the files (hj1): 'name' is retried until the offer, within the wait."""
         data = b'late' * 1000

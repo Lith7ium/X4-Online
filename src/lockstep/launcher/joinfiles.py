@@ -248,6 +248,12 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
                     if reason in ('busy',):
                         last = FetchError(f'{name}: host busy')
                         continue
+                    if reason == 'offset' and offset:
+                        # The server rejects an oversized partial before sending
+                        # its size. Discard it and retry from the beginning.
+                        part.unlink()
+                        last = FetchError(f'{name}: partial download exceeds the host file')
+                        continue
                     if reason == 'name':
                         raise FetchError(f'{name}: not offered by the host within {offer_wait_s} s (its saver may not play on that PC)')
                     raise FetchError(f'{name}: refused by the host ({reason})')
