@@ -128,6 +128,8 @@ assert(not cfg.native_gate_authority_motion or (cfg.test_profile=='45841' and cf
  'authority motion requires the isolated, idle fixture wire test')
 assert(cfg.native_gate_authority_wire_warp==nil or cfg.native_gate_authority_wire_warp==false or cfg.native_gate_authority_wire_warp==true, 'wire warp must be boolean')
 assert(not cfg.native_gate_authority_wire_warp or (cfg.native_gate_authority_wire and cfg.native_gate_authority_motion and cfg.test_profile=='45841'), 'wire warp requires isolated motion and wire')
+assert(cfg.native_gate_authority_continuous==nil or cfg.native_gate_authority_continuous==false or cfg.native_gate_authority_continuous==true, 'continuous fixture experiment must be boolean')
+assert(not cfg.native_gate_authority_continuous or (cfg.native_gate_authority_wire==true and cfg.native_gate_authority_motion==true and cfg.test_profile=='45841' and not cfg.native_gate_authority_wire_warp), 'continuous fixture experiment requires isolated motion and wire and excludes wire warp')
 assert(cfg.native_gate_authority_fleet==nil or cfg.native_gate_authority_fleet==false or cfg.native_gate_authority_fleet==true,
  'native_gate_authority_fleet must be boolean')
 assert(not cfg.native_gate_authority_fleet or (cfg.test_profile=='45841' and cfg.native_gate_hash=='battle'
@@ -6670,7 +6672,7 @@ local function frame()
   -- native_gate_battle_engage=false keeps the restored fixture idle (default
   -- order Wait) while its rows stay in the declared state: a calm sandbox.
   if tick==10 and cfg.native_gate_battle_engage~=false then AddUITriggeredEvent('X4LAN_NativeGate','Engage',{}) end
-  if tick==40 and cfg.native_gate_authority_motion and (not cfg.native_gate_authority_wire_warp or cfg.slot=='p1') then AddUITriggeredEvent('X4LAN_NativeGate','AuthorityMoveFixture',{}) end
+  if tick==40 and cfg.native_gate_authority_motion and (not (cfg.native_gate_authority_wire_warp or cfg.native_gate_authority_continuous) or cfg.slot=='p1') then AddUITriggeredEvent('X4LAN_NativeGate','AuthorityMoveFixture',{}) end
   -- Opt-in stress fixture (native_gate_bigbattle.xml): faction war and/or 40v40 spawn.
   if cfg.native_gate_big_war and tick==12 then AddUITriggeredEvent('X4LAN_NativeGate','BigWar',{}) end
   if cfg.native_gate_big_spawn and tick==14 then AddUITriggeredEvent('X4LAN_NativeGate','BigSpawn',{}) end

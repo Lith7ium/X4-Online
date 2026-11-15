@@ -178,7 +178,7 @@ probe.sample(cfg,29,log,gate);assert(#logs==0)
 probe.sample(cfg,30,log,gate);probe.sample(cfg,31,log,gate)
 assert(#logs==1 and logs[1]:find('AUTHORITY_INVENTORY ',1,true))
 for _,fragment in ipairs({'enumerated=4','memberships=4','objects=3','repeated_memberships=1','position_observed=1','not_confirmed_operational=1','unavailable=1',
- 'unresolved_identity=1','operational_unknown=1','coverage=unknown','positions_complete=false'}) do
+ 'unresolved_identity=1','operational_unknown=1','consistency=non_atomic','coverage=unknown','positions_complete=false'}) do
  assert(logs[1]:find(fragment,1,true),fragment)
 end
 assert(not logs[1]:find('0000000000000001',1,true) and not logs[1]:find('x=11',1,true))
@@ -196,64 +196,68 @@ probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function() e
 assert(#logs==1 and logs[1]:find('AUTHORITY_INVENTORY_ERROR',1,true))
 ''')
 
-    def test_inventory_budget_failure_is_a_diagnostic_not_partial_counts(self):
+    def test_cooperative_inventory_rechecks_and_never_returns_partial_rows(self):
+        self.run_lua('''
+data.a={};for i=1,300 do data.a[i]='a'..i end
+e.operational=function() return false end
+local calls=0;local old=e.fleet
+e.fleet=function(f,cap) calls=calls+1;return old(f,cap) end
+local task=scan.inventory_task(e,ids,opts)
+local state,r,err=task.step(5,function() return false end)
+assert(state=='running' and not r and not err and calls<=1)
+local iterations=0
+repeat
+ iterations=iterations+1
+ state,r,err=task.step(5,function() return false end)
+ if state=='running' then assert(not r and not err) end
+ assert(iterations<1000)
+until state~='running'
+assert(state=='complete' and r and r.counts.memberships==300 and #r.rows==300,err)
+assert(calls==2 and r.enumeration=='faction_lists_rechecked_non_atomic' and r.universe_coverage=='unknown')
+assert(task.step(5,function() return false end)=='error')
+''')
+
+    def test_cooperative_inventory_fails_if_membership_changes_between_frames(self):
+        self.run_lua('''
+data.a={'a1','a2'}
+local task=scan.inventory_task(e,ids,opts)
+local state,r=task.step(5,function() return false end)
+assert(state=='running' and not r)
+data.a={'a1','new'}
+local err
+repeat state,r,err=task.step(3,function() return false end) until state~='running'
+assert(state=='error' and not r and err:find('membership changed'))
+''')
+
+    def test_cooperative_probe_reports_progress_and_finishes_later(self):
         self.run_lua('''
 package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
-local calls=0;GetCurRealTime=function() calls=calls+1;if calls>1 then return 100 end return 10 end
+GetCurRealTime=function() return 10 end
+data.a={};for i=1,12000 do data.a[i]=tostring(i) end
+e.operational=function() return false end
+X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
+local gate={saved_identity=function(h) return string.format('%016x',tonumber(h)) end}
+probe.sample(cfg,30,function(s) logs[#logs+1]=s end,gate)
+assert(#logs==1 and logs[1]:find('AUTHORITY_CENSUS_PROGRESS',1,true))
+assert(not logs[1]:find('enumerated=',1,true) and logs[1]:find('coverage=unknown',1,true))
+for tick=31,60 do probe.sample(cfg,tick,function(s) logs[#logs+1]=s end,gate) end
+assert(#logs==2 and logs[2]:find('AUTHORITY_INVENTORY tick=',1,true) and logs[2]:find('enumerated=12000',1,true))
+''')
+
+    def test_cooperative_probe_clock_failure_never_returns_partial_counts(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
+local calls=0;GetCurRealTime=function() calls=calls+1;if calls>1 then return 0 end return 10 end
 X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
 local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
 for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
 local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
 probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function() return '0000000000000000' end})
-assert(#logs==1 and logs[1]:find('AUTHORITY_INVENTORY_ERROR tick=30 reason=checkpoint',1,true))
+assert(#logs==1 and logs[1]:find('AUTHORITY_INVENTORY_ERROR',1,true))
 assert(not logs[1]:find('enumerated=',1,true))
-''')
-
-    def test_collision_diagnostic_reports_indices_without_handles(self):
-        self.run_lua('''
-package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
-GetCurRealTime=function() return 10 end
-data.a={'1','1'}
-e.factions=function() return {'a'},false end
-e.operational=function() return true end;e.is_ship=function() return true end
-e.sector=function() return '4' end
-e.pose=function() return {x=1,y=2,z=3,yaw=0,pitch=0,roll=0} end
-local calls=0;e.member_at=function(f,i) calls=calls+1;return data[f][i] end
-X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
-local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
-for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
-local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
-probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function(h) return '000000000000000'..h end})
-assert(#logs==2 and calls==2 and logs[1]:find('AUTHORITY_DUPLICATE_TARGET_PRIVATE',1,true))
-assert(logs[1]:find('first_faction_private=a repeated_faction_private=a saved_private=0000000000000001',1,true))
-assert(logs[2]:find('reason=duplicate_object first_faction=1 first_index=1 repeated_faction=1 repeated_index=2',1,true))
-assert(not logs[2]:find('0000000000000001',1,true) and not logs[2]:find('enumerated=',1,true))
-''')
-
-    def test_targeted_collision_recheck_reports_changes_without_private_details(self):
-        self.run_lua('''
-package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
-GetCurRealTime=function() return 10 end
-data.a={'1','1'};e.factions=function() return {'a'},false end
-e.operational=function() return true end;e.is_ship=function() return true end;e.sector=function() return '4' end
-e.pose=function() return {x=1,y=2,z=3,yaw=0,pitch=0,roll=0} end
-X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
-local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
-for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
-for _,mode in ipairs({'handle','identity','count'}) do
- local calls=0;local saved_calls=0;local counts={a=0,b=0}
- e.fleet_count=function(f) counts[f]=counts[f]+1;if mode=='count' and f=='a' and counts[f]==6 then return 3 end;return #data[f] end
- e.member_at=function(f,i) calls=calls+1;if mode=='handle' and i==2 then return '9' end;return data[f][i] end
- local gate={saved_identity=function(h)
-  if h=='1' then saved_calls=saved_calls+1;if mode=='identity' and saved_calls==3 then return '0000000000000009' end end
-  return '000000000000000'..h
- end}
- local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
- probe.sample(cfg,30,function(s) logs[#logs+1]=s end,gate)
- local expected=mode=='handle' and 'repeated_handle_changed' or (mode=='identity' and 'saved_identity_changed' or 'repeated_count_changed')
- assert(#logs==2 and logs[1]:find('AUTHORITY_DUPLICATE_TARGET_ERROR',1,true) and logs[1]:find('reason='..expected,1,true))
- assert(logs[2]:find('reason=duplicate_object',1,true) and not table.concat(logs):find('TARGET_PRIVATE',1,true))
-end
 ''')
 
     def test_fixture_error_categories_do_not_conflate_faction_and_membership(self):
@@ -271,7 +275,7 @@ for _,item in ipairs({{'inventory faction membership changed','faction_set_chang
  {'inventory local object key collision','object_key_collision'},
  {'inventory fleet enumeration changed or incomplete','fleet_enumeration_changed'},
  {'untrusted private error','other'}}) do
- X4LAN_AUTHORITY_SHIP_SCAN={inventory=function() return nil,item[1] end}
+ X4LAN_AUTHORITY_SHIP_SCAN={inventory_task=function() return {step=function() return 'error',nil,item[1] end} end}
  local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
  probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function() return '0000000000000000' end})
  assert(#logs==1 and logs[1]:find('reason='..item[2],1,true) and not logs[1]:find('private',1,true))
@@ -316,6 +320,14 @@ class InventoryHarnessTests(unittest.TestCase):
         self.assertTrue(overlap_receipt['valid_receipt'])
         self.assertEqual(overlap_receipt['counts']['objects'],3)
         self.assertEqual(overlap_receipt['counts']['repeated_memberships'],1)
+        completed=overlapping.replace('tick=30','tick=47').replace('coverage=unknown', 'consistency=non_atomic coverage=unknown')
+        self.assertEqual(live.parse_authority_inventory([completed],60)['consistency'],'non_atomic')
+        self.assertFalse(live.parse_authority_inventory([completed.replace('consistency=non_atomic','consistency=atomic')],60)['valid_receipt'])
+        progress='[X4LAN] NATIVE_GATE AUTHORITY_CENSUS_PROGRESS tick=45 status=in_progress consistency=non_atomic coverage=unknown'
+        partial=live.parse_authority_inventory([progress],60)
+        self.assertFalse(partial['valid_receipt']);self.assertEqual(partial['status'],'in_progress')
+        self.assertNotIn('counts',partial)
+        self.assertTrue(live.parse_authority_inventory([progress,completed],60)['valid_receipt'])
         for broken in (overlapping.replace('memberships=4','memberships=3'),
                        overlapping.replace('objects=3','objects=4'),
                        overlapping.replace('repeated_memberships=1','repeated_memberships=0')):

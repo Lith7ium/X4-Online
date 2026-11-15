@@ -17,7 +17,7 @@ local function identity(value)
  return type(value)=='string' and #value>0 and #value<=64 and value:match('^[%w_.%-]+$')~=nil
 end
 
-function M.new(transport, role, lease, fixture)
+function M.new(transport, role, lease, fixture, motion)
  assert((type(transport)=='table' or type(transport)=='userdata') and
   type(transport.send)=='function' and type(transport.receive)=='function', 'transport required')
  assert(role=='SOURCE' or role=='GUEST', 'invalid fixture role')
@@ -44,13 +44,16 @@ function M.new(transport, role, lease, fixture)
     if packet=='FIX1|READY|'..role..'|'..fixture then
      self.ready=true
     elseif self.ready and role=='GUEST' then
-     local id,request,source,x,y,z=packet:match('^FIX1|POS|([%w_.%-]+)|(%d+)|(%d+)|([^|]+)|([^|]+)|([^|]+)$')
+     local id,request,source,x,y,z,vx,vy,vz=packet:match('^FIX1|POS|([%w_.%-]+)|(%d+)|(%d+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)$')
+     local hasrate=id~=nil
+     if not id then id,request,source,x,y,z=packet:match('^FIX1|POS|([%w_.%-]+)|(%d+)|(%d+)|([^|]+)|([^|]+)|([^|]+)$') end
+     if vx then vx,vy,vz=tonumber(vx),tonumber(vy),tonumber(vz) end
      request,source=sequence(request),sequence(source)
      x,y,z=tonumber(x),tonumber(y),tonumber(z)
      if id==fixture and request and source and request<=self.sent and
-        request>self.received_request and source>self.received_source and finite(x) and finite(y) and finite(z) then
+        request>self.received_request and source>self.received_source and finite(x) and finite(y) and finite(z) and (not hasrate or (finite(vx) and finite(vy) and finite(vz))) then
       self.received_request,self.received_source=request,source
-      latest={fixture=fixture, request=request, source_sequence=source, x=x, y=y, z=z}
+      latest={fixture=fixture, request=request, source_sequence=source, x=x, y=y, z=z, vx=vx, vy=vy, vz=vz}
      end
     end
    end
@@ -60,6 +63,10 @@ function M.new(transport, role, lease, fixture)
     assert(type(position)=='table' and finite(position.x) and finite(position.y) and finite(position.z), 'finite source pose required')
     local payload=table.concat({'FIX1','PUT',lease,fixture,next_seq(),
      string.format('%.17g',position.x),string.format('%.17g',position.y),string.format('%.17g',position.z)},'|')
+    if motion and position.vx then
+     assert(finite(position.vx) and finite(position.vy) and finite(position.vz), 'finite estimated rate required')
+     payload=payload..string.format('|%.17g|%.17g|%.17g',position.vx,position.vy,position.vz)
+    end
     send(payload)
    else
     send(table.concat({'FIX1','GET',lease,fixture,next_seq()},'|'))

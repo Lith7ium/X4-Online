@@ -398,6 +398,15 @@ def parse_authority_inventory(lines, ticks):
     records = [line.split('NATIVE_GATE ', 1)[-1].strip() for line in lines
                if 'NATIVE_GATE AUTHORITY_INVENTORY' in line]
     result = {'valid_receipt': False, 'errors': [], 'universe_coverage': 'unknown', 'positions_complete': False}
+    progress = [line.split('NATIVE_GATE ', 1)[-1].strip() for line in lines
+                if 'NATIVE_GATE AUTHORITY_CENSUS_PROGRESS' in line]
+    if not records and progress:
+        matches = [re.fullmatch(r'AUTHORITY_CENSUS_PROGRESS tick=(\d+) status=in_progress consistency=non_atomic coverage=unknown', row)
+                   for row in progress]
+        if all(matches) and all(30 <= int(match.group(1)) <= ticks for match in matches):
+            result.update(status='in_progress', last_progress_tick=int(matches[-1].group(1)))
+            result['errors'].append('inventory did not complete within this run')
+            return result
     if len(records) != 1 or not records[0].startswith('AUTHORITY_INVENTORY '):
         result['errors'].append('missing, duplicate, or failed inventory receipt')
         return result
@@ -409,6 +418,9 @@ def parse_authority_inventory(lines, ticks):
         counts = {'enumerated', 'position_observed', 'not_confirmed_operational', 'unavailable', 'unresolved_identity'}
         expected = reasons | counts | {'tick', 'coverage', 'positions_complete'}
         membership_counts = {'memberships', 'objects', 'repeated_memberships'}
+        has_consistency = 'consistency' in fields
+        if has_consistency:
+            expected |= {'consistency'}
         has_memberships = set(fields) == expected | membership_counts
         if has_memberships:
             counts |= membership_counts
@@ -427,10 +439,13 @@ def parse_authority_inventory(lines, ticks):
             objects != values['position_observed'] + values['not_confirmed_operational'] + values['unavailable'] or
             values['unresolved_identity'] > objects or
             values['unavailable'] != sum(values[k] for k in reasons) or
+            (has_consistency and fields['consistency'] != 'non_atomic') or
             fields['coverage'] != 'unknown' or fields['positions_complete'] != 'false'):
             raise ValueError('invalid counts')
         result.update(valid_receipt=True, tick=values['tick'], counts={k: values[k] for k in counts},
                       unavailable_reasons={k: values[k] for k in reasons})
+        if has_consistency:
+            result['consistency'] = 'non_atomic'
     except (ValueError, OverflowError):
         result['errors'].append('invalid inventory receipt')
     return result
@@ -502,8 +517,18 @@ def validate_authority_scan_bundle(root, manifest):
     assignments = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_wire_warp\s*=\s*(.*?)\s*$', config)
     if assignments != (['true'] if warp else []):
         raise ValueError('authority fixture wire warp config differs from bundle option')
+    continuous = manifest.get('authority_fixture_continuous', False)
+    if type(continuous) is not bool or (continuous and (not motion or warp or manifest.get('ticks', 0) < 300)):
+        raise ValueError('invalid authority fixture continuous option')
+    assignments = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_continuous\s*=\s*(.*?)\s*$', config)
+    if assignments != (['true'] if continuous else []):
+        raise ValueError('authority fixture continuous config differs from bundle option')
+    if continuous:
+        for rel in ('extension/x4_lan_lab/ui/fixture_continuous.lua', 'authority_fixture_continuous_support.py'):
+            if rel not in manifest.get('files', {}) or not (root / rel).is_file():
+                raise ValueError('authority fixture continuous artifact missing: ' + rel)
     sectors = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_warp_sector\s*=\s*[\'"]([0-9a-f]{16})[\'"]\s*$', config)
-    if len(sectors) != (1 if warp else 0) or (sectors and sectors[0] == '0000000000000000'):
+    if len(sectors) != (1 if warp or continuous else 0) or (sectors and sectors[0] == '0000000000000000'):
         raise ValueError('authority fixture wire warp sector missing or invalid')
     if warp:
         for rel in ('extension/x4_lan_lab/ui/authority_fixture_wire_warp.lua',
@@ -2518,6 +2543,10 @@ def bundle(args):
         if not args.authority_fixture_motion or args.ticks < 300:
             raise SystemExit('--authority-fixture-wire-warp requires motion and at least 300 ticks')
         command.append('--authority-fixture-wire-warp')
+    if args.authority_fixture_continuous:
+        if not args.authority_fixture_motion or args.authority_fixture_wire_warp or args.ticks < 300:
+            raise SystemExit('--authority-fixture-continuous requires motion, 300 ticks and no wire warp')
+        command.append('--authority-fixture-continuous')
     if args.authority_fixture_fleet:
         if not args.authority_fixture_wire or args.ticks < 300:
             raise SystemExit('--authority-fixture-fleet requires --authority-fixture-wire and at least 300 ticks')
@@ -2843,6 +2872,8 @@ def bundle(args):
     if args.authority_fixture_wire:
         shutil.copy2(repo / 'src/authority/fixture_udp.py', out / 'fixture_udp.py')
         shutil.copy2(repo / 'tools/dev/authority_fixture_wire_support.py', out / 'authority_fixture_wire_support.py')
+    if args.authority_fixture_continuous:
+        shutil.copy2(repo / 'tools/dev/authority_fixture_continuous_support.py', out / 'authority_fixture_continuous_support.py')
     if args.authority_fixture_wire_warp:
         shutil.copy2(repo / 'tools/dev/authority_fixture_wire_warp_support.py', out / 'authority_fixture_wire_warp_support.py')
     if args.authority_fixture_fleet:
@@ -3046,6 +3077,7 @@ def bundle(args):
         'authority_fixture_inventory',
         'authority_fixture_wire',
         'authority_fixture_wire_warp',
+        'authority_fixture_continuous',
         'authority_fixture_motion',
         'authority_fixture_fleet',
         'nav_probe_init',
@@ -4924,6 +4956,18 @@ def run(args):
         except (KeyError, OSError, ValueError) as error:
             result['authority_wire_evidence'] = {'pass': False, 'errors': [str(error)]}
             result['pass'] = False
+    if manifest.get('authority_fixture_continuous'):
+        try:
+            from authority_fixture_continuous_support import validate as validate_fixture_continuous
+            profiles = {slot: profile for slot, (_, profile) in zip(local, games)}
+            evidence = validate_fixture_continuous(gate_lines(profiles[1] / 'engine-output.log'),
+                                                   gate_lines(profiles[2] / 'engine-output.log'))
+            result['authority_continuous_evidence'] = evidence
+            if not evidence['pass']:
+                result['pass'] = False
+        except (KeyError, OSError, ValueError) as error:
+            result['authority_continuous_evidence'] = {'pass': False, 'errors': [str(error)]}
+            result['pass'] = False
     if manifest.get('authority_fixture_wire_warp'):
         try:
             from authority_fixture_wire_warp_support import validate as validate_fixture_wire_warp
@@ -5177,6 +5221,7 @@ def main(argv=None):
     b.add_argument('--authority-fixture-inventory', action='store_true', help='read-only faction-list inventory; requires scan')
     b.add_argument('--authority-fixture-wire', action='store_true', help='local read-only fixture UDP diagnostic; requires scan')
     b.add_argument('--authority-fixture-wire-warp', action='store_true', help='isolated one-shot guest apply of received position; needs motion')
+    b.add_argument('--authority-fixture-continuous', action='store_true', help='isolated repeated received-pose writes; needs motion')
     b.add_argument('--authority-fixture-motion', action='store_true', help='move the isolated fixture using an AI order; requires wire')
     b.add_argument('--authority-fixture-fleet', action='store_true', help='read-only 12-fixture loopback coverage diagnostic; requires wire')
     for name, why in (('fixture-body-observe', 'observe fixture 6 body bits beside its original getter at ticks 1400..1600 without actor/shield refresh'),

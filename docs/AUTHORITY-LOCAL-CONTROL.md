@@ -7,7 +7,10 @@ The approach reuses the earlier LAN experiment's `IsGamePaused`, `Pause`, `IsSav
 ## Explicit integration contract
 
 `control_state.lua` exposes the inert factory as `X4LAN_AUTHORITY_CONTROL_STATE` for X4 UI loading; it contains a pure state machine. `new({enabled=false}, ...)`, an absent config, or any value other than boolean `true` returns disabled without touching the engine. An enabled configuration supplies `owner`, `world_epoch`, `timeout_seconds` (default 30), and `pause_settle_seconds` (default 0.1). Owner and epoch are local fencing labels, **not authentication**. The caller must exclusively own this specific X4 process and serialize every call. Creating another state machine for the same process would defeat the one-save fence; it must be forbidden by the future supervisor.
-The one-save-per-process rule is a temporary diagnostic restriction, not a design for a persistent campaign: repeated joins and last-player departures require repeated saves. Before that goal can work, a future implementation must establish a safe, verified multi-save lifecycle and fencing strategy.
+By default the state machine retains the one-save-per-process restriction. An
+explicit `enable_verified_reuse=true` opts into a separate, synthetic-tested
+repeated-save lifecycle; it has not been run in X4. Repeated joins and last
+departures need this or another verified multi-save integration.
 
 `x4_control_engine.lua` exposes the separate explicit factory as `X4LAN_AUTHORITY_X4_CONTROL_ENGINE`. `new({enabled=true, test_profile='45841'})` resolves the required X4 UI functions and confirms that X4 reports a save directory ending in `/45841/save` (either slash convention). The caller must additionally establish that this profile and its game process are disposable and exclusively owned. Nothing in a profile suffix proves process ownership. The binding does not start, stop, load or save the game at construction. `register_save_event(config, state, RegisterEvent)` must be called explicitly once; it registers `gameSaved` and treats a registration error as indeterminate rather than allowing a duplicate retry. Integrate `state:on_update()` into an existing X4 UI update callback: do not install a second competing `SetScript` handler.
 
@@ -25,7 +28,20 @@ The example describes separate sequential requests, not calls to run together. R
 
 Pause succeeds only after `IsGamePaused()` is true and at least two observations, separated by the configured positive real-time interval, show an unchanged game clock. Resume succeeds only after `IsGamePaused()` becomes false and the observed game clock advances. These are bounded UI observations, not proof that every native worker is quiescent. A missing callback or paused UI loop can leave a request pending; the supervisor needs its own deadline and process fencing.
 
-Save is accepted only after the state machine itself confirmed pause, the game remains paused at the same game time, `IsSavingPossible(false)` returns true, the owner asserts its exclusive/empty-slot preconditions, and no earlier save was attempted in this process. The engine call happens at most once. `gameSaved(true)` is recorded, but only the next update with the pause still confirmed produces a report with `status='native_event_only'` and `reason='file_verification_required'`. A failed/duplicate/unexpected event, pause loss, timer regression, deadline, callback failure or engine error faults the instance; a fault cannot be reset in Lua. Because the X4 event supplies no request ID or slot, it is not independently attributable if another actor can save. After any uncertainty, the supervisor must fence the old operation and process before creating another instance; ignoring a late event alone is insufficient.
+Save is accepted only after the state machine itself confirmed pause, the game remains paused at the same game time, `IsSavingPossible(false)` returns true, and the owner asserts its exclusive/slot preconditions. In default mode, no earlier save may have been attempted in the process. Each accepted engine call happens at most once. `gameSaved(true)` is recorded, but only the next update with the pause still confirmed produces a report with `status='native_event_only'` and `reason='file_verification_required'`. A failed/duplicate/unexpected event, pause loss, timer regression, deadline, callback failure or engine error faults the instance; a fault cannot be reset in Lua. Because the X4 event supplies no request ID or slot, it is not independently attributable if another actor can save. After any uncertainty, the supervisor must fence the old operation and process before creating another instance; ignoring a late event alone is insufficient.
+
+In repeat mode the state machine derives a distinct title from the world epoch
+and request ID, includes it and the slot in the native-event receipt, and will
+not accept another action until `state:confirm_save(owner, world_epoch,
+request_id, true)`. Before making that assertion the supervisor must verify the
+actual file, its title and bytes, durably publish the checkpoint, and verify
+that the process remains paused. Lua cannot verify the filesystem or the
+supervisor's assertion. A verified previously used slot may be requested again
+only with `overwrite_verified_owned_slot=true`; a new slot still requires
+`empty_owned_slot=true`. The supervisor remains responsible for exclusive
+ownership and actual slot contents. A false verification, lost pause, or foreign
+save event faults the state. The Lua tests use doubles; this option is not
+connected to the coordinator and does not establish native repeated slot reuse.
 
 The report callback receives `{world_epoch, request_id, operation, status, reason}`. An exception from the callback faults the instance. Pause/resume reports use `status='confirmed'`; a native save event is never `confirmed`. For `WorldCoordinator`, a future supervisor must wait asynchronously without blocking the X4 UI thread, validate the exact newly created save, ensure completion and stability, then publish it through `CheckpointStore` before its synchronous `save()` returns. A matching receipt must identify the same owner, epoch and request, and an error/timeout must fail the coordinator closed. `WorldCoordinator.mark_loaded(..., trusted_confirmation=true)` still requires an independent native load receipt; delivery of bytes is not readiness.
 

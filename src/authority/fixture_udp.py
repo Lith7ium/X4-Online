@@ -8,9 +8,9 @@ mapping, change the game, or authenticate traffic outside this host.
 ASCII datagrams (no newline; at most 512 bytes):
   either -> adapter: FIX1|HELLO|<SOURCE or GUEST>|<role lease>|<fixture>
   adapter -> either: FIX1|READY|<SOURCE or GUEST>|<fixture>
-  source -> adapter: FIX1|PUT|<source lease>|<fixture>|<seq>|<x>|<y>|<z>
+  source -> adapter: FIX1|PUT|<source lease>|<fixture>|<seq>|<x>|<y>|<z>[|<vx>|<vy>|<vz>]
   guest  -> adapter: FIX1|GET|<guest lease>|<fixture>|<request seq>
-  adapter -> guest:  FIX1|POS|<fixture>|<request seq>|<source seq>|<x>|<y>|<z>
+  adapter -> guest:  FIX1|POS|<fixture>|<request seq>|<source seq>|<x>|<y>|<z>[|<vx>|<vy>|<vz>]
 
 Sequence numbers are decimal integers in 1..2**53-1, strictly increasing per
 role for the adapter lifetime. Coordinates are finite decimal numbers; the frame
@@ -116,10 +116,10 @@ class FixtureUDP:
                     else:
                         continue
                     self.sock.sendto(f'FIX1|READY|{role}|{self.fixture}'.encode('ascii'), sender)
-                elif (sender == self.source and len(parts) == 8 and parts[:3] ==
+                elif (sender == self.source and len(parts) in (8, 11) and parts[:3] ==
                         ['FIX1', 'PUT', self.source_lease] and parts[3] == self.fixture):
                     seq = _sequence(parts[4])
-                    coordinates = tuple(_coordinate(v) for v in parts[5:8])
+                    coordinates = tuple(_coordinate(v) for v in parts[5:])
                     if seq > self.source_seq:
                         self.source_seq = seq
                         self.latest = (time.monotonic(), coordinates)

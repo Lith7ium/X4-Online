@@ -105,6 +105,45 @@ paused=false;real=.3;ok,reason=control:on_update();assert(not ok and reason=='sa
 assert(not control:on_game_saved(true))
 ''')
 
+    def test_verified_checkpoint_allows_later_save_and_owned_slot_reuse(self):
+        self.lua(r'''
+cfg.enable_verified_reuse=true
+local saves={};engine.save=function(slot,title) saves[#saves+1]={slot,title} end
+start();confirm_pause()
+local fresh={slot='save_009',exclusive_owner=true,empty_owned_slot=true}
+assert(submit(2,'save',fresh));assert(saves[1][2]=='X4 Authority epoch-1 2')
+assert(control:on_game_saved(true));real=.3;assert(control:on_update())
+assert(reports[#reports].status=='native_event_only' and reports[#reports].title==saves[1][2])
+local ok,why=submit(3,'resume');assert(not ok and why=='save_verification_required')
+assert(not control:confirm_save('supervisor-1','epoch-1',1,true))
+assert(not control:confirm_save('other','epoch-1',2,true))
+assert(control:confirm_save('supervisor-1','epoch-1',2,true))
+assert(submit(3,'resume'));paused=false;game=101;real=.4;assert(control:on_update())
+assert(submit(4,'pause'));paused=true;real=.5;assert(control:on_update());real=.7;assert(control:on_update())
+assert(not submit(5,'save',fresh)) -- a used slot cannot be asserted empty
+assert(not submit(5,'save',{slot='save_010',exclusive_owner=true,overwrite_verified_owned_slot=true}))
+local reused={slot='save_009',exclusive_owner=true,overwrite_verified_owned_slot=true}
+assert(submit(5,'save',reused));assert(saves[2][2]=='X4 Authority epoch-1 5')
+assert(control:on_game_saved(true));real=.8;assert(control:on_update())
+assert(control:confirm_save('supervisor-1','epoch-1',5,true));assert(submit(6,'resume'))
+assert(#saves==2)
+''')
+
+    def test_failed_or_unexpected_save_event_fences_reuse(self):
+        self.lua(r'''
+cfg.enable_verified_reuse=true;engine.save=function() end
+local args={slot='save_009',exclusive_owner=true,empty_owned_slot=true}
+start();confirm_pause();assert(submit(2,'save',args));assert(control:on_game_saved(true))
+real=.3;assert(control:on_update());assert(not control:confirm_save('supervisor-1','epoch-1',2,false))
+assert(not submit(3,'resume'))
+real=0;game=100;paused=false;start();confirm_pause();assert(submit(2,'save',args))
+assert(control:on_game_saved(true));real=.3;assert(control:on_update());paused=false
+assert(not control:confirm_save('supervisor-1','epoch-1',2,true));assert(not submit(3,'resume'))
+real=0;game=100;paused=false;start();confirm_pause();assert(submit(2,'save',args))
+assert(control:on_game_saved(true));real=.3;assert(control:on_update())
+assert(not control:on_game_saved(true));assert(not control:confirm_save('supervisor-1','epoch-1',2,true))
+''')
+
     def test_immediate_event_duplicate_failure_and_report_exception(self):
         self.lua(r'''
 local args={slot='save_009',exclusive_owner=true,empty_owned_slot=true}
@@ -142,7 +181,8 @@ fakeffi.C={GetSaveFolderPath=function() return 'C:\\sandbox\\45841\\save' end,
  GetCurrentGameTime=function() return 123 end}
 package.loaded.ffi=fakeffi
 Pause=function() calls[#calls+1]='pause' end;Unpause=function() calls[#calls+1]='resume' end
-SaveGame=function(slot) calls[#calls+1]='save:'..slot end
+local saved_title
+SaveGame=function(slot,title) saved_title=title;calls[#calls+1]='save:'..slot end
 IsSavingPossible=function(v) assert(v==false);return true end
 GetCurRealTime=function() return 55 end
 local x4=assert(loadfile('src/authority/lua/x4_control_engine.lua'))()
@@ -151,6 +191,8 @@ assert(binding.ready() and not binding.is_paused() and binding.game_time()==123 
 assert(binding.saving_possible() and #calls==0)
 binding.pause();binding.resume();binding.save('save_009')
 assert(table.concat(calls,',')=='pause,resume,save:save_009')
+assert(saved_title=='X4 Authority isolated checkpoint')
+binding.save('save_009','X4 Authority epoch-1 2');assert(saved_title=='X4 Authority epoch-1 2')
 local state={on_game_saved=function(_,v) calls[#calls+1]=tostring(v) end}
 local register=function(name,fn) assert(name=='gameSaved');callbacks[#callbacks+1]=fn end
 assert(x4.register_save_event({enabled=true},state,register));assert(#callbacks==1)

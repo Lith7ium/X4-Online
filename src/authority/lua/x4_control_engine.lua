@@ -30,7 +30,7 @@ function M.new(cfg)
   pause=function() pause() end,
   resume=function() unpause() end,
   saving_possible=function() return possible(false) end,
-  save=function(slot) save(slot,'X4 Authority isolated checkpoint') end,
+  save=function(slot,title) save(slot,title or 'X4 Authority isolated checkpoint') end,
  }
 end
 -- Explicit and single registration; the caller remains responsible for invoking

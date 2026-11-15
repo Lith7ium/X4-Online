@@ -156,6 +156,7 @@ def main():
     p.add_argument('--authority-fixture-inventory', action='store_true', help='read-only faction-list inventory; requires scan')
     p.add_argument('--authority-fixture-wire', action='store_true', help='local read-only fixture UDP diagnostic; requires scan')
     p.add_argument('--authority-fixture-wire-warp', action='store_true', help='isolated one-shot guest apply of received fixture position; needs motion')
+    p.add_argument('--authority-fixture-continuous', action='store_true', help='isolated repeated received-pose writes; needs motion')
     p.add_argument('--authority-fixture-motion', action='store_true', help='move the isolated fixture via an AI order; requires fixture wire')
     p.add_argument('--authority-fixture-fleet', action='store_true', help='read-only 12-fixture loopback coverage diagnostic; requires wire')
     p.add_argument('--authority-net-so', type=Path, help='built Linux Lua UDP module for the fixture diagnostic')
@@ -795,7 +796,7 @@ def main():
                    'fp_redirect_drones', 'world_health_ticks', 'fp_attack_capture', 'fp_attack_watch'}
         allowed.add('travel_determinism')
         allowed.update(('authority_fixture_scan', 'authority_fixture_inventory'))
-        allowed.update(('authority_fixture_wire', 'authority_fixture_wire_warp', 'authority_fixture_motion', 'authority_fixture_fleet', 'authority_net_so'))
+        allowed.update(('authority_fixture_wire', 'authority_fixture_wire_warp', 'authority_fixture_continuous', 'authority_fixture_motion', 'authority_fixture_fleet', 'authority_net_so'))
         # The battle fixture on Linux (linux/gate_battle.h, gate_flight.h): the snapshot's twelve, their state row, steering.
         allowed.update(('fixture_body_observe', 'snapshot_prebind', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state',
                         'flight_diag', 'flight_rng', 'flight_full', 'avoidance_refresh', 'steering_init', 'agent_full', 'spline_diag', 'spline_refresh', 'spline_state', 'params_init', 'strict_physics', 'body_diag', 'params_diag'))
@@ -833,6 +834,8 @@ def main():
         p.error('--authority-fixture-motion requires --authority-fixture-wire')
     if args.authority_fixture_wire_warp and not args.authority_fixture_motion:
         p.error('--authority-fixture-wire-warp requires --authority-fixture-motion')
+    if args.authority_fixture_continuous and (not args.authority_fixture_motion or args.authority_fixture_wire_warp):
+        p.error('--authority-fixture-continuous requires motion and excludes wire warp')
     if args.authority_fixture_fleet and not args.authority_fixture_wire:
         p.error('--authority-fixture-fleet requires --authority-fixture-wire')
     if args.fixture_body_observe and (not args.gate_so or not args.snapshot or args.mode != 'battle' or not args.snapshot_prebind):
@@ -866,6 +869,9 @@ def main():
             shutil.copy2(root/'src/authority/lua'/name, args.out/'ui'/name)
         shutil.copy2(args.authority_net_so, args.out/'native/x4lan_net.so')
         ui_files = 'ui/fixture_wire.lua\nui/fixture_wire_probe.lua\n' + ui_files
+    if args.authority_fixture_continuous:
+        shutil.copy2(root/'src/authority/lua/fixture_continuous.lua', args.out/'ui/fixture_continuous.lua')
+        ui_files = 'ui/fixture_continuous.lua\n' + ui_files
     if args.authority_fixture_wire_warp:
         shutil.copy2(root/'tools/dev/authority_fixture_wire_warp.lua', args.out/'ui/authority_fixture_wire_warp.lua')
         shutil.copy2(root/'tools/dev/authority_fixture_warp.xml', args.out/'md/authority_fixture_warp.xml')
@@ -1605,11 +1611,12 @@ X4LAN_CONFIG.slot = "@X4LANE_SLOT@"
     if args.authority_fixture_motion:
         with (args.out/'ui/config.lua.append').open('a') as config:
             config.write('X4LAN_CONFIG.native_gate_authority_motion = true\n')
-    if args.authority_fixture_wire_warp:
+    if args.authority_fixture_wire_warp or args.authority_fixture_continuous:
         saved = snapshot_fixture(args.snapshot)[0]
         sector = player_orders.fixture_sector(args.snapshot, saved, _snapshot_starts)
         with (args.out/'ui/config.lua.append').open('a') as config:
-            config.write('X4LAN_CONFIG.native_gate_authority_wire_warp = true\n')
+            if args.authority_fixture_wire_warp: config.write('X4LAN_CONFIG.native_gate_authority_wire_warp = true\n')
+            if args.authority_fixture_continuous: config.write('X4LAN_CONFIG.native_gate_authority_continuous = true\n')
             config.write('X4LAN_CONFIG.native_gate_authority_warp_sector = '+repr(sector)+'\n')
     if args.authority_fixture_fleet:
         with (args.out/'ui/config.lua.append').open('a') as config:

@@ -126,8 +126,8 @@ function M.scan(engine, identities, options)
 end
 
 -- Optional local diagnostic; never invoked by scan(). A row represents each
--- entry returned by the faction enumerator, including unknown/non-operational
--- entries. The caller must provide read-only identity callbacks: they may use
+-- distinct object returned by the faction enumerator, including unknown or
+-- non-operational entries. The caller must provide read-only identity callbacks: they may use
 -- sealed identity tables, but must not dereference an unverified component.
 -- Supplied IDs are scoped labels, not validated cross-client identities. Rows
 -- and status counts refer to distinct local objects; enumerated and memberships
@@ -288,6 +288,49 @@ function M.inventory(engine, identities, options)
  local ok,result=pcall(inventory,engine,identities,options)
  if not ok then return nil,'inventory failed: '..tostring(result) end
  return result
+end
+
+
+-- Cooperative processing: resume only at scanner checkpoints. Each individual
+-- engine call (including full native fleet enumeration and adapter conversion)
+-- remains synchronous and cannot be preempted by this mechanism. Never expose
+-- rows until both non-atomic enumeration passes have completed successfully.
+function M.inventory_task(engine, identities, options)
+ options=options or {}
+ local copied={}
+ for k,v in pairs(options) do copied[k]=v end
+ local original=copied.checkpoint
+ assert(original==nil or type(original)=='function', 'checkpoint must be a function')
+ copied.checkpoint=function()
+  if original then original() end
+  coroutine.yield()
+ end
+ local thread=coroutine.create(function() return M.inventory(engine,identities,copied) end)
+ local finished=false
+ return {
+  step=function(max_checkpoints, should_yield)
+   if finished then return 'error',nil,'inventory task already finished' end
+   if type(max_checkpoints)~='number' or max_checkpoints~=math.floor(max_checkpoints) or max_checkpoints<1 or
+      type(should_yield)~='function' then
+    finished=true;return 'error',nil,'invalid inventory task budget'
+   end
+   for _=1,max_checkpoints do
+    local ok,result,why=coroutine.resume(thread)
+    if not ok then finished=true;return 'error',nil,'inventory task failed' end
+    if coroutine.status(thread)=='dead' then
+     finished=true
+     if result then return 'complete',result end
+     return 'error',nil,why
+    end
+    local checked,stop=pcall(should_yield)
+    if not checked or type(stop)~='boolean' then
+     finished=true;return 'error',nil,'inventory task clock failed'
+    end
+    if stop then break end
+   end
+   return 'running'
+  end,
+ }
 end
 
 X4LAN_AUTHORITY_SHIP_SCAN = M

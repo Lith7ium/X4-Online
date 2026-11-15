@@ -14,10 +14,14 @@ function M.new(config,engine,report)
  end
  local timeout=config.timeout_seconds or 30
  local settle=config.pause_settle_seconds or .1
+ assert(config.enable_verified_reuse==nil or type(config.enable_verified_reuse)=='boolean', 'invalid save reuse option')
+ local reusable=config.enable_verified_reuse==true
+ if reusable then assert(#expected_epoch<=64,'epoch too long for a checkpoint title') end
  assert(finite(timeout) and timeout>0 and timeout<=600 and finite(settle) and settle>0 and settle<=5,
   'invalid control timing')
  local pending,last_id,last_time=nil,0,nil
  local failed,paused_confirmed,paused_time,save_used=false,false,nil,false
+ local unverified,verified_slots=nil,{}
  local reporting=false
  local state={}
  local function invoke(name,...)
@@ -29,7 +33,9 @@ function M.new(config,engine,report)
   if status=='failed' then failed=true;paused_confirmed=false;paused_time=nil end
   if request then
    reporting=true
-   local ok=pcall(report,{world_epoch=expected_epoch,request_id=request.id,operation=request.op,status=status,reason=reason})
+   local receipt={world_epoch=expected_epoch,request_id=request.id,operation=request.op,status=status,reason=reason}
+   if reusable and request.op=='save' then receipt.slot=request.slot;receipt.title=request.title end
+   local ok=pcall(report,receipt)
    reporting=false
    if not ok then failed=true;paused_confirmed=false;paused_time=nil end
   end
@@ -52,12 +58,18 @@ function M.new(config,engine,report)
   if owner~=expected_owner or epoch~=expected_epoch then return false,'owner_or_epoch' end
   if failed then return false,'faulted' end
   if pending then return false,'busy' end
+  if unverified then return false,'save_verification_required' end
   if type(id)~='number' or id%1~=0 or id<1 or id>MAX or id<=last_id then return false,'stale_request' end
   if op~='pause' and op~='resume' and op~='save' then return false,'operation' end
   if op~='save' and params~=nil then return false,'parameters' end
-  if op=='save' and (type(params)~='table' or params.exclusive_owner~=true or params.empty_owned_slot~=true or
+  if op=='save' and (type(params)~='table' or params.exclusive_owner~=true or
      type(params.slot)~='string' or not params.slot:match('^save_%d%d%d$')) then return false,'save_contract' end
-  if op=='save' and save_used then return false,'one_save_per_process' end
+  if op=='save' then
+   if not reusable and save_used then return false,'one_save_per_process' end
+   if verified_slots[params.slot] then
+    if not reusable or params.overwrite_verified_owned_slot~=true or params.empty_owned_slot==true then return false,'save_contract' end
+   elseif params.empty_owned_slot~=true or params.overwrite_verified_owned_slot==true then return false,'save_contract' end
+  end
   local t=now();local observation=current()
   if failed then return false,'faulted' end
   if not t or not observation then failed=true;return false,'engine_unavailable' end
@@ -88,11 +100,29 @@ function M.new(config,engine,report)
   else
    save_used=true -- even a failed or uncertain call must never be retried
    pending.slot=params.slot
-   local ok=invoke('save',params.slot)
+   if reusable then pending.title='X4 Authority '..expected_epoch..' '..string.format('%.0f',id) end
+   local ok=invoke('save',params.slot,pending.title)
    if not ok then finish('failed','save_call');return false,'save_call' end
    if failed then return false,'save_event_failure' end
   end
   return true,'pending'
+ end
+ -- The supervisor is responsible for independently verifying the completed
+ -- file's bytes and generated title, durably publishing the checkpoint, and
+ -- fencing every other save initiator before making this assertion.
+ function state:confirm_save(owner,epoch,id,verified)
+  if reporting then return false,'reentrant_report' end
+  if owner~=expected_owner or epoch~=expected_epoch then return false,'owner_or_epoch' end
+  if failed then return false,'faulted' end
+  if not reusable or not unverified or id~=unverified.id then return false,'unknown_save' end
+  if verified~=true then failed=true;unverified=nil;return false,'verification_failed' end
+  local observation=current()
+  if failed then return false,'faulted' end
+  if not observation or not observation.paused or observation.time~=paused_time then
+   failed=true;unverified=nil;paused_confirmed=false;return false,'pause_lost'
+  end
+  verified_slots[unverified.slot]=true;unverified=nil
+  return true,'verified'
  end
  function state:on_game_saved(success)
   if reporting then return false,'reentrant_report' end
@@ -139,6 +169,7 @@ function M.new(config,engine,report)
    end
    if pending.event then
     -- The supervisor must independently verify/commit the resulting file.
+    if reusable then unverified={id=pending.id,slot=pending.slot,title=pending.title} end
     if not finish('native_event_only','file_verification_required') then return false,'report_failed' end
     return true,'native_event_only'
    end

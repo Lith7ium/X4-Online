@@ -10,7 +10,11 @@ public commit `b80712b39963c179dcdc2d99541cf9a25dacf7de`.
 A later opt-in Linux/Linux test applied one received localhost position to the
 matching fixture in the guest, with a matching delayed readback. The complete
 360-tick run failed its strict fleet scan and recorded a relay divergence; see
-`AUTHORITY-WIRE-WARP-EXPERIMENT.md`. Continuous replication is not established.
+`AUTHORITY-WIRE-WARP-EXPERIMENT.md`. A subsequent 600-tick experiment repeatedly
+applied locally transmitted positions and estimated rates to that one fixture;
+its bounded readback evidence passed, while its overall run failed the strict
+scan and diverged. See `AUTHORITY-CONTINUOUS-EXPERIMENT.md`. Replication of a
+complete universe or gameplay remains unestablished.
 
 In a later read-only Linux experiment, two local X4 instances each returned the
 same recorded pose for one known fixture at tick 30. The fleet scans in that run
@@ -64,8 +68,17 @@ count of distinct ships. An offline traversal of the same snapshot counted
 10,231 component records whose `class` begins `ship_`; that XML count is not an
 independent complete runtime fleet census. The diagnostic's membership bound
 has since been raised to one million while retaining the 200,000-object limit
-and the time budget; the revised limit has not yet been tested in X4 and does
-not guarantee that a full inventory fits.
+and switching the diagnostic to cooperative per-frame work. Its scanner yields
+at checkpoints and performs a second, non-atomic membership recheck. It emits
+no partial counts as a complete result. Individual native fleet-list calls and
+their conversion remain synchronous; the target frame budget is not a hard
+latency guarantee, and the 10,000-checkpoint fallback also applies when X4's UI
+clock does not advance within one frame. In one later 600-tick Linux/Linux run,
+both non-atomic rechecks completed at tick 70 with 10,070 distinct objects and
+203,970 list memberships. Each returned 9,976 observed positions, 65 entries
+not confirmed operational, and 29 entries without a usable saved identity.
+These counts do not prove universe coverage, and no positions were replicated
+for those inventory rows. The overall run still failed its separate strict scan.
 
 ## Question
 
