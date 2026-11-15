@@ -121,6 +121,44 @@ for i=1,12 do assert(seen[string.format('fixture-%02d',i)]) end
         result = subprocess.run(['luajit', '-'], input=script, text=True, cwd=ROOT, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('luajit') and shutil.which('cc'),
+                         'Linux compiler and LuaJIT required')
+    def test_x4_ui_load_order_publishes_wire_and_registers_real_udp_roles(self):
+        """Execute UI files for side effects, as X4 does; no mock wire module."""
+        with tempfile.TemporaryDirectory() as tmp, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
+            lib = Path(tmp)/'x4lan_net.so'
+            subprocess.run(['cc','-std=c11','-O2','-Wall','-Wextra','-Werror','-shared','-fPIC',
+                            str(ROOT/'src/native/net.c'),'-ldl','-o',str(lib)],check=True,capture_output=True)
+            server.bind(('127.0.0.1',0));server.settimeout(2)
+            script = r'''
+local ffi=require('ffi');ffi.cdef('typedef uint64_t UniverseID;')
+X4LAN_SHA256={digest=function() return string.rep('a',64) end}
+local real_load=package.loadlib
+package.loadlib=function(path,symbol) return real_load(arg[1],symbol) end
+X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return {
+ key=function(h) return tostring(h) end,operational=function() return true end,is_ship=function() return true end,
+ sector=function() return ffi.new('uint64_t',99) end,pose=function(h) return {x=tonumber(h),y=0,z=0} end,
+} end}
+local gate={saved_identity=function(v) local n=tonumber(v);if n==99 then return string.rep('a',16) end;return string.format('%016x',n) end}
+local actors={};local saved={};for i=1,12 do actors[i]=i;saved[i]=string.format('%016x',i) end
+X4LAN_AUTHORITY_FIXTURE_FLEET_WIRE=nil
+assert(loadfile('src/authority/lua/fixture_fleet_wire.lua'))() -- ignore returned value, like X4 UI
+assert(type(X4LAN_AUTHORITY_FIXTURE_FLEET_WIRE)=='table')
+for _,slot in ipairs({'p1','p2'}) do
+ local logs={};local probe=assert(loadfile('src/authority/lua/fixture_fleet_probe.lua'))()
+ local cfg={native_gate_authority_fleet=true,test_profile='45841',slot=slot,native_gate_authority_fleet_port=tonumber(arg[2]),
+  native_gate_authority_fleet_lease=string.rep(slot=='p1' and 'a' or 'b',32),native_gate_snapshot_fixture=saved}
+ probe.sample(cfg,30,actors,function(s) logs[#logs+1]=s end,gate)
+ assert(#logs==12,table.concat(logs,'\n'))
+ for _,row in ipairs(logs) do assert(row:find('AUTHORITY_FLEET_ENROLL',1,true) and not row:find('ERROR',1,true)) end
+end
+'''
+            result=subprocess.run(['luajit','-',str(lib),str(server.getsockname()[1])],input=script,text=True,
+                                  cwd=ROOT,capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            datagrams=[server.recv(512),server.recv(512)]
+            self.assertEqual({packet.split(b'|')[2] for packet in datagrams},{b'SOURCE',b'GUEST1'})
+
     @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
     def test_probe_error_stages_are_bounded_and_never_log_exceptions(self):
         script = r'''

@@ -109,4 +109,7 @@ function M.new(transport, role, lease, fixtures, max_reply_age)
  end
  return state
 end
+-- X4 executes UI files for their side effects and does not consume `return M`.
+-- Preserve the return for standalone Lua tests and non-X4 callers.
+X4LAN_AUTHORITY_FIXTURE_FLEET_WIRE=M
 return M
