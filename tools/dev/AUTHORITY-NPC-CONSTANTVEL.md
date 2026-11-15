@@ -45,6 +45,9 @@ through the three samples with zero constant velocity and the three samples
 over approximately three game seconds after the separate release. The reported
 pilot remained the same and the order was reported as `Patrol` / `started` in
 all nine samples. The process was paused and owned cleanup reported no
-remaining processes. This one observation does not show whether movement would
+remaining processes. A separate read-only review measured approximately 603 m
+between the first and last baseline positions over 2.02 game seconds and found
+no position change through the last sample, approximately 3.04 game seconds
+after the release receipt. There was no simultaneous control run. This one observation does not show whether movement would
 resume later, prove the pilot's complete order state, or establish restoration
 or a general NPC-control mechanism.
