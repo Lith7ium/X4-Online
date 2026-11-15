@@ -92,6 +92,15 @@ observed two distinguishable ships created after startup through a save and
 reload, with their runtime IDs changing. Universal spawn discovery, destruction,
 and cross-client binding remain to be established.
 
+A subsequent [two-instance experiment](AUTHORITY-TWO-X4-IDENTITY-EXPERIMENT.md)
+observed those two deliberately enrolled references after a real server save
+was transferred to another Linux X4 instance. Both corresponding runtime IDs
+again differed. This does not establish binding of arbitrary ships. The local
+MD schema defines events for job-activated ships, God-created ships and ships
+built by an observed construction object, but no single event found so far
+covers every creation path. Owner-change and destruction events take an object
+or group, and a galaxy search's full coverage and cost remain unverified.
+
 ## Question
 
 Can one running X4 instance own a persistent universe while other X4 instances
