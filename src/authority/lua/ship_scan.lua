@@ -129,7 +129,9 @@ end
 -- entry returned by the faction enumerator, including unknown/non-operational
 -- entries. The caller must provide read-only identity callbacks: they may use
 -- sealed identity tables, but must not dereference an unverified component.
--- Supplied IDs are scoped labels, not validated cross-client identities.
+-- Supplied IDs are scoped labels, not validated cross-client identities. Rows
+-- and status counts refer to distinct local objects; enumerated and memberships
+-- count list entries. Repeated memberships do not imply their semantics.
 local function inventory(engine, identities, options)
  assert(type(engine)=='table' and type(identities)=='table', 'missing inventory dependencies')
  options=options or {}
@@ -141,6 +143,7 @@ local function inventory(engine, identities, options)
  local max_factions=integer(options.max_factions or 256,4096,'faction limit')
  local max_ships=integer(options.max_ships or 250000,1000000,'ship limit')
  local max_fleet=integer(options.max_fleet or max_ships,max_ships,'fleet limit')
+ local max_memberships=integer(options.max_memberships or max_ships,1000000,'membership limit')
  local scope=id(options.identity_scope,'identity scope')
  assert(type(identities.ship)=='function' and type(identities.sector)=='function', 'identity callbacks required')
  assert(options.on_duplicate==nil or type(options.on_duplicate)=='function', 'invalid duplicate diagnostic')
@@ -186,58 +189,70 @@ local function inventory(engine, identities, options)
   return ships
  end
  local rows, membership, ids, reasons={},{},{},{}
- local counts={enumerated=0,position_observed=0,not_confirmed_operational=0,unavailable=0,unresolved_identity=0}
+ local counts={enumerated=0,memberships=0,objects=0,repeated_memberships=0,position_observed=0,not_confirmed_operational=0,unavailable=0,unresolved_identity=0}
  local first_factions,first_set=factions()
  for faction_index,faction in ipairs(first_factions) do
   for ship_index,ship in ipairs(fleet(faction)) do
    checkpoint()
-   if #rows>=max_ships then fail('inventory ship limit exceeded') end
+   counts.memberships=counts.memberships+1
+   counts.enumerated=counts.enumerated+1
+   if counts.memberships>max_memberships then fail('inventory membership limit exceeded') end
    local key=object_key(ship)
-   if membership[key] then
-    local first=membership[key]
-    -- The opt-in callback is diagnostic only: errors cannot replace or turn
-    -- the duplicate failure into a successful inventory.
-    if options.on_duplicate then pcall(options.on_duplicate,first.faction,first.ship_index,faction,ship_index,ship) end
-    -- Indices, not handles, identify the collision for the isolated probe.
-    fail(string.format('inventory duplicate object first=%d:%d repeated=%d:%d',
-     first.faction_index,first.ship_index,faction_index,ship_index))
-   end
-   local sid=stable_id(identities.ship,ship)
-   if sid and ids[sid] then fail('inventory duplicate supplied identity') end
-   if sid then ids[sid]=true else counts.unresolved_identity=counts.unresolved_identity+1 end
-   local record={faction=faction,faction_index=faction_index,ship_index=ship_index,
-    identity=sid,operational=bool(engine.operational,ship)}
-   membership[key]=record
-   local row={ordinal=#rows+1, identity=sid, status='unavailable'}
-   if record.operational==false then
-    row.status='not_confirmed_operational'
-   elseif record.operational==nil then
-    row.reason='operational_unknown'
+   local previous=membership[key]
+   if previous then
+    if previous.ship~=ship then fail('inventory local object key collision') end
+    local first=previous.factions[faction]
+    if first then
+     if options.on_duplicate then pcall(options.on_duplicate,faction,first.ship_index,faction,ship_index,ship) end
+     fail(string.format('inventory duplicate object first=%d:%d repeated=%d:%d',
+      first.faction_index,first.ship_index,faction_index,ship_index))
+    end
+    if stable_id(identities.ship,ship)~=previous.identity or bool(engine.operational,ship)~=previous.operational then
+     fail('inventory identity or operational state changed')
+    end
+    counts.repeated_memberships=counts.repeated_memberships+1
+    previous.factions[faction]={faction_index=faction_index,ship_index=ship_index}
+    previous.row.memberships[#previous.row.memberships+1]=faction
    else
-    record.ship_class=bool(engine.is_ship,ship)
-    if record.ship_class~=true then
-     row.reason=record.ship_class==false and 'ship_class_not_confirmed' or 'ship_class_unknown'
+    if #rows>=max_ships then fail('inventory ship limit exceeded') end
+    local sid=stable_id(identities.ship,ship)
+    if sid and ids[sid] then fail('inventory duplicate supplied identity') end
+    if sid then ids[sid]=key else counts.unresolved_identity=counts.unresolved_identity+1 end
+    local record={ship=ship,
+     factions={[faction]={faction_index=faction_index,ship_index=ship_index}},identity=sid,operational=bool(engine.operational,ship)}
+    membership[key]=record
+    local row={ordinal=#rows+1, identity=sid, status='unavailable',memberships={faction}}
+    record.row=row
+    if record.operational==false then
+     row.status='not_confirmed_operational'
+    elseif record.operational==nil then
+     row.reason='operational_unknown'
     else
-     local ok, sector=call(engine.sector,ship)
-     if ok and sector then record.sector_key=object_key(sector);record.sector_identity=stable_id(identities.sector,sector) end
-     if not ok or not sector then row.reason='sector_unavailable'
-     elseif not sid then row.reason='ship_identity_unavailable'
-     elseif not record.sector_identity then row.reason='sector_identity_unavailable'
+     record.ship_class=bool(engine.is_ship,ship)
+     if record.ship_class~=true then
+      row.reason=record.ship_class==false and 'ship_class_not_confirmed' or 'ship_class_unknown'
      else
-      local pose_ok, p=call(engine.pose,ship)
-      local pose={}
-      if pose_ok and type(p)=='table' then
-       for _,field in ipairs({'x','y','z','yaw','pitch','roll'}) do if not finite(p[field]) then pose_ok=false;break end;pose[field]=p[field] end
-      else pose_ok=false end
-      if pose_ok then row.status='position_observed';row.sector=record.sector_identity;row.pose=pose
-      else row.reason='pose_unavailable' end
+      local ok, sector=call(engine.sector,ship)
+      if ok and sector then record.sector_key=object_key(sector);record.sector_identity=stable_id(identities.sector,sector) end
+      if not ok or not sector then row.reason='sector_unavailable'
+      elseif not sid then row.reason='ship_identity_unavailable'
+      elseif not record.sector_identity then row.reason='sector_identity_unavailable'
+      else
+       local pose_ok, p=call(engine.pose,ship)
+       local pose={}
+       if pose_ok and type(p)=='table' then
+        for _,field in ipairs({'x','y','z','yaw','pitch','roll'}) do if not finite(p[field]) then pose_ok=false;break end;pose[field]=p[field] end
+       else pose_ok=false end
+       if pose_ok then row.status='position_observed';row.sector=record.sector_identity;row.pose=pose
+       else row.reason='pose_unavailable' end
+      end
      end
     end
+    counts.objects=counts.objects+1
+    counts[row.status]=counts[row.status]+1
+    if row.reason then reasons[row.reason]=(reasons[row.reason] or 0)+1 end
+    rows[#rows+1]=row
    end
-   counts.enumerated=counts.enumerated+1
-   counts[row.status]=counts[row.status]+1
-   if row.reason then reasons[row.reason]=(reasons[row.reason] or 0)+1 end
-   rows[#rows+1]=row
   end
  end
  local last_factions,last_set=factions()
@@ -248,7 +263,8 @@ local function inventory(engine, identities, options)
    checkpoint()
    local key=object_key(ship)
    local record=membership[key]
-   if not record or record.faction~=faction then fail('inventory object membership changed') end
+   if not record or not record.factions[faction] then fail('inventory object membership changed') end
+   if record.ship~=ship then fail('inventory local object key collision') end
    if stable_id(identities.ship,ship)~=record.identity or bool(engine.operational,ship)~=record.operational then fail('inventory identity or operational state changed') end
    if record.operational==true then
     if bool(engine.is_ship,ship)~=record.ship_class then fail('inventory class state changed') end
@@ -259,7 +275,8 @@ local function inventory(engine, identities, options)
      if key_after~=record.sector_key or identity_after~=record.sector_identity then fail('inventory sector state changed') end
     end
    end
-   membership[key]=nil
+   record.factions[faction]=nil
+   if not next(record.factions) then membership[key]=nil end
   end
  end
  if next(membership) then fail('inventory object membership changed') end

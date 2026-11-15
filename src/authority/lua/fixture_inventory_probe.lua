@@ -98,7 +98,7 @@ function M.sample(cfg,tick,log,gate)
   local scanner=assert(X4LAN_AUTHORITY_SHIP_SCAN, 'inventory scanner missing')
   local engine=assert(X4LAN_AUTHORITY_SHIP_ENGINE, 'inventory engine missing').new()
   local result,why=scanner.inventory(engine,{ship=saved_identity,sector=saved_identity},
-   {identity_scope='isolated-snapshot-local-diagnostic',max_factions=1024,max_ships=200000,max_fleet=200000,
+   {identity_scope='isolated-snapshot-local-diagnostic',max_factions=1024,max_ships=200000,max_fleet=200000,max_memberships=1000000,
     on_duplicate=function(first,first_index,repeated,repeated_index,ship)
      duplicate_probe(engine,gate,tick,log,first,first_index,repeated,repeated_index,ship)
     end,
@@ -126,6 +126,8 @@ function M.sample(cfg,tick,log,gate)
      {'inventory class state changed','class_changed'},
      {'inventory checkpoint failed','checkpoint'},
      {'inventory ship limit exceeded','ship_limit'},
+     {'inventory membership limit exceeded','membership_limit'},
+     {'inventory local object key collision','object_key_collision'},
      {'invalid faction','invalid_faction'},
     }) do
      if why:find(mapping[1],1,true) then reason=mapping[2];break end
@@ -143,9 +145,10 @@ function M.sample(cfg,tick,log,gate)
    return
   end
   local c,r=result.counts,result.unavailable_reasons
-  assert(c.enumerated==c.position_observed+c.not_confirmed_operational+c.unavailable, 'inventory count mismatch')
-  log(string.format('AUTHORITY_INVENTORY tick=%d enumerated=%d position_observed=%d not_confirmed_operational=%d unavailable=%d unresolved_identity=%d operational_unknown=%d ship_class_not_confirmed=%d ship_class_unknown=%d sector_unavailable=%d ship_identity_unavailable=%d sector_identity_unavailable=%d pose_unavailable=%d coverage=unknown positions_complete=false',
-   tick,c.enumerated,c.position_observed,c.not_confirmed_operational,c.unavailable,c.unresolved_identity,
+  assert(c.enumerated==c.memberships and c.memberships==c.objects+c.repeated_memberships, 'inventory membership count mismatch')
+  assert(c.objects==c.position_observed+c.not_confirmed_operational+c.unavailable, 'inventory count mismatch')
+  log(string.format('AUTHORITY_INVENTORY tick=%d enumerated=%d memberships=%d objects=%d repeated_memberships=%d position_observed=%d not_confirmed_operational=%d unavailable=%d unresolved_identity=%d operational_unknown=%d ship_class_not_confirmed=%d ship_class_unknown=%d sector_unavailable=%d ship_identity_unavailable=%d sector_identity_unavailable=%d pose_unavailable=%d coverage=unknown positions_complete=false',
+   tick,c.enumerated,c.memberships,c.objects,c.repeated_memberships,c.position_observed,c.not_confirmed_operational,c.unavailable,c.unresolved_identity,
    r.operational_unknown or 0,r.ship_class_not_confirmed or 0,r.ship_class_unknown or 0,r.sector_unavailable or 0,
    r.ship_identity_unavailable or 0,r.sector_identity_unavailable or 0,r.pose_unavailable or 0))
  end)

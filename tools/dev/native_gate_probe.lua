@@ -126,6 +126,8 @@ assert(cfg.native_gate_authority_motion==nil or cfg.native_gate_authority_motion
 assert(not cfg.native_gate_authority_motion or (cfg.test_profile=='45841' and cfg.native_gate_hash=='battle'
  and cfg.native_gate_authority_wire==true and cfg.native_gate_authority_scan==true and cfg.native_gate_battle_engage==false),
  'authority motion requires the isolated, idle fixture wire test')
+assert(cfg.native_gate_authority_wire_warp==nil or cfg.native_gate_authority_wire_warp==false or cfg.native_gate_authority_wire_warp==true, 'wire warp must be boolean')
+assert(not cfg.native_gate_authority_wire_warp or (cfg.native_gate_authority_wire and cfg.native_gate_authority_motion and cfg.test_profile=='45841'), 'wire warp requires isolated motion and wire')
 assert(cfg.native_gate_authority_fleet==nil or cfg.native_gate_authority_fleet==false or cfg.native_gate_authority_fleet==true,
  'native_gate_authority_fleet must be boolean')
 assert(not cfg.native_gate_authority_fleet or (cfg.test_profile=='45841' and cfg.native_gate_hash=='battle'
@@ -3381,7 +3383,7 @@ local function sample(tick)
   assert(X4LAN_AUTHORITY_FIXTURE_INVENTORY_PROBE,'authority inventory probe missing').sample(cfg,tick,ticklog.write,gate)
  end
  if cfg.native_gate_authority_wire then
-  assert(X4LAN_AUTHORITY_FIXTURE_WIRE_PROBE,'authority wire probe missing').sample(cfg,tick,actors,ticklog.write)
+  assert(X4LAN_AUTHORITY_FIXTURE_WIRE_PROBE,'authority wire probe missing').sample(cfg,tick,actors,ticklog.write,gate)
  end
  if cfg.native_gate_authority_fleet then
   assert(X4LAN_AUTHORITY_FIXTURE_FLEET_PROBE,'authority fleet probe missing').sample(cfg,tick,actors,ticklog.write,gate)
@@ -6668,7 +6670,7 @@ local function frame()
   -- native_gate_battle_engage=false keeps the restored fixture idle (default
   -- order Wait) while its rows stay in the declared state: a calm sandbox.
   if tick==10 and cfg.native_gate_battle_engage~=false then AddUITriggeredEvent('X4LAN_NativeGate','Engage',{}) end
-  if tick==40 and cfg.native_gate_authority_motion then AddUITriggeredEvent('X4LAN_NativeGate','AuthorityMoveFixture',{}) end
+  if tick==40 and cfg.native_gate_authority_motion and (not cfg.native_gate_authority_wire_warp or cfg.slot=='p1') then AddUITriggeredEvent('X4LAN_NativeGate','AuthorityMoveFixture',{}) end
   -- Opt-in stress fixture (native_gate_bigbattle.xml): faction war and/or 40v40 spawn.
   if cfg.native_gate_big_war and tick==12 then AddUITriggeredEvent('X4LAN_NativeGate','BigWar',{}) end
   if cfg.native_gate_big_spawn and tick==14 then AddUITriggeredEvent('X4LAN_NativeGate','BigSpawn',{}) end

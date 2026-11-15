@@ -408,14 +408,24 @@ def parse_authority_inventory(lines, ticks):
                    'sector_unavailable', 'ship_identity_unavailable', 'sector_identity_unavailable', 'pose_unavailable'}
         counts = {'enumerated', 'position_observed', 'not_confirmed_operational', 'unavailable', 'unresolved_identity'}
         expected = reasons | counts | {'tick', 'coverage', 'positions_complete'}
+        membership_counts = {'memberships', 'objects', 'repeated_memberships'}
+        has_memberships = set(fields) == expected | membership_counts
+        if has_memberships:
+            counts |= membership_counts
+            expected |= membership_counts
         if len(parts)-1 != len(expected) or set(fields) != expected:
             raise ValueError('fields')
         if any(not re.fullmatch(r'[0-9]+', fields[k]) for k in reasons | counts | {'tick'}):
             raise ValueError('number')
         values = {k: int(fields[k]) for k in reasons | counts | {'tick'}}
-        if (not 30 <= values['tick'] <= ticks or values['enumerated'] > 200000 or
+        objects = values['objects'] if has_memberships else values['enumerated']
+        if (not 30 <= values['tick'] <= ticks or values['enumerated'] > (1000000 if has_memberships else 200000) or
+            objects > 200000 or
             any(values[k] > values['enumerated'] for k in reasons | counts) or
-            values['enumerated'] != values['position_observed'] + values['not_confirmed_operational'] + values['unavailable'] or
+            (has_memberships and (values['enumerated'] != values['memberships'] or
+             values['memberships'] != objects + values['repeated_memberships'])) or
+            objects != values['position_observed'] + values['not_confirmed_operational'] + values['unavailable'] or
+            values['unresolved_identity'] > objects or
             values['unavailable'] != sum(values[k] for k in reasons) or
             fields['coverage'] != 'unknown' or fields['positions_complete'] != 'false'):
             raise ValueError('invalid counts')
@@ -486,6 +496,20 @@ def validate_authority_scan_bundle(root, manifest):
         raise ValueError('authority fixture motion config differs from bundle option')
     if motion and manifest.get('ticks', 0) < 120:
         raise ValueError('authority fixture motion requires at least 120 ticks')
+    warp = manifest.get('authority_fixture_wire_warp', False)
+    if type(warp) is not bool or (warp and (not wire or not motion or manifest.get('ticks', 0) < 300)):
+        raise ValueError('invalid authority fixture wire warp option')
+    assignments = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_wire_warp\s*=\s*(.*?)\s*$', config)
+    if assignments != (['true'] if warp else []):
+        raise ValueError('authority fixture wire warp config differs from bundle option')
+    sectors = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_warp_sector\s*=\s*[\'"]([0-9a-f]{16})[\'"]\s*$', config)
+    if len(sectors) != (1 if warp else 0) or (sectors and sectors[0] == '0000000000000000'):
+        raise ValueError('authority fixture wire warp sector missing or invalid')
+    if warp:
+        for rel in ('extension/x4_lan_lab/ui/authority_fixture_wire_warp.lua',
+                    'extension/x4_lan_lab/md/authority_fixture_warp.xml', 'authority_fixture_wire_warp_support.py'):
+            if rel not in manifest.get('files', {}) or not (root / rel).is_file():
+                raise ValueError('authority fixture wire warp artifact missing: ' + rel)
     fleet = manifest.get('authority_fixture_fleet', False)
     if type(fleet) is not bool or (fleet and not wire):
         raise ValueError('invalid authority fixture fleet option')
@@ -2490,6 +2514,10 @@ def bundle(args):
         if not args.authority_fixture_wire or args.ticks < 120:
             raise SystemExit('--authority-fixture-motion requires --authority-fixture-wire and at least 120 ticks')
         command.append('--authority-fixture-motion')
+    if args.authority_fixture_wire_warp:
+        if not args.authority_fixture_motion or args.ticks < 300:
+            raise SystemExit('--authority-fixture-wire-warp requires motion and at least 300 ticks')
+        command.append('--authority-fixture-wire-warp')
     if args.authority_fixture_fleet:
         if not args.authority_fixture_wire or args.ticks < 300:
             raise SystemExit('--authority-fixture-fleet requires --authority-fixture-wire and at least 300 ticks')
@@ -2815,6 +2843,8 @@ def bundle(args):
     if args.authority_fixture_wire:
         shutil.copy2(repo / 'src/authority/fixture_udp.py', out / 'fixture_udp.py')
         shutil.copy2(repo / 'tools/dev/authority_fixture_wire_support.py', out / 'authority_fixture_wire_support.py')
+    if args.authority_fixture_wire_warp:
+        shutil.copy2(repo / 'tools/dev/authority_fixture_wire_warp_support.py', out / 'authority_fixture_wire_warp_support.py')
     if args.authority_fixture_fleet:
         (out / 'authority').mkdir()
         for name in ('__init__.py', 'ship_state.py', 'fixture_udp.py', 'fixture_fleet_udp.py'):
@@ -3015,6 +3045,7 @@ def bundle(args):
         'authority_fixture_scan',
         'authority_fixture_inventory',
         'authority_fixture_wire',
+        'authority_fixture_wire_warp',
         'authority_fixture_motion',
         'authority_fixture_fleet',
         'nav_probe_init',
@@ -4893,6 +4924,18 @@ def run(args):
         except (KeyError, OSError, ValueError) as error:
             result['authority_wire_evidence'] = {'pass': False, 'errors': [str(error)]}
             result['pass'] = False
+    if manifest.get('authority_fixture_wire_warp'):
+        try:
+            from authority_fixture_wire_warp_support import validate as validate_fixture_wire_warp
+            profiles = {slot: profile for slot, (_, profile) in zip(local, games)}
+            evidence = validate_fixture_wire_warp(gate_lines(profiles[1] / 'engine-output.log'),
+                                                  gate_lines(profiles[2] / 'engine-output.log'))
+            result['authority_wire_warp_evidence'] = evidence
+            if not evidence['pass']:
+                result['pass'] = False
+        except (KeyError, OSError, ValueError) as error:
+            result['authority_wire_warp_evidence'] = {'pass': False, 'errors': [str(error)]}
+            result['pass'] = False
     if manifest.get('authority_fixture_fleet'):
         try:
             from authority_fixture_fleet_support import validate as validate_fixture_fleet
@@ -5133,6 +5176,7 @@ def main(argv=None):
     b.add_argument('--authority-fixture-scan', action='store_true', help='read-only disposable fixture position scan')
     b.add_argument('--authority-fixture-inventory', action='store_true', help='read-only faction-list inventory; requires scan')
     b.add_argument('--authority-fixture-wire', action='store_true', help='local read-only fixture UDP diagnostic; requires scan')
+    b.add_argument('--authority-fixture-wire-warp', action='store_true', help='isolated one-shot guest apply of received position; needs motion')
     b.add_argument('--authority-fixture-motion', action='store_true', help='move the isolated fixture using an AI order; requires wire')
     b.add_argument('--authority-fixture-fleet', action='store_true', help='read-only 12-fixture loopback coverage diagnostic; requires wire')
     for name, why in (('fixture-body-observe', 'observe fixture 6 body bits beside its original getter at ticks 1400..1600 without actor/shield refresh'),

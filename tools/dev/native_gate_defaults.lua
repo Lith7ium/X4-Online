@@ -232,6 +232,8 @@ D.DIAGNOSTIC={
  {'native_gate_authority_inventory','read-only isolated faction-list inventory'},
  {'native_gate_authority_wire','local read-only isolated fixture UDP diagnostic'},
  {'native_gate_authority_motion','isolated fixture movement stimulus'},
+ {'native_gate_authority_wire_warp','isolated one-shot guest fixture warp'},
+ {'native_gate_authority_warp_sector','snapshot sector identity for the wire warp'},
  {'native_gate_authority_fleet','read-only isolated twelve-fixture UDP diagnostic'},
  {'native_gate_fixture_body_observe','read-only Linux fixture body observation'},
  {'native_gate_navmesh_post_observe','Linux navmesh post attempts during startup and a bounded live tick window'},

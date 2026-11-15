@@ -7,6 +7,11 @@ while failing its strict immediate-readback criterion; see
 `AUTHORITY-FIXTURE-WARP-EXPERIMENT.md`. The branch is isolated and based on
 public commit `b80712b39963c179dcdc2d99541cf9a25dacf7de`.
 
+A later opt-in Linux/Linux test applied one received localhost position to the
+matching fixture in the guest, with a matching delayed readback. The complete
+360-tick run failed its strict fleet scan and recorded a relay divergence; see
+`AUTHORITY-WIRE-WARP-EXPERIMENT.md`. Continuous replication is not established.
+
 In a later read-only Linux experiment, two local X4 instances each returned the
 same recorded pose for one known fixture at tick 30. The fleet scans in that run
 still failed on a non-operational entry. This does not establish synchronization.
@@ -41,6 +46,26 @@ do not establish the semantics of membership or the stability of the complete
 faction census. The strict inventory still rejected the duplicate and the
 overall run failed; it is not evidence of a complete ship list. The owned X4
 processes were cleaned up and the checked Steam identity was unchanged.
+
+The diagnostic inventory now represents each distinct local object once and
+retains all of its observed faction-list memberships. Its receipt counts list
+entries, distinct objects, and additional memberships separately. A repeated
+entry within one faction list, a collision between distinct handles or saved
+identities, and changes across the non-atomic recheck still fail. The diagnostic
+does not infer ownership from membership and does not relax the separate strict
+fleet scan or claim complete universe coverage. Synthetic tests exercise the
+new cases; native results must be evaluated independently.
+
+One subsequent isolated two-instance Linux run passed the earlier duplicate
+membership point, but each inventory stopped after reaching the configured
+200,000-list-entry limit. The overall run failed, its owned processes exited,
+and the checked Steam identity was unchanged. These are memberships, not a
+count of distinct ships. An offline traversal of the same snapshot counted
+10,231 component records whose `class` begins `ship_`; that XML count is not an
+independent complete runtime fleet census. The diagnostic's membership bound
+has since been raised to one million while retaining the 200,000-object limit
+and the time budget; the revised limit has not yet been tested in X4 and does
+not guarantee that a full inventory fits.
 
 ## Question
 

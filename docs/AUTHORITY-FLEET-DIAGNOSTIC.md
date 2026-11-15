@@ -47,5 +47,9 @@ gap longer than 120 ticks must cover the remainder of the run. These are
 bounded diagnostic acceptance thresholds, not a gameplay performance target.
 The independent fleet scan and the rest of the runner remain mandatory. If
 `--authority-fixture-motion` is also enabled, the separate single-fixture wire
-check requires the transmitted first fixture to move at least 10 m. This
-native harness is implemented and synthetic-tested, but not yet executed in X4.
+check requires the transmitted first fixture to move at least 10 m. One native
+Linux/Linux 360-tick run matched 2,661 received samples for all twelve enrolled
+fixtures, including one moving fixture. The guest did not apply those samples.
+The independent strict fleet scan and inventory failed, so the overall run did
+not pass. These results do not establish complete fleet coverage or Windows or
+Internet operation; see `AUTHORITY-INVESTIGATION.md`.
