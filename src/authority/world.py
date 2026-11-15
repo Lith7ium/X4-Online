@@ -178,6 +178,21 @@ class WorldCoordinator:
         """
         if trusted_confirmation is not True:
             raise ValueError('a trusted explicit load confirmation is required')
+        self._accept_loaded(world_epoch, connection_handle, baseline_id, load_generation, checkpoint_id, sha256)
+
+    def mark_loaded_trusting_marker(self, world_epoch, connection_handle, baseline_id, load_generation,
+                                    checkpoint_id, sha256, *, trusted_marker_claim):
+        """Accept an explicitly trusted client marker/load/pause claim.
+
+        The caller must validate the current offer, checkpoint marker and its
+        trusted connection before calling. This assumption is weaker than proof
+        that X4 read the exact bytes and does not authenticate the client.
+        """
+        if trusted_marker_claim is not True:
+            raise ValueError('an explicit trusted marker claim is required')
+        self._accept_loaded(world_epoch, connection_handle, baseline_id, load_generation, checkpoint_id, sha256)
+
+    def _accept_loaded(self, world_epoch, connection_handle, baseline_id, load_generation, checkpoint_id, sha256):
         offer = self._load_offers.get(connection_handle)
         if (offer is None or world_epoch != offer.world_epoch or baseline_id != offer.baseline_id
                 or load_generation != offer.load_generation or checkpoint_id != offer.save.checkpoint_id

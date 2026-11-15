@@ -105,8 +105,8 @@ class ExperimentalLoadSession:
                     pass
             raise
 
-    def observe_test_receipt(self, peer, receipt):
-        """Consume a matching synthetic receipt, never mark the peer ready."""
+    def _current(self, peer, receipt):
+        """Validate a current offer without consuming or authorizing it."""
         self._live()
         if type(peer) is not str or peer not in self._peers or type(receipt) is not Receipt:
             raise ValueError('unknown peer or invalid test receipt')
@@ -136,6 +136,13 @@ class ExperimentalLoadSession:
             entry = world._offers.service.offered.get(offer.save.name)
         if entry != (baseline[1].path, message.size, message.sha256):
             raise ValueError('offer withdrawn or changed')
+        return offer, message
+
+    def observe_test_receipt(self, peer, receipt):
+        """Consume a matching synthetic receipt, never mark the peer ready."""
+        offer, message = self._current(peer, receipt)
+        world = self._world
+        handle = self._peers[peer]
         self._active.pop(peer)
         try:
             world._offers.revoke(offer.save)
