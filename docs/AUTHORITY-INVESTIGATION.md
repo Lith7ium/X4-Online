@@ -198,7 +198,18 @@ The live checks are MD self-checks, not independent bindings to saved components
 and neither exact loaded bytes nor multiplayer are established. See
 `tools/dev/AUTHORITY-SECTOR-REFERENCE-FIXTURE.md`.
 
-An isolated follow-up attempted a correlated registry ResolveV2 response as a
+A later isolated single-Linux-X4 read of that archived checkpoint reported a
+pilot present and a `Patrol` order in the `started` state for fixture slot 2,
+at game time `3.014` and FFI position `(-90852.75, 6354.83984375, 79232)`.
+The log shows the load request, marker inspection, read receipt and subsequent
+pause receipt; the result reports no remaining owned processes. The engine log
+also records a failed write to the read-only `config.xml`. No jobs setting was
+changed. The bounded observation does not establish movement, continuous pause,
+independent MD responses, exact loaded bytes or an independent runtime-to-save
+actor binding, and is not a multiplayer test. See
+`tools/dev/AUTHORITY-SECTOR-READ-PREFLIGHT.md`.
+
+A separate isolated diagnostic attempted a correlated registry ResolveV2 response as a
 single MD table containing a request ID and actor. Its native result was
 `success=false`: the Lua handler ran but saw nil in the expected table argument,
 then stopped. It did not reach the unavailable/null case. The local X4 9.00
