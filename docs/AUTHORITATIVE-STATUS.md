@@ -18,12 +18,13 @@ Native Linux evidence so far:
   sectors and observed their positions change. The observed rates were derived
   from position samples, not native velocity readback.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
-  accepted a trusted client load claim, and confirmed resume and pause. Another
-  run loaded a marked checkpoint in a fresh server process and wrote a fresh
+  accepted a trusted client load claim over TCP, and confirmed resume and pause
+  through TCP participant control. A second join was simulated. Another run
+  loaded a marked checkpoint in a fresh server process and wrote a fresh
   confirmed checkpoint after a synthetic join. Neither run tested gameplay.
 
-TCP load and participant-control building blocks have synthetic loopback tests.
-They are not yet connected to an actual playable client or public listener.
+TCP load and participant control have also passed a bounded native Linux/Linux
+loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity
 work in earlier LAN experiments provides useful prior evidence, but its
 fixture-specific guards and reference-frame assumptions are not yet a general
@@ -39,5 +40,6 @@ the complete persistent shared-world scenario require actual end-to-end tests.
 Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [marked admission](AUTHORITY-TRUSTED-MARKED-LIVE.md),
+[native TCP control](AUTHORITY-TCP-NATIVE-EXPERIMENT.md),
 [recovered-world bridge](../tools/dev/AUTHORITY-RECOVERY-BRIDGE.md),
 and [experimental local host](AUTHORITY-EXPERIMENTAL-LOCAL-HOST.md).
