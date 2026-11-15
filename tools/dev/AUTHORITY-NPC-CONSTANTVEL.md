@@ -33,8 +33,18 @@ mode is established, so the release does not establish exact restoration. Even
 a completed case cannot establish absence of state loss, universal NPC control,
 smoothness, client authority, Windows/internet operation, or gameplay.
 
-Only focused synthetic tests have run. They do not exercise X4 MD semantics:
+Focused synthetic tests do not exercise X4 MD semantics:
 
 ```sh
 python3 -m unittest tests.test_authority_npc_constantvel
 ```
+
+On 2026-11-15, one isolated Linux X4 run completed. The selected ship moved
+between the three pre-intervention samples. Its sampled position was unchanged
+through the three samples with zero constant velocity and the three samples
+over approximately three game seconds after the separate release. The reported
+pilot remained the same and the order was reported as `Patrol` / `started` in
+all nine samples. The process was paused and owned cleanup reported no
+remaining processes. This one observation does not show whether movement would
+resume later, prove the pilot's complete order state, or establish restoration
+or a general NPC-control mechanism.
