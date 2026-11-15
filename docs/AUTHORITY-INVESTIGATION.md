@@ -173,7 +173,18 @@ against each other, attack NPC ships, trade, board ships, and command their
 company's ships, including while players are in different sectors. These are
 requirements, not capabilities established by the current prototype. Player
 versus player combat and boarding under one shared player faction need explicit
-engine investigation; no implementation semantics have been decided yet.
+engine investigation; no implementation semantics have been decided yet. In
+the examined base files of the local X4 9.00 installation, the normal interaction
+menu excludes player-owned targets from its attack and boarding commands
+(`ui/addons/ego_interactmenu/menu_interactmenu.lua`). The boarding AI also
+requires different owners when repeating the operation
+(`aiscripts/order.fight.board.xml`). Successful player boarding assigns the
+target to the player faction (`md/boarding.xml`). This makes the standard
+commands an obstacle for boarding or ordering attacks on another player's ship
+in the shared-faction model; it does not establish whether direct weapon hits
+work or what happens after modifying the UI, AI or engine. These observations
+are static file inspection, not gameplay tests. Active profile or Workshop
+extensions were not checked.
 All participants initially share one player faction and one company account;
 individual player factions and separate player accounts are later features.
 NPC factions remain part of the simulated world and the ship census. The
