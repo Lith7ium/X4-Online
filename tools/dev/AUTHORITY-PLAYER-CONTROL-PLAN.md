@@ -24,16 +24,51 @@ establish that a pilot position is free or control was obtained. The existing
 slot-1 ship without an AI pilot in a respawn scenario. Neither its use on this
 checkpoint nor cross-sector seat selection is proven by that example.
 
+## Spawn-position evidence and limits
+
+The local X4 9.00 `preparation/game-schemas/libraries/common.xsd` documents
+`create_ship` with a `safepos` child (around line 25029). Its position search
+radius defaults to the created object's radius when omitted (around line 7488);
+`includeplotbox` can request avoidance of station plot boxes, and dangerous
+regions are not ignored by default. `tools/dev/native_gate_session_start.py`
+already constructs an optional `safepos` for a disposable saved start. These are
+schema and existing-code evidence, not a native result for this test.
+
+The same schema documents `get_safe_pos` for sector- or zone-relative output
+and optional space reservations (around line 29096). A zone takes precedence
+over a sector when both are supplied. The local base-game archive `08.cat` /
+`08.dat` contains `aiscripts/move.seekenemies.xml`, where an existing ship uses
+`get_safe_pos` and a reservation, and `aiscripts/move.buildership.xml`, where a
+build-location check follows a safe-position search. These are vanilla usage
+examples, not proof of our proposed spawn's complete geometry clearance.
+Reservations must be cancelled and coordinate frames checked; they are
+respected by participating position searches, not an atomic exclusion of all
+other movement or physics.
+
+The separately documented `check_is_area_obstructed` is ship-specific and
+explicitly excludes certain mass traffic and ships with collision avoidance
+disabled. `check_is_build_location_free` accounts for objects including
+stations, gates and highways but explicitly ignores ships and asteroids. A
+radius-based object search, either check alone, or their combination has not
+been shown to cover every moving, streamed or collidable object. An observed
+successful spawn, unchanged hull and absence of visible collision are bounded
+observations; hidden geometry, concurrent movement and later collisions remain
+unproven. Unknown or visibly unsafe results stop the experiment rather than
+being labeled safe.
+
 ## Bounded sequence
 
 1. Create a fresh disposable marked checkpoint containing two explicitly
    identified operational ships owned by `faction.player`, with free pilot
-   positions and saved MD references, in two distinct saved sectors. Establish
-   physical clearance independently before placing a ship; fixed coordinates
-   alone are not clearance evidence. Persist the references and use a
+   positions and saved MD references, in two distinct saved sectors. Use the
+   game's `<create_ship><safepos .../></create_ship>` search rather than
+   asserting that an arbitrary fixed coordinate is clear. Record the actual
+   resulting position and space, finite pose, hull and relevant collision or
+   damage observations before the save. Persist the references and use a
    structured checkpoint parser to verify marker, ship classes and owners,
-   distinct slots and sector ancestry. Missing, ambiguous, docked, stored or
-   unsafe fixtures refuse the test.
+   distinct slots and sector ancestry. Missing, ambiguous, docked or stored
+   fixtures, invalid positions, visible collisions, damage, or unexpected
+   movement abort the test; none of these checks proves complete clearance.
 2. Stage the verified checkpoint read-only into two separate disposable
    profiles and launch owned X4 processes using the pinned executable and
    bounded, gated lifecycle. Observe each load request, expected marker and
