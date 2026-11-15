@@ -135,8 +135,19 @@ while others play, pause the shared simulation, save and transfer the current
 checkpoint, wait for the new client to finish loading, then resume together. A
 network connection alone does not prove that the client has loaded the save or
 is ready to participate. Server restart must recover a verified save and the
-associated identity/authority metadata. None of these engine operations is
-established by the prototype coordinator.
+associated identity/authority metadata. Isolated experiments exercised parts
+of this lifecycle, but the coordinator does not yet implement it end to end.
+
+The current coordinator pauses the server before requesting client pauses. It
+has no implemented channel to collect, fence, and apply outstanding delegated
+high-attention results before creating the checkpoint. Consequently the
+existing pause/save experiments do not prove that a real client's latest
+progress is present in the saved server world. The separately confirmed
+checkpoint pointer likewise does not start X4 or establish that it loaded that
+checkpoint. The marker and completed-load event have only been exercised in a
+test overlay; normal checkpoint saves do not yet persist or bind that marker.
+The identity strategy and mandatory checkpoint-marker proposal are awaiting
+the owner's decision.
 
 Ship positions are the first scope; trade and combat follow later. Spacesuits
 and dropped cargo are deferred; missions currently have lower priority.
