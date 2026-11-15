@@ -12,15 +12,15 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
 import authority_sector_fingerprint_live as subject
 
-EXPECTED={1:dict(index=1,ship_code='LBT-457',ship_macro='ship_x',sector_code='VHB-132',sector_macro='sector_x'),
-          2:dict(index=2,ship_code='ABC-309',ship_macro='ship_y',sector_code='CWZ-318',sector_macro='sector_y')}
+EXPECTED={1:dict(index=1,ship_code='LBT-457',ship_macro='ship_x',sector_macro='sector_x'),
+          2:dict(index=2,ship_code='ABC-309',ship_macro='ship_y',sector_macro='sector_y')}
 
 
 def evidence():
     rows=[]
     for i in range(4):
         slot=i%2+1;r=EXPECTED[slot]
-        rows.append(subject.TAG+f"ROW slot={slot} n={i//2+1} ship_code={r['ship_code']} ship_macro={r['ship_macro']} sector_code={r['sector_code']} sector_macro={r['sector_macro']} game=3")
+        rows.append(subject.TAG+f"ROW slot={slot} n={i//2+1} ship_code={r['ship_code']} ship_macro={r['ship_macro']} sector_macro={r['sector_macro']} game=3")
     rows.append(subject.TAG+'DONE samples=4 game=3')
     return rows
 
@@ -42,9 +42,10 @@ class SectorFingerprintTests(unittest.TestCase):
         self.assertEqual(len(root.findall('.//cue')),1)
         text=ET.tostring(root,encoding='unicode')
         for part in ('$request_id','$epoch','$index','$ship','$sector','$ship.idcode',
-                     '$ship.macro.id','$sector.idcode','$sector.macro.id',
+                     '$ship.macro.id','$sector.macro.id',
                      '$ship.sector == $sector','not $ship.dock.exists','not $ship.isinternallystored'):
             self.assertIn(part,text)
+        self.assertNotIn('$sector.idcode',text)
 
     def test_install_reuses_update_owner_and_protects_new_files(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -69,7 +70,7 @@ class SectorFingerprintTests(unittest.TestCase):
             self.assertFalse(result['runtime_binding_proven'])
             self.assertIsNone(subject.validate(raw(rows[:-1]),{},2,EXPECTED,partial=True))
             for bad in (rows+[rows[-1]],rows[:2]+[rows[2].replace('LBT-457','ZZZ-999')]+rows[3:],
-                        rows[:1]+[rows[1].replace('CWZ-318','null')]+rows[2:],
+                        rows[:1]+[rows[1].replace('sector_y','null')]+rows[2:],
                         rows[:2]+[rows[2].replace('game=3','game=4')]+rows[3:],
                         [subject.TAG+'ERROR refused']+rows):
                 with self.assertRaises(ValueError): subject.validate(raw(bad),{},2,EXPECTED)

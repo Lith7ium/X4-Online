@@ -45,19 +45,19 @@ RegisterEvent('X4AuthoritySectorFingerprint.Result',function(_,v)
   local now,game=observe();stage='pending';assert(state=='wait' and pending and now<=pending.deadline and game==settled_game)
   stage='row_type';assert(type(v)=='string' and #v<=700)
   stage='row_format';local _,pipes=v:gsub('|','');detail='bytes_'..#v..'_separators_'..pipes
-  local id,ep,index,ah,sh,sc,sm,zc,zm=v:match('^([0-9a-f%-]+)|([0-9a-f]+)|([12])|(0[xX][0-9a-fA-F]+)|(0[xX][0-9a-fA-F]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)$')
+  local id,ep,index,ah,sh,sc,sm,zm=v:match('^([0-9a-f%-]+)|([0-9a-f]+)|([12])|(0[xX][0-9a-fA-F]+)|(0[xX][0-9a-fA-F]+)|([^|]+)|([^|]+)|([^|]+)$')
   assert(id);detail=nil
   stage='request_id';assert(id==pending.id)
   stage='epoch';assert(ep==epoch)
   stage='slot';assert(tonumber(index)==pending.slot)
-  for _,field in ipairs({{'ship_code',sc},{'ship_macro',sm},{'sector_code',zc},{'sector_macro',zm}}) do
+  for _,field in ipairs({{'ship_code',sc},{'ship_macro',sm},{'sector_macro',zm}}) do
    stage=field[1];detail='shape_'..shape(field[2]);assert(token(field[2]));detail=nil
   end
   stage='handle_parse';local a=X4LAN_RESOLVE_STRING.parse_hex(ah);local s=X4LAN_RESOLVE_STRING.parse_hex(sh);assert(a and s)
   stage='local_binding';live(a,s)
   local slot=pending.slot
   stage='initial_binding';if slot==2 then assert(a==initial_actor and s==initial_sector) end
-  local fingerprint=table.concat({sc,sm,zc,zm},'|')
+  local fingerprint=table.concat({sc,sm,zm},'|')
   stage='repeat_binding'
   if actors[slot] then assert(actors[slot]==a and sectors[slot]==s and values[slot]==fingerprint)
   else actors[slot]=a;sectors[slot]=s;values[slot]=fingerprint end
@@ -66,7 +66,7 @@ RegisterEvent('X4AuthoritySectorFingerprint.Result',function(_,v)
   stage='final_observe'
   local _,after=observe();assert(after==settled_game);live(a,s)
   n=n+1;pending=nil
-  log(('ROW slot=%d n=%d ship_code=%s ship_macro=%s sector_code=%s sector_macro=%s game=%.17g'):format(slot,math.floor((n+1)/2),sc,sm,zc,zm,game))
+  log(('ROW slot=%d n=%d ship_code=%s ship_macro=%s sector_macro=%s game=%.17g'):format(slot,math.floor((n+1)/2),sc,sm,zm,game))
   state=n==4 and 'done' or 'send'
   if state=='done' then log(('DONE samples=%d game=%.17g'):format(n,game)) end
  end)

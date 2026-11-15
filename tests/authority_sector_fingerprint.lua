@@ -37,9 +37,9 @@ for _=1,500 do
   if mode=='initial_mismatch' and item.slot==2 then actor='0x29';sector='0x2b' end
   if mode=='bad_hex' then actor='29' end
   if mode=='pause_loss' then paused=false end
-  local attrs=item.slot==1 and 'LBT-457|ship_x|VHB-132|sector_x' or 'ABC-309|ship_y|CWZ-318|sector_y'
-  if mode=='missing_sector' then attrs=attrs:gsub('VHB%-132','null') end
-  if mode=='changed_attributes' and issued==3 then attrs='ZZZ-999|ship_x|VHB-132|sector_x' end
+  local attrs=item.slot==1 and 'LBT-457|ship_x|sector_x' or 'ABC-309|ship_y|sector_y'
+  if mode=='missing_sector' then attrs=attrs:gsub('sector_x','null') end
+  if mode=='changed_attributes' and issued==3 then attrs='ZZZ-999|ship_x|sector_x' end
   local response=item.request_id..'|'..item.epoch..'|'..item.slot..'|'..actor..'|'..sector..'|'..attrs
   events['X4AuthoritySectorFingerprint.Result'](nil,response)
   if mode=='duplicate' then events['X4AuthoritySectorFingerprint.Result'](nil,response) end
@@ -47,8 +47,8 @@ for _=1,500 do
 end
 if mode=='ok' then assert(done and paused and resumes==0 and pauses==0 and issued==4 and logs[#logs]:find('DONE samples=4',1,true))
 else assert(not done and logs[#logs]:find('ERROR',1,true)) end
-if mode=='missing_sector' then assert(logs[#logs]:find('ERROR sample_sector_code shape_null',1,true)) end
-if mode=='bad_hex' then assert(logs[#logs]:find('ERROR sample_row_format bytes_',1,true) and logs[#logs]:find('_separators_8',1,true)) end
+if mode=='missing_sector' then assert(logs[#logs]:find('ERROR sample_sector_macro shape_null',1,true)) end
+if mode=='bad_hex' then assert(logs[#logs]:find('ERROR sample_row_format bytes_',1,true) and logs[#logs]:find('_separators_7',1,true)) end
 if mode=='wrong_id' then assert(logs[#logs]:find('ERROR sample_request_id',1,true)) end
 if mode=='pause_loss' then assert(logs[#logs]:find('ERROR sample_observe',1,true)) end
 print('fingerprint synthetic '..mode..' passed')

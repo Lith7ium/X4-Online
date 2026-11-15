@@ -17,7 +17,7 @@ from authority.checkpoints import CheckpointStore
 
 TAG='[X4LAN] AUTH_SECTOR_FINGERPRINT '
 TOKEN=r'[A-Za-z0-9_.-]{1,128}'
-ROW=re.compile(r'ROW slot=([12]) n=([12]) ship_code=('+TOKEN+r') ship_macro=('+TOKEN+r') sector_code=('+TOKEN+r') sector_macro=('+TOKEN+r') game=('+base.NUMBER+r')\Z',re.ASCII)
+ROW=re.compile(r'ROW slot=([12]) n=([12]) ship_code=('+TOKEN+r') ship_macro=('+TOKEN+r') sector_macro=('+TOKEN+r') game=('+base.NUMBER+r')\Z',re.ASCII)
 DONE=re.compile(r'DONE samples=4 game=('+base.NUMBER+r')\Z',re.ASCII)
 base_install=base.install
 base_check=base.check_log_bytes
@@ -72,10 +72,10 @@ def validate(raw,ticket,slot,expected,partial=False):
         m=ROW.fullmatch(row);index=i%2+1;sequence=i//2+1
         if not m or int(m[1])!=index or int(m[2])!=sequence:
             raise ValueError('invalid fingerprint row')
-        fields={'index':index,'ship_code':m[3],'ship_macro':m[4],'sector_code':m[5],'sector_macro':m[6]}
-        if any(v in ('null','nil') for v in (m[3],m[4],m[5],m[6])): raise ValueError('unavailable fingerprint')
+        fields={'index':index,'ship_code':m[3],'ship_macro':m[4],'sector_macro':m[5]}
+        if any(v in ('null','nil') for v in (m[3],m[4],m[5])): raise ValueError('unavailable fingerprint')
         if fields!=expected[index]: raise ValueError('live and saved fingerprint differ')
-        if float(m[7])!=observed['reported_game_time']: raise ValueError('game time changed')
+        if float(m[6])!=observed['reported_game_time']: raise ValueError('game time changed')
         result.append(fields)
     if len(rows)<5:
         if partial:return None
@@ -96,7 +96,7 @@ def run(args):
     checkpoint=CheckpointStore(base.archive.DEFAULT_STORE).latest_confirmed()
     verified=saved.verify(checkpoint,base.archive.REGISTRY_EPOCH)
     if base.archive._path_fingerprints(base.archive.DEFAULT_STORE)!=before: raise ValueError('archive changed while deriving fingerprints')
-    fields=('index','ship_code','ship_macro','sector_code','sector_macro')
+    fields=('index','ship_code','ship_macro','sector_macro')
     expected={row['index']:{key:row[key] for key in fields} for row in verified['slots']}
     if len(verified['slots'])!=2 or set(expected)!={1,2}: raise ValueError('invalid saved slots')
     out.mkdir(mode=0o700,parents=True,exist_ok=False)
