@@ -11,6 +11,7 @@ import re
 import secrets
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -18,7 +19,7 @@ import time
 ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
 from authority.checkpoints import CheckpointStore, _read_regular
-from authority_marked_admission_evidence import _read_regular as stable_read
+from authority_marked_admission_evidence import _read_regular as stable_read, EvidenceFileGrowing
 import authority_download_load_live as load
 import authority_load_live as base
 import authority_sector_archive_provenance as archive
@@ -139,6 +140,62 @@ def log_continuity(file_id,raw,previous):
     return file_id[:2],len(raw),hashlib.sha256(raw).digest()
 
 
+def check_live_prefix(path,previous):
+    """Recheck the accepted prefix without waiting for EOF on a growing file."""
+    expected_id,size,digest=previous
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:
+        before=os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or (before.st_dev,before.st_ino)!=expected_id or before.st_size<size:
+            raise ValueError('log replaced or truncated during prefix check')
+        remaining=size;actual=hashlib.sha256()
+        while remaining:
+            part=os.read(fd,min(1<<20,remaining))
+            if not part: raise ValueError('log truncated during prefix check')
+            actual.update(part);remaining-=len(part)
+        after=os.fstat(fd)
+        if ((after.st_dev,after.st_ino)!=expected_id or after.st_size<size or actual.digest()!=digest):
+            raise ValueError('log prefix changed during capture')
+    finally:
+        os.close(fd)
+    current=path.lstat()
+    if not stat.S_ISREG(current.st_mode) or (current.st_dev,current.st_ino)!=expected_id:
+        raise ValueError('log replaced during prefix check')
+
+
+def read_live_log(path,previous):
+    """Capture a stable log, retrying only an observed append to the same file.
+
+    A growing read is discarded, but first checked against the preceding stable
+    prefix. Path/inode replacement and shrinkage are never treated as growth.
+    This is sampled evidence, not protection against adversarial ABA changes.
+    """
+    try:
+        file_id,_,raw=stable_read(path,32<<20,collect=True)
+        growing=False
+    except FileNotFoundError:
+        if previous is not None: raise ValueError('log disappeared') from None
+        return None
+    except EvidenceFileGrowing as error:
+        file_id,raw,growing=error.fingerprint,error.partial,True
+        if raw is None: raise ValueError('growing log has no captured bytes')
+    try:
+        current=path.lstat()
+    except FileNotFoundError:
+        raise ValueError('log disappeared during capture') from None
+    if not stat.S_ISREG(current.st_mode) or (current.st_dev,current.st_ino)!=file_id[:2]:
+        raise ValueError('log replaced during capture')
+    if current.st_size<len(raw):
+        raise ValueError('log truncated after capture')
+    if previous is not None and file_id[2]<previous[1]:
+        raise ValueError('log truncated before capture')
+    snapshot=log_continuity(file_id,raw,previous)
+    if growing:
+        if previous is not None: check_live_prefix(path,previous)
+        return None
+    return raw,snapshot
+
+
 def run(args):
     if sys.platform!='linux' or os.geteuid()==0: raise ValueError('unprivileged Linux required')
     out=snapshot.output_path(args.out);store_dir=base.local_directory(args.store)
@@ -216,9 +273,9 @@ def run(args):
                 if live.steam_identity(home,user.pw_uid)!=steam: raise RuntimeError('Steam identity changed')
                 if any(stable_read(path,1<<20,collect=False)[:2]!=identity for path,identity in protected.items()):
                     raise ValueError('protected configuration changed')
-                try: file_id,_,raw=stable_read(profile/'engine-output.log',32<<20,collect=True)
-                except FileNotFoundError: time.sleep(poll_interval);continue
-                log_snapshot=log_continuity(file_id,raw,log_snapshot)
+                captured=read_live_log(profile/'engine-output.log',log_snapshot)
+                if captured is None: time.sleep(poll_interval);continue
+                raw,log_snapshot=captured
                 if fault_log(raw): raise RuntimeError('load/read probe reported a fault')
                 observed=check_log_bytes(raw,ticket,args.slot,partial=True)
                 if observed is not None:

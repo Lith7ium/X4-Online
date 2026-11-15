@@ -27,6 +27,14 @@ MAX_LOG = download_live.ReceiptWatch.MAX_LOG
 FIELDS = download_live.FIELDS
 
 
+class EvidenceFileGrowing(ValueError):
+    """A regular file grew while captured; its bytes are not a stable snapshot."""
+    def __init__(self, fingerprint, partial):
+        super().__init__('local evidence file grew while reading')
+        self.fingerprint = fingerprint
+        self.partial = partial
+
+
 def _read_regular(path, limit, *, collect):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
@@ -48,6 +56,9 @@ def _read_regular(path, limit, *, collect):
                 chunks.append(part)
         after = os.fstat(fd)
         fingerprint = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        if (after.st_size > before.st_size and total >= before.st_size and total <= after.st_size
+                and (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)):
+            raise EvidenceFileGrowing(fingerprint(before), b''.join(chunks) if collect else None)
         if fingerprint(before) != fingerprint(after) or total != before.st_size:
             raise ValueError('local evidence file changed while reading')
         return (fingerprint(before), digest.hexdigest(), b''.join(chunks) if collect else None)

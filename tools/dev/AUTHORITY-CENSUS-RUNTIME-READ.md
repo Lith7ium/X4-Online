@@ -2,8 +2,8 @@
 
 `authority_census_runtime_read_live.py` is an opt-in, isolated Linux diagnostic
 for the pinned `authority-registry-census-01` checkpoint. It is not a server,
-client admission path, or multiplayer protocol. It has not yet been exercised
-in X4. The wrapper reuses the existing isolated load supervisor, verifies the
+client admission path, or multiplayer protocol. The wrapper reuses the existing
+isolated load supervisor, verifies the
 archived checkpoint and origin scripts, loads a private copy, observes the saved
 marker and requests pause before invoking its one update owner.
 The archived identity fixture's original MD script is also installed unchanged
@@ -34,7 +34,21 @@ universe-wide coverage. The results do not test either player's gameplay.
 Pause checks are sampled rather than continuous. The original archive is not
 modified; the staged save is mounted read-only in a disposable profile.
 
-Only the synthetic tests have run:
+The first native run, `.local/authority-census-runtime-read-01`, failed with
+`local evidence file changed while reading`. Its retained `result.json` remains
+failed. Its final log contains 1,815 consecutive rows, including 1,813 finite
+positions from 74 local sector handles and two docked/stored entries. There was
+no completion or final pause receipt, so this is partial evidence, not a
+successful scan. The error does not identify the file; a log append during the
+strict snapshot read is a plausible but unconfirmed cause.
+
+The log watcher now retries a specifically typed observed growth case. It checks
+the captured inode, size and previously accepted prefix before discarding the
+unstable capture; a changed, replaced, truncated or missing previously observed
+log fails. Protected files and the final stopped-process log remain subject to
+the strict stable-file read. As before, these are sampled checks and cannot rule
+out changes that are made and reversed between observations. The revised watcher
+has not yet been exercised in X4. Focused synthetic checks can be run with:
 
 ```sh
 python3 -m unittest tests.test_authority_census_runtime_read

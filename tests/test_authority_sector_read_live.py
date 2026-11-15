@@ -49,6 +49,71 @@ class ReadRunner(unittest.TestCase):
         for identity,data in (((1,3,3,4,5),b'abcdef'),((1,2,3,4,5),b'ab'),((1,2,3,4,5),b'xbcdef')):
             with self.subTest(identity=identity,data=data),self.assertRaises(ValueError):
                 m.log_continuity(identity,data,snapshot)
+
+    def test_real_append_during_read_is_retried_with_prefix_continuity(self):
+        path=self.path/'live.log';path.write_bytes(b'old prefix\n')
+        _,previous=m.read_live_log(path,None)
+        original=os.read;changed=[False]
+        def append_during_read(fd,size):
+            data=original(fd,size)
+            if not changed[0]:
+                changed[0]=True
+                with path.open('ab') as writer: writer.write(b'new line\n')
+            return data
+        with patch.object(m.os,'read',side_effect=append_during_read):
+            self.assertIsNone(m.read_live_log(path,previous))
+        raw,snapshot=m.read_live_log(path,previous)
+        self.assertEqual(raw,b'old prefix\nnew line\n')
+        self.assertEqual(snapshot[1],len(raw))
+
+    def test_replaced_truncated_or_rewritten_growing_log_is_not_retried(self):
+        for mode in ('replace','truncate','rewrite'):
+            with self.subTest(mode=mode):
+                path=self.path/('live-'+mode);path.write_bytes(b'old prefix\n')
+                _,previous=m.read_live_log(path,None)
+                if mode=='truncate': path.write_bytes(b'old')
+                original=os.read;changed=[False]
+                def mutate_during_read(fd,size):
+                    data=original(fd,size)
+                    if not changed[0]:
+                        changed[0]=True
+                        if mode=='replace':
+                            with path.open('ab') as writer:
+                                path.rename(path.with_name(path.name+'-old'))
+                                path.write_bytes(b'replacement')
+                                writer.write(b'append')
+                        else:
+                            if mode=='rewrite':
+                                with path.open('r+b') as writer: writer.write(b'X')
+                            with path.open('ab') as writer: writer.write(b'additional bytes')
+                    return data
+                with patch.object(m.os,'read',side_effect=mutate_during_read):
+                    with self.assertRaises(ValueError): m.read_live_log(path,previous)
+
+    def test_nonappend_change_or_missing_previously_seen_log_fails(self):
+        path=self.path/'live.log';path.write_bytes(b'original\n')
+        _,previous=m.read_live_log(path,None)
+        original=os.read;changed=[False]
+        def rewrite_during_read(fd,size):
+            data=original(fd,size)
+            if not changed[0]:
+                changed[0]=True
+                with path.open('r+b') as writer: writer.write(b'X')
+            return data
+        with patch.object(m.os,'read',side_effect=rewrite_during_read):
+            with self.assertRaisesRegex(ValueError,'changed while reading'): m.read_live_log(path,previous)
+        path.unlink()
+        with self.assertRaisesRegex(ValueError,'disappeared'): m.read_live_log(path,previous)
+
+    def test_log_truncated_between_capture_and_path_check_fails(self):
+        path=self.path/'live.log';path.write_bytes(b'original log\n')
+        original=m.stable_read
+        def truncate_after_capture(*args,**kwargs):
+            result=original(*args,**kwargs)
+            path.write_bytes(b'new')
+            return result
+        with patch.object(m,'stable_read',side_effect=truncate_after_capture):
+            with self.assertRaisesRegex(ValueError,'truncated after capture'): m.read_live_log(path,None)
     def simulate_interruption(self, mode):
         game=self.path/'game';(game/'extensions').mkdir(parents=True);(game/'X4').write_text('')
         auth=self.path/'auth';auth.write_text('')
