@@ -18,6 +18,13 @@ the same fixture after a test-only movement order. The receiver logged 232
 matching samples and a 1,284 m displacement. No pose was applied in the guest,
 no velocity was transmitted, and the fleet scans still failed; this remains an
 overall failed test, not a multiplayer or smooth-motion acceptance.
+The non-operational entry was identified in the disposable snapshot as a
+drifting ship wreck. A guarded read in two Linux instances matched an independent
+snapshot/controller calculation to about 1.5 mm for that one object. This does
+not identify other non-operational entries or prove a complete scan. A later
+12-fixture transport run and faction inventory still failed in their respective
+diagnostics; fixes are awaiting a new native run. Inventory diagnostics explicitly
+retain unresolved entries and do not claim complete universe coverage.
 
 ## Question
 
