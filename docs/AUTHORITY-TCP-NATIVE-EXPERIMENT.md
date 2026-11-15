@@ -9,8 +9,14 @@ The helper takes exclusive ownership of inherited client TCP and participant
 UDP sockets. Its `LocalParticipantControl` sends commands to the isolated
 client's X4 Lua endpoint and returns the correlated pause/resume receipts over
 TCP. A second loopback connection simulates a join and triggers a native pause;
-it is not a second playable client. The experiment stops with a save pending:
-it does not test last-player logout or produce a final departure checkpoint.
+it is not a second playable client. By default the experiment stops with a save
+pending. The opt-in `--last-disconnect` variant removes that second connection,
+completes the pending save, resumes the remaining client and then stops the
+client helper. After observing the actual TCP EOF, the owner drives a new server
+pause and save, then checks that the confirmed checkpoint has a fresh marker in
+its saved bytes and no remaining players or offers. This is a simulated control
+disconnect: client X4 remains running until harness cleanup, so it is not a
+game logout or proof that the client stopped. Restart/reload is not exercised.
 
 The child receives the lease, claim and controller details through a private
 bounded Unix socket, not its command line. Parent and helper check time and
@@ -30,7 +36,9 @@ the Python SIGCHLD check cannot rule out native SA_NOCLDWAIT or hidden reapers.
 
 `tests/test_authority_tcp_native_live.py` runs the full hook with a fake engine,
 fake UDP X4 endpoint, real loopback TCP/UDP, real helper process and disposable
-files. Worker edge cases are in `tests/test_authority_tcp_native_worker.py`;
+files. It includes the last-disconnect variant, delayed EOF processing, an
+uncertain final save and explicit EOF checking. Worker edge cases are in
+`tests/test_authority_tcp_native_worker.py`;
 owned process/lock cleanup is checked separately. Passing them does not prove
 the native X4 experiment succeeds. Even a successful isolated native run would
 not establish exact consumed bytes, gameplay, a complete shared universe,

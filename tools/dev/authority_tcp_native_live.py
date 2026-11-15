@@ -7,6 +7,7 @@ consumption; loopback results do not establish Windows, Internet or gameplay.
 import argparse
 import json
 from pathlib import Path
+import select
 import socket
 import sys
 import time
@@ -18,6 +19,7 @@ from authority.experimental_client_load import ExperimentalClientLoad
 from authority.experimental_local_host import ExperimentalLocalHost
 from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
 from authority.experimental_tcp_participants import ExperimentalTCPParticipants
+from authority.marker_evidence import verify_saved_marker
 from authority.save_transfer import receive
 from authority.trusted_load_messages import decode_bound_offer, encode_load_claim
 from authority.trusted_marker_load_session import TrustedMarkerLoadSession
@@ -35,6 +37,20 @@ def read_line(sock, deadline, maximum=4096):
         if chunk == b'\n': return bytes(data)
         data.extend(chunk)
     raise ValueError('private frame too large')
+
+
+def await_eof(sock, deadline, guard):
+    """Observe TCP read-side EOF before the control owner removes the peer."""
+    while True:
+        guard()
+        readable, _, exceptional = select.select([sock], [], [sock], min(.1, marked.remaining(deadline)))
+        guard()
+        if exceptional: raise RuntimeError('control socket exception before EOF')
+        if readable:
+            try: data = sock.recv(1, socket.MSG_PEEK)
+            except BlockingIOError: continue
+            if data == b'': return
+            raise RuntimeError('unexpected control data before EOF')
 
 
 class GuardedTCPParticipants(ExperimentalTCPParticipants):
@@ -73,11 +89,31 @@ class DeadlineEngine:
         return value
 
 
+class GuardedCheckpointEngine:
+    """Guard pause/resume and marked checkpoint operations around each call."""
+    def __init__(self, engine, guard): self.engine, self.guard = engine, guard
+    def _call(self, operation, *args):
+        self.guard()
+        result = getattr(self.engine, operation)(*args)
+        self.guard()
+        return result
+    def pause(self): return self._call('pause')
+    def resume(self): return self._call('resume')
+    def save(self): return self._call('save')
+    def __getattr__(self, name):
+        value = getattr(self.engine, name)
+        if name == 'checkpoint_published' and callable(value):
+            return lambda *args: self._call(name, *args)
+        return value
+
+
 class TCPMarkedParticipant(marked.MarkedParticipant):
     """Private test supervisor; one host owner and one reaped client helper."""
-    def __init__(self, deadline):
+    def __init__(self, deadline, *, last_disconnect=False):
         super().__init__()
         self.run_deadline = deadline
+        if type(last_disconnect) is not bool: raise ValueError('invalid last-disconnect option')
+        self.last_disconnect = last_disconnect
         self.helpers = []
         self.client_tcp = self.server_tcp = self.ipc = self.second = None
         self.control = self.host = self.participants = None
@@ -214,7 +250,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                 if peer['stage']=='admitted': break
             if result.get('client_admitted') is not True: raise RuntimeError('TCP claim not admitted')
             original_engine = world._engine
-            world._engine = marked.GuardedEngine(original_engine, guard, deadline)
+            world._engine = GuardedCheckpointEngine(original_engine, guard)
             try:
                 self.participants._timeout = min(120, marked.remaining(deadline))
                 result['server_state'] = 'indeterminate'
@@ -228,7 +264,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                     listener.bind(('127.0.0.1',0)); listener.listen(1)
                     self.second = socket.create_connection(listener.getsockname(), timeout=min(1, marked.remaining(deadline)))
                     accepted, _ = listener.accept()
-                    try: self.host.adopt(accepted)
+                    try: second_handle = self.host.adopt(accepted)
                     except BaseException:
                         accepted.close()
                         raise
@@ -239,16 +275,72 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                 if world.session.state != 'saving': raise RuntimeError('native pause not confirmed')
                 result.update(server_state='paused', native_server_and_client_pause_confirmed=True,
                               simulated_second_join=True, pending_operation='save')
+                if self.last_disconnect:
+                    self.second.close(); self.second = None
+                    await_eof(accepted, deadline, guard)
+                    while accepted in self.control._peers:
+                        guard(); self.control.poll(min(.1, marked.remaining(deadline)))
+                    if (any(h == second_handle for h, _ in world.session.players) or
+                            len(world.session.players) != 1 or
+                            tuple(h for h, _ in world.session.ready_players) != (handle,) or
+                            world.session.pending is None or world.session.pending.operation != 'save'):
+                        raise RuntimeError('second peer EOF or queued save mismatch')
+                    result['server_state'] = 'indeterminate'
+                    self.host.tick(min(.1, marked.remaining(deadline))); guard()
+                    if world.session.state != 'resuming' or len(world.session.players) != 1:
+                        raise RuntimeError('second peer removal or intermediate save failed')
+                    previous = world._store.latest_marked_confirmed()
+                    if world._baseline is None or world._baseline[1] != previous:
+                        raise RuntimeError('intermediate confirmed baseline differs')
+                    result['server_state'] = 'indeterminate'
+                    self.host.tick(min(.1, marked.remaining(deadline))); guard()
+                    if world.session.state != 'running': raise RuntimeError('remaining client resume failed')
+                    result.update(intermediate_checkpoint_confirmed=True, remaining_client_resumed=True,
+                                  server_state='running', pending_operation=None)
+                self.ipc.settimeout(min(1, marked.remaining(deadline)))
+                self.ipc.sendall(b'{"command":"stop"}\n')
+                if json.loads(read_line(self.ipc, deadline)) != {'event':'stopped'}:
+                    raise RuntimeError('client helper did not stop cleanly')
+                if helper.proc.wait(timeout=min(5, marked.remaining(deadline))) != 0:
+                    raise RuntimeError('client helper failed')
+                guard(); result.update(tcp_claim_used=True, tcp_participant_commands_used=True,
+                                       helper_clean_exit=True)
+                if self.last_disconnect:
+                    result['simulated_client_disconnect'] = True
+                    result['server_state'] = 'indeterminate'
+                    await_eof(self.server_tcp, deadline, guard)
+                    while self.server_tcp in self.control._peers:
+                        guard(); self.control.poll(min(.1, marked.remaining(deadline)))
+                    if (world.session.players or world.session.ready_players or not world.session.save_required or
+                            world.session.pending is None or world.session.pending.operation != 'pause'):
+                        raise RuntimeError('last peer EOF did not request server pause')
+                    result['last_eof_observed'] = True
+                    self.host.tick(min(.1, marked.remaining(deadline))); guard()
+                    if world.session.players or world.session.state != 'saving':
+                        raise RuntimeError('last EOF or subsequent server pause not confirmed')
+                    result.update(last_departure_pause_confirmed=True, server_state='paused')
+                    result['server_state'] = 'indeterminate'
+                    self.host.tick(min(.1, marked.remaining(deadline))); guard()
+                    if world.session.players or world.session.state != 'paused' or world.session.pending is not None:
+                        raise RuntimeError('last-departure save not completed')
+                    checkpoint = world._store.latest_marked_confirmed()
+                    if (world._store.latest() != checkpoint or world._baseline is None or
+                            world._baseline[1] != checkpoint or world._baseline[0] != world.session.baseline_id or
+                            checkpoint.checkpoint_id == previous.checkpoint_id or checkpoint.marker == previous.marker or
+                            world._load_offers or world._offers.names):
+                        raise RuntimeError('last-departure checkpoint is not fresh and confirmed')
+                    with world._offers.service.lock:
+                        if world._offers.service.offered:
+                            raise RuntimeError('offers remain after last departure')
+                    if verify_saved_marker(checkpoint, checkpoint.marker,
+                            script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState') is not True:
+                        raise RuntimeError('last-departure marker not verified in saved bytes')
+                    guard()
+                    result.update(last_departure_checkpoint_confirmed=True, marker_changed=True,
+                                  last_checkpoint_id=checkpoint.checkpoint_id, last_checkpoint_sha256=checkpoint.sha256,
+                                  server_state='paused', pending_operation=None)
             finally:
                 world._engine = original_engine
-            self.ipc.settimeout(min(1, marked.remaining(deadline)))
-            self.ipc.sendall(b'{"command":"stop"}\n')
-            if json.loads(read_line(self.ipc, deadline)) != {'event':'stopped'}:
-                raise RuntimeError('client helper did not stop cleanly')
-            if helper.proc.wait(timeout=min(5, marked.remaining(deadline))) != 0:
-                raise RuntimeError('client helper failed')
-            guard(); result.update(tcp_claim_used=True, tcp_participant_commands_used=True,
-                                   helper_clean_exit=True)
         finally:
             ipc_child.close()
             # Repeat in the base cleanup hook if this attempt cannot confirm it.
@@ -256,7 +348,8 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
 
 
 def run(args):
-    participant = TCPMarkedParticipant(time.monotonic()+args.timeout)
+    participant = TCPMarkedParticipant(time.monotonic()+args.timeout,
+                                       last_disconnect=getattr(args, 'last_disconnect', False))
     original = marked.MarkedParticipant
     try:
         marked.MarkedParticipant = lambda: participant
@@ -272,7 +365,8 @@ def run(args):
     finally:
         marked.MarkedParticipant = original
     result['scope'] = ('two isolated Linux X4 processes; TCP marker claim and participant control; '
-                       'simulated second join; no Windows, Internet or gameplay')
+                       'simulated second join'+ (' and last disconnect' if participant.last_disconnect else '') +
+                       '; no Windows, Internet or gameplay')
     (Path(args.out)/'result.json').write_text(json.dumps(result, indent=2)+'\n')
     return result
 
@@ -282,6 +376,7 @@ def main():
     parser.add_argument('--game',type=Path,required=True);parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--display',required=True);parser.add_argument('--timeout',type=float,default=600)
     parser.add_argument('--seed',type=int,default=276944566)
+    parser.add_argument('--last-disconnect',action='store_true',help='also save after a simulated last TCP disconnect')
     try: result=run(parser.parse_args())
     except (OSError,ValueError,RuntimeError) as error: parser.exit(1,'REFUSED: '+str(error)+'\n')
     print(json.dumps(result,indent=2));return 0 if result['success'] else 1

@@ -1,5 +1,6 @@
 """Whole experimental hook with synthetic game and actual TCP/UDP/helper."""
 from pathlib import Path
+import gzip
 import os
 import socket
 import sys
@@ -18,9 +19,34 @@ from authority.save_transfer import SaveOffers
 from authority.world import WorldCoordinator
 from lockstep.launcher.joinfiles import FileService
 from test_authority_experimental_local_host import Engine
+from test_authority_trusted_marker_load_session import XML, MARKER
+
+
+class FreshEngine(Engine):
+    def save(self):
+        self.calls.append('save')
+        if getattr(self,'fail_final_save',False) and self.calls.count('save')==3:
+            raise TimeoutError('uncertain final save')
+        self.pending_marker = f'{self.calls.count("save"):032x}'
+        path = self.root/'source.gz'
+        path.write_bytes(gzip.compress(XML.replace(MARKER,self.pending_marker).encode()))
+        return path
 
 
 class HookIntegrationTest(unittest.TestCase):
+    def test_eof_check_refuses_unexpected_data(self):
+        listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        listener.bind(('127.0.0.1',0));listener.listen(1)
+        client=socket.create_connection(listener.getsockname(),timeout=1);server,_=listener.accept()
+        try:
+            client.sendall(b'x')
+            with self.assertRaisesRegex(RuntimeError,'unexpected control data'):
+                subject.await_eof(server,time.monotonic()+3,lambda:True)
+            self.assertEqual(server.recv(1),b'x')
+            client.shutdown(socket.SHUT_WR)
+            subject.await_eof(server,time.monotonic()+3,lambda:True)
+        finally: client.close();server.close();listener.close()
+
     def test_bridge_timeout_is_capped_and_restored_on_failure(self):
         bridge=Mock();bridge._timeout=130
         def fail():
@@ -61,14 +87,24 @@ class HookIntegrationTest(unittest.TestCase):
             participant.close()
 
     def test_real_offer_claim_and_helper_control_with_fake_game(self):
+        self.exercise_fake_game(last_disconnect=False)
+
+    def test_last_tcp_disconnect_pauses_and_confirms_fresh_marker(self):
+        self.exercise_fake_game(last_disconnect=True,delay_eof=True)
+
+    def test_failed_last_save_leaves_indeterminate_server_result(self):
+        self.exercise_fake_game(last_disconnect=True,fail_final_save=True)
+
+    def exercise_fake_game(self, *, last_disconnect,delay_eof=False,fail_final_save=False):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'store').mkdir(); (root/'client/save').mkdir(parents=True)
             (root/'game').mkdir(); (root/'game/X4').symlink_to('/proc/self/exe')
             store=CheckpointStore(root/'store')
             service=FileService('f'*32,slots=(1,)).start()
-            engine=Engine(root);engine._timeout=5
+            engine=FreshEngine(root);engine._timeout=5
+            engine.fail_final_save=fail_final_save
             world=WorldCoordinator('a'*32,engine,store,SaveOffers(service,store))
-            participant=subject.TCPMarkedParticipant(time.monotonic()+15)
+            participant=subject.TCPMarkedParticipant(time.monotonic()+15,last_disconnect=last_disconnect)
             udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);udp.bind(('127.0.0.1',0));udp.settimeout(.05)
             stop=threading.Event();commands=[]
             destination=participant.sock.getsockname()
@@ -89,18 +125,51 @@ class HookIntegrationTest(unittest.TestCase):
                 identity=(os.getpid(),subject.marked.base.live.start_ticks(os.getpid()))
                 thread=threading.Thread(target=fake_client);thread.start()
                 result={}; proc=object()
-                with patch.object(subject.marked,'observe_logs'), \
-                     patch.object(subject.marked.base.client,'game_identity',return_value=identity):
+                original_poll=participant.control.poll;delays={'second':0,'last':0}
+                def poll(timeout):
+                    if delay_eof and participant.second is None and world.session.state=='saving' and len(world.session.players)==2 and delays['second']<2:
+                        self.assertEqual(engine.calls.count('save'),1)
+                        delays['second']+=1;return
+                    if delay_eof and participant.helpers and participant.helpers[0].proc.returncode is not None and world.session.state=='running' and delays['last']<2:
+                        self.assertEqual(len(world.session.players),1)
+                        delays['last']+=1;return
+                    return original_poll(timeout)
+                def run_hook():
                     participant.on_ready(world=world,handle=handle,ticket=ticket,target=target,
                         server_identity=identity,server_proc=proc,server_started=identity[1],
                         client_identity=identity,client_proc=proc,client_started=identity[1],
                         game=root/'game',out=root,deadline=time.monotonic()+10,result=result,
                         check_protected=lambda:True)
+                with patch.object(subject.marked,'observe_logs'), \
+                     patch.object(subject.marked.base.client,'game_identity',return_value=identity), \
+                     patch.object(participant.control,'poll',side_effect=poll):
+                    if fail_final_save:
+                        with self.assertRaisesRegex(TimeoutError,'uncertain final save'): run_hook()
+                    else: run_hook()
+                if fail_final_save:
+                    self.assertTrue(result['last_eof_observed'])
+                    self.assertTrue(result['last_departure_pause_confirmed'])
+                    self.assertEqual(result['server_state'],'indeterminate')
+                    self.assertNotIn('last_departure_checkpoint_confirmed',result)
+                    self.assertEqual(world.session.state,'faulted')
+                    return
                 self.assertTrue(result['client_admitted']);self.assertTrue(result['tcp_claim_used'])
                 self.assertTrue(result['native_server_and_client_resume_confirmed'])  # synthetic only
                 self.assertTrue(result['native_server_and_client_pause_confirmed'])
                 self.assertTrue(result['helper_clean_exit'])
-                self.assertEqual(commands,['pause','resume','pause'])
+                self.assertEqual(commands,['pause','resume','pause','resume'] if last_disconnect else ['pause','resume','pause'])
+                if last_disconnect:
+                    self.assertTrue(result['simulated_client_disconnect'])
+                    self.assertTrue(result['last_eof_observed'])
+                    self.assertTrue(result['last_departure_pause_confirmed'])
+                    self.assertTrue(result['last_departure_checkpoint_confirmed'])
+                    self.assertTrue(result['marker_changed'])
+                    self.assertEqual(result['last_checkpoint_id'],store.latest_marked_confirmed().checkpoint_id)
+                    self.assertEqual(world.session.state,'paused')
+                    self.assertEqual(world.session.players,())
+                    self.assertIsNone(world.session.pending)
+                    self.assertEqual(engine.calls.count('save'),3)
+                    if delay_eof: self.assertEqual(delays,{'second':2,'last':2})
                 self.assertTrue(all(h.proc.poll() is not None for h in participant.helpers))
             finally:
                 stop.set()
