@@ -1,6 +1,6 @@
 # Authoritative-server experiment status
 
-Snapshot: 2026-11-15. This branch is **not yet playable multiplayer**. The
+Snapshot: 2026-11-16. This branch is **not yet playable multiplayer**. The
 target remains a persistent server-managed X4 universe with a Linux host who
 also plays and a Windows player connecting directly over the Internet. Both
 players share a company and account, can occupy different sectors, and should
@@ -27,8 +27,14 @@ Native Linux evidence so far:
   Linux X4 process loaded that checkpoint, reported its saved marker and pause,
   and produced another confirmed checkpoint after a synthetic waiting join.
   The original client game stayed open until cleanup; neither run tested an
-  actual game logout, client re-admission or gameplay after restart. Exact X4
-  file consumption and zero simulation before pause are not proven.
+  actual game logout or gameplay after restart. Exact X4 file consumption and
+  zero simulation before pause are not proven.
+* A further isolated Linux/Linux loopback run loaded the latter checkpoint in
+  a fresh server, created a new marked join checkpoint, and admitted one real
+  second X4 using a cooperative TCP load claim. The harness confirmed native
+  server/client resume and clean helper/process cleanup. Two saved fixture
+  references were observed on the client. This is a bounded reconnect chain,
+  not a real player logout, continued-session or gameplay test.
 
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
@@ -54,5 +60,6 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [marked admission](AUTHORITY-TRUSTED-MARKED-LIVE.md),
 [native TCP control](AUTHORITY-TCP-NATIVE-EXPERIMENT.md),
 [TCP departure recovery](AUTHORITY-TCP-RECOVERY-EXPERIMENT.md),
+[recovery with TCP client](AUTHORITY-RECOVERY-TCP-JOIN-EXPERIMENT.md),
 [recovered-world bridge](../tools/dev/AUTHORITY-RECOVERY-BRIDGE.md),
 and [experimental local host](AUTHORITY-EXPERIMENTAL-LOCAL-HOST.md).
