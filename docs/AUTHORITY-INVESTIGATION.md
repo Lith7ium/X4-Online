@@ -209,6 +209,18 @@ independent MD responses, exact loaded bytes or an independent runtime-to-save
 actor binding, and is not a multiplayer test. See
 `tools/dev/AUTHORITY-SECTOR-READ-PREFLIGHT.md`.
 
+Two subsequent isolated Linux X4 cases loaded the same confirmed archive and
+reported six slot-2 samples each. Both observed a present pilot with a `Patrol`
+order reported `started`, a final pause and owned-process cleanup. The control
+endpoint displacement from game time `3.85676` to `8.02537` was approximately
+1,410.55 game-coordinate units; treatment from `3.86153` to `8.02910` was
+approximately 1,336.65. Treatment's `BEGAN` receipt follows the `allow=false`
+jobs setter path in its staged MD script, but does not prove effective sector
+permission or child-space overrides. Neither displacement establishes its cause,
+universe coverage, continuous pause, exact loaded bytes or gameplay. Both logs
+also show a failed write attempt to the read-only `config.xml`. Details and
+other limits are in `tools/dev/AUTHORITY-SECTOR-JOBS-CASE.md`.
+
 A separate isolated diagnostic attempted a correlated registry ResolveV2 response as a
 single MD table containing a request ID and actor. Its native result was
 `success=false`: the Lua handler ran but saw nil in the expected table argument,
