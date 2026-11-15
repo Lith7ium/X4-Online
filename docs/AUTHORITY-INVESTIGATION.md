@@ -1,9 +1,11 @@
 # Authoritative X4 investigation: initial assessment
 
-Status: initial prototype and assessment, 15 November 2026. Native read-only
-scanner experiments failed before a valid scan receipt; no native
-authority correction experiment has been run. The branch is isolated and based
-on public commit `b80712b39963c179dcdc2d99541cf9a25dacf7de`.
+Status: prototype and assessment, 15 November 2026. Native read-only fleet
+transport has been observed locally, but a complete fleet scan remains
+unproven. A one-ship native warp experiment observed delayed position application
+while failing its strict immediate-readback criterion; see
+`AUTHORITY-FIXTURE-WARP-EXPERIMENT.md`. The branch is isolated and based on
+public commit `b80712b39963c179dcdc2d99541cf9a25dacf7de`.
 
 In a later read-only Linux experiment, two local X4 instances each returned the
 same recorded pose for one known fixture at tick 30. The fleet scans in that run
@@ -21,14 +23,24 @@ overall failed test, not a multiplayer or smooth-motion acceptance.
 The non-operational entry was identified in the disposable snapshot as a
 drifting ship wreck. A guarded read in two Linux instances matched an independent
 snapshot/controller calculation to about 1.5 mm for that one object. This does
-not identify other non-operational entries or prove a complete scan. A later
-A later 360-tick Linux/Linux run independently matched 2,661 received samples
+not identify other non-operational entries or prove a complete scan. A
+later 360-tick Linux/Linux run independently matched 2,661 received samples
 covering each of twelve enrolled fixtures, including one moved fixture. That
 read-only local transport diagnostic passed; no guest poses or velocities were
 applied. The overall run failed because the strict census failed and the
 separate inventory encountered the same entry in two faction lists. The meaning
 of that duplicate remains under investigation. Inventory diagnostics retain
 unresolved entries and do not claim complete universe coverage.
+
+A follow-up read-only diagnostic in two isolated Linux instances rechecked
+that collision. Each instance found the same object at index 1 of two distinct
+faction lists, reread each affected list prefix and its count, and obtained the
+same saved identity before and after those reads. The saved identity also
+matched between the two instances. These targeted checks were not atomic and
+do not establish the semantics of membership or the stability of the complete
+faction census. The strict inventory still rejected the duplicate and the
+overall run failed; it is not evidence of a complete ship list. The owned X4
+processes were cleaned up and the checked Steam identity was unchanged.
 
 ## Question
 
