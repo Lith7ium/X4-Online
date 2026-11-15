@@ -60,7 +60,9 @@ class FileService:
         if not re.fullmatch(r'[0-9a-f]{32}', token):
             raise ValueError('the session token is 32 hex digits')
         self.token, self.allow = token, frozenset({'127.0.0.1', *allow})
-        self.slots = frozenset(slots)   # the slots a joiner may name (the session's open slots); empty: any 2..8
+        # An explicit slot set can include 1 for an authority server whose
+        # local host is also a client. The legacy default remains 2..8.
+        self.slots = frozenset(slots)
         self.offered, self.nonces, self.lock = {}, set(), threading.Lock()
         self.served, self.refused, self.active = [], [], 0
         service = self
@@ -143,7 +145,8 @@ class FileService:
             slot, nonce, name, offset = int(f[2]), f[3], f[4], int(f[5])
             if not hmac.compare_digest(f[6], mac(self.token, f[2], nonce, name, f[5])):
                 return self.refuse(conn, address, 'mac')
-            if (self.slots and slot not in self.slots) or not 2 <= slot <= 8:
+            minimum_slot = 1 if self.slots else 2
+            if (self.slots and slot not in self.slots) or not minimum_slot <= slot <= 8:
                 return self.refuse(conn, address, 'slot')
             with self.lock:
                 replay = nonce in self.nonces

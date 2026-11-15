@@ -53,6 +53,31 @@ class TransferTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SaveOffer('j1.xml.gz', 'a' * 64, 0, 'checkpoint-' + 'b' * 32)
 
+    def test_local_host_client_can_download_only_when_slot_one_is_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'original.xml.gz'
+            source.write_bytes(gzip.compress(b'<savegame><world/></savegame>'))
+            (root / 'store').mkdir()
+            store = CheckpointStore(root / 'store')
+            checkpoint = store.publish(source)
+            for slots, accepted in (((1, 2), True), ((), False)):
+                with self.subTest(slots=slots):
+                    service = joinfiles.FileService('a' * 32, slots=slots).start()
+                    try:
+                        offer = SaveOffers(service, store).offer(checkpoint)
+                        target = root / ('explicit' if accepted else 'legacy')
+                        if accepted:
+                            received = receive('127.0.0.1', service.port, 'a' * 32, 1,
+                                               offer, target, retries=0, timeout=3)
+                            self.assertEqual(received.read_bytes(), source.read_bytes())
+                        else:
+                            with self.assertRaises(joinfiles.FetchError):
+                                receive('127.0.0.1', service.port, 'a' * 32, 1,
+                                        offer, target, retries=0, timeout=3)
+                    finally:
+                        service.close()
+
 
 if __name__ == '__main__':
     unittest.main()
