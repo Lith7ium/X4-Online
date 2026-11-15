@@ -1,5 +1,10 @@
 local M=dofile('tools/dev/authority_job_registry_probe.lua')
 assert(M.new({enabled=false})==nil)
+do
+ local ok=pcall(M.new,{enabled=true,epoch=string.rep('a',32),last=0,baseline={},expose_actor='true',
+  issue=function() end,key=function() end,to_md_actor=function() end,valid=function() end,report=function() end})
+ assert(not ok)
+end
 local function setup(convert, issue_result, report_result)
  local issued,rows={},{}
  local alive=true
