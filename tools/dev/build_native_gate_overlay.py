@@ -153,6 +153,7 @@ def main():
     p.add_argument('--tempzone-order', action='store_true', help="the Linux gate: the pathing pass's tempzone requests granted "
                    "in a portable order (native_gate_tempzone_order = 'order', on by default on Windows; needs --travel-snapshot)")
     p.add_argument('--authority-fixture-scan', action='store_true', help='read-only disposable fixture position scan')
+    p.add_argument('--authority-fixture-inventory', action='store_true', help='read-only faction-list inventory; requires scan')
     p.add_argument('--authority-fixture-wire', action='store_true', help='local read-only fixture UDP diagnostic; requires scan')
     p.add_argument('--authority-fixture-motion', action='store_true', help='move the isolated fixture via an AI order; requires fixture wire')
     p.add_argument('--authority-fixture-fleet', action='store_true', help='read-only 12-fixture loopback coverage diagnostic; requires wire')
@@ -792,7 +793,7 @@ def main():
                    'fork_save', 'fork_save_budget_ms', 'fork_save_watchdog', 'fork_save_every', 'fork_save_slot', 'world_identities', 'world_hash_stride', 'world_hash_schema', 'world_hash_watch', 'world_hash_shields',
                    'fp_redirect_drones', 'world_health_ticks', 'fp_attack_capture', 'fp_attack_watch'}
         allowed.add('travel_determinism')
-        allowed.add('authority_fixture_scan')
+        allowed.update(('authority_fixture_scan', 'authority_fixture_inventory'))
         allowed.update(('authority_fixture_wire', 'authority_fixture_motion', 'authority_fixture_fleet', 'authority_net_so'))
         # The battle fixture on Linux (linux/gate_battle.h, gate_flight.h): the snapshot's twelve, their state row, steering.
         allowed.update(('fixture_body_observe', 'snapshot_prebind', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state',
@@ -823,6 +824,8 @@ def main():
     actor_diag = args.actor_diag or args.flight_diag or args.flight_rng or args.flight_full or args.ai_diag or args.ai_rng or agent or ship or weapon or nav or shape or death or attention or args.mass_diag or args.params_init or args.params_diag or args.strict_state or args.velocity_diag or args.body_diag
     if args.authority_fixture_scan and (not args.gate_so or not args.snapshot or args.mode != 'battle' or not args.snapshot_prebind):
         p.error('--authority-fixture-scan requires Linux snapshot battle with --snapshot-prebind')
+    if args.authority_fixture_inventory and not args.authority_fixture_scan:
+        p.error('--authority-fixture-inventory requires --authority-fixture-scan')
     if args.authority_fixture_wire != bool(args.authority_net_so) or (args.authority_fixture_wire and not args.authority_fixture_scan):
         p.error('--authority-fixture-wire requires --authority-fixture-scan and --authority-net-so')
     if args.authority_fixture_motion and not args.authority_fixture_wire:
@@ -852,6 +855,9 @@ def main():
         for name in ('ship_scan.lua', 'x4_ship_engine.lua', 'fixture_scan_probe.lua'):
             shutil.copy2(root/'src/authority/lua'/name, args.out/'ui'/name)
         ui_files = 'ui/ship_scan.lua\nui/x4_ship_engine.lua\nui/fixture_scan_probe.lua\n' + ui_files
+    if args.authority_fixture_inventory:
+        shutil.copy2(root/'src/authority/lua/fixture_inventory_probe.lua',args.out/'ui/fixture_inventory_probe.lua')
+        ui_files = 'ui/fixture_inventory_probe.lua\n' + ui_files
     if args.authority_fixture_wire:
         for name in ('fixture_wire.lua', 'fixture_wire_probe.lua'):
             shutil.copy2(root/'src/authority/lua'/name, args.out/'ui'/name)
@@ -1583,6 +1589,9 @@ X4LAN_CONFIG.slot = "@X4LANE_SLOT@"
         with (args.out/'ui/config.lua.append').open('a') as config:
             config.write('X4LAN_CONFIG.native_gate_authority_scan = true\n')
             config.write('X4LAN_CONFIG.native_gate_battle_engage = false\n')
+    if args.authority_fixture_inventory:
+        with (args.out/'ui/config.lua.append').open('a') as config:
+            config.write('X4LAN_CONFIG.native_gate_authority_inventory = true\n')
     if args.authority_fixture_wire:
         with (args.out/'ui/config.lua.append').open('a') as config:
             config.write('X4LAN_CONFIG.native_gate_authority_wire = true\n')

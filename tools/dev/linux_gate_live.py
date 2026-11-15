@@ -393,6 +393,54 @@ def parse_authority_scan(lines, ticks):
     return result
 
 
+def parse_authority_inventory(lines, ticks):
+    """Parse diagnostic counts only; never imply world or position completeness."""
+    records = [line.split('NATIVE_GATE ', 1)[-1].strip() for line in lines
+               if 'NATIVE_GATE AUTHORITY_INVENTORY' in line]
+    result = {'valid_receipt': False, 'errors': [], 'universe_coverage': 'unknown', 'positions_complete': False}
+    if len(records) != 1 or not records[0].startswith('AUTHORITY_INVENTORY '):
+        result['errors'].append('missing, duplicate, or failed inventory receipt')
+        return result
+    try:
+        parts = records[0].split()
+        fields = dict(part.split('=', 1) for part in parts[1:])
+        reasons = {'operational_unknown', 'ship_class_not_confirmed', 'ship_class_unknown',
+                   'sector_unavailable', 'ship_identity_unavailable', 'sector_identity_unavailable', 'pose_unavailable'}
+        counts = {'enumerated', 'position_observed', 'not_confirmed_operational', 'unavailable', 'unresolved_identity'}
+        expected = reasons | counts | {'tick', 'coverage', 'positions_complete'}
+        if len(parts)-1 != len(expected) or set(fields) != expected:
+            raise ValueError('fields')
+        if any(not re.fullmatch(r'[0-9]+', fields[k]) for k in reasons | counts | {'tick'}):
+            raise ValueError('number')
+        values = {k: int(fields[k]) for k in reasons | counts | {'tick'}}
+        if (not 30 <= values['tick'] <= ticks or values['enumerated'] > 200000 or
+            any(values[k] > values['enumerated'] for k in reasons | counts) or
+            values['enumerated'] != values['position_observed'] + values['not_confirmed_operational'] + values['unavailable'] or
+            values['unavailable'] != sum(values[k] for k in reasons) or
+            fields['coverage'] != 'unknown' or fields['positions_complete'] != 'false'):
+            raise ValueError('invalid counts')
+        result.update(valid_receipt=True, tick=values['tick'], counts={k: values[k] for k in counts},
+                      unavailable_reasons={k: values[k] for k in reasons})
+    except (ValueError, OverflowError):
+        result['errors'].append('invalid inventory receipt')
+    return result
+
+
+def collect_authority_inventory(result, local_slots, games, ticks):
+    """Require a valid diagnostic receipt from each local instance when enabled."""
+    try:
+        if not local_slots or len(local_slots) != len(games) or len(set(local_slots)) != len(local_slots):
+            raise ValueError('inventory instances missing')
+        evidence = {str(slot): parse_authority_inventory(gate_lines(profile / 'engine-output.log'), ticks)
+                    for slot, (_, profile) in zip(local_slots, games)}
+        result['authority_inventory_evidence'] = evidence
+        if any(item['valid_receipt'] is not True for item in evidence.values()):
+            result['pass'] = False
+    except (OSError, TypeError, ValueError):
+        result['authority_inventory_evidence'] = {'errors': ['inventory log unavailable']}
+        result['pass'] = False
+
+
 def validate_authority_scan_bundle(root, manifest):
     """Require the opt-in and its frozen, read-only Lua modules to agree."""
     enabled = manifest.get('authority_fixture_scan', False)
@@ -414,6 +462,16 @@ def validate_authority_scan_bundle(root, manifest):
             rel = 'extension/x4_lan_lab/ui/' + name
             if rel not in manifest.get('files', {}) or not (root / rel).is_file():
                 raise ValueError('authority fixture scan module missing: ' + name)
+    inventory = manifest.get('authority_fixture_inventory', False)
+    if type(inventory) is not bool or (inventory and not enabled):
+        raise ValueError('invalid authority fixture inventory option')
+    assignments = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_inventory\s*=\s*(.*?)\s*$', config)
+    if assignments != (['true'] if inventory else []):
+        raise ValueError('authority fixture inventory config differs from bundle option')
+    if inventory:
+        rel = 'extension/x4_lan_lab/ui/fixture_inventory_probe.lua'
+        if rel not in manifest.get('files', {}) or not (root / rel).is_file():
+            raise ValueError('authority fixture inventory module missing')
     wire = manifest.get('authority_fixture_wire', False)
     if type(wire) is not bool or (wire and not enabled):
         raise ValueError('invalid authority fixture wire option')
@@ -2395,6 +2453,8 @@ def bundle(args):
         except ValueError as error:
             raise SystemExit(str(error)) from error
     out = args.out
+    if args.authority_fixture_inventory and not args.authority_fixture_scan:
+        raise SystemExit('--authority-fixture-inventory requires --authority-fixture-scan')
     if out.exists():
         raise SystemExit(f'{out} exists; use a new directory')
     snapshot_sha = sha(args.snapshot)
@@ -2416,6 +2476,8 @@ def bundle(args):
         if not args.battle or args.ticks < 30:
             raise SystemExit('--authority-fixture-scan requires --battle and at least 30 ticks')
         command.append('--authority-fixture-scan')
+    if args.authority_fixture_inventory:
+        command.append('--authority-fixture-inventory')
     if args.authority_fixture_wire:
         if not args.authority_fixture_scan or args.clients != 2 or args.ticks < 60:
             raise SystemExit('--authority-fixture-wire requires --authority-fixture-scan, two clients and at least 60 ticks')
@@ -2951,6 +3013,7 @@ def bundle(args):
         'nav_params_init',
         'fixture_body_observe',
         'authority_fixture_scan',
+        'authority_fixture_inventory',
         'authority_fixture_wire',
         'authority_fixture_motion',
         'authority_fixture_fleet',
@@ -4815,6 +4878,8 @@ def run(args):
         except Exception as error:
             result['authority_scan_error'] = str(error)
             result['pass'] = False
+    if manifest.get('authority_fixture_inventory'):
+        collect_authority_inventory(result, local, games, ticks)
     if manifest.get('authority_fixture_wire'):
         try:
             from authority_fixture_wire_support import validate as validate_fixture_wire
@@ -5066,6 +5131,7 @@ def main(argv=None):
     b.add_argument('--battle', action='store_true', help="the battle fixture: native_gate_hash = 'battle' with the snapshot's "
                    'twelve (--mode battle --snapshot-prebind; needs --serial-pathing, --path-determinism 1 or 3 and world identities)')
     b.add_argument('--authority-fixture-scan', action='store_true', help='read-only disposable fixture position scan')
+    b.add_argument('--authority-fixture-inventory', action='store_true', help='read-only faction-list inventory; requires scan')
     b.add_argument('--authority-fixture-wire', action='store_true', help='local read-only fixture UDP diagnostic; requires scan')
     b.add_argument('--authority-fixture-motion', action='store_true', help='move the isolated fixture using an AI order; requires wire')
     b.add_argument('--authority-fixture-fleet', action='store_true', help='read-only 12-fixture loopback coverage diagnostic; requires wire')

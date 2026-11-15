@@ -131,6 +131,11 @@ assert(cfg.native_gate_authority_fleet==nil or cfg.native_gate_authority_fleet==
 assert(not cfg.native_gate_authority_fleet or (cfg.test_profile=='45841' and cfg.native_gate_hash=='battle'
  and cfg.native_gate_authority_wire==true and cfg.native_gate_authority_scan==true and cfg.native_gate_battle_engage==false),
  'authority fleet requires the isolated, idle fixture wire test')
+assert(cfg.native_gate_authority_inventory==nil or cfg.native_gate_authority_inventory==false or cfg.native_gate_authority_inventory==true,
+ 'native_gate_authority_inventory must be boolean')
+assert(not cfg.native_gate_authority_inventory or (cfg.test_profile=='45841' and cfg.native_gate_hash=='battle'
+ and cfg.native_gate_authority_scan==true and cfg.native_gate_battle_engage==false),
+ 'authority inventory requires the isolated, idle fixture scan')
 -- Opt-in census scenario fixtures (docs/LOCKSTEP-SCENARIOS.txt): MD events at fixed gated
 -- ticks, identical on every client. native_gate_missions.xml / native_gate_highway.xml.
 -- Published as X4LAN_NATIVE_SCENARIOS; frame() reads that global (the frame is at
@@ -3371,6 +3376,9 @@ local function sample(tick)
  end
  if cfg.native_gate_authority_scan then
   assert(X4LAN_AUTHORITY_FIXTURE_SCAN_PROBE,'authority scan probe missing').sample(cfg,tick,actors,ticklog.write,gate,cfg.native_gate_authority_wreck_saved)
+ end
+ if cfg.native_gate_authority_inventory then
+  assert(X4LAN_AUTHORITY_FIXTURE_INVENTORY_PROBE,'authority inventory probe missing').sample(cfg,tick,ticklog.write,gate)
  end
  if cfg.native_gate_authority_wire then
   assert(X4LAN_AUTHORITY_FIXTURE_WIRE_PROBE,'authority wire probe missing').sample(cfg,tick,actors,ticklog.write)

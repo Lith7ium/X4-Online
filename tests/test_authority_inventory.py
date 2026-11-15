@@ -1,8 +1,15 @@
 import os
+import contextlib
+import gzip
+import io
+import json
 import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -114,3 +121,154 @@ assert(#r.rows==10000 and r.counts.enumerated==10000 and r.counts.position_obser
 assert(r.counts.not_confirmed_operational==5000 and r.counts.unavailable==0)
 assert(r.universe_coverage=='unknown' and r.positions_complete==false)
 ''')
+
+    def test_native_fixture_probe_is_separately_opt_in_and_logs_counts_only(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
+GetCurRealTime=function() return 10 end
+data.a={'1','2','3'}
+e.operational=function(h) if h=='2' then return false elseif h=='3' then return nil end return true end
+e.is_ship=function() return true end
+e.sector=function() return '4' end
+e.pose=function() return {x=11,y=22,z=33,yaw=0,pitch=0,roll=0} end
+X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local gate={saved_identity=function(h) if h=='3' then return '0000000000000000' end return '000000000000000'..h end}
+local cfg={native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
+local function log(s) logs[#logs+1]=s end
+probe.sample(cfg,30,log,gate);assert(#logs==0)
+cfg.native_gate_authority_inventory=true
+probe.sample(cfg,29,log,gate);assert(#logs==0)
+probe.sample(cfg,30,log,gate);probe.sample(cfg,31,log,gate)
+assert(#logs==1 and logs[1]:find('AUTHORITY_INVENTORY ',1,true))
+for _,fragment in ipairs({'enumerated=3','position_observed=1','not_confirmed_operational=1','unavailable=1',
+ 'unresolved_identity=1','operational_unknown=1','coverage=unknown','positions_complete=false'}) do
+ assert(logs[1]:find(fragment,1,true),fragment)
+end
+assert(not logs[1]:find('0000000000000001',1,true) and not logs[1]:find('x=11',1,true))
+''')
+
+    def test_native_fixture_probe_does_not_run_outside_isolation(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/real/unknown/save' end}, string=function(x) return x end}
+GetCurRealTime=function() return 10 end
+X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() error('must not call engine') end}
+local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
+probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function() error('must not resolve') end})
+assert(#logs==1 and logs[1]:find('AUTHORITY_INVENTORY_ERROR',1,true))
+''')
+
+    def test_inventory_budget_failure_is_a_diagnostic_not_partial_counts(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
+local calls=0;GetCurRealTime=function() calls=calls+1;if calls>1 then return 100 end return 10 end
+X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
+probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function() return '0000000000000000' end})
+assert(#logs==1 and logs[1]:find('AUTHORITY_INVENTORY_ERROR tick=30 reason=checkpoint',1,true))
+assert(not logs[1]:find('enumerated=',1,true))
+''')
+
+
+class InventoryHarnessTests(unittest.TestCase):
+    def test_receipt_is_count_checked_and_never_implies_completeness(self):
+        sys.path.insert(0, str(ROOT/'tools/dev'))
+        import linux_gate_live as live
+        from linux_gate_evidence import is_fatal_gate_message
+        line=('[X4LAN] NATIVE_GATE AUTHORITY_INVENTORY tick=30 enumerated=3 position_observed=1 '
+              'not_confirmed_operational=1 unavailable=1 unresolved_identity=1 operational_unknown=1 '
+              'ship_class_not_confirmed=0 ship_class_unknown=0 sector_unavailable=0 ship_identity_unavailable=0 '
+              'sector_identity_unavailable=0 pose_unavailable=0 coverage=unknown positions_complete=false')
+        receipt=live.parse_authority_inventory([line],60)
+        self.assertTrue(receipt['valid_receipt'])
+        self.assertEqual(receipt['counts']['enumerated'],3)
+        self.assertEqual(receipt['universe_coverage'],'unknown')
+        self.assertFalse(receipt['positions_complete'])
+        self.assertNotIn('pass',receipt)
+        failure='[X4LAN] NATIVE_GATE AUTHORITY_INVENTORY_ERROR tick=30 reason=checkpoint'
+        self.assertFalse(is_fatal_gate_message(failure))
+        for lines in ([],[line,line],[failure],[line.replace('enumerated=3','enumerated=4')],
+                      [line.replace('operational_unknown=1','operational_unknown=0')],
+                      [line.replace('positions_complete=false','positions_complete=true')],
+                      [line+' secret=1']):
+            self.assertFalse(live.parse_authority_inventory(lines,60)['valid_receipt'])
+
+    def test_bundle_requires_explicit_scan_and_freezes_inventory_module(self):
+        sys.path.insert(0, str(ROOT/'tools/dev'))
+        import linux_gate_live as live
+        import build_native_gate_overlay as builder
+        refs=''.join(f'<value type="component" value="[0x{i:08x}]"/>' for i in range(256,268))
+        ships=''.join(f'<component id="[0x{i:08x}]" class="ship_s" '
+                      f'macro="ship_{"arg" if i<262 else "xen"}_s_fighter_01_a_macro" '
+                      f'owner="{"argon" if i<262 else "xenon"}"><movement class="navigation"/></component>'
+                      for i in range(256,268))
+        save=gzip.compress((f'<savegame><info><game seed="1"/></info><md><script name="X4LAN_NativeGate">'
+          f'<cue name="Spawn" state="complete"><vars><value name="$ships" type="list" value="42"/></vars>'
+          f'</cue></script></md><script><refs type="list"><ref id="42">{refs}</ref></refs></script>'
+          f'<universe>{ships}</universe></savegame>').encode())
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);snapshot=root/'save.gz';snapshot.write_bytes(save)
+            bundle=root/'bundle';forwarded=[]
+            with self.assertRaisesRegex(SystemExit,'inventory requires --authority-fixture-scan'):
+                live.main(['bundle','--zig','/unused','--snapshot',str(snapshot),'--out',str(root/'refused'),
+                           '--ticks','60','--battle','--serial-pathing','--path-determinism','1',
+                           '--authority-fixture-inventory'])
+            self.assertFalse((root/'refused').exists())
+            def command(arguments,**kwargs):
+                if 'build_native_gate_linux.py' in str(arguments[1]):
+                    (bundle/'.build/x4lan_gate.so').write_bytes(b'fake')
+                elif 'build_native_gate_overlay.py' in str(arguments[1]):
+                    forwarded.extend(arguments)
+                    with mock.patch.object(sys,'argv',arguments[1:]):builder.main()
+                return mock.Mock(stdout='synthetic-commit\n' if 'rev-parse' in arguments else '',returncode=0)
+            with mock.patch.object(live.subprocess,'run',side_effect=command),contextlib.redirect_stdout(io.StringIO()):
+                live.main(['bundle','--zig','/unused','--snapshot',str(snapshot),'--out',str(bundle),
+                           '--ticks','60','--battle','--serial-pathing','--path-determinism','1',
+                           '--authority-fixture-scan','--authority-fixture-inventory'])
+            self.assertIn('--authority-fixture-inventory',forwarded)
+            manifest=json.loads((bundle/'manifest.json').read_text())
+            self.assertTrue(manifest['authority_fixture_inventory'])
+            self.assertEqual(bundle.stat().st_mode & 0o077,0)
+            live.validate_authority_scan_bundle(bundle,manifest)
+            self.assertIn('extension/x4_lan_lab/ui/fixture_inventory_probe.lua',manifest['files'])
+            manifest['authority_fixture_inventory']=False
+            with self.assertRaisesRegex(ValueError,'inventory config differs'): live.validate_authority_scan_bundle(bundle,manifest)
+
+    def test_enabled_inventory_requires_each_receipt_without_overriding_strict_failure(self):
+        sys.path.insert(0, str(ROOT/'tools/dev'))
+        import linux_gate_live as live
+        line=('[X4LAN] NATIVE_GATE AUTHORITY_INVENTORY tick=30 enumerated=1 position_observed=0 '
+              'not_confirmed_operational=1 unavailable=0 unresolved_identity=0 operational_unknown=0 '
+              'ship_class_not_confirmed=0 ship_class_unknown=0 sector_unavailable=0 ship_identity_unavailable=0 '
+              'sector_identity_unavailable=0 pose_unavailable=0 coverage=unknown positions_complete=false\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles=[Path(tmp)/'one',Path(tmp)/'two']
+            for profile in profiles: profile.mkdir()
+            (profiles[0]/'engine-output.log').write_text(line)
+            (profiles[1]/'engine-output.log').write_text('[X4LAN] NATIVE_GATE AUTHORITY_INVENTORY_ERROR tick=30 reason=checkpoint\n')
+            games=[(None,p) for p in profiles]
+            result={'pass':True}
+            live.collect_authority_inventory(result,[1,2],games,60)
+            self.assertFalse(result['pass'])
+            self.assertTrue(result['authority_inventory_evidence']['1']['valid_receipt'])
+            self.assertFalse(result['authority_inventory_evidence']['2']['valid_receipt'])
+            (profiles[1]/'engine-output.log').write_text(line)
+            result={'pass':False}
+            live.collect_authority_inventory(result,[1,2],games,60)
+            self.assertFalse(result['pass'])
+            self.assertFalse(result['authority_inventory_evidence']['1']['positions_complete'])
+            result={'pass':True}
+            live.collect_authority_inventory(result,[1,2],games,60)
+            self.assertTrue(result['pass'])
+            (profiles[1]/'engine-output.log').unlink()
+            result={'pass':True}
+            live.collect_authority_inventory(result,[1,2],games,60)
+            self.assertFalse(result['pass'])
+            result={'pass':True}
+            live.collect_authority_inventory(result,[1,2],games[:1],60)
+            self.assertFalse(result['pass'])

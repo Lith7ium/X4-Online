@@ -229,6 +229,7 @@ D.FAMILY_NEEDS={missiles='native_gate_pilot_fire',missions='guard:missions',conv
 -- Diagnostics and measurement: off by default (they only log, capture, trace, profile, watch or measure). {'key','why'}.
 D.DIAGNOSTIC={
  {'native_gate_authority_scan','read-only isolated Linux fixture fleet scan'},
+ {'native_gate_authority_inventory','read-only isolated faction-list inventory'},
  {'native_gate_authority_wire','local read-only isolated fixture UDP diagnostic'},
  {'native_gate_authority_motion','isolated fixture movement stimulus'},
  {'native_gate_authority_fleet','read-only isolated twelve-fixture UDP diagnostic'},
