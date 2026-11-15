@@ -12,7 +12,7 @@ Those checks are sampled and the MD and FFI reads are not atomic.
 
 After pausing and observing the load marker, the disposable instance resumes.
 It observes three positions one game second apart before any setter, issues a
-single zero-vector `set_object_velocity constantvel="true"`, observes three
+`set_object_velocity constantvel="true"` request intended to set a zero vector, observes three
 more positions, then issues a separate `constantvel="false"` setter **without
 linear or angular children**, observes three further positions, and requests a
 final pause. Each request is correlated and bounded. The result records the
@@ -39,15 +39,24 @@ Focused synthetic tests do not exercise X4 MD semantics:
 python3 -m unittest tests.test_authority_npc_constantvel
 ```
 
-On 2026-11-15, one isolated Linux X4 run completed. The selected ship moved
-between the three pre-intervention samples. Its sampled position was unchanged
-through the three samples with zero constant velocity and the three samples
-over approximately three game seconds after the separate release. The reported
+On 2026-11-15, one isolated Linux X4 run reached its final pause and produced
+the expected receipts, but the engine log also reported three conversion and
+arithmetic errors for `0m / 1s` during loading. This expression was used for
+each component of the requested zero vector. The physical effect of the setter
+and its intended zero vector are therefore **not established**, even though
+the historical `result.json` says `success: true`: that result did not reject
+these engine errors. Treat the intervention and release outcome as inconclusive.
+
+The selected ship moved between the three pre-intervention samples. Its sampled
+position was unchanged through the three samples after the setter request and
+the three samples over approximately three game seconds after the separate
+release request. The reported
 pilot remained the same and the order was reported as `Patrol` / `started` in
 all nine samples. The process was paused and owned cleanup reported no
 remaining processes. A separate read-only review measured approximately 603 m
 between the first and last baseline positions over 2.02 game seconds and found
 no position change through the last sample, approximately 3.04 game seconds
-after the release receipt. There was no simultaneous control run. This one observation does not show whether movement would
-resume later, prove the pilot's complete order state, or establish restoration
-or a general NPC-control mechanism.
+after the release receipt. There was no simultaneous control run. The observations
+cannot establish why the ship stopped or whether movement would resume later;
+they do not prove the pilot's complete order state, restoration or a general
+NPC-control mechanism. The archived result and logs have not been modified.

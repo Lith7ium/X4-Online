@@ -34,6 +34,11 @@ work in earlier LAN experiments provides useful prior evidence, but its
 fixture-specific guards and reference-frame assumptions are not yet a general
 NPC solution.
 
+An isolated NPC constant-velocity experiment logged conversion errors for its
+requested zero-vector expression. Its historical success flag only reflects
+the harness checks; the setter's physical effect and release outcome remain
+inconclusive. See [the diagnostic](../tools/dev/AUTHORITY-NPC-CONSTANTVEL.md).
+
 The main remaining work includes connecting the real X4 participant to network
 control, resolving sector and object identity on each client, continuously
 replicating ships and appropriate velocity, handling independent NPC simulation

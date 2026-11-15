@@ -47,8 +47,22 @@ def install(case,profile,ticket,slot,nonce,mode):
     return protected
 
 
+def fault_log(raw):
+    """Reject known X4 expression failures as well as existing probe faults.
+
+    These messages occur in engine-output.log during MD loading and do not
+    identify a cue, so any occurrence makes this narrowly scoped run unusable.
+    Other known MD/Lua errors remain covered by the shared probe watcher.
+    """
+    lower=raw.lower()
+    return (jobs.base_fault(raw) or (TAG+'ERROR ').lower().encode() in lower or
+        b'could not find suitable data type for conversion!' in lower or
+        b'invalid data types for arithmetic operation!' in lower)
+
+
 def validate(raw,ticket,slot,mode,partial=False):
     if mode not in ('control','treatment'): raise ValueError('invalid mode')
+    if fault_log(raw): raise ValueError('X4 or probe fault in log')
     observed=jobs.base_check(raw,ticket,slot,partial=partial)
     if observed is None: return None
     if observed.get('reported_pilot')!='present' or observed.get('reported_order_state') not in ('started','critical'):
@@ -119,7 +133,7 @@ def run(args):
     try:
         base.install=lambda case,profile,ticket,slot: install(case,profile,ticket,slot,nonce,args.mode)
         base.check_log_bytes=lambda raw,ticket,slot,partial=False: validate(raw,ticket,slot,args.mode,partial)
-        base.fault_log=lambda raw: old[2](raw) or (TAG+'ERROR ').encode() in raw
+        base.fault_log=lambda raw: old[2](raw) or fault_log(raw)
         result=base.run(args)
     finally:
         base.install,base.check_log_bytes,base.fault_log=old

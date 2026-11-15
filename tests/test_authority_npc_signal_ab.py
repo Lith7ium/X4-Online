@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -53,7 +54,7 @@ class SignalABTests(unittest.TestCase):
         self.assertIsNotNone(decision.find("./set_value[@name='State.$phase'][@exact=\"'tail'\"]"))
         setters=root.findall('.//set_object_velocity');self.assertEqual(len(setters),2)
         self.assertEqual(setters[0].get('constantvel'),'true')
-        self.assertEqual(setters[0].find('linear').attrib,{'x':'0m / 1s','y':'0m / 1s','z':'0m / 1s'})
+        self.assertEqual(setters[0].find('linear').attrib,{'x':'0','y':'0','z':'0'})
         self.assertEqual(setters[1].get('constantvel'),'false');self.assertEqual(len(setters[1]),0)
         guard=root.find('.//library[@name="Guard"]/actions/set_value').get('exact')
         for part in ('State.$ship.pilot == State.$pilot','State.$ship.sector == State.$sector',
@@ -78,6 +79,48 @@ class SignalABTests(unittest.TestCase):
             self.assertIn('X4LAN_NPC_SIGNAL_AB_READY()',owner)
             self.assertIn(md/'authority_npc_signal_ab.xml',protected)
             self.assertNotIn(md/'authority_sector_jobs_correlated.xml',protected)
+
+    def test_native_expression_faults_override_complete_evidence(self):
+        old=subject.jobs.base_check
+        subject.jobs.base_check=lambda *a,**k:{'reported_order_id':'Patrol','reported_pilot':'present',
+            'reported_order_state':'started','reported_game_time':3.}
+        try:
+            clean=raw(evidence('control'))
+            self.assertFalse(subject.fault_log(clean))
+            self.assertTrue(subject.validate(clean,{},2,'control'))
+            for line in (b'[=ERROR=] 3.01 Could not find suitable data type for conversion! Value: 0m',
+                         b'[=ERROR=] 3.01 Invalid data types for arithmetic operation! 0m / 1s',
+                         b'[X4LAN] AUTH_NPC_SIGNAL_AB ERROR refused',
+                         b'[=ERROR=] Error in MD script unexpected'):
+                for log in (line+b'\n'+clean, clean+line+b'\n'):
+                    self.assertTrue(subject.fault_log(log))
+                    with self.assertRaisesRegex(ValueError,'fault'): subject.validate(log,{},2,'control')
+                    with self.assertRaisesRegex(ValueError,'fault'): subject.validate(log,{},2,'control',partial=True)
+            self.assertFalse(subject.fault_log(b'[=ERROR=] FOpenForWriting(config.xml): Error 30\n'))
+        finally: subject.jobs.base_check=old
+
+    def test_run_wires_native_fault_into_shared_watcher(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);out=root/'out';out.mkdir();source=root/'source';source.mkdir()
+            saved_run=subject.base.run;saved_output=subject.base.snapshot.output_path
+            saved_dir=subject.base.base.local_directory
+            calls=[]
+            try:
+                subject.base.snapshot.output_path=lambda path: Path(path)
+                subject.base.base.local_directory=lambda path: source/'checkpoints'
+                def fake_run(args):
+                    self.assertTrue(subject.base.fault_log(b'[=ERROR=] Invalid data types for arithmetic operation! 0m / 1s'))
+                    with self.assertRaisesRegex(ValueError,'fault'):
+                        subject.base.check_log_bytes(b'Could not find suitable data type for conversion!',{},2,partial=True)
+                    calls.append(True)
+                    return {'success':False,'error':'load/read probe reported a fault'}
+                subject.base.run=fake_run
+                result=subject.run(SimpleNamespace(mode='control',slot=2,seed=276944566,out=out,store=source/'checkpoints'))
+                self.assertEqual(calls,[True]);self.assertFalse(result['success'])
+                self.assertIn('load/read probe reported a fault',(out/'result.json').read_text())
+            finally:
+                subject.base.run=saved_run;subject.base.snapshot.output_path=saved_output
+                subject.base.base.local_directory=saved_dir
 
     def test_evidence_checks_timing_order_and_arm(self):
         old=subject.jobs.base_check

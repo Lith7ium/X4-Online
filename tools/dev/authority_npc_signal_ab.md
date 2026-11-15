@@ -43,3 +43,21 @@ and pass the same `--game` and `--display` in each invocation, once with
 `--mode control` and once with `--mode treatment`. Use two separate `.local`
 output directories outside the source experiment tree. Preparing and testing
 the runner does not itself start X4.
+
+## Invalid first control run
+
+The retained `.local/authority-npc-signal-control-01` control reported a
+completed run, but X4 logged three conversion errors for `0m` and three
+arithmetic type errors for `0m / 1s` during the second save-loading pass,
+before `BEGAN`. Its zero-velocity setter was therefore not validated: the
+recorded motion observations do not establish how that intervention behaved.
+The original result and log are preserved unchanged. The older
+`.local/authority-npc-constantvel-01` used the same expression and logged the
+same errors; its setter interpretation is likewise inconclusive.
+
+The fixture now supplies plain `0` for each linear component. A complete or
+partial run fails when the engine log contains the observed conversion or
+arithmetic type errors, along with the existing specific MD/Lua probe faults.
+This targeted detection is not a promise to recognize every possible native
+error. Plain zero values, actual setter behaviour and signal handling remain to
+be verified natively; the offline checks do not establish them.
