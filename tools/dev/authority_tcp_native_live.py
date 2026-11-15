@@ -109,11 +109,13 @@ class GuardedCheckpointEngine:
 
 class TCPMarkedParticipant(marked.MarkedParticipant):
     """Private test supervisor; one host owner and one reaped client helper."""
-    def __init__(self, deadline, *, last_disconnect=False):
+    def __init__(self, deadline, *, last_disconnect=False, first_resume_only=False):
+        if type(last_disconnect) is not bool or type(first_resume_only) is not bool or (last_disconnect and first_resume_only):
+            raise ValueError('invalid disconnect or resume-only options')
         super().__init__()
         self.run_deadline = deadline
-        if type(last_disconnect) is not bool: raise ValueError('invalid last-disconnect option')
         self.last_disconnect = last_disconnect
+        self.first_resume_only = first_resume_only
         self.helpers = []
         self.client_tcp = self.server_tcp = self.ipc = self.second = None
         self.control = self.host = self.participants = None
@@ -189,6 +191,9 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         if errors: raise RuntimeError('helper or communication cleanup unconfirmed') from errors[0]
         return True
 
+    def verify_logs(self, server_log, client_log, ticket, marker):
+        return marked.observe_logs(server_log, client_log, ticket, marker)
+
     def on_ready(self, *, world, handle, ticket, target, server_identity, server_proc, server_started,
                  client_identity, client_proc, client_started, game, out, deadline, result, check_protected):
         deadline = min(deadline, self.run_deadline)
@@ -201,7 +206,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                     check_protected() is not True):
                 raise RuntimeError('deadline, protected files or owned X4 changed')
             return True
-        guard(); marked.observe_logs(server_log, client_log, ticket, self.marker); guard()
+        guard(); self.verify_logs(server_log, client_log, ticket, self.marker); guard()
         attempt = self.offer.attempt_id
         self.client_load.observe_load_requested(attempt)
         self.client_load.observe_loaded_marker(attempt, self.marker)
@@ -212,7 +217,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         self.enroll(ticket['world_epoch'], deadline-1)
         marked.GuardedEngine(world._engine, guard, deadline).pause()
         self.request('pause'); guard()
-        marked.observe_logs(server_log, client_log, ticket, self.marker); guard()
+        self.verify_logs(server_log, client_log, ticket, self.marker); guard()
         original_accept = self.session.accept
         def guarded_accept(connection, claim_value, *, pre_accept):
             result.update(client_admitted=None, admission_state='indeterminate')
@@ -259,44 +264,47 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                 if json.loads(read_line(self.ipc, deadline)) != {'event':'active'}:
                     raise RuntimeError('client helper did not become active')
                 result.update(server_state='running', native_server_and_client_resume_confirmed=True)
-                listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                try:
-                    listener.bind(('127.0.0.1',0)); listener.listen(1)
-                    self.second = socket.create_connection(listener.getsockname(), timeout=min(1, marked.remaining(deadline)))
-                    accepted, _ = listener.accept()
-                    try: second_handle = self.host.adopt(accepted)
-                    except BaseException:
-                        accepted.close()
-                        raise
-                finally: listener.close()
-                self.participants._timeout = min(120, marked.remaining(deadline))
-                result['server_state'] = 'indeterminate'
-                self.host.tick(min(.1, marked.remaining(deadline))); guard()
-                if world.session.state != 'saving': raise RuntimeError('native pause not confirmed')
-                result.update(server_state='paused', native_server_and_client_pause_confirmed=True,
-                              simulated_second_join=True, pending_operation='save')
-                if self.last_disconnect:
-                    self.second.close(); self.second = None
-                    await_eof(accepted, deadline, guard)
-                    while accepted in self.control._peers:
-                        guard(); self.control.poll(min(.1, marked.remaining(deadline)))
-                    if (any(h == second_handle for h, _ in world.session.players) or
-                            len(world.session.players) != 1 or
-                            tuple(h for h, _ in world.session.ready_players) != (handle,) or
-                            world.session.pending is None or world.session.pending.operation != 'save'):
-                        raise RuntimeError('second peer EOF or queued save mismatch')
+                if self.first_resume_only:
+                    result.update(simulated_second_join=False, pending_operation=None)
+                else:
+                    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    try:
+                        listener.bind(('127.0.0.1',0)); listener.listen(1)
+                        self.second = socket.create_connection(listener.getsockname(), timeout=min(1, marked.remaining(deadline)))
+                        accepted, _ = listener.accept()
+                        try: second_handle = self.host.adopt(accepted)
+                        except BaseException:
+                            accepted.close()
+                            raise
+                    finally: listener.close()
+                    self.participants._timeout = min(120, marked.remaining(deadline))
                     result['server_state'] = 'indeterminate'
                     self.host.tick(min(.1, marked.remaining(deadline))); guard()
-                    if world.session.state != 'resuming' or len(world.session.players) != 1:
-                        raise RuntimeError('second peer removal or intermediate save failed')
-                    previous = world._store.latest_marked_confirmed()
-                    if world._baseline is None or world._baseline[1] != previous:
-                        raise RuntimeError('intermediate confirmed baseline differs')
-                    result['server_state'] = 'indeterminate'
-                    self.host.tick(min(.1, marked.remaining(deadline))); guard()
-                    if world.session.state != 'running': raise RuntimeError('remaining client resume failed')
-                    result.update(intermediate_checkpoint_confirmed=True, remaining_client_resumed=True,
-                                  server_state='running', pending_operation=None)
+                    if world.session.state != 'saving': raise RuntimeError('native pause not confirmed')
+                    result.update(server_state='paused', native_server_and_client_pause_confirmed=True,
+                                  simulated_second_join=True, pending_operation='save')
+                    if self.last_disconnect:
+                        self.second.close(); self.second = None
+                        await_eof(accepted, deadline, guard)
+                        while accepted in self.control._peers:
+                            guard(); self.control.poll(min(.1, marked.remaining(deadline)))
+                        if (any(h == second_handle for h, _ in world.session.players) or
+                                len(world.session.players) != 1 or
+                                tuple(h for h, _ in world.session.ready_players) != (handle,) or
+                                world.session.pending is None or world.session.pending.operation != 'save'):
+                            raise RuntimeError('second peer EOF or queued save mismatch')
+                        result['server_state'] = 'indeterminate'
+                        self.host.tick(min(.1, marked.remaining(deadline))); guard()
+                        if world.session.state != 'resuming' or len(world.session.players) != 1:
+                            raise RuntimeError('second peer removal or intermediate save failed')
+                        previous = world._store.latest_marked_confirmed()
+                        if world._baseline is None or world._baseline[1] != previous:
+                            raise RuntimeError('intermediate confirmed baseline differs')
+                        result['server_state'] = 'indeterminate'
+                        self.host.tick(min(.1, marked.remaining(deadline))); guard()
+                        if world.session.state != 'running': raise RuntimeError('remaining client resume failed')
+                        result.update(intermediate_checkpoint_confirmed=True, remaining_client_resumed=True,
+                                      server_state='running', pending_operation=None)
                 self.ipc.settimeout(min(1, marked.remaining(deadline)))
                 self.ipc.sendall(b'{"command":"stop"}\n')
                 if json.loads(read_line(self.ipc, deadline)) != {'event':'stopped'}:

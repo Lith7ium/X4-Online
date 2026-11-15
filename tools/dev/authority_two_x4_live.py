@@ -207,6 +207,17 @@ def check_live_context(*, deadline, server_proc, server_started, server_identity
     return True
 
 
+def check_final_recovery_files(result, experiment):
+    """Recheck protected recovery inputs after owned cleanup, before redaction."""
+    if not result.get('success'): return
+    check = getattr(experiment, 'check_server_files', None)
+    if check is None: return
+    try:
+        if not callable(check) or check() is not True: raise ValueError('recovery protection failed')
+    except BaseException as error:
+        result.update(success=False, error='final recovery state invalid: '+(str(error) or type(error).__name__))
+
+
 def run(args, *, experiment=None):
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('unprivileged Linux desktop user required')
@@ -245,7 +256,12 @@ def run(args, *, experiment=None):
         sock.bind(('127.0.0.1', 0)); sock.settimeout(.25)
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
         marker_required = getattr(experiment, 'marker_required', False) is True
-        if marker_required:
+        recovery_install = getattr(experiment, 'install_recovery_server', None)
+        if recovery_install is not None:
+            if not callable(recovery_install) or not marker_required:
+                raise ValueError('invalid recovery installation hook')
+            recovery_install(server_case, server_profile, sock.getsockname()[1], lease, epoch)
+        elif marker_required:
             server.install_probe(server_case, sock.getsockname()[1], lease, epoch, marker_required=True)
         else:
             server.install_probe(server_case, sock.getsockname()[1], lease, epoch)
@@ -255,10 +271,28 @@ def run(args, *, experiment=None):
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             handlers[number] = signal.signal(number, snapshot.cancel_capture)
         deadline = time.monotonic() + args.timeout
-        server_proc, server_started = spawn_owned_gated(snapshot.command_for(server_case, game, server_binds,
-            server_lock, args.display, auth, user.pw_name, args.seed), server_out / 'process.log', processes)
+        recovery_command = getattr(experiment, 'recovery_server_command', None)
+        if recovery_command is not None:
+            if not callable(recovery_command): raise ValueError('invalid recovery command hook')
+            command = recovery_command(server_case, game, server_binds, server_lock,
+                args.display, auth, user.pw_name, args.seed)
+        else:
+            command = snapshot.command_for(server_case, game, server_binds,
+                server_lock, args.display, auth, user.pw_name, args.seed)
+        server_proc, server_started = spawn_owned_gated(command, server_out / 'process.log', processes)
         server_identity = None
         peer = None
+        recovered_enroll = getattr(experiment, 'enroll_recovered_server', None)
+        if recovered_enroll is not None:
+            if not callable(recovered_enroll): raise ValueError('invalid recovery enrollment hook')
+            peer, server_identity = recovered_enroll(sock=sock, lease=lease, epoch=epoch, deadline=deadline,
+                server_proc=server_proc, server_started=server_started, game=game,
+                steam=steam, home=home, uid=user.pw_uid, profile=server_profile)
+            if (not isinstance(peer,tuple) or len(peer)!=2 or peer[0]!='127.0.0.1' or
+                    type(peer[1]) is not int or not 1<=peer[1]<=65535 or server_identity is None or
+                    time.monotonic()>=deadline or client.game_identity(server_proc,server_started,game)!=server_identity or
+                    live.steam_identity(home,user.pw_uid)!=steam):
+                raise RuntimeError('recovered server enrollment was not confirmed')
         while peer is None:
             if time.monotonic() >= deadline: raise TimeoutError('server enrollment timed out')
             identity = client.game_identity(server_proc, server_started, game)
@@ -279,13 +313,20 @@ def run(args, *, experiment=None):
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store), participants=experiment)
         join = getattr(experiment, 'join', None)
         handle = join(world) if callable(join) else world.join('isolated-client')
+        recovery_files = getattr(experiment, 'check_server_files', None)
+        if recovery_files is not None and not callable(recovery_files):
+            raise ValueError('invalid recovery protection hook')
         for operation in ('pause', 'save'):
             if time.monotonic() >= deadline: raise TimeoutError('server checkpoint timed out')
+            if recovery_files is not None and recovery_files() is not True:
+                raise ValueError('recovery server protection failed')
             if world.session.pending is None or world.session.pending.operation != operation:
                 raise RuntimeError('unexpected coordinator operation')
             world.step()
             if client.game_identity(server_proc, server_started, game) != server_identity:
                 raise RuntimeError('server X4 changed during checkpoint')
+            if recovery_files is not None and recovery_files() is not True:
+                raise ValueError('recovery server protection failed')
         transfer = getattr(experiment, 'offer_and_download', None)
         ticket, target = (transfer(world, service, handle, out, client_profile) if callable(transfer)
                           else offer_and_download(world, service, handle, out, client_profile))
@@ -423,6 +464,7 @@ def run(args, *, experiment=None):
             if live.steam_identity(home, user.pw_uid) != steam:
                 cleanup_error('Steam identity changed')
         except BaseException as error: cleanup_error('Steam identity unavailable', error)
+        check_final_recovery_files(result, experiment)
         server_config = out/'server/case/extensions/x4_lan_lab/ui/config.lua'
         try:
             if server_config.is_file():
