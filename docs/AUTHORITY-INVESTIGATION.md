@@ -106,6 +106,16 @@ built by an observed construction object, but no single event found so far
 covers every creation path. Owner-change and destruction events take an object
 or group, and a galaxy search's full coverage and cost remain unverified.
 
+One isolated Linux job-activation diagnostic subsequently reported 46 events
+and 46 local acknowledgments with an empty registry baseline. All 46 were first
+enrollments in that test register; this is not evidence that those ships were
+newly built. The configured nominal observation window was 60 seconds with a
+5-second drain timeout; events have no timestamps and may include drain, so the
+count is not a strict 60-second count. The result reports a confirmed pause and
+owned-process cleanup. It does not establish event coverage, client delivery,
+or multiplayer. See `tools/dev/AUTHORITY-JOB-REGISTRY-SINGLE.md` and the local
+`.local/authority-job-observe-01/result.json`.
+
 ## Question
 
 Can one running X4 instance own a persistent universe while other X4 instances
