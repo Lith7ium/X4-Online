@@ -1,7 +1,94 @@
 -- Opt-in, read-only inventory of entries returned by faction ship APIs.
--- Runs only in the disposable fixture profile; no identity or pose is logged.
+-- Runs only in the disposable fixture profile. The collision audit can log
+-- saved identities and faction names privately; no component pose is logged.
 local M={}
 local attempted=false
+-- Enumerate memberships only, without component getters. This is executed
+-- only after a duplicate abort in the private opt-in fixture profile. No
+-- evidence is logged until the full multiset has been read twice unchanged.
+local function membership_audit(engine,gate,tick,log)
+ local ok=pcall(function()
+  local started=GetCurRealTime()
+  assert(type(started)=='number' and started==started and started~=math.huge and started~=-math.huge)
+  local function checkpoint()
+   local now=GetCurRealTime()
+   assert(type(now)=='number' and now==now and now>=started and now-started<=6)
+  end
+  local function factions()
+   checkpoint()
+   local list,truncated=engine.factions(1024)
+   assert(not truncated and type(list)=='table' and #list>0 and #list<1024)
+   local set={}
+   for _,f in ipairs(list) do
+    assert(type(f)=='string' and #f>0 and #f<=256 and not set[f]);set[f]=true
+   end
+   return list,set
+  end
+  local function fleet(faction)
+   checkpoint()
+   local n=engine.fleet_count(faction)
+   assert(type(n)=='number' and n==math.floor(n) and n>=0 and n<=200000)
+   local ships,truncated=engine.fleet(faction,n+1)
+   assert(not truncated and type(ships)=='table' and #ships==n and engine.fleet_count(faction)==n)
+   return ships
+  end
+  local first,set=factions()
+  local seen,multiset,duplicates={}, {}, {}
+  local entries,unique=0,0
+  for fi,faction in ipairs(first) do
+   for si,ship in ipairs(fleet(faction)) do
+    checkpoint();entries=entries+1;assert(entries<=200000)
+    local key=engine.key(ship)
+    assert(type(key)=='string' and #key>0 and #key<=256)
+    local membership=faction..'\0'..key
+    multiset[membership]=(multiset[membership] or 0)+1
+    if seen[key] then
+     assert(#duplicates<4096)
+     duplicates[#duplicates+1]={first=seen[key],faction=faction,faction_index=fi,ship_index=si,ship=ship}
+    else
+     unique=unique+1
+     seen[key]={faction=faction,faction_index=fi,ship_index=si}
+    end
+   end
+  end
+  local last,lastset=factions()
+  for f in pairs(set) do assert(lastset[f]) end
+  for f in pairs(lastset) do assert(set[f]) end
+  for _,faction in ipairs(last) do
+   for _,ship in ipairs(fleet(faction)) do
+    checkpoint()
+    local key=engine.key(ship)
+    assert(type(key)=='string' and #key>0 and #key<=256)
+    local membership=faction..'\0'..key
+    local count=multiset[membership]
+    assert(count and count>0)
+    if count==1 then multiset[membership]=nil else multiset[membership]=count-1 end
+   end
+  end
+  assert(not next(multiset))
+  local function safe_faction(value)
+   return #value<=64 and value:match('^[A-Za-z0-9_%-]+$') and value or 'unknown'
+  end
+  -- Resolve all saved IDs before writing any receipt. They remain private to
+  -- this snapshot; unresolved/new IDs are represented as unknown.
+  for _,entry in ipairs(duplicates) do
+   checkpoint()
+   local decimal=tostring(entry.ship):gsub('ULL$','')
+   local success,saved=false,nil
+   if decimal:match('^%d+$') then success,saved=pcall(gate.saved_identity,decimal) end
+   entry.saved=success and type(saved)=='string' and #saved==16 and saved:match('^[0-9a-f]+$') and
+    saved~='0000000000000000' and saved or 'unknown'
+  end
+  log(string.format('AUTHORITY_MEMBERSHIP_AUDIT tick=%d factions=%d entries=%d unique=%d repeated=%d consistency=membership_rechecked_non_atomic',
+   tick,#first,entries,unique,#duplicates))
+  for _,entry in ipairs(duplicates) do
+   log(string.format('AUTHORITY_MEMBERSHIP_DUP_PRIVATE tick=%d first_faction_index=%d first_index=%d repeated_faction_index=%d repeated_index=%d first_faction_private=%s repeated_faction_private=%s saved_private=%s',
+    tick,entry.first.faction_index,entry.first.ship_index,entry.faction_index,entry.ship_index,
+    safe_faction(entry.first.faction),safe_faction(entry.faction),entry.saved))
+  end
+ end)
+ if not ok then log('AUTHORITY_MEMBERSHIP_AUDIT_ERROR tick='..tostring(tick)..' reason=unstable_or_budget') end
+end
 function M.sample(cfg,tick,log,gate)
  if not cfg.native_gate_authority_inventory or attempted or tick<30 then return end
  attempted=true
@@ -66,6 +153,7 @@ function M.sample(cfg,tick,log,gate)
     end
    end
    log('AUTHORITY_INVENTORY_ERROR tick='..tick..' reason='..reason..details)
+   if reason=='duplicate_object' then membership_audit(engine,gate,tick,log) end
    return
   end
   local c,r=result.counts,result.unavailable_reasons

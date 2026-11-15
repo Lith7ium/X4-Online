@@ -188,8 +188,29 @@ local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,
 for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
 local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
 probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function(h) return '000000000000000'..h end})
-assert(#logs==1 and logs[1]:find('reason=duplicate_object first_faction=1 first_index=1 repeated_faction=2 repeated_index=1',1,true))
+assert(#logs==3 and logs[1]:find('reason=duplicate_object first_faction=1 first_index=1 repeated_faction=2 repeated_index=1',1,true))
 assert(not logs[1]:find('0000000000000001',1,true) and not logs[1]:find('enumerated=',1,true))
+assert(logs[2]:find('entries=2 unique=1 repeated=1',1,true) and not logs[2]:find('0000000000000001',1,true))
+assert(logs[3]:find('first_faction_private=a repeated_faction_private=b saved_private=0000000000000001',1,true))
+''')
+
+    def test_collision_audit_with_changing_membership_publishes_no_partial_details(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
+GetCurRealTime=function() return 10 end
+data.a={'1'};data.b={'1'};e.factions=function() return {'a','b'},false end
+e.operational=function() return true end;e.is_ship=function() return true end;e.sector=function() return '4' end
+e.pose=function() return {x=1,y=2,z=3,yaw=0,pitch=0,roll=0} end
+local original=e.fleet;local calls=0
+e.fleet=function(f) calls=calls+1; if calls==5 then return {'9'},false end;return original(f) end
+X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
+probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function(h) return '000000000000000'..h end})
+assert(#logs==2 and logs[1]:find('reason=duplicate_object',1,true))
+assert(logs[2]:find('AUTHORITY_MEMBERSHIP_AUDIT_ERROR',1,true))
+assert(not table.concat(logs):find('DUP_PRIVATE',1,true))
 ''')
 
     def test_fixture_error_categories_do_not_conflate_faction_and_membership(self):
