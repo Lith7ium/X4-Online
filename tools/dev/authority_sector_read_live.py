@@ -143,7 +143,9 @@ def run(args):
     if sys.platform!='linux' or os.geteuid()==0: raise ValueError('unprivileged Linux required')
     out=snapshot.output_path(args.out);store_dir=base.local_directory(args.store)
     if store_dir!=archive.DEFAULT_STORE.resolve(strict=True): raise ValueError('only the recorded archive is supported')
-    if args.slot not in (1,2) or not math.isfinite(args.timeout) or args.timeout<30 or not 0<=args.seed<=0xffffffff:
+    poll_interval=getattr(args,'poll_interval',.1)
+    if (args.slot not in (1,2) or not math.isfinite(args.timeout) or args.timeout<30
+            or not 0<=args.seed<=0xffffffff or not math.isfinite(poll_interval) or not .1<=poll_interval<=2):
         raise ValueError('invalid slot, timeout or seed')
     game=args.game.resolve(strict=True)
     if live.sha(game/'X4')!=live.EXE_SHA or not (game/'extensions').is_dir() or not shutil.which('bwrap'):
@@ -215,7 +217,7 @@ def run(args):
                 if any(stable_read(path,1<<20,collect=False)[:2]!=identity for path,identity in protected.items()):
                     raise ValueError('protected configuration changed')
                 try: file_id,_,raw=stable_read(profile/'engine-output.log',32<<20,collect=True)
-                except FileNotFoundError: time.sleep(.1);continue
+                except FileNotFoundError: time.sleep(poll_interval);continue
                 log_snapshot=log_continuity(file_id,raw,log_snapshot)
                 if fault_log(raw): raise RuntimeError('load/read probe reported a fault')
                 observed=check_log_bytes(raw,ticket,args.slot,partial=True)
@@ -226,7 +228,7 @@ def run(args):
                         live.steam_identity(home,user.pw_uid)!=steam):
                         raise RuntimeError('identity or deadline changed during final live log check')
                     result.update(observed);result['success']=True;break
-                time.sleep(.1)
+                time.sleep(poll_interval)
     except BaseException as error:
         result['error']=str(error) or type(error).__name__
     finally:
