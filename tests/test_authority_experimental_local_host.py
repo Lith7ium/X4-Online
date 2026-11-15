@@ -1,0 +1,156 @@
+"""Local composition only: real loopback sockets with fake game controls."""
+import json
+import gzip
+from pathlib import Path
+import socket
+import sys
+import tempfile
+import threading
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tests'), str(ROOT/'tools/dev')]
+from authority.checkpoints import CheckpointStore
+from authority.experimental_local_host import ExperimentalLocalHost
+from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
+from authority.local_control_bridge import LocalControlBridge
+from authority.save_transfer import SaveOffers
+from authority.trusted_load_messages import decode_bound_offer, encode_load_claim
+from authority.trusted_marker_load_session import TrustedMarkerLoadSession
+from authority.world import WorldCoordinator
+from lockstep.launcher.joinfiles import FileService
+from test_authority_trusted_marker_load_session import FakeEngine, claim_for, XML, MARKER
+from authority_control_cycle_evidence import read_cycle_evidence
+
+
+class Engine(FakeEngine):
+    def __init__(self, root):
+        super().__init__(root); self.calls = []
+    def pause(self): self.calls.append('pause')
+    def save(self): self.calls.append('save'); return super().save()
+    def resume(self): self.calls.append('resume')
+
+
+class Participants:
+    def __init__(self): self.calls = []
+    def pause(self, handles): self.calls.append(('pause', handles)); return True
+    def resume(self, handles): self.calls.append(('resume', handles)); return True
+
+
+class HostTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name); (root/'store').mkdir()
+        self.store = CheckpointStore(root/'store')
+        self.service = FileService('a'*32, bind='127.0.0.1', port=0, slots=(1,)).start()
+        self.addCleanup(self.service.thread.join, 2)
+        self.addCleanup(self.service.close)
+        self.engine = Engine(root); self.participants = Participants()
+        self.world = WorldCoordinator('a'*32, self.engine, self.store, SaveOffers(self.service, self.store),
+                                      participants=self.participants)
+        self.control = ExperimentalTCPControl(TrustedMarkerLoadSession(self.world, enabled=True), enabled=True)
+        self.addCleanup(lambda: self.control.close() if not (self.control._closed or self.control._failed) else None)
+        self.host = ExperimentalLocalHost(self.world, self.control, self.service, enabled=True)
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.bind(('127.0.0.1', 0)); self.listener.listen(1)
+        self.addCleanup(self.listener.close)
+
+    def test_tcp_claim_ack_resume_and_last_disconnect_save(self):
+        self.host.tick(); self.assertEqual(self.engine.calls, ['pause'])
+        client = socket.create_connection(self.listener.getsockname(), timeout=1)
+        self.addCleanup(client.close)
+        conn, _ = self.listener.accept(); self.host.adopt(conn)
+        self.host.tick(); self.assertEqual(self.engine.calls, ['pause', 'save'])
+        client.sendall(offer_request()); self.host.tick(.1); self.host.tick(.1)
+        bound = decode_bound_offer(client.recv(8192).rstrip(b'\n'))
+        client.sendall(encode_load_claim(claim_for(bound.offer))+b'\n')
+        self.host.tick(.1)
+        self.assertEqual(self.engine.calls, ['pause', 'save'])  # ACK still queued
+        self.host.tick(.1)
+        self.assertEqual(json.loads(client.recv(8192))['kind'], 'accepted')
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume'])
+        self.assertEqual(self.participants.calls[0][0], 'resume')
+        client.shutdown(socket.SHUT_WR)
+        self.host.tick(.1); self.host.tick(.1)
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause', 'save'])
+        self.assertEqual(self.world.session.state, 'paused')
+        self.assertEqual(self.world.session.players, ())
+        self.assertIsNotNone(self.store.latest_marked_confirmed())
+
+    def test_uncertain_engine_error_poison_owner(self):
+        def fail(): raise TimeoutError('uncertain engine state')
+        self.engine.pause = fail
+        with self.assertRaises(TimeoutError): self.host.tick()
+        with self.assertRaisesRegex(RuntimeError, 'fence all'): self.host.tick()
+        self.assertEqual(self.world.session.state, 'faulted')
+
+    def test_engine_callback_cannot_reenter_host(self):
+        self.engine.pause = lambda: self.host.tick()
+        with self.assertRaisesRegex(RuntimeError, 'reentrant'):
+            self.host.tick()
+        with self.assertRaisesRegex(RuntimeError, 'fence all'): self.host.tick()
+        self.assertEqual(self.world.session.state, 'faulted')
+
+    def test_closed_control_faults_owner_and_requires_fencing(self):
+        self.control.close()
+        with self.assertRaisesRegex(RuntimeError, 'fence all'): self.host.tick()
+        self.assertTrue(self.host._failed)
+
+    def test_real_local_bridge_with_synthetic_udp_engine_and_tcp_client(self):
+        profile = Path(self.temp.name)/'45841'; (profile/'save').mkdir(parents=True)
+        bridge_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        bridge_socket.bind(('127.0.0.1', 0)); self.addCleanup(bridge_socket.close)
+        engine_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        engine_socket.bind(('127.0.0.1', 0)); engine_socket.settimeout(.1)
+        stop = threading.Event(); commands = []
+        def fake_engine():
+            while not stop.is_set():
+                try: raw, peer = engine_socket.recvfrom(768)
+                except socket.timeout: continue
+                fields = raw.decode('ascii').split('|'); commands.append(fields[-1])
+                if fields[0] == 'VERIFY':
+                    reply = 'VERIFIED|'+'|'.join(fields[1:])
+                else:
+                    _, lease, epoch, request, operation, *marker = fields
+                    if operation == 'save':
+                        title = 'X4 Authority '+epoch+' '+request
+                        xml = XML.replace(MARKER, marker[0]).replace('<savegame>',
+                            '<savegame><info><save name="'+title+'"/><game time="12"/></info>')
+                        (profile/'save/save_009.xml.gz').write_bytes(gzip.compress(xml.encode()))
+                    status = 'native_event_only' if operation == 'save' else 'confirmed'
+                    reply = '|'.join(('RECEIPT',lease,epoch,request,operation,status))
+                engine_socket.sendto(reply.encode('ascii'), peer)
+        thread = threading.Thread(target=fake_engine); thread.start()
+        def stop_engine():
+            stop.set(); thread.join(2); engine_socket.close()
+            self.assertFalse(thread.is_alive())
+        self.addCleanup(stop_engine)
+        self.world._engine = LocalControlBridge(enabled=True, sock=bridge_socket,
+            peer=engine_socket.getsockname(), lease='b'*32, world_epoch='a'*32,
+            profile=profile, store=self.store, verify_checkpoint=read_cycle_evidence,
+            timeout=2, marker_required=True)
+        self.host.tick()
+        client = socket.create_connection(self.listener.getsockname(), timeout=1); self.addCleanup(client.close)
+        conn, _ = self.listener.accept(); self.host.adopt(conn); self.host.tick()
+        client.sendall(offer_request()); self.host.tick(.1); self.host.tick(.1)
+        bound = decode_bound_offer(client.recv(8192).rstrip(b'\n'))
+        claim = claim_for(bound.offer)
+        from dataclasses import replace
+        claim = replace(claim, marker=bound.marker)
+        client.sendall(encode_load_claim(claim)+b'\n'); self.host.tick(.1); self.host.tick(.1)
+        self.assertEqual(json.loads(client.recv(8192))['kind'], 'accepted')
+        self.assertEqual(self.world.session.state, 'running')
+        client.shutdown(socket.SHUT_WR); self.host.tick(.1); self.host.tick(.1)
+        self.assertEqual(self.world.session.state, 'paused')
+        self.assertEqual(len(commands), 7)  # pause, save+verify, resume, pause, save+verify
+        self.assertIsNotNone(self.store.latest_marked_confirmed())
+
+    def test_service_and_control_must_belong_to_same_world(self):
+        with self.assertRaises(ValueError):
+            ExperimentalLocalHost(self.world, self.control, self.service)
+        other = WorldCoordinator('b'*32, self.engine, self.store, SaveOffers(self.service, self.store))
+        with self.assertRaises(ValueError):
+            ExperimentalLocalHost(other, self.control, self.service, enabled=True)
+
+
+if __name__ == '__main__': unittest.main()
