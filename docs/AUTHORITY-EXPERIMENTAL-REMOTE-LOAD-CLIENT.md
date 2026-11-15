@@ -34,8 +34,15 @@ File-service requests use its existing shared-token HMAC and are not bound to
 the TCP control socket. Secrets must be passed by an appropriate private caller.
 
 Tests use real loopback TCP and the existing file service with synthetic local
-events. This component has not been connected to X4, Windows, a real remote
-peer, or internet transport. The existing participant-control adapter remains
+events. `tests.test_authority_load_participant_handoff` additionally hands the
+accepted stream and its offer's epoch/handle to the existing loopback-only
+participant adapter. Its fake host queues the first command immediately after
+the accepted frame, then checks pause/resume receipts. Wrong epoch or handle
+and EOF fail without dispatch to the fake controller; a missing or mismatched
+accepted frame prevents socket transfer. This establishes that
+the existing test components compose on local sockets, not that the game is
+being controlled. This component has not been connected to X4, Windows, a real
+remote peer, or internet transport. The existing participant-control adapter remains
 loopback-only, and normal profile setup, compatibility collection, server
 listener, remote endpoint/token delivery and native client lifecycle are not
 provided. This is not a playable multiplayer client.
