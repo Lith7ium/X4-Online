@@ -125,7 +125,9 @@ class WorldCoordinator:
                 self._offers.invalidate()
                 self._load_offers.clear()
                 source = self._engine.save()
-                checkpoint = self._store.publish(source)
+                marker = getattr(self._engine, 'pending_marker', None)
+                checkpoint = (self._store.publish(source, marker=marker) if marker is not None
+                              else self._store.publish(source))
                 published = getattr(self._engine, 'checkpoint_published', None)
                 if published is not None:
                     if not callable(published):

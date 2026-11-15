@@ -7,7 +7,9 @@ function M.new(cfg,engine,net)
  assert(type(cfg.world_epoch)=='string' and #cfg.world_epoch==32 and cfg.world_epoch:match('^[0-9a-f]+$'))
  assert(cfg.empty_owned_slot==true and net~=nil and type(net.send)=='function' and type(net.receive)=='function')
  local owner='isolated-supervisor';local epoch=cfg.world_epoch;local lease=cfg.lease
- local verified=false;local faulted=false;local state
+ assert(cfg.marker_required==nil or type(cfg.marker_required)=='boolean')
+ if cfg.marker_required then assert(type(cfg.store_marker)=='function') end
+ local verified=false;local faulted=false;local state;local waiting_marker=nil
  local function send(s) assert(net:send(s)==true,'control send failed') end
  local function report(row)
   if row.status=='failed' then faulted=true end
@@ -16,27 +18,62 @@ function M.new(cfg,engine,net)
  state=assert(X4LAN_AUTHORITY_CONTROL_STATE.new({enabled=true,owner=owner,world_epoch=epoch,
   enable_verified_reuse=true,timeout_seconds=120},engine,report))
  local bridge={state=state}
+ local function submit_save(number)
+  local params={slot='save_009',exclusive_owner=true}
+  if verified then params.overwrite_verified_owned_slot=true else params.empty_owned_slot=true end
+  local ok,reason=state:submit(owner,epoch,number,'save',params)
+  if not ok then faulted=true;return false,reason end
+  return true
+ end
+ function bridge:marker_stored(marker)
+  local now=engine.real_time()
+  if faulted or not waiting_marker or marker~=waiting_marker.marker or type(now)~='number'
+    or now~=now or now>=waiting_marker.deadline then
+   faulted=true;return false,'marker_receipt'
+  end
+  local number=waiting_marker.number;waiting_marker=nil
+  return submit_save(number)
+ end
  function bridge:update()
   if faulted then return false,'faulted' end
   for _=1,16 do
    local packet=net:receive();if not packet then break end
-   local typ,l,e,id,op=packet:match('^([A-Z]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|?([a-z]*)$')
+   if waiting_marker then faulted=true;return false,'marker_pending' end
+   local typ,l,e,id,op,marker=packet:match('^([A-Z]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|([a-z]+)|([0-9a-f]+)$')
+   if not typ then typ,l,e,id,op=packet:match('^([A-Z]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|?([a-z]*)$') end
    if l~=lease or e~=epoch or not id or #id>16 or id:match('^0') then faulted=true;return false,'packet' end
    local number=tonumber(id)
    if not number or number>9007199254740991 then faulted=true;return false,'request_id' end
    if typ=='CMD' and (op=='pause' or op=='save' or op=='resume') then
-    local params=nil
     if op=='save' then
-     params={slot='save_009',exclusive_owner=true}
-     if verified then params.overwrite_verified_owned_slot=true else params.empty_owned_slot=true end
+     if cfg.marker_required then
+      if not marker or #marker~=32 then faulted=true;return false,'marker_required' end
+      local now=engine.real_time()
+      if type(now)~='number' or now~=now then faulted=true;return false,'clock' end
+      waiting_marker={number=number,marker=marker,deadline=now+120}
+      local ok=pcall(cfg.store_marker,marker)
+      if not ok then faulted=true;return false,'marker_store' end
+     else
+      if marker then faulted=true;return false,'unexpected_marker' end
+      local ok,reason=submit_save(number)
+      if not ok then return false,reason end
+     end
+    else
+     if marker then faulted=true;return false,'unexpected_marker' end
+     local ok,reason=state:submit(owner,epoch,number,op,nil)
+     if not ok then faulted=true;return false,reason end
     end
-    local ok,reason=state:submit(owner,epoch,number,op,params)
-    if not ok then faulted=true;return false,reason end
    elseif typ=='VERIFY' and op=='' then
     local ok,reason=state:confirm_save(owner,epoch,number,true)
     if not ok then faulted=true;return false,reason end
     verified=true;send('VERIFIED|'..lease..'|'..epoch..'|'..id)
    else faulted=true;return false,'packet' end
+  end
+  if waiting_marker then
+   local now=engine.real_time()
+   if type(now)~='number' or now~=now or now>=waiting_marker.deadline then
+    faulted=true;return false,'marker_timeout'
+   end
   end
   local ok,reason=state:on_update()
   if not ok then faulted=true end

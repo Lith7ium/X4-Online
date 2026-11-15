@@ -21,7 +21,16 @@ local function frame()
   local entries=GetSaveList({save_009=true});assert(type(entries)=='table')
   for _,entry in pairs(entries) do assert(entry.filename~='save_009','owned slot not empty') end
   bridge=assert(X4LAN_AUTHORITY_LOCAL_CONTROL_BRIDGE.new({enabled=true,empty_owned_slot=true,
-   lease=cfg.authority_control_lease,world_epoch=cfg.authority_world_epoch},engine,net))
+   lease=cfg.authority_control_lease,world_epoch=cfg.authority_world_epoch,
+   marker_required=cfg.authority_marker_required,
+   store_marker=function(marker)
+    AddUITriggeredEvent('X4AuthorityCheckpointMarker','Store',{marker=marker})
+   end},engine,net))
+  if cfg.authority_marker_required then
+   RegisterEvent('X4AuthorityCheckpointMarker.Stored',function(_,marker)
+    local ok,reason=bridge:marker_stored(marker);assert(ok,reason)
+   end)
+  end
   assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.register_save_event({enabled=true},bridge.state,RegisterEvent))
  end
  if now>=next_hello then

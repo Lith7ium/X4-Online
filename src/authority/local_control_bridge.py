@@ -8,14 +8,17 @@ an already dispatched X4 operation. The caller serializes every access.
 import re
 import socket
 import time
+import secrets
 from pathlib import Path
+
+from .marker_evidence import verify_saved_marker
 
 _HEX = re.compile(r'[0-9a-f]{32}\Z')
 
 
 class LocalControlBridge:
     def __init__(self, *, enabled, sock, peer, lease, world_epoch, profile, store,
-                 verify_checkpoint, timeout=130):
+                 verify_checkpoint, timeout=130, marker_required=False):
         if enabled is not True:
             raise ValueError('local control bridge requires explicit opt-in')
         if (not _HEX.fullmatch(lease) or not _HEX.fullmatch(world_epoch)
@@ -25,6 +28,10 @@ class LocalControlBridge:
                 or not 1 <= peer[1] <= 65535 or not 0 < timeout <= 600
                 or not callable(verify_checkpoint)):
             raise ValueError('invalid local bridge configuration')
+        if type(marker_required) is not bool:
+            raise ValueError('invalid marker setting')
+        self._marker_required = marker_required
+        self._pending_marker = None
         profile = Path(profile)
         if profile.is_symlink() or profile.name != '45841' or not profile.is_dir():
             raise ValueError('isolated 45841 profile required')
@@ -63,7 +70,7 @@ class LocalControlBridge:
         finally:
             self._sock.settimeout(old_timeout)
 
-    def _request(self, operation, status):
+    def _request(self, operation, status, *, marker=None):
         if self._pending_save is not None:
             raise RuntimeError('previous save has not been verified')
         number = self._next
@@ -71,7 +78,8 @@ class LocalControlBridge:
             raise ValueError('request IDs exhausted')
         self._next += 1
         prefix = f'{self._lease}|{self._epoch}|{number}'
-        self._exchange(f'CMD|{prefix}|{operation}', f'RECEIPT|{prefix}|{operation}|{status}')
+        suffix = '' if marker is None else f'|{marker}'
+        self._exchange(f'CMD|{prefix}|{operation}{suffix}', f'RECEIPT|{prefix}|{operation}|{status}')
         return number
 
     def pause(self):
@@ -81,9 +89,15 @@ class LocalControlBridge:
         self._request('resume', 'confirmed')
 
     def save(self):
-        number = self._request('save', 'native_event_only')
+        marker = secrets.token_hex(16) if self._marker_required else None
+        number = self._request('save', 'native_event_only', marker=marker)
         self._pending_save = number
+        self._pending_marker = marker
         return self._source
+
+    @property
+    def pending_marker(self):
+        return self._pending_marker
 
     def checkpoint_published(self, checkpoint):
         number = self._pending_save
@@ -93,13 +107,18 @@ class LocalControlBridge:
         self._poisoned = True
         expected = f'X4 Authority {self._epoch} {number}'
         evidence = self._verify(self._store, checkpoint.checkpoint_id, expected)
-        if (self._store.get(checkpoint.checkpoint_id) != checkpoint
+        if (getattr(checkpoint, 'marker', None) != self._pending_marker
+                or self._store.get(checkpoint.checkpoint_id) != checkpoint
                 or evidence.checkpoint_id != checkpoint.checkpoint_id
                 or evidence.sha256 != checkpoint.sha256 or evidence.size != checkpoint.size
                 or evidence.save_name != expected):
             raise ValueError('published checkpoint identity mismatch')
+        if self._pending_marker is not None:
+            verify_saved_marker(checkpoint, self._pending_marker,
+                                script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState')
         self._poisoned = False
         prefix = f'{self._lease}|{self._epoch}|{number}'
         self._exchange(f'VERIFY|{prefix}', f'VERIFIED|{prefix}')
         self._pending_save = None
+        self._pending_marker = None
         return True

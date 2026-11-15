@@ -51,6 +51,37 @@ class CheckpointTests(unittest.TestCase):
         restarted.confirm(second)
         self.assertEqual(CheckpointStore(self.store_dir).latest_confirmed(), second)
 
+    def test_marked_confirmation_survives_restart_and_ignores_newer_unconfirmed(self):
+        self.write_save()
+        first = self.store.publish(self.source, marker='a' * 32)
+        self.store.confirm(first)
+        self.write_save(b'<savegame><newer/></savegame>')
+        second = self.store.publish(self.source, marker='b' * 32)
+        restarted = CheckpointStore(self.store_dir)
+        self.assertEqual(restarted.latest(), second)
+        self.assertEqual(restarted.latest_marked_confirmed(), first)
+        self.assertEqual(restarted.latest_marked_confirmed().marker, 'a' * 32)
+        restarted.confirm(second)
+        self.assertEqual(CheckpointStore(self.store_dir).latest_marked_confirmed().marker, 'b' * 32)
+
+    def test_marker_recovery_rejects_legacy_invalid_and_changed_manifest(self):
+        self.write_save()
+        legacy = self.store.publish(self.source)
+        self.store.confirm(legacy)
+        with self.assertRaises(CheckpointError):
+            self.store.latest_marked_confirmed()
+        for marker in ('A' * 32, 'a' * 31, '', 42):
+            with self.subTest(marker=marker), self.assertRaises(CheckpointError):
+                self.store.publish(self.source, marker=marker)
+        checkpoint = self.store.publish(self.source, marker='a' * 32)
+        self.store.confirm(checkpoint)
+        manifest = checkpoint.path.parent / 'manifest.json'
+        data = json.loads(manifest.read_bytes())
+        data['marker'] = 'b' * 32
+        manifest.write_text(json.dumps(data))
+        with self.assertRaises(CheckpointError):
+            CheckpointStore(self.store_dir).latest_marked_confirmed()
+
     def test_confirmation_replace_failure_keeps_previous_pointer(self):
         self.write_save()
         first = self.store.publish(self.source)

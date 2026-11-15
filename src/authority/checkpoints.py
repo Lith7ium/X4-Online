@@ -25,6 +25,7 @@ MAX_XML = 2 * 1024 * 1024 * 1024
 CHUNK = 1024 * 1024
 _ID = re.compile(r'checkpoint-[0-9a-f]{32}\Z')
 _HASH = re.compile(r'[0-9a-f]{64}\Z')
+_MARKER = re.compile(r'[0-9a-f]{32}\Z')
 
 
 class CheckpointError(ValueError):
@@ -37,6 +38,7 @@ class Checkpoint:
     path: Path
     sha256: str
     size: int
+    marker: str | None = None
 
 
 def _read_regular(path, limit):
@@ -142,7 +144,14 @@ class CheckpointStore:
             raise CheckpointError('store must be an existing non-symlink directory')
         self.directory = directory.resolve(strict=True)
 
-    def publish(self, source):
+    def publish(self, source, *, marker=None):
+        """Publish a save and optionally bind the caller's marker assertion.
+
+        Metadata alone does not prove that X4 wrote the marker into the save.
+        That requires an independently observed native load.
+        """
+        if marker is not None and (not isinstance(marker, str) or not _MARKER.fullmatch(marker)):
+            raise CheckpointError('invalid checkpoint marker')
         source = Path(source)
         if source.is_symlink() or not source.is_file():
             raise CheckpointError('source must be an existing non-symlink file')
@@ -174,8 +183,11 @@ class CheckpointStore:
                 outgoing.flush()
                 os.fsync(outgoing.fileno())
             _validate_save(target)
-            metadata = _canonical({'version': 1, 'id': checkpoint_id,
-                                   'sha256': digest.hexdigest(), 'size': size})
+            manifest_value = {'version': 1, 'id': checkpoint_id,
+                              'sha256': digest.hexdigest(), 'size': size}
+            if marker is not None:
+                manifest_value.update(version=2, marker=marker)
+            metadata = _canonical(manifest_value)
             with (stage / 'manifest.json').open('xb') as manifest:
                 manifest.write(metadata)
                 manifest.flush()
@@ -194,7 +206,7 @@ class CheckpointStore:
             os.replace(pointer_temp, self.directory / 'CURRENT')
             pointer_temp = None
             _sync_dir(self.directory)
-            return Checkpoint(checkpoint_id, self.directory / checkpoint_id / 'save.xml.gz', digest.hexdigest(), size)
+            return Checkpoint(checkpoint_id, self.directory / checkpoint_id / 'save.xml.gz', digest.hexdigest(), size, marker)
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
@@ -211,8 +223,15 @@ class CheckpointStore:
         if manifest_sha256 is not None and hashlib.sha256(metadata).hexdigest() != manifest_sha256:
             raise CheckpointError('checkpoint manifest does not match CURRENT')
         value = _json(metadata)
-        if (not isinstance(value, dict) or set(value) != {'version', 'id', 'sha256', 'size'}
-                or type(value['version']) is not int or value['version'] != 1 or value['id'] != checkpoint_id
+        if not isinstance(value, dict):
+            raise CheckpointError('invalid checkpoint manifest')
+        version = value.get('version')
+        fields = {'version', 'id', 'sha256', 'size'}
+        if version == 2:
+            fields.add('marker')
+        if (set(value) != fields or type(version) is not int or version not in (1, 2)
+                or (version == 2 and (not isinstance(value['marker'], str) or not _MARKER.fullmatch(value['marker'])))
+                or value['id'] != checkpoint_id
                 or not isinstance(value['sha256'], str) or not _HASH.fullmatch(value['sha256'])
                 or type(value['size']) is not int or not 0 < value['size'] <= MAX_COMPRESSED):
             raise CheckpointError('invalid checkpoint manifest')
@@ -221,7 +240,7 @@ class CheckpointStore:
         if (digest, size) != (value['sha256'], value['size']):
             raise CheckpointError('checkpoint content does not match manifest')
         _validate_save(save)
-        return Checkpoint(checkpoint_id, save, digest, size)
+        return Checkpoint(checkpoint_id, save, digest, size, value.get('marker'))
 
     def _pointed_checkpoint(self, contents):
         pointer = _json(contents)
@@ -265,3 +284,14 @@ class CheckpointStore:
     def latest_confirmed(self):
         """Verify the separately confirmed checkpoint; never fall back to CURRENT."""
         return self._pointed_checkpoint(_read_regular(self.directory / 'CONFIRMED', 4096))
+
+    def latest_marked_confirmed(self):
+        """Return a confirmed checkpoint with a marker assertion in its manifest.
+
+        This validates metadata and bytes; it does not prove the marker exists in
+        the X4 save or that an X4 process loaded them. Rejects legacy saves.
+        """
+        checkpoint = self.latest_confirmed()
+        if checkpoint.marker is None:
+            raise CheckpointError('confirmed checkpoint has no marker')
+        return checkpoint

@@ -149,10 +149,14 @@ high-attention results before creating the checkpoint. Consequently the
 existing pause/save experiments do not prove that a real client's latest
 progress is present in the saved server world. The separately confirmed
 checkpoint pointer likewise does not start X4 or establish that it loaded that
-checkpoint. The marker and completed-load event have only been exercised in a
-test overlay; normal checkpoint saves do not yet persist or bind that marker.
-The identity strategy and mandatory checkpoint-marker proposal are awaiting
-the owner's decision.
+checkpoint. The owner approved unique markers for new multiplayer saves. The
+opt-in local controller now sets a fresh marker before each save, binds its
+assertion to the checkpoint manifest and checks the observed MD string reference
+in the saved bytes before confirming. One isolated Linux X4 run completed
+three successive marked saves, with two simulated client admissions and a
+final paused checkpoint. Restart recovery and real clients were not exercised.
+A marker in the bytes alone does not prove that an X4 process loaded the
+checkpoint. The ship identity strategy remains awaiting the owner's decision.
 
 Ship positions are the first scope; trade and combat follow later. Spacesuits
 and dropped cargo are deferred; missions currently have lower priority.

@@ -75,3 +75,20 @@ separate native checkpoint-reload experiment is described in
 [`AUTHORITY-REPEATED-CHECKPOINT.md`](../../docs/AUTHORITY-REPEATED-CHECKPOINT.md).
 The participant pause/resume requirement was added after that native run and
 has been checked with doubles, not re-run against X4.
+
+## Experimental per-save markers
+
+The local bridge can opt into `marker_required=True`. The supervisor generates a
+fresh marker for each save, and the Lua bridge waits for the corresponding MD
+receipt before submitting `SaveGame`. Timeout, unexpected receipt, and additional
+commands while awaiting the receipt fence the bridge. The coordinator passes the
+marker into the checkpoint manifest and compares it again at publication.
+Before native save confirmation, the bridge verifies the typed MD reference,
+marker string and observed false representation of the load flag in the saved
+bytes. One isolated Linux X4 run completed three successive marked saves while
+paused and confirmed the final checkpoint; an independent read verified three
+different markers. Recovery after loading is not implemented.
+
+For a disposable one-process diagnostic, the existing live harness accepts
+`--marker-required`; its participant load confirmations remain fake. The
+saved-byte check is not a native reload. No game runs on import.

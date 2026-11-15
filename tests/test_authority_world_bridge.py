@@ -1,5 +1,6 @@
 """WorldCoordinator over actual loopback UDP to LuaJIT controller doubles; no X4."""
 import os
+import gzip
 from pathlib import Path
 import shutil
 import socket
@@ -15,6 +16,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 sys.path.insert(0, str(ROOT / 'tools/dev'))
 from authority.checkpoints import CheckpointStore
 from authority.local_control_bridge import LocalControlBridge
+from authority.marker_evidence import MarkerEvidenceError
 from authority.save_transfer import SaveOffers
 from authority.world import WorldCoordinator
 from lockstep.launcher import joinfiles
@@ -32,13 +34,19 @@ class BridgeTests(unittest.TestCase):
         self.sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);self.sock.bind(('127.0.0.1',0));self.sock.settimeout(3)
         self.addCleanup(self.sock.close)
         self.lease='a'*32;self.epoch='b'*32
+        self.marker_required = self._testMethodName in ('test_marked_save_waits_for_md_receipt_and_is_durable',
+                                                        'test_wrong_saved_marker_is_never_confirmed')
+        peer_mode = ('badmarker' if self._testMethodName == 'test_wrong_saved_marker_is_never_confirmed'
+                     else 'marked' if self.marker_required else 'legacy')
         self.proc=subprocess.Popen(['luajit',str(ROOT/'tests/authority_bridge_peer.lua'),str(self.sock.getsockname()[1]),
-            str(self.profile/'save/save_009.xml.gz'),self.lease,self.epoch,str(lib)],cwd=ROOT,stderr=subprocess.PIPE)
+            str(self.profile/'save/save_009.xml.gz'),self.lease,self.epoch,str(lib),
+            peer_mode],cwd=ROOT,stderr=subprocess.PIPE)
         self.addCleanup(self.stop)
         data,peer=self.sock.recvfrom(768)
         self.assertEqual(data,f'HELLO|{self.lease}|{self.epoch}'.encode())
         self.bridge=LocalControlBridge(enabled=True,sock=self.sock,peer=peer,lease=self.lease,world_epoch=self.epoch,
-            profile=self.profile,store=self.store,verify_checkpoint=read_cycle_evidence,timeout=3)
+            profile=self.profile,store=self.store,verify_checkpoint=read_cycle_evidence,timeout=3,
+            marker_required=self.marker_required)
         self.service=joinfiles.FileService('c'*32,slots=(1,2)).start();self.addCleanup(self.service.close)
         self.world=WorldCoordinator(self.epoch,self.bridge,self.store,SaveOffers(self.service,self.store),
                                     participants=live.FakeParticipants())
@@ -61,6 +69,21 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(lifecycle['final_state'],'paused')
         self.assertEqual(self.world.session.state,'paused')
 
+    def test_invalid_missing_and_duplicate_marker_receipts_fail_closed(self):
+        subprocess.run(['luajit',str(ROOT/'tests/authority_bridge_marker_failures.lua')],
+                       cwd=ROOT,check=True)
+
+    def test_marked_save_waits_for_md_receipt_and_is_durable(self):
+        lifecycle=live.execute_world(self.world,self.store,expect_markers=True)
+        checkpoints=[self.store.get(c['checkpoint_id']) for c in lifecycle['fake_client_loads']]
+        checkpoints.append(self.store.latest_marked_confirmed())
+        self.assertEqual(len({c.marker for c in checkpoints}),3)
+        for checkpoint in checkpoints:
+            self.assertRegex(checkpoint.marker, r'^[0-9a-f]{32}$')
+            with gzip.open(checkpoint.path, 'rt') as source:
+                self.assertIn('string="'+checkpoint.marker+'"', source.read())
+        self.assertIsNone(self.bridge.pending_marker)
+
     def test_verification_failure_faults_and_never_authorizes_resume(self):
         self.world.join('a');self.world.step()
         self.bridge._verify=mock.Mock(side_effect=ValueError('bad identity'))
@@ -68,6 +91,17 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.world.session.state,'faulted')
         self.assertTrue(self.store.latest().path.is_file())
         with self.assertRaises(RuntimeError):self.bridge.resume()
+
+    def test_wrong_saved_marker_is_never_confirmed(self):
+        self.world.join('a'); self.world.step()
+        with self.assertRaises(MarkerEvidenceError):
+            self.world.step()
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertTrue(self.store.latest().path.is_file())
+        with self.assertRaises(FileNotFoundError):
+            self.store.latest_confirmed()
+        with self.assertRaises(RuntimeError):
+            self.bridge.resume()
 
     def test_timeout_and_wrong_receipt_poison_adapter(self):
         for wrong in (False, True):
@@ -102,6 +136,17 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('authority_reuse_probe',ui)
         self.assertEqual((lab/'ui/local_control_bridge.lua').read_bytes(),
                          (ROOT/'src/authority/lua/local_control_bridge.lua').read_bytes())
+
+    def test_disposable_overlay_can_opt_into_marker(self):
+        case=Path(self.temp.name)/'marked-case';lab=case/'extensions/x4_lan_lab'
+        for folder in ('ui','md','native'):(lab/folder).mkdir(parents=True,exist_ok=True)
+        (lab/'ui/config.lua').write_text('old')
+        (lab/'ui/native_gate_snapshot.lua').write_text('old')
+        (lab/'md/native_gate_battle.xml').write_text('<md/>')
+        live.install_probe(case,12345,self.lease,self.epoch,marker_required=True)
+        self.assertIn('authority_marker_required=true', (lab/'ui/config.lua').read_text())
+        self.assertEqual((lab/'md/authority_checkpoint_marker.xml').read_bytes(),
+                         (ROOT/'src/authority/md/checkpoint_marker.xml').read_bytes())
 
     def test_disabled_and_occupied_slot_refuse(self):
         args=dict(sock=self.sock,peer=('127.0.0.1',1234),lease=self.lease,world_epoch=self.epoch,
