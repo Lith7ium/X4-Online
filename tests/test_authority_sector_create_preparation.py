@@ -25,7 +25,7 @@ class PreparationTests(unittest.TestCase):
    self.assertIn(value,conditions)
   self.assertFalse(root.findall('.//create_ship'))
  def test_state_machine(self):
-  for mode in ('ok','disabled','guard','dispatch','reentrant','bad_count','wrong_index','bad_correlation','bad_snapshot','changed','duplicate','no_remote','report','timeout','slow_guard','slow_count','slow_issue','pause_lost_issue','slow_snapshot','slow_report','pause_lost_report'):
+  for mode in ('ok','disabled','guard','dispatch','reentrant','bad_count','wrong_index','bad_correlation','bad_snapshot','changed','duplicate','no_remote','report','timeout','slow_guard','slow_count','slow_issue','pause_lost_issue','slow_snapshot','slow_report','pause_lost_report','duplicate_final'):
    with self.subTest(mode=mode):subprocess.run(['luajit','tests/authority_sector_create_driver.lua',mode],cwd=ROOT,check=True,capture_output=True)
 
 if __name__=='__main__':unittest.main()

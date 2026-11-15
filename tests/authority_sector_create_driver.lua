@@ -57,7 +57,7 @@ for iteration=1,50 do
   if mode=='no_remote' then loc='local' end
   local v=args.request_id..'|'..epoch..'|'..id..'|'..a..'|'..s..'|'..macro..'|'..loc
   driver:event(screen..'.Result',v)
-  if mode=='duplicate' then driver:event(screen..'.Result',v) end
+  if mode=='duplicate' or (mode=='duplicate_final' and driver:state()=='done') then driver:event(screen..'.Result',v) end
  else error('unexpected request') end
  if driver:state()=='failed' or driver:state()=='done' then break end
 end

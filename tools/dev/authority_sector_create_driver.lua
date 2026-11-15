@@ -67,6 +67,7 @@ function M.new(o)
   return issue(inspect,'Preflight',{epoch=o.epoch,request_id=o.nonce..'-0'},'preflight')
  end
  function api:event(name,value)
+  if phase=='done' then return fail('late_event') end
   if not check() then return false end
   if name==inspect..'.Refused' or name==receiver..'.Refused' then return fail('refused') end
   if phase=='preflight' and name==inspect..'.Preflight' then
