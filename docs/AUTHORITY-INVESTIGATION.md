@@ -210,6 +210,16 @@ and possible next controls are documented in
 `tools/dev/AUTHORITY-REGISTRY-RESOLVE-V2.md`; no correlated transport or
 multiplayer result follows from this attempt.
 
+A separate string-response experiment subsequently observed a correlated
+resolve of one already known local ship and one unavailable index in a single
+isolated Linux X4 process. After two earlier failed attempts, the third run
+matched the MD-formatted actor string against an independently retained fleet
+FFI ID and reported confirmed pause and owned-process cleanup. The prior failed
+results remain unchanged. The large uint64 boundary was exercised synthetically,
+not in X4; the diagnostic did not resolve an unknown actor ID or establish
+cross-process, Windows, Internet or gameplay behavior. See
+`tools/dev/AUTHORITY-REGISTRY-RESOLVE-STRING.md`.
+
 The owner also approved an experiment creating newly spawned ships on clients
 under the server's registry ID. One isolated Linux/Linux run created one
 controlled server fixture after a common checkpoint, forwarded its test
