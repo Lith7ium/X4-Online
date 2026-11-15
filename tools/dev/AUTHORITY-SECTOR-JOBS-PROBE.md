@@ -8,8 +8,8 @@ Control and treatment must load separate copies of the same confirmed marked
 checkpoint; discard both copies afterward.
 
 The checkpoint must contain initialized `X4AuthorityShipRegistry` and
-`X4AuthoritySectorReferenceFixture` state, including the fixture's first
-existing ship and sector. A future supervisor must establish the checkpoint,
+`X4AuthoritySectorReferenceFixture` state, including both saved ship and sector
+slots. A future supervisor must establish the checkpoint,
 epoch and process identity, serialize this probe's events and operations,
 confirm pause independently before and after each request, impose a timeout,
 and discard the case on refusal, MD error, silence or uncertain delivery. This
@@ -20,12 +20,20 @@ serialize requests and fence late responses. A refusal does not permanently faul
 the cue: the caller must abort and discard the case on every refusal or timeout,
 even if the cue might respond to a later request. The `State` cue is one-shot;
 never automatically retry `Begin` after a missing or uncertain response.
-Request `Begin` exactly once on screen `X4AuthoritySectorJobsProbe` with table fields
-`epoch` and `mode`, the latter exactly `control` or `treatment`. The cue checks
+Request `Begin` exactly once on screen `X4AuthoritySectorJobsProbe` with table
+fields `epoch`, `slot` and `mode`: slot must be 1 or 2 and mode exactly
+`control` or `treatment`. The selected slot supplies the saved ship, sector and
+registry index. Before dispatch, the caller must strictly validate slot as the
+integer 1 or 2, excluding booleans, strings and other values; MD coercion
+behavior is unverified and the cue's comparisons do not replace that check.
+Both cases must select the same slot. An undefined slot or index, any MD error,
+or a missing response by the deadline makes the result uncertain: abort and
+discard the entire case, without retry. The cue checks
 the fixture/registry epoch, both registry mappings, ship/sector binding,
 operational ship, non-player status, a pilot and the current order's reported
-type and `started` or `critical` state at that sample. The treatment alone sets jobs permission false for that
-saved sector; control does not change it. `Began(order_id)` follows these checks
+type and `started` or `critical` state at that sample. The treatment alone sets
+jobs permission false for that saved sector; control does not change it.
+`Began(order_id)` follows these checks
 and the optional action. It is not proof of the effective sector permissions,
 their child overrides, or that the setting affected the ship.
 
@@ -47,6 +55,11 @@ is not evidence by itself that the ship continued to act after treatment.
 For a meaningful comparison, a separate read-only observation must establish
 actual behavior during the interval and distinguish it from inertia or other
 causes; a stopped or missing order alone does not establish a general rule.
+The archived candidate checkpoint has a temporary `Attack` order in slot 1 and
+a `Patrol` order recorded in slot 2. Those are saved XML observations only;
+neither proves the respective order remains active after loading. If the
+selected ship fails the current guard, the case is inconclusive.
+
 No inference can be made about God, faction logic, unobserved sectors, child
 permissions or creation paths. A short test with no observed behavior remains
 inconclusive. The schema documents the permission setter and order states.

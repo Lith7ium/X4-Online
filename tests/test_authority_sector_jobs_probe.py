@@ -43,6 +43,22 @@ class SectorJobsProbeStructure(unittest.TestCase):
         self.assertGreaterEqual(len(self.begin.findall('.//do_else/raise_lua_event')), 2)
         self.assertIsNotNone(self.sample.find('.//do_else/raise_lua_event'))
 
+    def test_only_explicit_fixture_slots_can_select_ship_and_sector(self):
+        outer = self.begin.find('./actions/do_if')
+        self.assertIn('(@$v.$slot == 1 or @$v.$slot == 2)', outer.get('value'))
+        actions = list(outer)
+        one = next(i for i, node in enumerate(actions)
+                   if node.tag == 'do_if' and node.get('value') == '$v.$slot == 1')
+        two = actions[one + 1]
+        self.assertEqual(two.tag, 'do_else')
+        for selected, suffix in ((actions[one], '1'), (two, '2')):
+            actual = {node.get('name'): node.get('exact') for node in selected.findall('set_value')}
+            self.assertEqual(actual, {
+                '$index': 'md.X4AuthoritySectorReferenceFixture.State.$index' + suffix,
+                '$ship': 'md.X4AuthoritySectorReferenceFixture.State.$ship' + suffix,
+                '$sector': 'md.X4AuthoritySectorReferenceFixture.State.$sector' + suffix,
+            })
+
     def test_no_ship_or_motion_mutation_and_order_type_ids_are_reported(self):
         allowed = {'mdscript', 'cues', 'cue', 'conditions', 'event_ui_triggered', 'actions',
                    'set_value', 'do_if', 'do_else', 'set_space_jobs_allowed', 'raise_lua_event'}
