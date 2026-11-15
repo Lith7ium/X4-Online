@@ -63,6 +63,7 @@ class CensusRuntimeTests(unittest.TestCase):
         raw=lambda r: ('\n'.join(r)+'\n').encode()
         result=subject.validate(raw(rows),ticket,1,limit=105)
         self.assertEqual((result['position_reads'],result['local_sectors']),(105,1))
+        self.assertTrue(result['position_observation_conclusive'])
         self.assertIsNone(subject.validate(raw(rows[:-1]),ticket,1,limit=105,partial=True))
         for bad in (rows[:5]+[rows[5].replace('index=4','index=5')]+rows[6:],
                     rows[:5]+[rows[5].replace('y=2','y=nan')]+rows[6:],
@@ -82,6 +83,7 @@ class CensusRuntimeTests(unittest.TestCase):
         result=subject.validate(('\n'.join(rows)+'\n').encode(),ticket,1,limit=4)
         self.assertEqual([result[k] for k in ('position_reads','unavailable','no_sector','docked_or_stored','local_invalid')],
                          [0,1,1,1,1])
+        self.assertFalse(result['position_observation_conclusive'])
 
 
 if __name__=='__main__': unittest.main()

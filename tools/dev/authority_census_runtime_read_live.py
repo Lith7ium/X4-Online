@@ -110,7 +110,8 @@ def validate(raw,ticket,slot,*,partial=False,limit):
     if (tag!=TAG or not m or [int(m[i]) for i in range(1,8)]!=
         [limit,counts['ok'],counts['unavailable'],counts['no_sector'],counts['docked_or_stored'],counts['local_invalid'],len(sectors)]
         or not math.isfinite(float(m[8])) or float(m[8])<0): raise ValueError('invalid census completion')
-    return dict(requested=limit,position_reads=counts['ok'],unavailable=counts['unavailable'],
+    return dict(requested=limit,position_reads=counts['ok'],position_observation_conclusive=counts['ok']>0,
+        unavailable=counts['unavailable'],
         no_sector=counts['no_sector'],docked_or_stored=counts['docked_or_stored'],local_invalid=counts['local_invalid'],local_sectors=len(sectors),
         reported_game_time=float(m[8]),pause_checked_in_probe=True,runtime_binding_proven=False,
         exact_loaded_file_proven=False,universe_coverage_proven=False)
