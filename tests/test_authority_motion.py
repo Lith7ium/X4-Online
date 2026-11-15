@@ -89,6 +89,58 @@ assert(not pcall(function() M.new({horizon=-1}) end))
 assert(not pcall(function() M.new({horizzon=.3}) end))
 ''')
 
+    def test_rendered_linear_velocity_interpolation_prediction_and_freeze(self):
+        self.lua(r'''
+local m=M.new({delay=.15,horizon=.35,clock_leak=0})
+local function add(seq,t,arrival,x,rate)
+ return m:push({frame='A',sequence=seq,source_time=t,pose={x,0,0,0,0,0},rate=rate},arrival)
+end
+local rate={100,0,0,0,0,0}
+assert(add(1,1,10,0,rate));assert(add(2,1.1,10.12,10,rate));assert(add(3,1.3,10.32,30,rate))
+local first=m:render(10.32);assert(first.phase=='interpolated' and first.linear_velocity==nil)
+local a=m:render(10.34);assert(a.phase=='interpolated' and math.abs(a.linear_velocity[1]-100)<1e-7)
+local b=m:render(10.65);assert(b.phase=='extrapolated' and math.abs(b.linear_velocity[1]-100)<1e-7)
+local c=m:render(10.9);assert(c.phase=='frozen' and c.linear_velocity[1]==0 and c.linear_velocity[2]==0)
+local d=m:render(10.9);assert(d.phase=='frozen' and d.linear_velocity==nil)
+''')
+
+    def test_unknown_rate_frame_change_and_invalid_clock_stay_unknown(self):
+        self.lua(r'''
+local m=M.new({delay=0,clock_leak=0})
+local function s(n,t,f,x,rate) return {sequence=n,source_time=t,frame=f,pose={x,0,0,0,0,0},rate=rate} end
+assert(m:push(s(1,1,'A',1,nil),2))
+assert(m:render(2.2).linear_velocity==nil)
+assert(m:render(2.3).phase=='held-no-rate' and m:render(2.3).linear_velocity==nil)
+local bad,why=m:render(2.2);assert(not bad and why=='invalid-clock')
+local ok,reason=m:push(s(2,1.4,'B',2,{20,0,0,0,0,0}),2.4)
+assert(ok and reason=='frame')
+local after=m:render(2.5);assert(after.frame=='B' and after.linear_velocity==nil)
+-- No transmitted rate is needed to infer a slope between two known poses.
+local j=M.new({delay=.1,clock_leak=0})
+assert(j:push(s(1,1,'A',0,nil),2));assert(j:push(s(2,1.2,'A',20,nil),2.2))
+assert(j:render(2.2).linear_velocity==nil)
+local k=j:render(2.25);assert(k.phase=='interpolated' and math.abs(k.linear_velocity[1]-100)<1e-6)
+''')
+
+    def test_rendered_rate_tracks_clock_slew_and_refuses_excessive_rate(self):
+        self.lua(r'''
+local m=M.new({delay=.2,clock_leak=.5,slew=.5,stale=1})
+local function s(n,t,x) return {sequence=n,source_time=t,frame='A',pose={x,0,0,0,0,0},rate={100,0,0,0,0,0}} end
+assert(m:push(s(1,1,0),10));assert(m:push(s(2,1.1,10),10.4))
+assert(m:render(10.4));assert(m:render(10.5))
+assert(m:push(s(3,1.2,20),10.6))
+local slow=m:render(10.6);assert(slow.phase=='interpolated' and math.abs(slow.linear_velocity[1]-50)<1e-6)
+assert(m:push(s(4,1.55,55),10.7))
+local fast=m:render(10.7);assert(fast.phase=='interpolated' and math.abs(fast.linear_velocity[1]-150)<1e-6)
+-- A large offset jump snaps the model clock; never report a derivative there.
+assert(m:push(s(5,3,200),10.8))
+assert(m:render(10.8).linear_velocity==nil)
+local too=M.new({delay=.05,clock_leak=0})
+assert(too:push(s(1,1,0),2));assert(too:push(s(2,1.000001,1),2.000001))
+assert(too:render(2.000001))
+local q=too:render(2.0500005);assert(q.phase=='interpolated' and q.linear_velocity==nil)
+''')
+
 
 if __name__ == '__main__':
     unittest.main()

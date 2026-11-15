@@ -105,10 +105,20 @@ function M.new(options)
   if #samples==0 then return nil,'empty' end
   last_render=now
   local wanted=offset+cfg.delay
+  -- d(source render time)/d(observer time). A snap or repeated clock value
+  -- has no established derivative. A moving lag changes the displayed rate.
+  local clock_factor
   if not lag or not lag_at or math.abs(wanted-lag)>1 then lag=wanted
   else
-   local step=cfg.slew*(now-lag_at)
+   local elapsed=now-lag_at
+   local old_lag=lag;local step=cfg.slew*elapsed
    lag=wanted>lag and math.min(wanted,lag+step) or math.max(wanted,lag-step)
+   if elapsed>0 then
+    -- At a reached target, lag is locally constant on the forward side.
+    if lag==wanted then clock_factor=1
+    elseif wanted>old_lag then clock_factor=1-cfg.slew
+    else clock_factor=1+cfg.slew end
+   end
   end
   lag_at=now
   local target=now-lag
@@ -126,6 +136,16 @@ function M.new(options)
      out.pose[i]=i>3 and angle(a.pose[i]+angle(delta)*t) or a.pose[i]+delta*t
     end
     out.phase='interpolated';out.source_sequence=b.sequence
+    -- At a knot, adjacent segments may have different slopes. Never infer a
+    -- native angular vector from wrapped Euler-coordinate rates.
+    if clock_factor and target~=b.source_time then
+     local v={};local valid=true
+     for i=1,3 do
+      v[i]=(b.pose[i]-a.pose[i])/(b.source_time-a.source_time)*clock_factor
+      if not finite(v[i]) or math.abs(v[i])>100000 then valid=false end
+     end
+     if valid then out.linear_velocity=v end
+    end
     return out
    end
   end
@@ -137,6 +157,15 @@ function M.new(options)
    end
    if not vector(out.pose,false) then return nil,'out-of-bounds' end
    out.phase=target-last.source_time<cfg.horizon and 'extrapolated' or 'frozen'
+   if out.phase=='frozen' and clock_factor then out.linear_velocity={0,0,0}
+   elseif clock_factor then
+    local v={};local valid=true
+    for i=1,3 do
+     v[i]=last.rate[i]*clock_factor
+     if not finite(v[i]) or math.abs(v[i])>100000 then valid=false end
+    end
+    if valid then out.linear_velocity=v end
+   end
   else
    out.pose=copy(last.pose);out.phase='held-no-rate'
   end

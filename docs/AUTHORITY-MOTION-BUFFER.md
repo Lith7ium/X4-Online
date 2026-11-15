@@ -23,6 +23,21 @@ Push rejects invalid or nonfinite fields, stale sequence/source time, or a backw
 
 Rendering maps observer time to source time using the lowest observed offset, with a bounded rate of offset increase to accommodate drift. It interpolates between known samples (using shortest-angle wrap). Beyond the latest sample, it applies the supplied linear/Euler rates up to a configured horizon, then freezes at that predicted pose. If the pose would exceed validation limits, rendering fails closed. `result.phase` is `held`, `held-no-rate`, `interpolated`, `extrapolated` or `frozen`. The result freezes indefinitely once its horizon is reached; the caller is responsible for expiring, hiding or replacing stale objects. Arrival/clock data do not prove actual capture time or provide synchronized clocks.
 
+`result.linear_velocity`, when present, is a newly allocated three-number vector
+describing the current model's rendered translation per observer-clock second
+in `result.frame`. Inside an interpolation segment it is the positional slope;
+inside extrapolation it is the supplied linear rate. Both account for the
+current render-clock slew. A known prediction frozen at its horizon reports
+`{0,0,0}`. This is the forward-side derivative of the current piecewise model,
+not native X4 velocity or a measurement of actual game motion; packet arrival,
+pose corrections and other discontinuities can change the model between calls.
+It is absent (`nil`) when that derivative is not established: held poses,
+missing rates, first render, repeated observer timestamp, a clock snap, an
+interpolation knot, or a nonfinite/out-of-bounds derivative. Frame/gap/teleport
+resets discard the incoming rate, so their held result does not invent a zero.
+Invalid clocks still return `nil, 'invalid-clock'`; the second return value is
+reserved for existing errors. No angular velocity or native setter is supplied.
+
 Defaults mirror the earlier normal-flight LAN buffer: 0.15 s delay, 0.35 s prediction horizon, 0.75 s stale gap, 10,000 m discontinuity base, 0.002 s/s clock-offset leak and 0.1 s/s render-clock slew. They are adjustable test parameters, not production tuning or evidence of smooth gameplay. For large offset jumps the render clock can snap, as in the source experiment. This adaptation does **not** include the LAN experiment's adaptive delay, per-mode high-speed thresholds, velocity fences, native lifecycle logic or NPC prioritization.
 
 `tests/test_authority_motion.py` uses LuaJIT without X4 to check irregular samples, bounded extrapolation and freeze, coordinate-frame change, teleport, gap, angle wrap, stationary data, absent rates, invalid data and reordered input. The tests do not establish visual smoothness, high-speed behavior, accuracy in X4, collision correctness or Windows/Internet behavior.
