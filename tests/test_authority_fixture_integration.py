@@ -29,13 +29,16 @@ class FixtureWireEvidenceTests(unittest.TestCase):
             secret = 'a'*32
             config.write_text('X4LAN_CONFIG.native_gate_authority_wire = true\n'
                               'X4LAN_CONFIG.native_gate_authority_wire_port = 12345\n'
-                              f'X4LAN_CONFIG.native_gate_authority_wire_lease = "{secret}"\n')
+                              f'X4LAN_CONFIG.native_gate_authority_wire_lease = "{secret}"\n'
+                              'X4LAN_CONFIG.native_gate_authority_fleet_port = 12346\n'
+                              f'X4LAN_CONFIG.native_gate_authority_fleet_lease = "{secret}"\n')
             with mock.patch.object(live, 'validate_evidence', return_value={}):
                 live.collect_run_evidence(run, [1], [(case, profile)], 60,
                                           {'stride': 1, 'authority_fixture_wire': True}, True)
             exported = run/'client1/installed/x4_lan_lab-config.lua'
             self.assertNotIn(secret, exported.read_text())
             self.assertNotIn('native_gate_authority_wire_port', exported.read_text())
+            self.assertNotIn('native_gate_authority_fleet_port', exported.read_text())
             self.assertIn('native_gate_authority_wire = true', exported.read_text())
             # A partial or otherwise unexpected assignment must remove any stale
             # export and refuse collection, not copy the untrusted remainder.

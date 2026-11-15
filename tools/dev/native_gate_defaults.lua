@@ -231,6 +231,7 @@ D.DIAGNOSTIC={
  {'native_gate_authority_scan','read-only isolated Linux fixture fleet scan'},
  {'native_gate_authority_wire','local read-only isolated fixture UDP diagnostic'},
  {'native_gate_authority_motion','isolated fixture movement stimulus'},
+ {'native_gate_authority_fleet','read-only isolated twelve-fixture UDP diagnostic'},
  {'native_gate_fixture_body_observe','read-only Linux fixture body observation'},
  {'native_gate_navmesh_post_observe','Linux navmesh post attempts during startup and a bounded live tick window'},
  {'native_gate_economy_watch','Linux saved-station deadline observation'},
@@ -598,7 +599,8 @@ D.TUNING={
 }
 -- The keys a session config supplies itself (no default).
 D.SESSION={'native_gate_test','native_gate_clients','native_gate_player_identity_plan','native_gate_relay_host','native_gate_arm_timeout_ms',
- 'native_gate_authority_wire_port','native_gate_authority_wire_lease',
+ 'native_gate_authority_wire_port','native_gate_authority_wire_lease','native_gate_authority_fleet_port','native_gate_authority_fleet_lease',
+ 'native_gate_authority_wreck_saved',
  'native_gate_arm_at','native_gate_story',
  'native_gate_input_priority','native_gate_defaults'}
 -- Stop reasons the probe names in its info line (docs/LOCKSTEP-REGISTRY.txt, section 4; tests check them).

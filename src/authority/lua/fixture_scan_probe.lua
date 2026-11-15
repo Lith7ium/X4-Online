@@ -1,15 +1,20 @@
 -- Explicitly enabled, read-only fixture diagnostic for the disposable Linux harness.
 local M = {}
 local attempted = false
-function M.sample(cfg, tick, actors, log, gate)
+function M.sample(cfg, tick, actors, log, gate, known_wreck_saved)
  if not cfg.native_gate_authority_scan or attempted or tick < 30 then return end
  attempted = true
  local ok, err = pcall(function()
   assert(cfg.native_gate_authority_scan == true, 'explicit boolean required')
+  if known_wreck_saved ~= nil then
+   assert(type(known_wreck_saved)=='string' and #known_wreck_saved==16 and
+    known_wreck_saved:match('^[0-9a-f]+$') and known_wreck_saved~='0000000000000000', 'invalid private wreck identity')
+   assert(type(gate)=='table' and type(gate.saved_identity)=='function', 'wreck identity table required')
+  end
   assert(cfg.native_gate_hash == 'battle' and cfg.native_gate_snapshot_fixture and
    #cfg.native_gate_snapshot_fixture == 12, 'saved battle fixture required')
   local ffi = require('ffi')
-  ffi.cdef[[const char* GetSaveFolderPath(void);]]
+  ffi.cdef[[const char* GetSaveFolderPath(void); double GetCurrentGameTime(void);]]
   local path = ffi.string(ffi.C.GetSaveFolderPath()):gsub('\\','/'):gsub('/+$','')
   assert(cfg.test_profile=='45841' and path:sub(-#'/45841/save')=='/45841/save', 'isolated profile required')
   local engine = assert(X4LAN_AUTHORITY_SHIP_ENGINE, 'engine adapter missing').new()
@@ -94,6 +99,50 @@ function M.sample(cfg, tick, actors, log, gate)
     end
     log(string.format('AUTHORITY_NONOP_DIAG tick=%d faction_index=%d ship_index=%d operational_recheck=%s same_fleet_recheck=%s valid=%s construction=%s ship_class=%s wreck_ui=%s saved_private=%s',
      tick,faction_index,ship_index,status,membership,exists,construction,shipclass,wreck_ui,saved))
+    -- A separately opted-in, snapshot-identified test object only. The caller
+    -- must keep its identity, configuration and these pose logs private.
+    -- Finite results are observations, not proof that X4 supplied a pose:
+    -- compare them independently to the snapshot hierarchy and motion.
+    if known_wreck_saved and saved==known_wreck_saved and membership=='true' and
+       exists=='true' and construction=='false' and status=='false' then
+     local read_ok=pcall(function()
+      local runtime=tostring(ship):gsub('ULL$','')
+      assert(runtime:match('^%d+$'), 'invalid wreck runtime identity')
+      local function guard()
+       assert(gate.saved_identity(runtime)==known_wreck_saved, 'wreck identity changed')
+       assert(recheck_membership() and engine.valid(ship) and not engine.operational(ship), 'wreck changed during read')
+       assert(gate.saved_identity(runtime)==known_wreck_saved, 'wreck identity changed during guard')
+      end
+      local function guarded(getter)
+       guard()
+       local value=getter(ship)
+       guard()
+       return value
+      end
+      local sector=assert(guarded(engine.sector), 'wreck sector unavailable')
+      local key=engine.key(sector)
+      local decimal=tostring(sector):gsub('ULL$','')
+      assert(decimal:match('^%d+$'), 'invalid sector identity')
+      local sector_saved=gate.saved_identity(decimal)
+      assert(type(sector_saved)=='string' and #sector_saved==16 and sector_saved:match('^[0-9a-f]+$') and
+       sector_saved~='0000000000000000', 'missing saved sector')
+      local first=guarded(engine.pose)
+      local after=assert(guarded(engine.sector), 'wreck sector unavailable after read')
+      assert(engine.key(after)==key, 'wreck sector changed')
+      local second=guarded(engine.pose)
+      local game_time=tonumber(ffi.C.GetCurrentGameTime())
+      assert(game_time and game_time==game_time and game_time~=math.huge and game_time~=-math.huge, 'invalid game time')
+      for _,field in ipairs({'x','y','z','yaw','pitch','roll'}) do
+       for _,p in ipairs({first,second}) do
+        local v=p[field]; assert(type(v)=='number' and v==v and v~=math.huge and v~=-math.huge, 'invalid wreck pose')
+       end
+      end
+      log(string.format('AUTHORITY_WRECK_READ tick=%d game_time=%.9g sector_saved_private=%s x=%.9g y=%.9g z=%.9g yaw=%.9g pitch=%.9g roll=%.9g read_x=%.9g read_y=%.9g read_z=%.9g read_yaw=%.9g read_pitch=%.9g read_roll=%.9g',
+       tick,game_time,sector_saved,first.x,first.y,first.z,first.yaw,first.pitch,first.roll,
+       second.x,second.y,second.z,second.yaw,second.pitch,second.roll))
+     end)
+     if not read_ok then log('AUTHORITY_WRECK_ERROR tick='..tostring(tick)..' why=guard_or_read_failed') end
+    end
    end,
    checkpoint=function()
     local now=GetCurRealTime()

@@ -1,0 +1,126 @@
+"""Strict 12-fixture evidence and isolated probe tests; no X4 process."""
+from pathlib import Path
+import json
+import os
+import select
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools/dev'))
+from authority_fixture_fleet_support import IDS, validate
+
+
+def records():
+    source, guest = [], []
+    for ident in IDS:
+        row = f'[X4LAN] NATIVE_GATE AUTHORITY_FLEET_ENROLL tick=30 id={ident} sector=' + 'a'*64
+        source.append(row); guest.append(row)
+        for seq, tick in enumerate((90, 150, 210, 270), 1):
+            source.append(f'[X4LAN] NATIVE_GATE AUTHORITY_FLEET_SOURCE tick={tick} id={ident} seq={seq} time={tick}.0 x={seq} y=2 z=3')
+            guest.append(f'[X4LAN] NATIVE_GATE AUTHORITY_FLEET_RECEIVE tick={tick} id={ident} request={seq} seq={seq} time={tick}.5 x={seq} y=2 z=3')
+    return source, guest
+
+
+class FleetEvidenceTests(unittest.TestCase):
+    def test_sealed_daemon_package_private_pipe_and_udp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); package=root/'authority'; package.mkdir()
+            for name in ('__init__.py','ship_state.py','fixture_udp.py','fixture_fleet_udp.py'):
+                shutil.copy(ROOT/'src/authority'/name, package/name)
+            shutil.copy(ROOT/'tools/dev/authority_fixture_fleet_support.py', root/'authority_fixture_fleet_support.py')
+            read_fd, write_fd=os.pipe()
+            process=subprocess.Popen([sys.executable,str(root/'authority_fixture_fleet_support.py'),'--config-fd',str(read_fd)],
+                                     pass_fds=(read_fd,),stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            os.close(read_fd)
+            try:
+                with os.fdopen(write_fd,'w') as pipe:
+                    json.dump({'source':'a'*32,'guest':'b'*32},pipe)
+                self.assertTrue(select.select([process.stdout],[],[],5)[0])
+                ready=process.stdout.readline()
+                self.assertRegex(ready,r'^AUTHORITY_FLEET_READY port=\d+\n$')
+                port=int(ready.split('=')[1]); destination=('127.0.0.1',port)
+                with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as source, socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as guest:
+                    source.settimeout(2);guest.settimeout(2)
+                    for sock,role,lease in ((source,'SOURCE','a'*32),(guest,'GUEST1','b'*32)):
+                        sock.sendto(f'FLEET1|HELLO|{role}|{lease}'.encode(),destination)
+                        self.assertEqual(sock.recv(512),f'FLEET1|READY|{role}'.encode())
+                    source.sendto(f'FLEET1|PUT|{"a"*32}|fixture-01|test-frame|1|1|2|3'.encode(),destination)
+                    for seq in range(1,4):
+                        guest.sendto(f'FLEET1|GET|{"b"*32}|fixture-01|test-frame|{seq}'.encode(),destination)
+                        try:
+                            received=guest.recv(512); break
+                        except socket.timeout:
+                            pass
+                    else:
+                        self.fail('no guest position received')
+                    self.assertIn(b'|1|1.0|2.0|3.0',received)
+            finally:
+                process.send_signal(signal.SIGTERM)
+                stdout,stderr=process.communicate(timeout=5)
+            self.assertEqual(process.returncode,0)
+            for secret in ('a'*32,'b'*32):
+                self.assertNotIn(secret,ready+stdout+stderr)
+
+    def test_12_independent_fixtures_and_age(self):
+        source, guest = records()
+        result = validate(source, guest, 300)
+        self.assertTrue(result['pass'], result)
+        self.assertEqual(set(result['fixtures']), set(IDS))
+        self.assertEqual(result['fixtures'][IDS[0]]['maximum_capture_age_s'], .5)
+
+    def test_missing_or_misleading_fixture_cannot_pass(self):
+        source, guest = records()
+        variants = [
+            [line for line in guest if 'id=fixture-07 ' not in line],
+            [line.replace('sector='+'a'*64, 'sector='+'b'*64, 1) for line in guest],
+            [line.replace('x=1 y=2', 'x=9 y=2', 1) for line in guest],
+            [line.replace('time=90.5', 'time=93.0', 1) for line in guest],
+            guest + [guest[-1]],
+            guest + ['[X4LAN] NATIVE_GATE AUTHORITY_FLEET_ERROR tick=299'],
+        ]
+        for bad in variants:
+            self.assertFalse(validate(source, bad, 300)['pass'])
+        self.assertFalse(validate(source, guest, 299)['pass'])
+
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
+    def test_probe_enrolls_and_samples_all_fixture_ids(self):
+        script = r'''
+local ffi=require('ffi');ffi.cdef('typedef uint64_t UniverseID;')
+X4LAN_SHA256={digest=function() return string.rep('a',64) end}
+local logs={};local net={send=function() return true end,receive=function() end,close=function() end}
+package.loadlib=function() return function() return {open=function(host,port) assert(host=='127.0.0.1' and port==1234);return net end} end end
+X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return {
+ key=function(h) return tostring(h) end,operational=function() return true end,is_ship=function() return true end,
+ sector=function() return ffi.new('uint64_t',99) end,
+ pose=function(h) return {x=tonumber(h),y=0,z=0} end,
+} end}
+local wire=assert(loadfile('src/authority/lua/fixture_fleet_wire.lua'))()
+X4LAN_AUTHORITY_FIXTURE_FLEET_WIRE=wire
+local fake={sent={}}
+X4LAN_AUTHORITY_FIXTURE_FLEET_WIRE={new=function(conn,role,lease,frames)
+ assert(role=='SOURCE');return {step=function(_,samples)
+  local rows={}; for id,p in pairs(samples) do rows[#rows+1]={fixture=id,sequence=1} end; return {},rows end}
+end}
+local gate={saved_identity=function(v)
+ local n=tonumber(v);if n==99 then return string.rep('a',16) end;return string.format('%016x',n) end}
+local cfg={native_gate_authority_fleet=true,test_profile='45841',slot='p1',native_gate_authority_fleet_port=1234,
+ native_gate_authority_fleet_lease=string.rep('c',32),native_gate_snapshot_fixture={}}
+local actors={};for i=1,12 do actors[i]=i;cfg.native_gate_snapshot_fixture[i]=string.format('%016x',i) end
+local probe=assert(loadfile('src/authority/lua/fixture_fleet_probe.lua'))()
+probe.sample(cfg,30,actors,function(s) logs[#logs+1]=s end,gate)
+assert(#logs==24, table.concat(logs,'\n'))
+local seen={};for _,s in ipairs(logs) do local id=s:match('AUTHORITY_FLEET_SOURCE tick=30 id=(fixture%-%d%d)');if id then seen[id]=true end end
+for i=1,12 do assert(seen[string.format('fixture-%02d',i)]) end
+'''
+        result = subprocess.run(['luajit', '-'], input=script, text=True, cwd=ROOT, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+if __name__ == '__main__':
+    unittest.main()

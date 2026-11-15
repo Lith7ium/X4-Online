@@ -263,6 +263,63 @@ diag=run(); assert(diag:find('same_fleet_recheck=unknown',1,true) and diag:find(
 assert(diag:find('construction=unknown',1,true) and diag:find('wreck_ui=unknown',1,true))
 ''')
 
+    def test_known_wreck_read_is_explicit_identity_matched_and_read_only(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, new=function(_,v) return v end,
+ C={GetSaveFolderPath=function() return '/private/45841/save' end, GetCurrentGameTime=function() return 42 end}, string=function(s) return s end}
+GetCurRealTime=function() return 10 end
+X4LAN_AUTHORITY_SHIP_SCAN=scan; X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local cfg={native_gate_authority_scan=true,native_gate_hash='battle',native_gate_snapshot_fixture={},test_profile='45841'}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+data.a={'a1','2'}
+local reads=0; local old_pose=e.pose
+e.pose=function(h) if h=='2' then reads=reads+1 end; return old_pose(h) end
+e.operational=function(h) return h~='2' end
+e.valid=function() return true end
+e.is_ship=function(h) return h~='2' end
+e.sector=function() return '3' end
+IsComponentConstruction=function() return false end
+ConvertStringTo64Bit=function(h) return h end
+local gate={saved_identity=function(h)
+ if h=='2' then return '0000000000001234' end
+ if h=='3' then return '0000000000005678' end
+end}
+local function run(known)
+ local logs={}; local probe=assert(loadfile('src/authority/lua/fixture_scan_probe.lua'))()
+ probe.sample(cfg,30,{'a1'},function(s) logs[#logs+1]=s end,gate,known)
+ assert(logs[#logs]:find('ship not operational',1,true))
+ return table.concat(logs,'\\n')
+end
+assert(not run(nil):find('AUTHORITY_WRECK_READ') and reads==0)
+assert(not run('0000000000009999'):find('AUTHORITY_WRECK_READ') and reads==0)
+local result=run('0000000000001234')
+assert(result:find('AUTHORITY_WRECK_READ',1,true) and reads==2)
+assert(result:find('sector_saved_private=0000000000005678',1,true))
+e.valid=function() return false end
+assert(not run('0000000000001234'):find('AUTHORITY_WRECK_READ') and reads==2)
+e.valid=function() return true end
+IsComponentConstruction=function() return true end
+assert(not run('0000000000001234'):find('AUTHORITY_WRECK_READ') and reads==2)
+IsComponentConstruction=function() return false end
+for _,mode in ipairs({'identity','validity'}) do
+ local saved='0000000000001234';local valid=true;local wreck_reads=0
+ e.valid=function() return valid end
+ gate.saved_identity=function(h) if h=='2' then return saved elseif h=='3' then return '0000000000005678' end end
+ e.pose=function(h)
+  if h=='2' then
+   wreck_reads=wreck_reads+1
+   if wreck_reads==2 then
+    if mode=='identity' then saved='0000000000009999' else valid=false end
+   end
+  end
+  return old_pose(h)
+ end
+ result=run('0000000000001234')
+ assert(wreck_reads==2 and result:find('AUTHORITY_WRECK_ERROR',1,true))
+ assert(not result:find('AUTHORITY_WRECK_READ',1,true))
+end
+''')
+
     def test_membership_recheck_absence_or_failure_does_not_complete_scan(self):
         self.run_lua('''
 package.loaded.ffi={cdef=function() end, new=function(_,v) return v end,
@@ -391,6 +448,24 @@ class OverlayIntegrationTests(unittest.TestCase):
                              (bundle/'extension/x4_lan_lab/ui/config.lua').read_text())
             manifest['authority_fixture_wire']=False
             with self.assertRaisesRegex(ValueError,'wire config differs'): live.validate_authority_scan_bundle(bundle,manifest)
+
+            bundle = root/'fleet-bundle'; forwarded.clear()
+            with mock.patch.object(live.subprocess,'run',side_effect=wire_command), contextlib.redirect_stdout(io.StringIO()):
+                live.main(['bundle','--zig','/unused','--snapshot',str(snapshot),'--out',str(bundle),
+                           '--ticks','300','--battle','--serial-pathing','--path-determinism','1',
+                           '--authority-fixture-scan','--authority-fixture-wire','--authority-fixture-fleet'])
+            self.assertIn('--authority-fixture-fleet',forwarded)
+            manifest=json.loads((bundle/'manifest.json').read_text())
+            self.assertTrue(manifest['authority_fixture_fleet'])
+            self.assertEqual(bundle.stat().st_mode & 0o077, 0)
+            live.validate_authority_scan_bundle(bundle,manifest)
+            for name in ('fixture_fleet_wire.lua','fixture_fleet_probe.lua'):
+                self.assertIn('extension/x4_lan_lab/ui/'+name,manifest['files'])
+            for name in ('authority_fixture_fleet_support.py','authority/__init__.py','authority/ship_state.py',
+                         'authority/fixture_udp.py','authority/fixture_fleet_udp.py'):
+                self.assertIn(name,manifest['files'])
+            manifest['authority_fixture_fleet']=False
+            with self.assertRaisesRegex(ValueError,'fleet config differs'): live.validate_authority_scan_bundle(bundle,manifest)
 
 if __name__ == '__main__':
     unittest.main()

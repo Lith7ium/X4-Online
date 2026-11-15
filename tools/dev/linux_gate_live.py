@@ -399,6 +399,8 @@ def validate_authority_scan_bundle(root, manifest):
     if type(enabled) is not bool:
         raise ValueError('invalid authority fixture scan option')
     config = (root / 'extension/x4_lan_lab/ui/config.lua').read_text()
+    if 'native_gate_authority_wreck_saved' in config:
+        raise ValueError('wreck identity may only be supplied to an individual run')
     values = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_scan\s*=\s*(.*?)\s*$', config)
     if values != (['true'] if enabled else []):
         raise ValueError('authority fixture scan config differs from bundle option')
@@ -426,6 +428,19 @@ def validate_authority_scan_bundle(root, manifest):
         raise ValueError('authority fixture motion config differs from bundle option')
     if motion and manifest.get('ticks', 0) < 120:
         raise ValueError('authority fixture motion requires at least 120 ticks')
+    fleet = manifest.get('authority_fixture_fleet', False)
+    if type(fleet) is not bool or (fleet and not wire):
+        raise ValueError('invalid authority fixture fleet option')
+    assignments = re.findall(r'(?m)^\s*X4LAN_CONFIG\.native_gate_authority_fleet\s*=\s*(.*?)\s*$', config)
+    if assignments != (['true'] if fleet else []):
+        raise ValueError('authority fixture fleet config differs from bundle option')
+    if fleet:
+        if manifest.get('ticks', 0) < 300:
+            raise ValueError('authority fixture fleet requires at least 300 ticks')
+        for rel in ('extension/x4_lan_lab/ui/fixture_fleet_wire.lua', 'extension/x4_lan_lab/ui/fixture_fleet_probe.lua',
+                    'authority/__init__.py', 'authority/ship_state.py', 'authority/fixture_udp.py', 'authority/fixture_fleet_udp.py', 'authority_fixture_fleet_support.py'):
+            if rel not in manifest.get('files', {}) or not (root / rel).is_file():
+                raise ValueError('authority fixture fleet artifact missing: ' + rel)
     if wire:
         if manifest.get('clients') != 2 or manifest.get('ticks', 0) < 60:
             raise ValueError('authority fixture wire requires two local clients and at least 60 ticks')
@@ -2384,7 +2399,9 @@ def bundle(args):
         raise SystemExit(f'{out} exists; use a new directory')
     snapshot_sha = sha(args.snapshot)
     world_seed = snapshot_seed(args.snapshot)
-    out.mkdir(parents=True)
+    # Authority bundles contain an owned snapshot and may retain private IDs.
+    # Restrict only the newly created bundle; never chmod an existing path.
+    out.mkdir(mode=0o700 if args.authority_fixture_scan else 0o777, parents=True)
     work = out / '.build'
     work.mkdir()
     subprocess.run([sys.executable, str(repo / 'tools/dev/build_native_gate_linux.py'), '--zig', str(args.zig), '--out', str(work)], check=True)
@@ -2411,6 +2428,10 @@ def bundle(args):
         if not args.authority_fixture_wire or args.ticks < 120:
             raise SystemExit('--authority-fixture-motion requires --authority-fixture-wire and at least 120 ticks')
         command.append('--authority-fixture-motion')
+    if args.authority_fixture_fleet:
+        if not args.authority_fixture_wire or args.ticks < 300:
+            raise SystemExit('--authority-fixture-fleet requires --authority-fixture-wire and at least 300 ticks')
+        command.append('--authority-fixture-fleet')
     for name in ('fixture_body_observe', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state', 'flight_rng', 'flight_full',
                  'avoidance_refresh', 'steering_init', 'agent_full', 'spline_diag', 'spline_refresh', 'spline_state', 'params_init', 'strict_physics', 'body_diag', 'params_diag'):
         if getattr(args, name, False):
@@ -2732,6 +2753,11 @@ def bundle(args):
     if args.authority_fixture_wire:
         shutil.copy2(repo / 'src/authority/fixture_udp.py', out / 'fixture_udp.py')
         shutil.copy2(repo / 'tools/dev/authority_fixture_wire_support.py', out / 'authority_fixture_wire_support.py')
+    if args.authority_fixture_fleet:
+        (out / 'authority').mkdir()
+        for name in ('__init__.py', 'ship_state.py', 'fixture_udp.py', 'fixture_fleet_udp.py'):
+            shutil.copy2(repo / 'src/authority' / name, out / 'authority' / name)
+        shutil.copy2(repo / 'tools/dev/authority_fixture_fleet_support.py', out / 'authority_fixture_fleet_support.py')
     shutil.copy2(Path(__file__), out / 'linux_gate_live.py')
     shutil.copy2(Path(__file__).with_name('linux_ui_seat_pose_evidence.py'), out / 'linux_ui_seat_pose_evidence.py')
     shutil.copy2(Path(__file__).with_name('linux_ui_plan_kick_evidence.py'), out / 'linux_ui_plan_kick_evidence.py')
@@ -2927,6 +2953,7 @@ def bundle(args):
         'authority_fixture_scan',
         'authority_fixture_wire',
         'authority_fixture_motion',
+        'authority_fixture_fleet',
         'nav_probe_init',
         'clients',
         'fp_redirect_drones',
@@ -3519,6 +3546,68 @@ def load_credentials(path):
     return {int(k): v for k, v in data.items()}
 
 
+def load_authority_wreck_id(path, manifest, root, uid):
+    """Read an explicitly enrolled snapshot identity without exposing its value."""
+    if path is None:
+        return None
+    if manifest.get('authority_fixture_scan') is not True:
+        raise ValueError('wreck identity file requires the authority fixture scan')
+    root_stat = root.stat()
+    if root_stat.st_uid != uid or stat.S_IMODE(root_stat.st_mode) != 0o700:
+        raise ValueError('wreck identity requires a user-owned mode 0700 bundle directory')
+    runs = root / 'runs'
+    if runs.is_symlink() or (runs.exists() and not runs.is_dir()):
+        raise ValueError('wreck identity requires an ordinary runs directory')
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        raise ValueError('cannot open private wreck identity file') from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o600:
+            raise ValueError('wreck identity must be an owner-only mode 0600 regular file')
+        value = os.read(fd, 18)
+    except OSError:
+        raise ValueError('cannot read private wreck identity file') from None
+    finally:
+        os.close(fd)
+    if not re.fullmatch(rb'[0-9a-f]{16}\n?', value) or value[:16] == b'0000000000000000':
+        raise ValueError('wreck identity must contain one nonzero lowercase 16-hex identity')
+    return value[:16].decode('ascii')
+
+
+def redact_wreck_output(text, identity):
+    """Keep the requested identity out of summaries even on exceptional paths."""
+    return text.replace(identity, '[private]') if identity is not None else text
+
+
+def redacted_wreck_json(value, identity, *, indent=None):
+    """Redact recursively before encoding, including IDs that are all digits."""
+    def clean(item):
+        if isinstance(item, str):
+            return redact_wreck_output(item, identity)
+        if isinstance(item, dict):
+            return {redact_wreck_output(str(key), identity): clean(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [clean(child) for child in item]
+        if item is None or isinstance(item, bool):
+            return item
+        if isinstance(item, (int, float)):
+            text = str(item)
+            return '[private]' if identity is not None and identity in text else item
+        return redact_wreck_output(str(item), identity)
+    return json.dumps(clean(value), indent=indent)
+
+
+def append_authority_wreck_config(config, identity):
+    """The caller must register config for cleanup before calling this function."""
+    if not re.fullmatch(r'[0-9a-f]{16}', identity) or identity == '0000000000000000':
+        raise ValueError('invalid private wreck identity')
+    config.chmod(0o600)
+    with config.open('a', encoding='ascii') as output:
+        output.write(f'\nX4LAN_CONFIG.native_gate_authority_wreck_saved = "{identity}"\n')
+
+
 def stage_case(root, run, slot, game, userhome, port, token, clients=2, credential=None, snapshot=True,
                relay_host=None, arm_at=None):
     """One private instance: HOME, profile 45841 (autosave off), snapshot, extensions."""
@@ -3615,18 +3704,38 @@ def completed_client_evidence(engine_log, process_output):
                 yield line
 
 
-def retain_wire_safe_config(source, destination):
-    """Export a wire case config only after removing strictly shaped private lines."""
-    destination.unlink(missing_ok=True)
+PRIVATE_CONFIG_FIELDS = (
+    ('native_gate_authority_wire_lease', r' = "[0-9a-f]{32}"\s*'),
+    ('native_gate_authority_fleet_lease', r' = "[0-9a-f]{32}"\s*'),
+    ('native_gate_authority_wire_port', r' = [0-9]+\s*'),
+    ('native_gate_authority_fleet_port', r' = [0-9]+\s*'),
+    ('native_gate_authority_wreck_saved', r' = "[0-9a-f]{16}"\s*'),
+)
+
+
+def redacted_private_config(text):
+    """Refuse ambiguous secret assignments, including truncated lines."""
     kept = []
-    for line in source.read_text(encoding='utf-8').splitlines(keepends=True):
-        if 'native_gate_authority_wire_lease' in line or 'native_gate_authority_wire_port' in line:
-            if not (re.fullmatch(r'X4LAN_CONFIG\.native_gate_authority_wire_lease = "[0-9a-f]{32}"\s*', line) or
-                    re.fullmatch(r'X4LAN_CONFIG\.native_gate_authority_wire_port = [0-9]+\s*', line)):
-                raise ValueError('cannot safely redact private wire config')
+    for line in text.splitlines(keepends=True):
+        if any(name in line for name, _ in PRIVATE_CONFIG_FIELDS):
+            if not any(re.fullmatch(r'X4LAN_CONFIG\.' + re.escape(key) + pattern, line)
+                       for key, pattern in PRIVATE_CONFIG_FIELDS):
+                raise ValueError('cannot safely redact private diagnostic config')
         else:
             kept.append(line)
-    destination.write_text(''.join(kept), encoding='utf-8')
+    return ''.join(kept)
+
+
+def cleanup_private_config(config):
+    safe = redacted_private_config(config.read_text(encoding='utf-8'))
+    config.write_text(safe, encoding='utf-8')
+
+
+def retain_wire_safe_config(source, destination):
+    """Export only after all private fields are strictly redacted."""
+    destination.unlink(missing_ok=True)
+    redacted = redacted_private_config(source.read_text(encoding='utf-8'))
+    destination.write_text(redacted, encoding='utf-8')
 
 
 def collect_run_evidence(run_dir, slots, cases, ticks, manifest, writers_closed):
@@ -3641,10 +3750,7 @@ def collect_run_evidence(run_dir, slots, cases, ticks, manifest, writers_closed)
         retain_gate_log(log, retained_log, run_dir / f'game{slot}.log', writers_closed)
         config_source = case / 'extensions/x4_lan_lab/ui/config.lua'
         config_target = client / 'installed/x4_lan_lab-config.lua'
-        if manifest.get('authority_fixture_wire'):
-            retain_wire_safe_config(config_source, config_target)
-        else:
-            shutil.copyfile(config_source, config_target)
+        retain_wire_safe_config(config_source, config_target)
         if (case / 'portable-math.log').is_file():
             shutil.copyfile(case / 'portable-math.log', client / 'portable-math.log')
         process_output = run_dir / f'game{slot}-stdout.log'
@@ -3689,6 +3795,10 @@ def run(args):
         validate_authority_scan_bundle(root, manifest)
     except (OSError, ValueError) as error:
         raise SystemExit('authority fixture scan bundle refused: ' + str(error)) from error
+    try:
+        wreck_identity = load_authority_wreck_id(getattr(args, 'authority_wreck_id_file', None), manifest, root, user.pw_uid)
+    except (OSError, ValueError) as error:
+        raise SystemExit('private wreck diagnostic refused: ' + str(error)) from None
     try:
         local_stop_enabled = local_stop.validate_option(getattr(args, 'local_stop', False), manifest)
     except ValueError as error:
@@ -3996,7 +4106,12 @@ def run(args):
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*', name):
         raise SystemExit('--name must be a single directory name containing letters, digits, dots, underscores or hyphens')
     run_dir = root / 'runs' / name
-    run_dir.mkdir(parents=True, exist_ok=False)
+    run_dir.mkdir(mode=0o700 if manifest.get('authority_fixture_scan') else 0o777,
+                  parents=True, exist_ok=False)
+    if wreck_identity is not None:
+        run_dir.chmod(0o700)
+        if stat.S_IMODE(run_dir.stat().st_mode) != 0o700 or (root / 'runs').is_symlink():
+            raise SystemExit('private wreck diagnostic requires a private run directory')
     if external:
         port, token = args.relay_port, args.relay_token
     else:
@@ -4096,6 +4211,11 @@ def run(args):
         procs.append(proc)
         return proc
     try:
+        if wreck_identity is not None:
+            for slot in local:
+                config = by_slot[slot][0] / 'extensions/x4_lan_lab/ui/config.lua'
+                wire_private_configs.append(config)
+                append_authority_wreck_config(config, wreck_identity)
         wire_process = None
         if manifest.get('authority_fixture_wire'):
             source_lease, guest_lease = secrets.token_hex(16), secrets.token_hex(16)
@@ -4126,10 +4246,45 @@ def run(args):
             for slot, lease in ((1, source_lease), (2, guest_lease)):
                 config = by_slot[slot][0] / 'extensions/x4_lan_lab/ui/config.lua'
                 config.chmod(0o600)
-                wire_private_configs.append(config)
+                if config not in wire_private_configs:
+                    wire_private_configs.append(config)
                 with config.open('a', encoding='utf-8') as handle:
                     handle.write(f'\nX4LAN_CONFIG.native_gate_authority_wire_port = {wire_port}\n')
                     handle.write(f'X4LAN_CONFIG.native_gate_authority_wire_lease = "{lease}"\n')
+        if manifest.get('authority_fixture_fleet'):
+            fleet_source, fleet_guest = secrets.token_hex(16), secrets.token_hex(16)
+            while len({source_lease, guest_lease, fleet_source, fleet_guest}) != 4:
+                fleet_source, fleet_guest = secrets.token_hex(16), secrets.token_hex(16)
+            read_fd, write_fd = os.pipe()
+            try:
+                fleet_process = launch('authority-fleet', [sys.executable, str(root / 'authority_fixture_fleet_support.py'),
+                                       '--config-fd', str(read_fd)], as_user=True, pass_fds=(read_fd,))
+                os.close(read_fd); read_fd = None
+                with os.fdopen(write_fd, 'w', encoding='ascii') as pipe:
+                    write_fd = None
+                    json.dump({'source': fleet_source, 'guest': fleet_guest}, pipe)
+            finally:
+                if read_fd is not None: os.close(read_fd)
+                if write_fd is not None: os.close(write_fd)
+            deadline = time.monotonic() + 10
+            while True:
+                match = re.search(r'(?m)^AUTHORITY_FLEET_READY port=([0-9]+)$', bounded_tail(run_dir / 'authority-fleet.log'))
+                if match:
+                    fleet_port = int(match.group(1))
+                    if not 1 <= fleet_port <= 65535:
+                        raise RuntimeError('authority fleet process reported invalid port')
+                    break
+                if fleet_process.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError('authority fleet process did not start')
+                time.sleep(.1)
+            for slot, lease in ((1, fleet_source), (2, fleet_guest)):
+                config = by_slot[slot][0] / 'extensions/x4_lan_lab/ui/config.lua'
+                config.chmod(0o600)
+                if config not in wire_private_configs:
+                    wire_private_configs.append(config)
+                with config.open('a', encoding='utf-8') as handle:
+                    handle.write(f'\nX4LAN_CONFIG.native_gate_authority_fleet_port = {fleet_port}\n')
+                    handle.write(f'X4LAN_CONFIG.native_gate_authority_fleet_lease = "{lease}"\n')
         relay = None
         if not external:
             relay = launch('relay', [sys.executable, str(root / 'native_gate_relay.py'), '--port', str(port), '--token', token,
@@ -4322,11 +4477,9 @@ def run(args):
                 result.setdefault('cleanup_errors', []).append(str(error))
         for config in wire_private_configs:
             try:
-                lines = config.read_text(encoding='utf-8').splitlines(keepends=True)
-                config.write_text(''.join(line for line in lines if not line.startswith(
-                    ('X4LAN_CONFIG.native_gate_authority_wire_port = ', 'X4LAN_CONFIG.native_gate_authority_wire_lease = '))), encoding='utf-8')
-            except OSError:
-                result.setdefault('cleanup_errors', []).append('could not remove private wire configuration')
+                cleanup_private_config(config)
+            except (OSError, UnicodeError, ValueError):
+                result.setdefault('cleanup_errors', []).append('could not remove private diagnostic configuration')
         if local_stop_enabled:
             for channel in local_stop_channels:
                 evidence = result['local_stop']['clients'].setdefault(str(channel.slot), dict(channel.evidence))
@@ -4675,10 +4828,23 @@ def run(args):
         except (KeyError, OSError, ValueError) as error:
             result['authority_wire_evidence'] = {'pass': False, 'errors': [str(error)]}
             result['pass'] = False
-    (run_dir / 'run-result.json').write_text(json.dumps(result, indent=2, default=str) + '\n')
-    print('LINUX_GATE_LIVE ' + json.dumps({k: result.get(k) for k in ('name', 'pass', 'lifecycle_discard', 'physics_discard', 'recurring_readiness', 'error', 'postprocessing_error', 'stops', 'world_identity', 'world_capture_problems', 'portable_math_active', 'world_hash_ticks',
-                                                                    'world_hash_first_difference', 'evidence_errors', 'steam_unchanged', 'x4_left')}))
-    print(f'results: {run_dir}')
+    if manifest.get('authority_fixture_fleet'):
+        try:
+            from authority_fixture_fleet_support import validate as validate_fixture_fleet
+            profiles = {slot: profile for slot, (_, profile) in zip(local, games)}
+            evidence = validate_fixture_fleet(gate_lines(profiles[1] / 'engine-output.log'),
+                                              gate_lines(profiles[2] / 'engine-output.log'), ticks)
+            result['authority_fleet_evidence'] = evidence
+            if not evidence['pass']:
+                result['pass'] = False
+        except (KeyError, OSError, ValueError) as error:
+            result['authority_fleet_evidence'] = {'pass': False, 'errors': [str(error)]}
+            result['pass'] = False
+    (run_dir / 'run-result.json').write_text(redacted_wreck_json(result, wreck_identity, indent=2) + '\n')
+    summary = {k: result.get(k) for k in ('name', 'pass', 'lifecycle_discard', 'physics_discard', 'recurring_readiness', 'error', 'postprocessing_error', 'stops', 'world_identity', 'world_capture_problems', 'portable_math_active', 'world_hash_ticks',
+                                                   'world_hash_first_difference', 'evidence_errors', 'steam_unchanged', 'x4_left')}
+    print('LINUX_GATE_LIVE ' + redacted_wreck_json(summary, wreck_identity))
+    print(redact_wreck_output(f'results: {run_dir}', wreck_identity))
     raise SystemExit(0 if result['pass'] else 1)
 
 
@@ -4902,6 +5068,7 @@ def main(argv=None):
     b.add_argument('--authority-fixture-scan', action='store_true', help='read-only disposable fixture position scan')
     b.add_argument('--authority-fixture-wire', action='store_true', help='local read-only fixture UDP diagnostic; requires scan')
     b.add_argument('--authority-fixture-motion', action='store_true', help='move the isolated fixture using an AI order; requires wire')
+    b.add_argument('--authority-fixture-fleet', action='store_true', help='read-only 12-fixture loopback coverage diagnostic; requires wire')
     for name, why in (('fixture-body-observe', 'observe fixture 6 body bits beside its original getter at ticks 1400..1600 without actor/shield refresh'),
                       ('actor-diag', "the fixture actors' raw native state row (gate.actor)"),
                       ('strict-state', 'the raw hull, shield and navigation banks in the digest (needs --actor-diag)'),
@@ -4957,6 +5124,8 @@ def main(argv=None):
     b.add_argument('--stride', type=int, default=60, help='world hash capture every N ticks (and tick 1)')
     r = sub.add_parser('run', help='run on Linux as the Steam user, or select one as root')
     r.add_argument('--root', type=Path, required=True)
+    r.add_argument('--authority-wreck-id-file', type=Path, metavar='FILE',
+                   help='private mode 0600 file containing one diagnostic wreck identity; requires private scan bundle')
     r.add_argument('--local-stop', action='store_true',
                    help='private stop pipe per local game; requires a worker-dispatch bundle')
     lifecycle_modes = r.add_mutually_exclusive_group()

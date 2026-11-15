@@ -155,6 +155,7 @@ def main():
     p.add_argument('--authority-fixture-scan', action='store_true', help='read-only disposable fixture position scan')
     p.add_argument('--authority-fixture-wire', action='store_true', help='local read-only fixture UDP diagnostic; requires scan')
     p.add_argument('--authority-fixture-motion', action='store_true', help='move the isolated fixture via an AI order; requires fixture wire')
+    p.add_argument('--authority-fixture-fleet', action='store_true', help='read-only 12-fixture loopback coverage diagnostic; requires wire')
     p.add_argument('--authority-net-so', type=Path, help='built Linux Lua UDP module for the fixture diagnostic')
     p.add_argument('--probes-diag', action='store_true', help='PROBES rows: the fixture ships obstacle probe ranges and vectors (native_gate_probes_diag)')
     p.add_argument('--pursuit-speed', action='store_true', help="the Linux gate: the pursuit behaviour's speed factor with Windows' folded constant (native_gate_pursuit_speed)")
@@ -792,7 +793,7 @@ def main():
                    'fp_redirect_drones', 'world_health_ticks', 'fp_attack_capture', 'fp_attack_watch'}
         allowed.add('travel_determinism')
         allowed.add('authority_fixture_scan')
-        allowed.update(('authority_fixture_wire', 'authority_fixture_motion', 'authority_net_so'))
+        allowed.update(('authority_fixture_wire', 'authority_fixture_motion', 'authority_fixture_fleet', 'authority_net_so'))
         # The battle fixture on Linux (linux/gate_battle.h, gate_flight.h): the snapshot's twelve, their state row, steering.
         allowed.update(('fixture_body_observe', 'snapshot_prebind', 'actor_diag', 'strict_state', 'shield_refresh', 'order_state', 'fleet_state',
                         'flight_diag', 'flight_rng', 'flight_full', 'avoidance_refresh', 'steering_init', 'agent_full', 'spline_diag', 'spline_refresh', 'spline_state', 'params_init', 'strict_physics', 'body_diag', 'params_diag'))
@@ -826,6 +827,8 @@ def main():
         p.error('--authority-fixture-wire requires --authority-fixture-scan and --authority-net-so')
     if args.authority_fixture_motion and not args.authority_fixture_wire:
         p.error('--authority-fixture-motion requires --authority-fixture-wire')
+    if args.authority_fixture_fleet and not args.authority_fixture_wire:
+        p.error('--authority-fixture-fleet requires --authority-fixture-wire')
     if args.fixture_body_observe and (not args.gate_so or not args.snapshot or args.mode != 'battle' or not args.snapshot_prebind):
         p.error('--fixture-body-observe requires Linux snapshot battle with --snapshot-prebind')
     if args.fixture_body_observe and (actor_diag or args.shield_refresh):
@@ -854,6 +857,10 @@ def main():
             shutil.copy2(root/'src/authority/lua'/name, args.out/'ui'/name)
         shutil.copy2(args.authority_net_so, args.out/'native/x4lan_net.so')
         ui_files = 'ui/fixture_wire.lua\nui/fixture_wire_probe.lua\n' + ui_files
+    if args.authority_fixture_fleet:
+        for name in ('fixture_fleet_wire.lua', 'fixture_fleet_probe.lua'):
+            shutil.copy2(root/'src/authority/lua'/name, args.out/'ui'/name)
+        ui_files = 'ui/fixture_fleet_wire.lua\nui/fixture_fleet_probe.lua\n' + ui_files
     if args.fixture_body_observe:
         shutil.copy2(root/'tools/dev/native_gate_fixture_body_observer.lua', args.out/'ui/native_gate_fixture_body_observer.lua')
         ui_files = 'ui/native_gate_fixture_body_observer.lua\n' + ui_files
@@ -1582,6 +1589,9 @@ X4LAN_CONFIG.slot = "@X4LANE_SLOT@"
     if args.authority_fixture_motion:
         with (args.out/'ui/config.lua.append').open('a') as config:
             config.write('X4LAN_CONFIG.native_gate_authority_motion = true\n')
+    if args.authority_fixture_fleet:
+        with (args.out/'ui/config.lua.append').open('a') as config:
+            config.write('X4LAN_CONFIG.native_gate_authority_fleet = true\n')
     if args.fixture_body_observe:
         with (args.out/'ui/config.lua.append').open('a') as config:
             config.write('X4LAN_CONFIG.native_gate_fixture_body_observe = true\n')
