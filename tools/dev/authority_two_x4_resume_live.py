@@ -10,29 +10,22 @@ import argparse
 import json
 import os
 from pathlib import Path
-import secrets
 import shutil
-import socket
 import stat
 import sys
-import time
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
 import authority_two_x4_identity_live as identity
 import authority_two_x4_live as base
 from lockstep.launcher import extension
+from authority.local_participant_control import LocalParticipantControl
 
 
-class Participant:
+class Participant(LocalParticipantControl):
     """Single serialized loopback diagnostic, fenced on any uncertain receipt."""
     def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(('127.0.0.1', 0)); self.sock.settimeout(.25)
-        self.lease = secrets.token_hex(16)
-        self.peer = self.epoch = self.handle = None
-        self.next_id = 1
-        self.fault = False
+        super().__init__(enabled=True)
         self.config = self.config_identity = None
 
     def install(self, case):
@@ -81,42 +74,6 @@ class Participant:
         lab = case/'extensions/x4_lan_lab'
         return [lab/'ui'/name for name in ('authority_control_state.lua', 'x4_control_engine.lua',
                                            'authority_two_x4_participant_probe.lua')] + [lab/'native/x4lan_net.so']
-
-    def enroll(self, epoch, deadline):
-        self.epoch = epoch
-        expected = f'HELLO|{self.lease}|{epoch}'.encode('ascii')
-        while time.monotonic() < deadline:
-            try: data, peer = self.sock.recvfrom(769)
-            except socket.timeout: continue
-            if data == expected and peer[0] == '127.0.0.1':
-                self.peer = peer; return
-        raise TimeoutError('participant enrollment timed out')
-
-    def request(self, operation):
-        if self.fault or self.peer is None: raise RuntimeError('participant unavailable')
-        self.fault = True
-        number = self.next_id; self.next_id += 1
-        prefix = f'{self.lease}|{self.epoch}|{number}'
-        self.sock.sendto(f'CMD|{prefix}|{operation}'.encode('ascii'), self.peer)
-        expected = f'RECEIPT|{prefix}|{operation}|confirmed'.encode('ascii')
-        hello = f'HELLO|{self.lease}|{self.epoch}'.encode('ascii')
-        deadline = time.monotonic()+130
-        while time.monotonic() < deadline:
-            try: data, peer = self.sock.recvfrom(769)
-            except socket.timeout: continue
-            if peer != self.peer: continue
-            if data == hello: continue
-            if data != expected: raise RuntimeError('unexpected participant receipt')
-            self.fault = False; return
-        raise TimeoutError('participant state indeterminate')
-
-    def pause(self, handles):
-        if handles != (self.handle,): raise ValueError('unexpected participant set')
-        self.request('pause'); return True
-
-    def resume(self, handles):
-        if handles != (self.handle,): raise ValueError('unexpected participant set')
-        self.request('resume'); return True
 
     def on_ready(self, *, world, handle, ticket, target, server_identity, server_proc, server_started,
                  client_identity, client_proc, client_started, game, out, deadline, result):
@@ -168,7 +125,7 @@ def run(args):
         result = identity.run(args)
     finally:
         identity.inject, base.run = old_inject, old_run
-        participant.sock.close()
+        participant.close()
         try:
             participant.redact()
         except (OSError, UnicodeError, ValueError) as error:
