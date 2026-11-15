@@ -79,6 +79,35 @@ class SemaphoreEvidenceTest(unittest.TestCase):
         self.rows[-1] = self.rows[-1].replace('tick=399', 'tick=219')
         self.assertFalse(self.collect()['pass'])
 
+    def test_fixed_bootstrap_prefix_still_requires_all_later_dispatches(self):
+        self.options.update(player_ui_session_frames=420, independent_keyboard_frames=420,
+                            worker_dispatch=True, bootstrap_checkpoint_tick=399)
+        self.physics.update(frame_count=420, frames=[{'tick': tick} for tick in range(40, 460)])
+        self.rows[-1] = self.rows[-1].replace('tick=219', 'tick=399')
+        raw = ('X4LAN WORKER_DISPATCH bootstrap=1 parked=1 count=0 maximum=1\n' +
+               ''.join(f'X4LAN WORKER_DISPATCH tick={tick} ticket={tick} consumed=1 post_returned=1\n'
+                       for tick in range(37, 460)) +
+               'X4LAN SEMAPHORE OBSERVER CHECKPOINT tick=399 owner=77 main_parked=1 complete=1\n')
+
+        def collect(text):
+            self.lifecycle.write_text(text)
+            self.physics['log_sha256'] = hashlib.sha256(self.lifecycle.read_bytes()).hexdigest()
+            return self.collect()
+
+        result = collect(raw)
+        self.assertTrue(result['pass'], result['errors'])
+        self.assertEqual(result['status_tick'], 399)
+        self.assertEqual(result['session_end_tick'], 459)
+        self.assertFalse(result['observation_covers_session'])
+        self.assertEqual(result['worker_dispatch']['dispatches'], 423)
+        for broken in (raw.replace('tick=400 ticket=400', 'tick=400 ticket=399'),
+                       raw.replace('X4LAN WORKER_DISPATCH tick=400 ticket=400 consumed=1 post_returned=1\n', ''),
+                       raw + 'X4LAN SEMAPHORE OBSERVER CHECKPOINT tick=399 owner=77 main_parked=1 complete=1\n',
+                       raw.replace('CHECKPOINT tick=399', 'CHECKPOINT tick=459')):
+            self.assertFalse(collect(broken)['pass'])
+        self.rows[-1] = self.rows[-1].replace('tick=399', 'tick=459')
+        self.assertFalse(collect(raw)['pass'])
+
     def test_disabled_and_dependencies(self):
         self.assertTrue(bundle.collect(None, None, {}, False)['pass'])
         with self.assertRaises(ValueError):

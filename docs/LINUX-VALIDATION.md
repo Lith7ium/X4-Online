@@ -6,6 +6,29 @@ It does not provide the Windows launcher's player input, UI replay or hot-join
 feature set. A passing run is not evidence of Windows/Linux interoperability or
 of a session between different PCs.
 
+## Bootstrap observer lifetime, 15 November 2026
+
+The optional `--bootstrap-checkpoint-tick` closes the semaphore observation log
+at a selected startup checkpoint while the worker dispatcher continues running.
+The requested tick is fixed during configuration; later environment changes
+cannot turn an incomplete observation into a successful close. Without this
+option, observation still ends at the final session checkpoint.
+
+In a two-instance native test, both observation logs closed at tick 399 and
+both dispatchers continued through tick 459. All 420 physics frames and 459
+recorded world-digest rows agreed between the peers. This verifies continuation
+beyond the observation boundary for that finite run; it does not establish an
+unbounded session. Both games deliberately exited with code 223, leaving the
+overall harness result false. Cleanup left no owned game processes.
+
+The accompanying mouse-input attempts have not yet established steering:
+one lost focus before the planned motions; the next sent both motions while
+focused, but native mouse steering was disabled and every cursor sample stayed
+zero. The failed input receipts remain retained. A further Shift+Space
+request also left the native steering state unchanged, so the helper refused
+to send motion. Input delivery in the private test display remains under
+investigation; these runs do not establish a broken game steering function.
+
 ## Native player-control progress, 14 November 2026
 
 The latest development work adds Linux consumers for the shared VIEW records,
@@ -54,6 +77,20 @@ A subsequent native attempt exercised this termination path when the presentatio
 fork refused an active video thread at tick 42. That failed run is retained; it
 provides no flight or performance acceptance. Resuming the ordinary single-player
 simulation after takeover is unsupported.
+
+The runner now offers explicit `--local-stop` for worker-dispatch bundles. Each
+local game receives a private stop pipe; other games and an external relay are
+not signalled. Native polling pins the gate thread and rejects concurrent or
+reentrant access. Existing owned-process cleanup remains a bounded fallback.
+In a separate two-instance native test, the runner was cancelled after both
+peers reached tick 101. Both stopped at tick 103 with the expected local-stop
+reason and exit 225, before fallback was needed. No owned processes remained,
+and the Steam client identity was unchanged. All 424 sealed files and 334 source
+receipts were verified against the tested commit.
+
+That cancelled run remains incomplete under the finite physics/UI validators;
+it establishes launcher cancellation after takeover only. Loading-time stop,
+window close, relay disconnect and external-server behavior remain unvalidated.
 
 Fresh mapping transactions reduce repeated semaphore-validation map reads from
 98 to two per check in the focused fixture. The transactions retain provider,

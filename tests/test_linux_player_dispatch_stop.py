@@ -32,3 +32,26 @@ class DispatchStopTests(unittest.TestCase):
             self.assertEqual(result.stderr.count('WORKER_DISPATCH_TERMINAL'), 45)
             self.assertIn('policy=terminate-only exit=225', result.stderr)
             self.assertNotIn('exit=223', result.stderr)
+
+    def test_local_launcher_pipe_at_actual_gate_wait_and_forwarding(self):
+        root = Path(__file__).resolve().parents[1]
+        engine = root / 'src/native/engine'
+        monocypher = root / 'third_party/monocypher-4.0.2/src'
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'local-stop'
+            subprocess.run(['cc', '-std=gnu11', '-O1', '-Wall', '-Wextra', '-Werror',
+                            '-Wno-misleading-indentation', '-mcx16', '-ffp-contract=off', '-pthread',
+                            '-I', str(engine), '-I', str(engine / 'linux'), '-I', str(monocypher),
+                            '-I', str(monocypher / 'optional'),
+                            str(engine / 'linux/test_gate_player_local_stop.c'),
+                            str(monocypher / 'monocypher.c'), str(monocypher / 'optional/monocypher-ed25519.c'),
+                            '-Wl,--wrap=write', '-Wl,--wrap=send', '-Wl,--wrap=recv',
+                            '-Wl,--wrap=readlink', '-Wl,--wrap=read',
+                            '-ldl', '-lm', '-o', str(executable)], check=True, timeout=90)
+            result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stderr.count('WORKER_DISPATCH_TERMINAL'), 19)
+            self.assertIn('source=local-launcher', result.stderr)
+            self.assertIn('policy=terminate-only exit=225', result.stderr)
+            self.assertIn('sibling isolation and concurrent ownership ok', result.stdout)
+            self.assertEqual(result.stderr.count('reason=230'), 5)

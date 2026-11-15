@@ -714,13 +714,19 @@ static void finish(unsigned reason) {
     gate_fetch_remove();
     close_connection();
 }
+#include "gate_player_local_stop.h"
 static void gate_original_once(void *frame,unsigned char loading) {
+    player_local_stop_poll();
     stock_observer_main_boundary=0;
     int boundary_armed = player_control_boundary_before_frame();
+    player_local_stop_poll();
     gate_frame_tick(frame,loading);
     player_control_boundary_after_frame(boundary_armed);
 }
-static int closed_window(void) {return 0;} /* no cheap SDL quit check from this thread yet; the timeout bounds the wait */
+static int closed_window(void) {
+    player_local_stop_poll();
+    return 0; /* Window close is unsupported; this dev mode requires launcher Stop. */
+}
 /* The per-frame reads of the timing rows: every guarded read, also those not through read_local. */
 #define read_local_calls gate_read_count
 #include "lockstep_gate_timing.h"
@@ -735,6 +741,7 @@ static __attribute__((unused)) int read_local(const void *source,void *dest,size
 static unsigned gate_wait_permit(const char *packet,int length,char *reply,size_t capacity) {
     ULONGLONG start=GetTickCount64(),last=0;
     for(;;) {
+        player_local_stop_poll();
         ULONGLONG now=GetTickCount64();
         double game;memcpy(&game,image+GAME_RVA,8);
         double drift=fabs(game-stats.game);
@@ -744,6 +751,7 @@ static unsigned gate_wait_permit(const char *packet,int length,char *reply,size_
         if(now-start>timeout_ms) return 7;
         if(!last||now-last>=100) {gate_wire_send(packet,(size_t)length);last=now;++stats.waits;}
         int count=gate_wire_recv(reply,(int)capacity-1);
+        player_local_stop_poll();
         if(count<0) {int error=WSAGetLastError();if(error!=WSAETIMEDOUT&&error!=WSAEWOULDBLOCK) return 8;continue;}
         if(wcg.stop) return wcg.stop;
         reply[count]=0;
@@ -770,6 +778,7 @@ static void seed_frame(void) {
 }
 #include "gate_player_stock_focus.h"
 static void gate_tick(void *frame,unsigned char loading) {
+    player_local_stop_main_poll();
     player_ui_overlay_main_interlock();
     if(!stats.active) {gate_original_once(frame,loading);return;}
     LARGE_INTEGER ft_entry;QueryPerformanceCounter(&ft_entry);

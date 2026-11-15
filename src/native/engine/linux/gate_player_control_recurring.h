@@ -32,6 +32,9 @@
 /* 0 unconfigured, 1 disabled, 2 active, 3 bounded window finished. */
 static _Atomic unsigned player_recurring_mode;
 static uint64_t player_recurring_end;
+static uint64_t player_semaphore_checkpoint_tick;
+static unsigned player_semaphore_checkpoint_done;
+static unsigned player_semaphore_checkpoint_prefix;
 static unsigned player_recurring_tail;
 static unsigned player_recurring_physics;
 static player_ui_session_budget player_session_budget;
@@ -116,6 +119,51 @@ static void player_recurring_write_complete(uint64_t generation) {
         written += (size_t)count;
     }
 }
+/* Immutable checkpoint epoch; no callback or semaphore wrapper is unregistered. */
+static void player_recurring_checkpoint_configure(const char *text, uint64_t end) {
+    player_semaphore_checkpoint_tick = end;
+    player_semaphore_checkpoint_prefix = text != NULL;
+    if (!text) return;
+    const char *observer = getenv("X4MP_SEMAPHORE_OBSERVER");
+    if (!player_dispatch_enabled || !observer || strcmp(observer, "1") || !*text || *text == '0')
+        player_recurring_fatal("invalid_bootstrap_checkpoint");
+    uint64_t tick = 0;
+    for (const char *cursor = text; *cursor; ++cursor) {
+        if (*cursor < '0' || *cursor > '9' || tick > end / 10)
+            player_recurring_fatal("invalid_bootstrap_checkpoint");
+        tick = tick * 10 + (unsigned)(*cursor - '0');
+        if (tick > end) player_recurring_fatal("invalid_bootstrap_checkpoint");
+    }
+    if (tick < player_startup()->take) player_recurring_fatal("invalid_bootstrap_checkpoint");
+    player_semaphore_checkpoint_tick = tick;
+}
+
+static void player_recurring_checkpoint_tail(uint64_t generation) {
+    if (generation != player_semaphore_checkpoint_tick) return;
+    const char *observer = getenv("X4MP_SEMAPHORE_OBSERVER");
+    if (!observer) {
+        if (player_semaphore_checkpoint_prefix) player_recurring_fatal("semaphore_checkpoint_admission");
+        return;
+    }
+    Dl_info checkpoint_owner = {0}, information_owner = {0};
+    void *information = dlsym(RTLD_DEFAULT, "x4mp_semaphore_observer_info");
+    if (player_semaphore_checkpoint_done || strcmp(observer, "1") || !x4mp_semaphore_observer_checkpoint ||
+        !player_semaphore_pinned_provider((void *)x4mp_semaphore_observer_checkpoint, &checkpoint_owner) ||
+        !information || !dladdr(information, &information_owner) ||
+        checkpoint_owner.dli_fbase != information_owner.dli_fbase ||
+        !player_recurring_physics_entered()) player_recurring_fatal("semaphore_checkpoint_admission");
+    player_semaphore_checkpoint_done = 1;
+    int complete = x4mp_semaphore_observer_checkpoint(generation);
+    char checkpoint[192];
+    int length = snprintf(checkpoint, sizeof checkpoint,
+        "X4LAN SEMAPHORE OBSERVER CHECKPOINT tick=%llu owner=%ld main_parked=1 complete=%d\n",
+        (unsigned long long)generation, (long)syscall(SYS_gettid), complete == 1);
+    if (length <= 0 || (size_t)length >= sizeof checkpoint) player_recurring_fatal("semaphore_checkpoint_format");
+    lifecycle_discard_write(checkpoint);
+    if (complete != 1 && player_semaphore_checkpoint_prefix)
+        player_recurring_fatal("semaphore_checkpoint_incomplete");
+}
+
 /* Only the main frame caller configures; immutable data is release-published. */
 static unsigned player_recurring_configure(void) {
     unsigned mode = atomic_load_explicit(&player_recurring_mode, memory_order_acquire);
@@ -123,6 +171,8 @@ static unsigned player_recurring_configure(void) {
     const char *dispatch_setting = getenv("X4_DEV_WORKER_DISPATCH");
     if (dispatch_setting && strcmp(dispatch_setting, "1")) player_recurring_fatal("invalid_dispatch_mode");
     player_dispatch_enabled = dispatch_setting != NULL;
+    const char *checkpoint_text = getenv("X4_DEV_SEMAPHORE_BOOTSTRAP_TICK");
+    if (checkpoint_text && !player_dispatch_enabled) player_recurring_fatal("invalid_bootstrap_checkpoint");
     const char *setting = getenv("X4LAN_PLAYER_CONTROL_RECURRING");
     const char *tail_setting = getenv("X4LAN_PLAYER_CONTROL_RECURRING_TAIL");
     const char *physics_setting = getenv("X4_DEV_PLAYER_PHYSICS");
@@ -186,6 +236,7 @@ static unsigned player_recurring_configure(void) {
         player_physics_frame_prefix = player_dispatch_frame_prefix;
         player_fork_owned_worker_park = player_dispatch_parked_for_fork;
     }
+    player_recurring_checkpoint_configure(checkpoint_text, end);
     player_recurring_end = end;
     atomic_store_explicit(&player_recurring_worker_last, phase->take - 1, memory_order_relaxed);
     atomic_store_explicit(&player_recurring_mode, 2, memory_order_release);
@@ -321,24 +372,11 @@ static void player_recurring_tail_callback(void *semaphore, unsigned count) {
             if (generation == player_recurring_end) {
                 player_view_ancestry_close(generation);
                 player_stock_view_observer_close(generation);
-                const char *observer = getenv("X4MP_SEMAPHORE_OBSERVER");
-                if (observer) {
-                    Dl_info checkpoint_owner = {0}, information_owner = {0};
-                    void *information = dlsym(RTLD_DEFAULT, "x4mp_semaphore_observer_info");
-                    if (strcmp(observer, "1") || !x4mp_semaphore_observer_checkpoint ||
-                        !player_semaphore_pinned_provider((void *)x4mp_semaphore_observer_checkpoint, &checkpoint_owner) ||
-                        !information || !dladdr(information, &information_owner) ||
-                        checkpoint_owner.dli_fbase != information_owner.dli_fbase ||
-                        !player_recurring_physics_entered()) player_recurring_fatal("semaphore_checkpoint_admission");
-                    int complete = x4mp_semaphore_observer_checkpoint(generation);
-                    char checkpoint[192];
-                    int length = snprintf(checkpoint, sizeof checkpoint,
-                        "X4LAN SEMAPHORE OBSERVER CHECKPOINT tick=%llu owner=%ld main_parked=1 complete=%d\n",
-                        (unsigned long long)generation, (long)syscall(SYS_gettid), complete == 1);
-                    if (length <= 0 || (size_t)length >= sizeof checkpoint) player_recurring_fatal("semaphore_checkpoint_format");
-                    lifecycle_discard_write(checkpoint);
-                }
             }
+            player_recurring_checkpoint_tail(generation);
+            if (generation == player_recurring_end &&
+                (player_semaphore_checkpoint_prefix || getenv("X4MP_SEMAPHORE_OBSERVER")) &&
+                !player_semaphore_checkpoint_done) player_recurring_fatal("semaphore_checkpoint_missing");
             player_physics_network_finish(generation, generation == player_recurring_end);
         } else {
             player_physics_frames_finish(generation, generation == player_recurring_end);

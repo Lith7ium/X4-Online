@@ -14,10 +14,14 @@ EXTRA_SOURCES = tuple('src/native/engine/linux/' + x for x in (
     'player_semaphore_observer_preload.c', 'player_semaphore_observer.md',
     'player_semaphore_dispatch_callback.h', 'player_worker_dispatch_adapter.h',
     'gate_player_presentation_quiet.h', 'test_gate_player_presentation_quiet.c',
-    'gate_player_presentation_fork.h', 'gate_player_dispatch_stop.h', 'test_gate_player_dispatch_stop.c', 'gate_player_fork_worker_park.h', 'gate_fork_save.h', 'gate_player_physics_frame_prefix.h', 'gate_player_lifecycle_discard.h', 'gate_player_physics_discard.h',
+    'gate_player_presentation_fork.h',
+    'gate_player_dispatch_stop.h', 'test_gate_player_dispatch_stop.c',
+    'gate_player_local_stop.h', 'test_gate_player_local_stop.c',
+    'gate_player_fork_worker_park.h', 'gate_fork_save.h',
+    'gate_player_physics_frame_prefix.h', 'gate_player_lifecycle_discard.h', 'gate_player_physics_discard.h',
     'player_worker_dispatch_contract.h', 'player_worker_dispatch_contract.md', 'gate_player_worker_dispatch.h',
     'test_player_worker_dispatch_adapter.c', 'test_player_worker_dispatch_contract.c',
-    'test_player_semaphore_dispatch_midwait.c',
+    'test_player_semaphore_dispatch_midwait.c', 'test_player_semaphore_dispatch_checkpoint.c',
     'gate_mass_traffic.h', 'gate_player_control_recurring.h', 'gate_linux.c',
     'gate_player_control_worker_tail.h', 'frame_worker_recurring.h', 'test_gate_mass_traffic.h',
     'test_gate_player_control_recurring.c', 'test_gate_player_control_recurring.sh',
@@ -25,6 +29,8 @@ EXTRA_SOURCES = tuple('src/native/engine/linux/' + x for x in (
     'test_gate_player_semaphore_original_view.c', 'test_player_semaphore_observer_preload.c',
     'test_semaphore_pin_provider.c')) + (
     'tests/test_linux_player_presentation_quiet.py', 'src/native/engine/lockstep_gate_exports.h', 'tests/test_linux_player_dispatch_stop.py', 'tests/test_linux_player_dispatch_fork_park.py', 'tests/test_linux_player_dispatch_log_prefix.py', 'tests/test_linux_player_worker_dispatch_adapter.py', 'tests/test_linux_player_worker_dispatch_contract.py',
+    'tools/dev/linux_local_stop.py', 'tests/test_linux_local_stop.py',
+    'tests/test_linux_semaphore_bootstrap_checkpoint.py',
     'tools/dev/build_linux_semaphore_observer.py', 'tools/dev/linux_semaphore_observer_bundle.py',
     'tools/dev/exec_linux_semaphore_observer.py', 'tests/test_linux_semaphore_original_view.py',
     'tests/test_linux_semaphore_observer_preload.py', 'tests/test_linux_semaphore_observer_bundle.py',
@@ -34,13 +40,27 @@ EXTRA_SOURCES = tuple('src/native/engine/linux/' + x for x in (
     'tests/test_linux_t40_evidence.py', 'tests/test_linux_network_long_window.py',
     'tools/dev/test_linux_player_frames_evidence.py', 'tools/dev/test_linux_player_network_evidence.py')
 SOURCES = tuple(dict.fromkeys(previous.SOURCES + EXTRA_SOURCES))
-HELPERS = tuple(dict.fromkeys(previous.HELPERS + ('linux_semaphore_observer_bundle.py', 'exec_linux_semaphore_observer.py',
+HELPERS = tuple(dict.fromkeys(previous.HELPERS + ('linux_local_stop.py', 'linux_semaphore_observer_bundle.py', 'exec_linux_semaphore_observer.py',
                                                    'linux_stock_view_fov_observer.py', 'linux_player_frames_evidence.py',
                                                    'linux_player_network_evidence.py', 'linux_gate_live.py')))
 
 
+def bootstrap_checkpoint_tick(options):
+    """An explicit prefix is available only with resident worker dispatch."""
+    tick = options.get('bootstrap_checkpoint_tick')
+    if tick is None:
+        return None
+    budget = budget_from_options(options)
+    if (type(tick) is not int or options.get('worker_dispatch') is not True or
+            options.get('semaphore_observer') is not True or not budget or
+            not budget['take'] <= tick <= budget['recurring_end']):
+        raise ValueError('bootstrap checkpoint requires worker dispatch and a tick within take..end')
+    return tick
+
+
 def enabled(options):
     active = options.get('semaphore_observer', False)
+    bootstrap_checkpoint_tick(options)
     dispatch = options.get('worker_dispatch', False)
     if type(dispatch) is not bool or (dispatch and active is not True):
         raise ValueError('worker dispatch requires an explicit semaphore observer')
@@ -76,6 +96,10 @@ def wrap_program(case, manifest, env, program):
         raise ValueError('semaphore observer launch has no frozen provider pin')
     wrapped_env = dict(env)
     wrapped_env.pop('X4_DEV_WORKER_DISPATCH', None)
+    wrapped_env.pop('X4_DEV_SEMAPHORE_BOOTSTRAP_TICK', None)
+    checkpoint = bootstrap_checkpoint_tick(manifest)
+    if checkpoint is not None:
+        wrapped_env['X4_DEV_SEMAPHORE_BOOTSTRAP_TICK'] = str(checkpoint)
     if manifest.get('worker_dispatch') is True:
         wrapped_env['X4_DEV_WORKER_DISPATCH'] = '1'
     for name in ('X4MP_SEMAPHORE_OBSERVER', 'X4MP_SEMAPHORE_OBSERVER_FD',
@@ -142,6 +166,7 @@ def collect(receipt_path, physics, options, active, *, ancestry=None):
             result['pass'] = True
             return result
         budget = budget_from_options(options)
+        checkpoint_tick = bootstrap_checkpoint_tick(options) or budget['recurring_end']
         frames = physics.get('frames') if isinstance(physics, dict) else None
         if (not isinstance(physics, dict) or physics.get('pass') is not True or
                 physics.get('returncode') != 223 or physics.get('frame_count') != budget['frames'] or
@@ -163,8 +188,8 @@ def collect(receipt_path, physics, options, active, *, ancestry=None):
                 raise ValueError('missing, duplicate or mismatched native dispatch tickets')
             result['worker_dispatch'] = {'pass': True, 'evidence_version': 1, 'dispatches': len(expected)}
         checkpoints = [CHECKPOINT.fullmatch(line) for line in lines if 'X4LAN SEMAPHORE OBSERVER CHECKPOINT' in line]
-        if len(checkpoints) != 1 or not checkpoints[0] or int(checkpoints[0][1]) != budget['recurring_end']:
-            raise ValueError('missing authenticated final worker checkpoint')
+        if len(checkpoints) != 1 or not checkpoints[0] or int(checkpoints[0][1]) != checkpoint_tick:
+            raise ValueError('missing authenticated worker checkpoint')
         if not 0 < int(checkpoints[0][2]) <= 0xffffffff:
             raise ValueError('invalid checkpoint OS thread owner')
         # Physics thread fields use a pthread-derived identifier, not SYS_gettid.
@@ -183,7 +208,7 @@ def collect(receipt_path, physics, options, active, *, ancestry=None):
         if not status:
             raise ValueError('missing explicit final semaphore status')
         tick, owner, active_calls, token_count, receipt_count, incomplete, constructor_state, complete = map(int, status.groups())
-        if (tick != budget['recurring_end'] or owner != int(checkpoints[0][2]) or not owner or active_calls or incomplete or
+        if (tick != checkpoint_tick or owner != int(checkpoints[0][2]) or not owner or active_calls or incomplete or
                 constructor_state != 2 or complete != 1 or receipt_count != len(rows) - 2 or
                 receipt_count != token_count * 2 or token_count < 2 or receipt_count > 8192):
             raise ValueError('incomplete or mismatched semaphore status')
@@ -224,7 +249,9 @@ def collect(receipt_path, physics, options, active, *, ancestry=None):
         if receipt.read_bytes() != raw or lifecycle_path.read_bytes() != lifecycle:
             raise ValueError('semaphore evidence changed during collection')
         result.update(pass_=True, receipt_sha256=hashlib.sha256(raw).hexdigest(),
-                      token_count=token_count, movement_waits=movement, status_tick=tick)
+                      token_count=token_count, movement_waits=movement, status_tick=tick,
+                      observation_end_tick=checkpoint_tick, session_end_tick=budget['recurring_end'],
+                      observation_covers_session=checkpoint_tick == budget['recurring_end'])
         result['pass'] = result.pop('pass_')
     except (OSError, UnicodeError, ValueError, KeyError, TypeError, AttributeError) as error:
         result['errors'].append(str(error))

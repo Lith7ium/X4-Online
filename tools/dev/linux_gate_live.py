@@ -72,6 +72,7 @@ import linux_selection_parity_bundle as selection_parity_bundle
 import linux_player_view_wire_bundle as view_wire_bundle
 import linux_view_performance_bundle as view_performance_bundle
 import linux_semaphore_observer_bundle as semaphore_bundle
+import linux_local_stop as local_stop
 import linux_player_fire_observation as fire_observation
 import linux_cursor_input_trace as mouse_trace
 import linux_view_precompare_bundle as precompare_trace
@@ -1536,8 +1537,10 @@ def physics_environment_mode(frames, network=False):
     return 'network-frames-discard' if network else ('bounded-frames-discard' if frames > 1 else 'single-frame-discard')
 
 
-def collect_network_client(arguments, stderr, frames, slot, camera=False, throttle=False, throttle_start_tick=5, presentation=False, session_frames=0, startup=None, cursor=False, space=False, *, allow_view=False, allow_semaphore_checkpoint=False, allow_worker_dispatch=False):
+def collect_network_client(arguments, stderr, frames, slot, camera=False, throttle=False, throttle_start_tick=5, presentation=False, session_frames=0, startup=None, cursor=False, space=False, *, allow_view=False, allow_semaphore_checkpoint=False, allow_worker_dispatch=False, bootstrap_checkpoint_tick=None):
     kwargs = {'allow_camera': True} if camera else {}
+    if bootstrap_checkpoint_tick is not None:
+        kwargs['bootstrap_checkpoint_tick'] = bootstrap_checkpoint_tick
     if allow_worker_dispatch is not False:
         kwargs['allow_worker_dispatch'] = allow_worker_dispatch
     if allow_semaphore_checkpoint is not False:
@@ -2800,6 +2803,7 @@ def bundle(args):
         'view_query_source_version': semaphore_bundle.SOURCE_VERSION,
         'semaphore_observer': semaphore_observer_enabled,
         'worker_dispatch': getattr(args, 'worker_dispatch', False),
+        'bootstrap_checkpoint_tick': getattr(args, 'bootstrap_checkpoint_tick', None),
         'worker_dispatch_evidence_version': 1 if getattr(args, 'worker_dispatch', False) else None,
         'semaphore_observer_evidence_version': 1 if semaphore_observer_enabled else None,
         'semaphore_observer_sha256': files.get('semaphore_observer/' + semaphore_bundle.PROVIDER),
@@ -3364,6 +3368,10 @@ def run(args):
         raise SystemExit(f'{root} is not a staged live-test root under {userhome} with {MARKER}')
     manifest = json.loads((root / 'manifest.json').read_text())
     try:
+        local_stop_enabled = local_stop.validate_option(getattr(args, 'local_stop', False), manifest)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    try:
         shared_identity_bundle.validate_bundle(root, manifest)
     except (ValueError, OSError) as error:
         raise SystemExit('shared identity bundle refused: ' + str(error)) from error
@@ -3723,6 +3731,7 @@ def run(args):
         result['recurring_readiness'] = {'pass': False, 'end': recurring_end, 'tail': recurring_tail, 'clients': {},
                                          'readiness_only': True, 'other_threads_excluded': False}
     procs, starts, logs, games = [], {}, [], []
+    local_stop_channels = []
     cases_by_slot = {}
     cancelled = []
     # bwrap binds each private lock over this path, and cannot create it in the read-only view.
@@ -3734,7 +3743,7 @@ def run(args):
     for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(number, lambda *_: cancelled.append(1))
 
-    def launch(label, command, env=None, as_user=False, stderr_path=None):
+    def launch(label, command, env=None, as_user=False, stderr_path=None, pass_fds=()):
         log = (run_dir / f'{label}.log').open('wb')
         logs.append(log)
         error_log = subprocess.STDOUT
@@ -3742,6 +3751,8 @@ def run(args):
             error_log = stderr_path.open('wb')
             logs.append(error_log)
         extra = {'user': user.pw_uid, 'group': user.pw_gid, 'extra_groups': []} if as_user and os.geteuid() == 0 else {}
+        if pass_fds:
+            extra['pass_fds'] = pass_fds
         parent = os.getpid()
 
         def parent_death():
@@ -3849,8 +3860,18 @@ def run(args):
                     raise RuntimeError('semaphore observer requires the system Python launcher')
                 env, program = semaphore_bundle.wrap_program(case, manifest, env, program)
             cases_by_slot[slot] = case
-            games_by_slot[slot] = (launch(f'game{slot}-stdout', namespace_command(case, game, dlc_binds, lock, env, program, args.user, shm),
-                stderr_path=run_dir / f'game{slot}-stderr.log' if recurring else None), profile)
+            def game_command(environment):
+                return namespace_command(case, game, dlc_binds, lock, environment, program, args.user, shm)
+
+            def launch_game_command(command, **options):
+                return launch(f'game{slot}-stdout', command,
+                              stderr_path=run_dir / f'game{slot}-stderr.log' if recurring else None, **options)
+
+            process, stop_channel = local_stop.launch_game(
+                slot, env, game_command, launch_game_command, local_stop_enabled)
+            if stop_channel is not None:
+                local_stop_channels.append(stop_channel)
+            games_by_slot[slot] = (process, profile)
         games = [games_by_slot[slot] for slot in local]
         result['started'] = time.time()
         deadline = time.monotonic() + args.timeout
@@ -3911,11 +3932,27 @@ def run(args):
     except Exception as error:
         result['error'] = str(error)
     finally:
+        if local_stop_enabled:
+            result['local_stop'] = {'enabled': True, 'clients': {}}
+            try:
+                result['local_stop']['clients'] = local_stop.cooperative_stop(local_stop_channels)
+            except Exception as error:
+                result['local_stop']['error'] = str(error)
+                result.setdefault('cleanup_errors', []).append('local stop: ' + str(error))
         for proc in reversed(procs):
+            if local_stop_enabled:
+                for channel in local_stop_channels:
+                    if channel.process is proc:
+                        channel.evidence['fallback_attempted'] = proc.poll() is None
             try:
                 stop_owned_process(proc, starts[proc.pid])
             except (OSError, subprocess.TimeoutExpired) as error:
                 result.setdefault('cleanup_errors', []).append(str(error))
+        if local_stop_enabled:
+            for channel in local_stop_channels:
+                evidence = result['local_stop']['clients'].setdefault(str(channel.slot), dict(channel.evidence))
+                evidence.update(channel.evidence)
+                evidence['returncode_after_fallback'] = channel.process.poll()
         result['owned_processes_remaining'] = wait_owned_groups(starts)
         if result['owned_processes_remaining']:
             result.setdefault('cleanup_errors', []).append('owned process groups still have members')
@@ -3963,7 +4000,8 @@ def run(args):
                             throttle_start_tick=manifest.get('player_throttle_start_tick') or 5,
                             presentation=presentation_enabled, session_frames=manifest.get('player_ui_session_frames',0), startup=manifest.get('player_startup_phases'), cursor=cursor_enabled, space=space_enabled, allow_view=view_wire_enabled,
                             allow_semaphore_checkpoint=semaphore_observer_enabled,
-                            allow_worker_dispatch=manifest.get('worker_dispatch', False))
+                            allow_worker_dispatch=manifest.get('worker_dispatch', False),
+                            bootstrap_checkpoint_tick=manifest.get('bootstrap_checkpoint_tick'))
                     else:
                         clients_evidence[str(slot)] = collect_physics_client(arguments, stderr, physics_frames)
                 else:
@@ -4267,6 +4305,8 @@ def main(argv=None):
                    help='bundle default-off pre-main lifetime guard for disposable physics experiments only')
     b.add_argument('--worker-dispatch', action='store_true',
                    help='finite native worker dispatch handoff; requires --semaphore-observer')
+    b.add_argument('--bootstrap-checkpoint-tick', type=int, metavar='TICK',
+                   help='seal only this semaphore ledger prefix; requires worker dispatch, within take..end')
     b.add_argument('--semaphore-observer', action='store_true',
                    help='bounded target semaphore diagnostics for a finite T40 session; no ownership proof')
     b.add_argument('--player-factory-probe', action='store_true',
@@ -4467,6 +4507,8 @@ def main(argv=None):
     b.add_argument('--stride', type=int, default=60, help='world hash capture every N ticks (and tick 1)')
     r = sub.add_parser('run', help='run on Linux as the Steam user, or select one as root')
     r.add_argument('--root', type=Path, required=True)
+    r.add_argument('--local-stop', action='store_true',
+                   help='private stop pipe per local game; requires a worker-dispatch bundle')
     lifecycle_modes = r.add_mutually_exclusive_group()
     lifecycle_modes.add_argument('--controller-lifecycle-discard', action='store_true',
                    help='RUN-only disposable take/release experiment; expects exit 223, never accepts a tick run')

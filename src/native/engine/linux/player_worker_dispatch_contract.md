@@ -44,3 +44,31 @@ callbacks until process death. A legacy stop keeps its prior cleanup behavior,
 but later takeover in that process is refused. Neither hook restoration nor
 callback unregistration is supported for resident dispatch. Finite completion
 still uses exit 223 and retains its existing budgets and deadlines.
+
+Local launcher stop is a separate, opt-in capability: set
+`X4_DEV_PLAYER_STOP_FD` to the canonical decimal descriptor (at least 3) of an
+inherited read-only, nonblocking anonymous pipe, together with
+`X4_DEV_WORKER_DISPATCH=1`. The gate pins this configuration once and owns a
+private CLOEXEC duplicate; it never reads or closes the inherited original.
+It checks the duplicate's identity and flags before reading. Send one ASCII
+`S` byte to request stop. EOF, malformed bytes, invalid configuration, and
+channel faults also terminate the isolated process with exit 225. Reasons are
+226 (invalid), 227 (request), 228 (EOF), and 229 (fault), and 230 (foreign/concurrent/reentrant polling). Before takeover this
+uses the terminal path directly; after takeover it uses `finish` and the existing
+terminate-only latch. Neither path restores hooks or resumes singleplayer.
+
+The main gate polls at entry and before native forwarding, and on both sides of
+its 25 ms permit receive. Shared window-check polling also covers handshake and
+lookahead waits. Polling preserves `errno` on the no-stop path. No environment
+setting leaves the default behavior intact. Human window close is unsupported
+in this development mode; a native call that blocks without returning still
+requires the launcher's bounded, owned-process fallback. This capability stops
+only its local isolated game; it does not grant privileges over an external relay.
+
+Only the actual `gate_tick` entry may initialize an opted-in channel and publish
+its OS-thread owner. Atomic configuration states prevent shared wait callers
+from accessing a partial descriptor or identity. A READY-to-POLLING transition
+excludes concurrent/reentrant reads; foreign threads fail closed before touching
+the capability fields. The owner is fixed even though the gate's older
+`main_thread` field is assigned later in its first entry. With no channel setting,
+concurrent callers publish only ABSENT, retaining default thread behavior.
