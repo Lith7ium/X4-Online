@@ -63,7 +63,10 @@ all 10,054 indices in the archived checkpoint. It recorded 10,052 finite
 positions across 140 local sector handles and classified two entries as docked
 or internally stored, without reading their positions. It reported zero
 unavailable, missing-sector and local-invalid entries, observed pause at the
-checkpoints and reported no remaining owned processes after cleanup. This is a
+checkpoints and reported no remaining owned processes after cleanup. A separate
+read-only review recounted the consecutive rows, finite positions, categories,
+sector handles and load/marker/completion/pause order in the retained log and
+matched them to the result. This is a
 paused local read of this particular registry, not a live stream, independently
 proved runtime-to-save binding, complete universe coverage, a native velocity
 measurement, or a multiplayer test.
