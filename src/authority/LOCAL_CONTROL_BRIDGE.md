@@ -49,8 +49,9 @@ not exercise this bridge.
 --display :0` prepares and runs that disposable case using the existing
 capture isolation, installs the opt-in UI bridge and executes the real
 `WorldCoordinator` through two pause/save/resume cycles and a final pause/save
-when the last simulated client departs. Its client load
-confirmations are explicitly marked FAKE in `result.json`. It is never invoked
+when the last simulated client departs. Its client load confirmations and its
+participant pause/resume adapter are fake; there are no client processes. The
+load confirmations are explicitly marked FAKE in `result.json`. It is never invoked
 on import. `--help` lists its parameters.
 
 On 2026-11-15, one isolated Linux X4 run completed this lifecycle: the game
@@ -62,3 +63,5 @@ download, actual client load, Windows client, internet connection, gameplay or
 restart from the last-departure checkpoint was exercised in this run. A
 separate native checkpoint-reload experiment is described in
 [`AUTHORITY-REPEATED-CHECKPOINT.md`](../../docs/AUTHORITY-REPEATED-CHECKPOINT.md).
+The participant pause/resume requirement was added after that native run and
+has been checked with doubles, not re-run against X4.

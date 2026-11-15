@@ -40,7 +40,8 @@ class BridgeTests(unittest.TestCase):
         self.bridge=LocalControlBridge(enabled=True,sock=self.sock,peer=peer,lease=self.lease,world_epoch=self.epoch,
             profile=self.profile,store=self.store,verify_checkpoint=read_cycle_evidence,timeout=3)
         self.service=joinfiles.FileService('c'*32,slots=(1,2)).start();self.addCleanup(self.service.close)
-        self.world=WorldCoordinator(self.epoch,self.bridge,self.store,SaveOffers(self.service,self.store))
+        self.world=WorldCoordinator(self.epoch,self.bridge,self.store,SaveOffers(self.service,self.store),
+                                    participants=live.FakeParticipants())
 
     def stop(self):
         self.proc.terminate();self.proc.wait(timeout=3);self.proc.stderr.close()

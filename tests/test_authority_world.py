@@ -40,6 +40,19 @@ class FakeEngine:
         self.paused = False
 
 
+class FakeParticipants:
+    def __init__(self):
+        self.actions = []
+
+    def pause(self, handles):
+        self.actions.append(('pause', handles))
+        return True
+
+    def resume(self, handles):
+        self.actions.append(('resume', handles))
+        return True
+
+
 class WorldTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -49,9 +62,11 @@ class WorldTests(unittest.TestCase):
         self.store_path.mkdir()
         self.store = CheckpointStore(self.store_path)
         self.engine = FakeEngine(self.root)
+        self.participants = FakeParticipants()
         self.service = joinfiles.FileService('a' * 32, slots=(1, 2)).start()
         self.addCleanup(self.service.close)
-        self.world = WorldCoordinator('world-1', self.engine, self.store, SaveOffers(self.service, self.store))
+        self.world = WorldCoordinator('world-1', self.engine, self.store, SaveOffers(self.service, self.store),
+                                      participants=self.participants)
 
     def step(self, operation):
         self.assertEqual(self.world.session.pending.operation, operation)
@@ -93,6 +108,43 @@ class WorldTests(unittest.TestCase):
         self.assertEqual(CheckpointStore(self.store_path).latest(), latest)
         self.assertEqual(self.engine.actions,
                          ['pause', 'save', 'resume', 'pause', 'save', 'resume', 'pause', 'save'])
+        self.assertEqual(self.participants.actions,
+                         [('resume', (a,)), ('pause', (a,)), ('resume', (a, b))])
+
+    def test_existing_client_pause_failure_prevents_save(self):
+        a = self.world.join('a')
+        self.step('pause'); self.step('save')
+        self.confirm(self.world.offer_load(a)); self.step('resume')
+        self.world.join('b')
+        self.participants.pause = lambda _handles: False
+        with self.assertRaisesRegex(RuntimeError, 'client pause was not confirmed'):
+            self.world.step()
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertTrue(self.engine.paused)
+        self.assertEqual(self.engine.actions, ['pause', 'save', 'resume', 'pause'])
+
+    def test_no_client_controller_does_not_start_server_resume(self):
+        a = self.world.join('a')
+        self.step('pause'); self.step('save')
+        self.confirm(self.world.offer_load(a))
+        self.world._participants = None
+        with self.assertRaisesRegex(RuntimeError, 'client pause/resume control is unavailable'):
+            self.world.step()
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertTrue(self.engine.paused)
+        self.assertEqual(self.engine.actions, ['pause', 'save'])
+
+    def test_failed_client_resume_pauses_server_and_faults(self):
+        a = self.world.join('a')
+        self.step('pause'); self.step('save')
+        self.confirm(self.world.offer_load(a))
+        self.participants.resume = lambda _handles: False
+        with self.assertRaisesRegex(RuntimeError, 'client resume was not confirmed'):
+            self.world.step()
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertTrue(self.engine.paused)
+        self.assertEqual(self.engine.actions, ['pause', 'save', 'resume', 'pause'])
+        self.assertIsNone(self.world.session.baseline_id)
 
     def test_forged_stale_or_untrusted_load_confirmation_rejected(self):
         a = self.world.join('a')

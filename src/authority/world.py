@@ -14,6 +14,14 @@ though the verified checkpoint itself remains in the store.
 All access must be serialized by the caller. This module neither starts an
 engine nor restores one on restart. Session/client authentication, genuine
 client-side loading, adapter timeouts and engine fencing are external duties.
+The optional participant adapter must synchronously confirm pause/resume for
+each ready client; without it, a transition involving ready clients fails closed.
+Its pause(handles) and resume(handles) methods must return True only when all
+specified participants actually confirmed the requested state. The caller must
+authenticate and control those clients, bound its operations and fence them on
+failure; a server-side pause cannot stop an indeterminate client operation. If
+client resume fails after the engine started, the coordinator attempts to pause
+the engine and faults even if that attempt succeeds.
 """
 from dataclasses import dataclass
 
@@ -35,11 +43,12 @@ class LoadOffer:
 class WorldCoordinator:
     """Execute one engine action at a time and bind join loads to saved bytes."""
 
-    def __init__(self, world_epoch, engine, store, offers):
+    def __init__(self, world_epoch, engine, store, offers, *, participants=None):
         self.session = SessionCoordinator(world_epoch)
         self._engine = engine
         self._store = store
         self._offers = offers
+        self._participants = participants
         self._baseline = None  # (session-local save request id, Checkpoint)
         self._load_offers = {}
 
@@ -49,6 +58,14 @@ class WorldCoordinator:
     def disconnect(self, connection_handle):
         self.session.disconnect(connection_handle)
         self._load_offers.pop(connection_handle, None)
+
+    def _control_participants(self, operation):
+        handles = tuple(handle for handle, _ in self.session.ready_players)
+        if not handles:
+            return
+        method = getattr(self._participants, operation, None)
+        if not callable(method) or method(handles) is not True:
+            raise RuntimeError('client ' + operation + ' was not confirmed')
 
     def step(self):
         """Run the currently pending operation, or return None if there is none.
@@ -72,12 +89,28 @@ class WorldCoordinator:
         try:
             if request.operation == 'pause':
                 self._engine.pause()
+                self._control_participants('pause')
             elif request.operation == 'resume':
+                if self.session.ready_players and any(
+                    not callable(getattr(self._participants, name, None)) for name in ('pause', 'resume')
+                ):
+                    raise RuntimeError('client pause/resume control is unavailable')
                 # Already-started transfers still require external admission
                 # fencing; revocation only prevents new downloads.
                 self._offers.invalidate()
                 self._load_offers.clear()
                 self._engine.resume()
+                try:
+                    self._control_participants('resume')
+                except Exception:
+                    # The server resume succeeded, but one or more clients may
+                    # be running or uncertain. Attempt to stop server progress;
+                    # the session remains faulted even if this pause succeeds.
+                    try:
+                        self._engine.pause()
+                    except Exception as error:
+                        raise RuntimeError('client resume failed and server pause is uncertain') from error
+                    raise
             elif request.operation == 'save':
                 source = self._engine.save()
                 checkpoint = self._store.publish(source)

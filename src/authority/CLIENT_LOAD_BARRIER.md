@@ -35,4 +35,6 @@ approach is limited to an isolated process started for one attempt; it does not
 design dynamic rejoining of a running client.
 
 `tests/test_authority_client_load_barrier.py` runs Lua with test doubles only.
-It does not start X4 or prove the engine adapter's behavior on Linux or Windows.
+A separate isolated Linux X4 run combined this barrier with a localhost download;
+see [the native experiment](../../docs/AUTHORITY-CLIENT-DOWNLOAD-LOAD.md). It
+does not establish Windows behavior or actual client admission.
