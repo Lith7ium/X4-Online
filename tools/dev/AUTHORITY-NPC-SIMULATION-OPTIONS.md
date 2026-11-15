@@ -22,6 +22,14 @@ behavior. These are research options, not a working replication design.
    existing or incoming ships, and coverage of non-job creation remain unproven.
    A small MD experiment is plausible; establishing safe, sufficient coverage
    and its effects on economy, combat and high attention is the larger task.
+   A search of the available schemas, project scripts, and installed base and
+   stock-DLC MD, AI and library catalog files found no documented getter for
+   either the effective permission or its explicit local setting; this bounded
+   search does not prove that no engine getter exists. Reset returns a space to
+   its default; it does not establish restoration of a previously explicit
+   allow or deny. Even an effective boolean alone would not reveal whether that
+   value was inherited. Do not rely on reset as an in-place rollback of an
+   unknown pre-existing state.
 
 2. **Change individual ships' AI state.** The schema says `abort_scripts`
    aborts an entity's running AI scripts, `cancel_all_orders` cancels an
