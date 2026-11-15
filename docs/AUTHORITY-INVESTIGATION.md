@@ -185,6 +185,16 @@ complete ship state, autonomous-simulation deduplication, real session
 admission, Windows or internet operation; see
 `tools/dev/AUTHORITY-SHIP-CREATE-RECEIVER.md`.
 
+A separate isolated Linux/Linux run connected this newly created registry
+fixture to the local motion diagnostic in two paused X4 instances. The checker
+recorded 970 source samples, 34 guest writes, 33 matching guest readbacks and
+20 controlled source setter impulses. It transmitted position and a
+finite-difference rate, then applied predicted positions on the guest; it did
+not sample or apply native velocity. The run does not establish automatic ship
+discovery, NPC flight, collision clearance, atomicity, smoothness, client
+admission, gameplay, Windows or internet operation. See
+`tools/dev/AUTHORITY-REGISTRY-MOTION.md`.
+
 Ship positions are the first scope; trade and combat follow later. Spacesuits
 and dropped cargo are deferred; missions currently have lower priority.
 Synchronizing positions alone does not imply

@@ -49,6 +49,7 @@ function AddUITriggeredEvent(screen,control,args)
  else error('unexpected event '..screen..'.'..control) end
 end
 assert(loadfile('tools/dev/authority_create_test_probe.lua'))()
+assert(not callbacks['X4AuthorityRegistryMotionGuard.Verified'] and not callbacks['X4AuthorityRegistryMotionGuard.Refused'], 'default path registered motion handlers')
 assert(X4LAN_AUTHORITY_CREATE_READY())
 assert(onupdate)
 if invalid_macro then

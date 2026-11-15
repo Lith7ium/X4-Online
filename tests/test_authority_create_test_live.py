@@ -36,6 +36,51 @@ class FakeSocket:
 
 
 class ProbeTests(unittest.TestCase):
+    def test_default_install_has_no_motion_artifacts_or_relay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case=Path(directory)/'case';lab=case/'extensions/x4_lan_lab'
+            (lab/'ui').mkdir(parents=True);(lab/'md').mkdir()
+            (lab/'ui/config.lua').write_text('X4LAN_CONFIG = {}\n')
+            (lab/'ui.xml').write_text('    <file name="ui/authority_checkpoint_marker_probe.lua" />\n')
+            (lab/'ui/authority_world_bridge_probe.lua').write_text(' if not started and now-loaded_at>=3 and not X4LAN_AUTHORITY_MARKER_READY() then return end\n')
+            exp=module.Experiment()
+            try:
+                exp.install(case,'save')
+                self.assertIsNone(exp.relay)
+                self.assertNotIn('authority_motion_', (lab/'ui/config.lua').read_text())
+                self.assertNotIn('motion', (lab/'ui.xml').read_text())
+                self.assertFalse((lab/'md/authority_registry_motion_guard.xml').exists())
+                self.assertFalse((lab/'ui/authority_registry_motion_native.lua').exists())
+            finally: exp.close()
+
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT is not installed')
+    def test_motion_late_guard_after_failure_is_fenced(self):
+        root=PATH.parents[2]
+        result=subprocess.run(['luajit','tests/lua/authority_create_motion_failure.lua'],cwd=root,
+                              capture_output=True,text=True,timeout=5)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+    def test_motion_install_is_opt_in_and_leases_are_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case=Path(directory)/'case';lab=case/'extensions/x4_lan_lab'
+            (lab/'ui').mkdir(parents=True);(lab/'md').mkdir()
+            (lab/'ui/config.lua').write_text('X4LAN_CONFIG = {}\n')
+            (lab/'ui.xml').write_text('    <file name="ui/authority_checkpoint_marker_probe.lua" />\n')
+            (lab/'ui/authority_world_bridge_probe.lua').write_text(' if not started and now-loaded_at>=3 and not X4LAN_AUTHORITY_MARKER_READY() then return end\n')
+            exp=module.Experiment(motion=True)
+            try:
+                exp.install(case,'save')
+                config=(lab/'ui/config.lua').read_text()
+                self.assertIn('authority_motion_test=true',config)
+                self.assertIn(exp.source_lease,config)
+                self.assertTrue((lab/'md/authority_registry_motion_guard.xml').is_file())
+                self.assertIn(lab/'ui/authority_registry_motion_native.lua',exp.protected(case))
+            finally:
+                exp.close()
+            config=(lab/'ui/config.lua').read_text()
+            self.assertNotIn(exp.source_lease,config)
+            self.assertIn('authority_motion_lease="redacted"',config)
+
     @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT is not installed')
     def test_lua_conversion_and_invalid_macro(self):
         root=PATH.parents[2]
