@@ -76,6 +76,7 @@ class WarpWatch:
     NUMBER=rb'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?'
     LABELS=(b'LOAD_ARMED',b'LOAD_REQUEST',b'LOADED',b'BEFORE',b'REQUEST',b'ACK',b'IMMEDIATE',b'LATE')
     MAX_LOG=256<<20;MAX_LINE=65536
+    SAMPLES=(b'BEFORE',b'IMMEDIATE',b'LATE');TIMED=(b'LATE',)
     def __init__(self,path):
         self.path=path;self.offset=0;self.identity=None;self.carry=b'';self.stage=0;self.samples={}
     def poll(self):
@@ -98,14 +99,14 @@ class WarpWatch:
                     row=line.split(self.TAG,1)[1].strip()
                     if self.stage>=len(self.LABELS):raise ValueError('extra warp receipt')
                     name=self.LABELS[self.stage]
-                    if name in (b'BEFORE',b'IMMEDIATE',b'LATE'):
+                    if name in self.SAMPLES:
                         pattern=name+rb' x=('+self.NUMBER+rb') y=('+self.NUMBER+rb') z=('+self.NUMBER+rb')'
-                        if name==b'LATE':pattern+=rb' elapsed=('+self.NUMBER+rb')'
+                        if name in self.TIMED:pattern+=rb' elapsed=('+self.NUMBER+rb')'
                         found=re.fullmatch(pattern,row)
                         if not found:raise ValueError('invalid or out-of-order warp measurement')
                         values=tuple(float(v) for v in found.groups())
                         if not all(math.isfinite(v) for v in values):raise ValueError('nonfinite warp measurement')
-                        if name==b'LATE' and values[3]<1:raise ValueError('late readback too early')
+                        if name in self.TIMED and values[3]<1:raise ValueError('late readback too early')
                         self.samples[name.decode()]=values
                     elif row!=name:raise ValueError('invalid or out-of-order warp receipt')
                     self.stage+=1
@@ -129,7 +130,8 @@ def check_measurements(watch):
     return results
 
 
-def run(args):
+def run(args, *, install=install_probe, watch_class=WarpWatch, check=check_measurements,
+        scope='one disposable X4 instance, one MD fixture warp; no multiplayer'):
     if sys.platform!='linux' or os.geteuid()==0:raise ValueError('run as unprivileged Linux Steam user')
     out=snapshot.output_path(args.out);bundle=load.local_directory(args.bundle)
     game=args.game.resolve(strict=True)
@@ -145,7 +147,7 @@ def run(args):
     import pwd
     user=pwd.getpwuid(os.geteuid());home=Path(user.pw_dir);steam=live.steam_identity(home,user.pw_uid)
     out.mkdir(mode=0o700,parents=True,exist_ok=False);out.chmod(0o700)
-    result={'success':False,'scope':'one disposable X4 instance, one MD fixture warp; no multiplayer',
+    result={'success':False,'scope':scope,
             'collision_clearance_proven':False,'atomicity_proven':False,'runtime_saved_id_proven':False,
             'steam_before':steam}
     proc=started=lock_fd=lock_stat=None;handlers={}
@@ -153,7 +155,7 @@ def run(args):
         case,profile,binds,lock=snapshot.prepare_case(out,game,home)
         target,digest,ids=stage_fixture(bundle,profile)
         if len(ids)!=12:raise ValueError('snapshot fixture list incomplete')
-        install_probe(case,profile)
+        install(case,profile)
         lock_fd,lock_stat=live.create_lock_target(snapshot.LOCK_TARGET,user.pw_uid,user.pw_gid)
         for number in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):handlers[number]=signal.signal(number,snapshot.cancel_capture)
         if live.sha(target)!=digest:raise ValueError('snapshot changed before launch')
@@ -161,14 +163,14 @@ def run(args):
             command=load.readonly_save_command(case,game,binds,lock,args.display,auth,user.pw_name,args.seed,target)
             proc=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
             started=live.start_ticks(proc.pid);deadline=time.monotonic()+args.timeout
-            watch=WarpWatch(profile/'engine-output.log')
+            watch=watch_class(profile/'engine-output.log')
             while True:
                 if time.monotonic()>=deadline:raise TimeoutError('fixture warp experiment timed out')
                 if proc.poll() is not None:raise RuntimeError('owned X4 exited before warp completion')
                 if live.steam_identity(home,user.pw_uid)!=steam:raise RuntimeError('Steam identity changed')
                 caught_up=watch.poll()
-                if caught_up and watch.stage==len(WarpWatch.LABELS):
-                    measurements=check_measurements(watch)
+                if caught_up and watch.stage==len(watch.LABELS):
+                    measurements=check(watch)
                     if live.sha(target)!=digest:raise ValueError('snapshot changed during experiment')
                     result.update(success=True,snapshot_sha256=digest,saved_reference_list_validated=True,**measurements)
                     break
@@ -189,7 +191,7 @@ def run(args):
                     previous=watch.offset
                     if watch.poll():break
                     if watch.offset==previous:raise ValueError('incomplete final log line')
-                check_measurements(watch)
+                check(watch)
             except (OSError,ValueError):result.update(success=False,error='final warp receipt invalid')
         if lock_stat is not None:
             try:live.release_lock_target(snapshot.LOCK_TARGET,lock_fd,lock_stat)
