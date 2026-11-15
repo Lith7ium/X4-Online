@@ -33,6 +33,15 @@ function M.new()
    local result={}; for i=0,n-1 do result[#result+1]=buffer[i] end
    return result,false
   end,
+  -- Prefix reads are only for a private diagnostic of an already observed
+  -- index, never to assert that a faction list is complete.
+  member_at=function(faction,index)
+   assert(type(index)=='number' and index==math.floor(index) and index>=1 and index<=200000, 'invalid member index')
+   local buffer=ffi.new('UniverseID[?]',index)
+   local n=tonumber(allships(buffer,index,faction))
+   if n~=index then return nil end
+   return buffer[index-1]
+  end,
   key=function(handle) if handle==nil or handle==0 then return '' end; return tostring(handle) end,
   operational=function(ship) return operational(ship) end,
   -- Used only by the opt-in isolated diagnostic after the same faction has

@@ -143,6 +143,7 @@ local function inventory(engine, identities, options)
  local max_fleet=integer(options.max_fleet or max_ships,max_ships,'fleet limit')
  local scope=id(options.identity_scope,'identity scope')
  assert(type(identities.ship)=='function' and type(identities.sector)=='function', 'identity callbacks required')
+ assert(options.on_duplicate==nil or type(options.on_duplicate)=='function', 'invalid duplicate diagnostic')
  local function call(fn, ...)
   if type(fn)~='function' then return false end
   return pcall(fn,...)
@@ -194,6 +195,9 @@ local function inventory(engine, identities, options)
    local key=object_key(ship)
    if membership[key] then
     local first=membership[key]
+    -- The opt-in callback is diagnostic only: errors cannot replace or turn
+    -- the duplicate failure into a successful inventory.
+    if options.on_duplicate then pcall(options.on_duplicate,first.faction,first.ship_index,faction,ship_index,ship) end
     -- Indices, not handles, identify the collision for the isolated probe.
     fail(string.format('inventory duplicate object first=%d:%d repeated=%d:%d',
      first.faction_index,first.ship_index,faction_index,ship_index))

@@ -183,34 +183,42 @@ e.factions=function() return {'a','b'},false end
 e.operational=function() return true end;e.is_ship=function() return true end
 e.sector=function() return '4' end
 e.pose=function() return {x=1,y=2,z=3,yaw=0,pitch=0,roll=0} end
+local calls=0;e.member_at=function(f,i) calls=calls+1;assert(i==1);return data[f][i] end
 X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
 local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
 for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
 local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
 probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function(h) return '000000000000000'..h end})
-assert(#logs==3 and logs[1]:find('reason=duplicate_object first_faction=1 first_index=1 repeated_faction=2 repeated_index=1',1,true))
-assert(not logs[1]:find('0000000000000001',1,true) and not logs[1]:find('enumerated=',1,true))
-assert(logs[2]:find('entries=2 unique=1 repeated=1',1,true) and not logs[2]:find('0000000000000001',1,true))
-assert(logs[3]:find('first_faction_private=a repeated_faction_private=b saved_private=0000000000000001',1,true))
+assert(#logs==2 and calls==2 and logs[1]:find('AUTHORITY_DUPLICATE_TARGET_PRIVATE',1,true))
+assert(logs[1]:find('first_faction_private=a repeated_faction_private=b saved_private=0000000000000001',1,true))
+assert(logs[2]:find('reason=duplicate_object first_faction=1 first_index=1 repeated_faction=2 repeated_index=1',1,true))
+assert(not logs[2]:find('0000000000000001',1,true) and not logs[2]:find('enumerated=',1,true))
 ''')
 
-    def test_collision_audit_with_changing_membership_publishes_no_partial_details(self):
+    def test_targeted_collision_recheck_reports_changes_without_private_details(self):
         self.run_lua('''
 package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
 GetCurRealTime=function() return 10 end
 data.a={'1'};data.b={'1'};e.factions=function() return {'a','b'},false end
 e.operational=function() return true end;e.is_ship=function() return true end;e.sector=function() return '4' end
 e.pose=function() return {x=1,y=2,z=3,yaw=0,pitch=0,roll=0} end
-local original=e.fleet;local calls=0
-e.fleet=function(f) calls=calls+1; if calls==5 then return {'9'},false end;return original(f) end
 X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
 local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
 for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
-local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
-probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function(h) return '000000000000000'..h end})
-assert(#logs==2 and logs[1]:find('reason=duplicate_object',1,true))
-assert(logs[2]:find('AUTHORITY_MEMBERSHIP_AUDIT_ERROR',1,true))
-assert(not table.concat(logs):find('DUP_PRIVATE',1,true))
+for _,mode in ipairs({'handle','identity','count'}) do
+ local calls=0;local saved_calls=0;local counts={a=0,b=0}
+ e.fleet_count=function(f) counts[f]=counts[f]+1;if mode=='count' and f=='b' and counts[f]==4 then return 2 end;return #data[f] end
+ e.member_at=function(f,i) calls=calls+1;assert(i==1);if mode=='handle' and f=='b' then return '9' end;return data[f][i] end
+ local gate={saved_identity=function(h)
+  if h=='1' then saved_calls=saved_calls+1;if mode=='identity' and saved_calls==3 then return '0000000000000009' end end
+  return '000000000000000'..h
+ end}
+ local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
+ probe.sample(cfg,30,function(s) logs[#logs+1]=s end,gate)
+ local expected=mode=='handle' and 'repeated_handle_changed' or (mode=='identity' and 'saved_identity_changed' or 'repeated_count_changed')
+ assert(#logs==2 and logs[1]:find('AUTHORITY_DUPLICATE_TARGET_ERROR',1,true) and logs[1]:find('reason='..expected,1,true))
+ assert(logs[2]:find('reason=duplicate_object',1,true) and not table.concat(logs):find('TARGET_PRIVATE',1,true))
+end
 ''')
 
     def test_fixture_error_categories_do_not_conflate_faction_and_membership(self):
@@ -231,6 +239,23 @@ for _,item in ipairs({{'inventory faction membership changed','faction_set_chang
  probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function() return '0000000000000000' end})
  assert(#logs==1 and logs[1]:find('reason='..item[2],1,true) and not logs[1]:find('private',1,true))
 end
+''')
+
+    def test_x4_prefix_adapter_only_returns_the_requested_present_entry(self):
+        self.run_lua('''
+local capacities={}
+package.loaded.ffi={typeof=function() return true end,cdef=function() end,
+ new=function(_,n) assert(n>=1 and n<=200000);return {} end,
+ C={GetAllFactionShips=function(buffer,cap,faction)
+  assert(faction=='a');capacities[#capacities+1]=cap
+  local ships={'first','second'};local n=math.min(cap,#ships)
+  for i=1,n do buffer[i-1]=ships[i] end
+  return n
+ end}}
+local engine=assert(loadfile('src/authority/lua/x4_ship_engine.lua'))().new()
+assert(engine.member_at('a',1)=='first' and engine.member_at('a',2)=='second')
+assert(engine.member_at('a',3)==nil and capacities[1]==1 and capacities[2]==2 and capacities[3]==3)
+assert(not pcall(engine.member_at,'a',0) and not pcall(engine.member_at,'a',200001))
 ''')
 
 
