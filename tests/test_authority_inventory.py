@@ -174,6 +174,44 @@ assert(#logs==1 and logs[1]:find('AUTHORITY_INVENTORY_ERROR tick=30 reason=check
 assert(not logs[1]:find('enumerated=',1,true))
 ''')
 
+    def test_collision_diagnostic_reports_indices_without_handles(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
+GetCurRealTime=function() return 10 end
+data.a={'1'};data.b={'1'}
+e.factions=function() return {'a','b'},false end
+e.operational=function() return true end;e.is_ship=function() return true end
+e.sector=function() return '4' end
+e.pose=function() return {x=1,y=2,z=3,yaw=0,pitch=0,roll=0} end
+X4LAN_AUTHORITY_SHIP_SCAN=scan;X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
+probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function(h) return '000000000000000'..h end})
+assert(#logs==1 and logs[1]:find('reason=duplicate_object first_faction=1 first_index=1 repeated_faction=2 repeated_index=1',1,true))
+assert(not logs[1]:find('0000000000000001',1,true) and not logs[1]:find('enumerated=',1,true))
+''')
+
+    def test_fixture_error_categories_do_not_conflate_faction_and_membership(self):
+        self.run_lua('''
+package.loaded.ffi={cdef=function() end, C={GetSaveFolderPath=function() return '/private/45841/save' end}, string=function(x) return x end}
+GetCurRealTime=function() return 10 end
+X4LAN_AUTHORITY_SHIP_ENGINE={new=function() return e end}
+local cfg={native_gate_authority_inventory=true,native_gate_authority_scan=true,native_gate_hash='battle',test_profile='45841',native_gate_snapshot_fixture={}}
+for i=1,12 do cfg.native_gate_snapshot_fixture[i]=i end
+for _,item in ipairs({{'inventory faction membership changed','faction_set_changed'},
+ {'inventory faction enumeration incomplete','faction_enumeration_incomplete'},
+ {'inventory duplicate supplied identity','duplicate_identity'},
+ {'inventory object membership changed','object_set_changed'},
+ {'inventory fleet enumeration changed or incomplete','fleet_enumeration_changed'},
+ {'untrusted private error','other'}}) do
+ X4LAN_AUTHORITY_SHIP_SCAN={inventory=function() return nil,item[1] end}
+ local logs={};local probe=assert(loadfile('src/authority/lua/fixture_inventory_probe.lua'))()
+ probe.sample(cfg,30,function(s) logs[#logs+1]=s end,{saved_identity=function() return '0000000000000000' end})
+ assert(#logs==1 and logs[1]:find('reason='..item[2],1,true) and not logs[1]:find('private',1,true))
+end
+''')
+
 
 class InventoryHarnessTests(unittest.TestCase):
     def test_receipt_is_count_checked_and_never_implies_completeness(self):

@@ -35,11 +35,37 @@ function M.sample(cfg,tick,log,gate)
   if not result then
    local reason='other'
    if type(why)=='string' then
-    for _,candidate in ipairs({'checkpoint','faction','fleet','membership','identity','sector','class','limit'}) do
-     if why:find(candidate,1,true) then reason=candidate;break end
+    -- Never expose raw callback errors or IDs. Match known scanner failures to
+    -- fixed labels; overlapping words such as "faction" and "membership"
+    -- must not collapse distinct failures into a misleading diagnosis.
+    for _,mapping in ipairs({
+     {'inventory duplicate object first=','duplicate_object'},
+     {'inventory duplicate supplied identity','duplicate_identity'},
+     {'inventory faction enumeration incomplete','faction_enumeration_incomplete'},
+     {'inventory duplicate faction','duplicate_faction'},
+     {'inventory faction membership changed','faction_set_changed'},
+     {'inventory object membership changed','object_set_changed'},
+     {'inventory invalid fleet count','fleet_count_invalid'},
+     {'inventory fleet enumeration changed or incomplete','fleet_enumeration_changed'},
+     {'inventory identity or operational state changed','identity_or_operational_changed'},
+     {'inventory sector state changed','sector_changed'},
+     {'inventory class state changed','class_changed'},
+     {'inventory checkpoint failed','checkpoint'},
+     {'inventory ship limit exceeded','ship_limit'},
+     {'invalid faction','invalid_faction'},
+    }) do
+     if why:find(mapping[1],1,true) then reason=mapping[2];break end
     end
    end
-   log('AUTHORITY_INVENTORY_ERROR tick='..tick..' reason='..reason)
+   local details=''
+   if reason=='duplicate_object' then
+    local a,b,c,d=why:match('inventory duplicate object first=(%d+):(%d+) repeated=(%d+):(%d+)')
+    a,b,c,d=tonumber(a),tonumber(b),tonumber(c),tonumber(d)
+    if a and b and c and d and a>=1 and a<=1024 and c>=1 and c<=1024 and b>=1 and b<=200000 and d>=1 and d<=200000 then
+     details=string.format(' first_faction=%d first_index=%d repeated_faction=%d repeated_index=%d',a,b,c,d)
+    end
+   end
+   log('AUTHORITY_INVENTORY_ERROR tick='..tick..' reason='..reason..details)
    return
   end
   local c,r=result.counts,result.unavailable_reasons

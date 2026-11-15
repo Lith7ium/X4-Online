@@ -187,16 +187,22 @@ local function inventory(engine, identities, options)
  local rows, membership, ids, reasons={},{},{},{}
  local counts={enumerated=0,position_observed=0,not_confirmed_operational=0,unavailable=0,unresolved_identity=0}
  local first_factions,first_set=factions()
- for _,faction in ipairs(first_factions) do
-  for _,ship in ipairs(fleet(faction)) do
+ for faction_index,faction in ipairs(first_factions) do
+  for ship_index,ship in ipairs(fleet(faction)) do
    checkpoint()
    if #rows>=max_ships then fail('inventory ship limit exceeded') end
    local key=object_key(ship)
-   if membership[key] then fail('inventory duplicate object or faction membership') end
+   if membership[key] then
+    local first=membership[key]
+    -- Indices, not handles, identify the collision for the isolated probe.
+    fail(string.format('inventory duplicate object first=%d:%d repeated=%d:%d',
+     first.faction_index,first.ship_index,faction_index,ship_index))
+   end
    local sid=stable_id(identities.ship,ship)
    if sid and ids[sid] then fail('inventory duplicate supplied identity') end
    if sid then ids[sid]=true else counts.unresolved_identity=counts.unresolved_identity+1 end
-   local record={faction=faction,identity=sid,operational=bool(engine.operational,ship)}
+   local record={faction=faction,faction_index=faction_index,ship_index=ship_index,
+    identity=sid,operational=bool(engine.operational,ship)}
    membership[key]=record
    local row={ordinal=#rows+1, identity=sid, status='unavailable'}
    if record.operational==false then
