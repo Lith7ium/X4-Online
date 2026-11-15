@@ -144,7 +144,7 @@ class SupervisorCleanupTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
 
-    def run_failing(self, survivor=False, service_failure=False, steam_change=False, system_exit=False):
+    def run_failing(self, survivor=False, service_failure=False, steam_change=False, system_exit=False, helper_failure=False):
         game=self.root/'game';(game/'extensions').mkdir(parents=True);(game/'X4').touch()
         auth=self.root/'auth';auth.touch();out=self.root/'out';lock_path=self.root/'owned-lock';lock_path.touch()
         lock_fd=os.open(lock_path,os.O_RDONLY);lock_stat=object()
@@ -198,11 +198,15 @@ class SupervisorCleanupTests(unittest.TestCase):
                 error=SystemExit('run failure') if system_exit else KeyboardInterrupt('run failure')
                 set_(supervisor.client,'game_identity',Mock(side_effect=error))
             stop_mock=set_(supervisor.snapshot,'stop_owned',Mock(side_effect=stop))
+            def fail_helper():
+                if helper_failure == 'interrupt': raise KeyboardInterrupt('helper cleanup')
+                return False
+            experiment=SimpleNamespace(cleanup_before_owned_processes=fail_helper) if helper_failure else None
             if system_exit:
                 with self.assertRaises(SystemExit): supervisor.run(args)
                 import json
                 result=json.loads((out/'result.json').read_text())
-            else: result=supervisor.run(args)
+            else: result=supervisor.run(args,experiment=experiment)
         self.assertFalse(result['success']);self.assertEqual(result['owned_cleanup_confirmed'],service_failure)
         self.assertTrue(lock_path.exists())
         if service_failure:
@@ -213,9 +217,14 @@ class SupervisorCleanupTests(unittest.TestCase):
         if steam_change:
             self.assertEqual(result['error'],'run failure');self.assertIn('Steam identity changed',result['cleanup_error'])
         if system_exit: self.assertEqual(result['error'],'run failure')
-        self.assertEqual(stop_mock.call_count,2)
-        self.assertEqual(stop_mock.call_args_list[0].args,(second,2))
-        self.assertEqual(stop_mock.call_args_list[1].args,(first,1))
+        if helper_failure:
+            stop_mock.assert_not_called()
+            self.assertIsNone(result['owned_processes_remaining'])
+            self.assertIn('helper cleanup unconfirmed',result['cleanup_error'])
+        else:
+            self.assertEqual(stop_mock.call_count,2)
+            self.assertEqual(stop_mock.call_args_list[0].args,(second,2))
+            self.assertEqual(stop_mock.call_args_list[1].args,(first,1))
         self.assertTrue((out/'result.json').is_file());self.assertGreaterEqual(steam_check.call_count,2)
         self.assertTrue(all(value==supervisor.signal.SIG_DFL for value in handlers.values()))
         fake_sock.close.assert_called_once()
@@ -225,6 +234,8 @@ class SupervisorCleanupTests(unittest.TestCase):
     def test_service_close_exception_does_not_skip_process_cleanup(self): self.run_failing(service_failure=True)
     def test_steam_change_preserves_original_error(self): self.run_failing(steam_change=True)
     def test_system_exit_remains_failure_and_propagates(self): self.run_failing(system_exit=True)
+    def test_unconfirmed_helper_retains_processes_and_lock(self): self.run_failing(helper_failure=True)
+    def test_interrupted_helper_cleanup_retains_processes_and_lock(self): self.run_failing(helper_failure='interrupt')
 
 
 if __name__=='__main__': unittest.main()

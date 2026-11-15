@@ -364,13 +364,22 @@ def run(args, *, experiment=None):
         for number in handlers:
             try: signal.signal(number, signal.SIG_IGN)
             except BaseException as error: cleanup_error('cannot fence cleanup signals', error)
+        helper_stopped = True
+        try:
+            hook = getattr(experiment, 'cleanup_before_owned_processes', None)
+            if hook is not None and (not callable(hook) or hook() is not True):
+                raise RuntimeError('helper stop unconfirmed')
+        except BaseException as error:
+            helper_stopped = False
+            all_stopped = False
+            cleanup_error('helper cleanup unconfirmed', error)
         for owned_service in reversed(services):
             try: close_owned_file_service(owned_service)
             except BaseException as error: cleanup_error('service cleanup failed', error)
         if sock is not None:
             try: sock.close()
             except BaseException as error: cleanup_error('socket cleanup failed', error)
-        for proc, started in reversed(processes):
+        for proc, started in reversed(processes) if helper_stopped else ():
             try:
                 if started is not None:
                     remaining = snapshot.stop_owned(proc, started)
@@ -388,7 +397,7 @@ def run(args, *, experiment=None):
             except BaseException as error:
                 all_stopped = False
                 cleanup_error('process cleanup failed', error)
-        result['owned_processes_remaining'] = remaining_owned
+        result['owned_processes_remaining'] = remaining_owned if helper_stopped else None
         result['owned_cleanup_confirmed'] = all_stopped
         if result['success']:
             try:
