@@ -1,6 +1,6 @@
 # Opt-in two-sector source read experiment
 
-This experiment has **not been run in X4**. It reuses the separately verified,
+This experiment reuses the separately verified,
 marked two-sector archive and the existing single-X4 private-profile load and
 cleanup harness. That archive contains exactly two registry entries: this is
 not the 10,054-entry census checkpoint and it cannot show fleet-scale
@@ -43,3 +43,12 @@ address it; increasing these hard-coded slots would not supply those guarantees.
 Offline checks: `python3 -m unittest discover -s tests -p test_authority_multi_sector_read.py -v`.
 A future native run requires independent review first, a fresh output directory,
 a local display and the pinned game; use `python3 tools/dev/authority_multi_sector_read_live.py --help`.
+
+On 2026-11-15, one isolated native Linux run succeeded. Both registered
+ships in distinct sectors produced three correlated samples each, and the
+positions of both changed over the sampled interval. The source was paused
+again and owned-process cleanup reported no remaining members. The native
+results support this two-entry read path and its observed response format;
+they do not remove the identity, time, scale, client, or gameplay limitations
+above. The finite-difference vectors remain estimates per engine-real second,
+not native X4 velocity.
