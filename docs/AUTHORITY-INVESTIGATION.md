@@ -195,6 +195,26 @@ discovery, NPC flight, collision clearance, atomicity, smoothness, client
 admission, gameplay, Windows or internet operation. See
 `tools/dev/AUTHORITY-REGISTRY-MOTION.md`.
 
+One later isolated natural-flight attempt was interrupted after several minutes
+without progress. The server logged a pilot/MoveWait `ORDER` but no source
+`SAMPLE`; the last recorded server state was paused and no client was admitted.
+It did not demonstrate a bridge resume or NPC flight. A synthetic test exposed
+that a lost, previously one-shot `ARMED` UDP receipt could stall this handshake;
+the source now repeats the receipt while paused and the runner records bounded
+phases. The old run did not record receipt/fence progress, so this failure mode
+cannot be established as its cause. See `tools/dev/AUTHORITY-NPC-FLIGHT.md`.
+
+A subsequent isolated Linux/Linux run recorded a pilot and `MoveWait` order
+for one newly registered fixture, followed by 1,290 source samples over about
+32 seconds of advancing game time and roughly 3 km of source displacement.
+The checker accepted 201 guest position writes and 201 readbacks within its
+5 m and 0.75 s limits. Position-derived rates were transmitted; native
+velocity was not sampled. After the source stopped, the bridge confirmed a
+pause. No post-flight checkpoint or client admission occurred. This single
+same-sector diagnostic does not establish exact loaded bytes, collision
+clearance, smoothness, shared gameplay, universe-wide synchronization, Windows
+or internet operation. The checker alone cannot prove what caused movement.
+
 Ship positions are the first scope; trade and combat follow later. Spacesuits
 and dropped cargo are deferred; missions currently have lower priority.
 Synchronizing positions alone does not imply

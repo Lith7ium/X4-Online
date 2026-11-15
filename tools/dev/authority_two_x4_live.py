@@ -218,10 +218,11 @@ def run(args, *, experiment=None):
                     client_save_fd_max_offset=max(save_fd_offsets) if save_fd_offsets else None,
                     exact_loaded_file_proven=False, client_admitted=False, gameplay_tested=False)
                 if experiment is not None:
+                    extra = {'steam_identity': steam} if getattr(experiment, 'requires_steam_identity', False) else {}
                     experiment.on_ready(world=world, handle=handle, ticket=ticket, target=target,
                         server_identity=server_identity, server_proc=server_proc, server_started=server_started,
                         client_identity=client_identity, client_proc=client_proc, client_started=client_started,
-                        game=game, out=out, deadline=deadline, result=result)
+                        game=game, out=out, deadline=deadline, result=result, **extra)
                 result['success'] = True
                 break
             time.sleep(.1)
