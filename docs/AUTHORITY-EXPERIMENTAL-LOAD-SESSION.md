@@ -54,3 +54,18 @@ and hashes the save, consumes a synthetic receipt and checks that a subsequent
 fetch is refused after withdrawal. It closes and joins its owned server. This
 local test establishes neither X4 load/admission nor Windows, WAN, peer
 authentication, confidentiality or other security properties.
+
+`tests/test_authority_loopback_lifecycle.py` adds a separate real-loopback
+exercise with three labelled fake players, a fake engine and fake participant
+controls. The test explicitly calls `WorldCoordinator.mark_loaded` with
+`trusted_confirmation=True` as a **test assumption**, without invoking
+`observe_test_receipt` to authorize anyone. After two fake players disconnect,
+the third advances a fake counter, disconnects, and causes fake pause/save;
+later, a new attachment downloads the resulting confirmed checkpoint over TCP.
+An independent counterexample consumes `observe_test_receipt` and verifies that
+no player becomes ready or causes a resume or unnecessary last-disconnect save.
+The fake confirmation bypasses this experimental adapter's non-admitting API;
+its stale adapter attempt is rejected when observed afterward. This test does
+not establish real admission, X4 execution, remote networking, or recovery after
+a server-process restart. Reopening `CheckpointStore` validates access to the
+fake checkpoint, not restoration of a running world.
