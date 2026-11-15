@@ -89,8 +89,8 @@ def run(args):
             if len(observed) != 1: raise ValueError('expected one load offer')
             log = Path('case/home/.config/EgoSoft/X4/45841/engine-output.log')
             verify_receipts((out/'server'/log).read_text(), (out/'client'/log).read_text(), nonce, observed[0])
-            result.update(marker_restored_after_game_loaded=True, marker_bound_to_offered_load_attempt=True,
-                          exact_loaded_file_proven=False, client_admitted=False)
+            result.update(marker_restored_after_game_loaded=True, marker_matched_during_observed_attempt=True,
+                          load_attempt_authenticated=False, exact_loaded_file_proven=False, client_admitted=False)
         except (OSError, ValueError) as error:
             result.update(success=False, error=str(error))
     (out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
