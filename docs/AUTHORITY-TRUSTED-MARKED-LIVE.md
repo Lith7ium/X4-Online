@@ -30,3 +30,13 @@ by this test harness. Results and private logs are written only under its fresh
 python tools/dev/authority_trusted_marked_live.py --game /path/to/X4 \
   --out .local/trusted-marked-experiment --display :2 --timeout 600
 ```
+
+On 2026-11-15, one run in the pinned Linux environment completed successfully.
+The source checkpoint and localhost transfer were verified; the controlled
+client reported the marker and paused load, and the coordinator accepted its
+trusted claim. Both owned X4 processes confirmed resume and then pause. The
+coordinator had a save pending when the experiment stopped. The result also
+reported that the staged save was observed open by the client, without proving
+complete file consumption. The owned-process cleanup reported no remaining
+members; the limitations above still apply. No gameplay, Windows or Internet
+connection was tested.
