@@ -61,15 +61,17 @@ logs, staged save and result under the 0700 output directory, including on
 failure. It uses the existing owned-process and lock cleanup. No network
 connection or personal save is required by this test.
 
-A successful result would establish that the UI requested the staged slot and
-then observed a valid player with advancing game time. The file's hash and
+A native Linux run on 15 November 2026 completed this sequence using the second
+checkpoint of the isolated two-cycle experiment. The UI requested the staged
+slot, observed a valid player and advancing game time, and the loaded time did
+not precede the saved time. The staged file remained unchanged and the owned
+process exited. The file's hash and
 read-only mount provide strong supporting evidence, but do not directly attest
 which file bytes X4 consumed. The result does not establish recovery of all
 world state, a new join, multi-client synchronization, platform interoperability
-or save distribution. The exact profile-path convention, UI callback lifecycle,
-read-only-file compatibility and X4 load/clock behavior remain native-test
-questions until actually executed. The comparison's empirical assumptions must
-be revisited if the executable or target platform changes.
+or save distribution. The profile path, UI callback lifecycle, read-only file
+and clock checks worked for this isolated Linux run. The comparison's empirical
+assumptions must be revisited if the executable or target platform changes.
 
 Synthetic coverage: `python3 -m unittest discover -s tests -p
 "test_authority_load_live.py" -v`. These tests use temporary files and Lua

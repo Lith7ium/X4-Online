@@ -20,3 +20,14 @@ unchanged. This proves only one local cycle in the test world, not repeated
 campaign saves, reloading the resulting checkpoint, reconnects, two-client
 gameplay, Internet operation or Windows behavior. Earlier documentation about
 the one-save-per-process experimental limit still applies.
+
+A separate experimental Linux run subsequently completed two pause/save/verify/
+resume cycles in one isolated process, using two initially empty slots and
+distinct saved titles. The second verified save had a later game time. A fresh
+isolated X4 process then requested the second checkpoint, reached player-ready
+state and advanced its game clock without regressing behind the saved time. The
+staged file matched the checkpoint before and after loading and was mounted
+read-only. The loader's actual file descriptor and complete world identity were
+not independently observed. Both owned process groups exited and Steam identity
+remained unchanged. This is a local diagnostic, not yet an integrated persistent
+server, an automatic last-disconnect save, or a client join.
