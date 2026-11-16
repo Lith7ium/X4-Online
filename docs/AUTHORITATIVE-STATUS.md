@@ -65,6 +65,11 @@ Native Linux evidence so far:
   evidence; there is no packet trace. The replica uses an artificial seed and
   approximate loadout. This is one paused fixture, not continuous ship-state
   synchronization, proven shared frames, Windows/Internet or gameplay.
+* In an isolated player-seat calibration, an NPC with an observed pilot and
+  started Patrol returned a valid assigned pilot while its control-post
+  reservation lookup reported empty. The positive control failed before the
+  two test ships' seats were assessed. This does not establish an empty or
+  usable physical seat, player control, or the cause of the differing readings.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
   accepted a trusted client load claim over TCP, and confirmed resume and pause
   through TCP participant control. A second join was simulated. Another run
@@ -108,6 +113,7 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [local job descriptor](../tools/dev/AUTHORITY-JOB-DESCRIPTOR-PROBE.md),
 [two-X4 census descriptor](../tools/dev/AUTHORITY-CENSUS-PAIR-READ.md),
 [two-X4 census replica](../tools/dev/AUTHORITY-CENSUS-REPLICA-PAIR.md),
+[player-seat experiment](../tools/dev/AUTHORITY-PLAYER-SEAT-EXPERIMENT.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-sector local creation](../tools/dev/AUTHORITY-SECTOR-CREATE-PREPARATION.md),

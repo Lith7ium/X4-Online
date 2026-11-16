@@ -76,3 +76,25 @@ slot-0 combinations `nil_observed`/`occupied`, `present`/`empty`, and
 positive-control values. A nil result or empty reservation is an observation,
 not proof of an unoccupied or usable physical seat; nor do simultaneous positive
 values prove that they refer to the same physical person.
+
+## Third native attempt
+
+The isolated Linux run `.local/authority-player-seat-03` loaded the same
+checkpoint and logged the expected marker, a paused slot-2 NPC read with
+`pilot=present` and a started Patrol, then preflight and creation of two test
+ship references. The first seat query ended with
+`SEAT_RESULT_POSITIVE_ASSIGNED_PRESENT_RESERVATION_EMPTY`. In the executed
+probe this category follows a correlated slot-0 MD response and successful
+local inspection: `assignedpilot` produced a valid non-nil actor while the MD
+control-post reservation lookup reported `empty`. This failed the deliberately
+strict positive control, so neither new ship's seat was assessed. The result
+was unsuccessful, no checkpoint was requested, and the runner reported no
+owned processes remaining.
+
+The archived source and private staged save both hash to
+`2c6494308424fffe8bd114bd017802e2b6dc1f227a64998aea8a787672846748`.
+The private experiment and calibration Lua/MD files match their reviewed
+inputs. These are point-in-time file checks, not proof of byte-exact engine
+loading or uninterrupted pause. This one observed combination does not prove
+a physically empty or usable seat, player control, or why the two properties
+differ. No conclusion about high- or low-attention causation follows from it.
