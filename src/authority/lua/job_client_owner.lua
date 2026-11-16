@@ -11,6 +11,10 @@ local function natural(v)
  if type(v)~='string' or not v:match('^[1-9]%d*$') or #v>16 then return nil end
  local n=tonumber(v);if not integer(n,1) or string.format('%.0f',n)~=v then return nil end;return n
 end
+local function reason(v)
+ if type(v)=='string' and #v<=40 and v:match('^[a-z0-9_]+$') then return v end
+ return 'unknown'
+end
 local function name(v)return type(v)=='string' and #v>=1 and #v<=128 and v:match('^[A-Za-z0-9_]+$')~=nil end
 local function split(v)local p={};for s in (v..'|'):gmatch('(.-)|')do p[#p+1]=s end;return p end
 function M.new(o)
@@ -80,8 +84,8 @@ function M.new(o)
   if busy or failed or delivered or (phase~='initializing' and phase~='applying') then return fail('unexpected_event') end
   busy=true
   if not check() then busy=false;return fail('guard') end
-  local ok,result=pcall(client.event,client,value)
-  if not ok or result~=true or failed or not check() then busy=false;return fail('event') end
+  local ok,result,detail=pcall(client.event,client,value)
+  if not ok or result~=true or failed or not check() then busy=false;return fail('event_'..reason(detail)) end
   if delivered then
    if phase=='initializing' and delivered=='initialize' then phase='announce'
    elseif phase=='applying' and delivered=='create' then phase='reply'
@@ -97,20 +101,22 @@ function M.new(o)
      not token(p[5],32) or p[6]~=o.epoch or p[7]~=o.generation or not token(p[10],64) then return false end
   local sequence,index=natural(p[8]),natural(p[9]);local x,y,z=number(p[14]),number(p[15]),number(p[16])
   if not sequence or sequence~=last_seq+1 or not index or not name(p[11]) or not name(p[12]) or not name(p[13]) or not x or not y or not z then return false end
-  local ok,w=call(o.witness,p[13]);if not ok or not integer(w,1) or w>o.baseline or not check() then return false end
+  local ok,w=call(o.witness,p[13]);if not ok or not integer(w,1) or w>o.baseline or not check() then return false,'witness' end
   pending={index=index,identity={p[5],p[6],p[7],p[8],p[9],p[10]}}
   deadline=last+o.timeout;phase='applying'
   local armed,value=call(o.inspector.arm_running,o.inspector)
-  if not armed or value~=true or not check() then return false end
-  local sent,accepted=call(client.create,client,{index=index,macro=p[11],owner=p[12],sector=p[13],seed=o.seed,x=x,y=y,z=z,witness_index=w})
-  return sent and accepted==true and check()
+  if not armed or value~=true or not check() then return false,'inspector_arm' end
+  local sent,accepted,detail=call(client.create,client,{index=index,macro=p[11],owner=p[12],sector=p[13],seed=o.seed,x=x,y=y,z=z,witness_index=w})
+  if not sent or accepted~=true then return false,'create_'..reason(detail) end
+  if not check() then return false,'create_guard' end
+  return true
  end
  function api:tick()
   if busy or failed or phase=='new' then return fail('tick_state') end
   busy=true
   if not check() then busy=false;return fail('guard') end
-  local ok,result=call(client.tick,client)
-  if not ok or result~=true or not check() then busy=false;return fail('client_tick') end
+  local ok,result,detail=call(client.tick,client)
+  if not ok or result~=true or not check() then busy=false;return fail('client_tick_'..reason(detail)) end
   if phase=='announce' then
    if not send(response('READY')) then busy=false;return fail('ready_send') end
    deadline=nil;phase='ready'
@@ -123,7 +129,11 @@ function M.new(o)
    last_seq=last_seq+1;pending=nil;deadline=nil;phase='ready'
   end
   local got,packet=call(o.net.receive,o.net)
-  if not got or (packet~=nil and not accept(packet)) then busy=false;return fail('packet') end
+  if not got then busy=false;return fail('receive') end
+  if packet~=nil then
+   local accepted,detail=accept(packet)
+   if not accepted then busy=false;return fail('packet_'..reason(detail)) end
+  end
   busy=false;return true
  end
  function api:state()return phase end

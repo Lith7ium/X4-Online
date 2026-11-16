@@ -3,8 +3,12 @@ local cfg=X4LAN_CONFIG
 if not cfg or cfg.authority_participant_job_session~=true then return end
 local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);double GetCurrentGameTime(void);]]
 local failed=false;local participant,participant_net,job,job_net_owner,engine,next_hello=nil,nil,nil,nil,nil,0
-local function fail()
- if not failed then failed=true;DebugError('[X4LAN] AUTH_PARTICIPANT_JOB ERROR') end
+local function fail(reason)
+ if not failed then
+  failed=true
+  if type(reason)~='string' or #reason>64 or not reason:match('^[a-z0-9_]+$') then reason='session_tick' end
+  DebugError('[X4LAN] AUTH_PARTICIPANT_JOB ERROR '..reason)
+ end
 end
 function X4LAN_PARTICIPANT_JOB_TICK()
  if failed then return end

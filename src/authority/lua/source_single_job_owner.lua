@@ -119,7 +119,12 @@ function M.new(o)
    elseif state=='await_go' then
     assert(host:state()=='attached_wait_running' and host:tick() and host:state()=='attached_wait_running')
     local p=c.net:receive()
-    if p~=nil then assert(p==identity('P','GO'));state='observing';assert(send(identity('S','GO_READY'))) end
+    if p~=nil then
+     assert(p==identity('P','GO'));state='observing';assert(send(identity('S','GO_READY')))
+     -- Continuous sessions use the host/descriptor/IPC operation deadlines and
+     -- the supervisor lifecycle after GO, not a lifetime measured from start.
+     if continuous then deadline=nil end
+    end
    elseif state=='observing' or state=='selected' then
     assert(host:tick())
     if state=='selected' then

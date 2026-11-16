@@ -79,3 +79,44 @@ prove a ship birth; descriptors are not atomic and cross-process frame
 identity is unproven. Two events in the same sector do not demonstrate
 complete universe coverage, continuous replication, Windows/Internet
 connectivity, persistence or gameplay.
+
+### Continuous-window diagnostic
+
+The separate `--continuous` opt-in runs serial source delivery until the source
+reports a correlated `FINISHED` snapshot after its observation window. It uses
+no small fixed event-count target. The X4 event producer continues running, so
+this reports only a point-in-time queue observation, not a durable drain or
+complete universe coverage. Each completed event is sent separately to the
+supervisor after client receipt, source MD acknowledgement and REARM. Results
+retain the worker-reported completed prefix on failure, and the current event
+is marked uncertain. Final X4-log validation is required before a successful
+result. A zero-event snapshot is recorded as inconclusive, not as a client
+apply. The private runner imposes finite process/time/log and 64 MiB progress
+artifact resource limits; hitting a limit is a failure, not a truncated success.
+The longer-running reusable components and this private bounded lifecycle have
+separate timeout policies. Offline tests exercise more than eight events,
+missing-witness failure after a completed prefix, and an empty snapshot with
+synthetic process peers.
+
+The one native `.local/authority-source-tcp-continuous-01` attempt on
+2026-11-16 **failed** before reporting `FINISHED`. The client X4 log records
+19 consecutive `LOCAL_APPLIED` entries, indices 10055–10073, followed by a
+generic participant-owner error. The source log samples 20 `delivering`
+states; the last sampled state is `delivering`, with no event identity printed
+there. The saved supervisor result contains only two completed worker-progress
+records, for sequence/index `(1,10055)` and `(2,10056)`. Those records and
+the client logs are different evidence: later local applications do not prove
+TCP receipts, source MD acknowledgements or REARM. The outcome of the last
+begun event is uncertain. The saved result reports no FINISHED snapshot and
+confirmed owned-process cleanup with no owned processes remaining.
+
+The immediate cause of the client error cannot be identified from the generic
+log. The old supervisor read each frame one byte at a time and ran an expensive
+context guard around each read; this could explain why the saved worker prefix
+was short, but the original socket buffer contents were not recorded. The
+framing has since been changed and tested to read chunks and preserve available
+validated progress frames on failure. That change cannot recover the original
+run’s unrecorded frames. Subsequent diagnostic error codes are likewise
+prepared for future use; they do not identify the original failure. No packet
+trace, full-universe coverage, Windows/Internet operation or gameplay success
+is established by this failed attempt.

@@ -50,9 +50,9 @@ function M.new(o)
  local function fail(reason)phase='failed';pending=nil;deadline=nil;return false,reason end
  local function call(fn,...)
   if busy then return fail('reentrant') end
-  local old=phase;busy=true;local ok,a,b=pcall(fn,...);busy=false
+  local old=phase;busy=true;local ok,a,b,c=pcall(fn,...);busy=false
   if not ok or phase~=old then return fail('callback') end
-  return true,a,b
+  return true,a,b,c
  end
  local function check()
   if phase=='failed' or phase=='closed' then return false end
@@ -115,7 +115,10 @@ function M.new(o)
     string.format('%.0f',pending.descriptor.index)~=index then return fail('inspect_response') end
   local expected=actor_decimal(hex);if not expected or expected~=pending.actor or not actor_decimal(sector) then return fail('actor_format') end
   local view=descriptor(pending.descriptor,o.baseline)
-  local ok,actor_key,binding=call(o.inspect,hex,sector,pending.descriptor.index,view)
+  local ok,actor_key,binding,inspect_reason=call(o.inspect,hex,sector,pending.descriptor.index,view)
+  if ok and binding~=true and type(inspect_reason)=='string' and #inspect_reason<=32 and inspect_reason:match('^[a-z0-9_]+$') then
+   return fail('inspector_'..inspect_reason)
+  end
   if not ok or not descriptor(view,o.baseline) or not same(view,pending.descriptor) or view.witness_index~=pending.descriptor.witness_index or
     actor_key~=expected or binding~=true or not check() then return fail('actor_binding') end
   local d,operation=pending.descriptor,pending.kind=='inspect_create' and 'create' or 'replay';local old=records[d.index]

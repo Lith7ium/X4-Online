@@ -1,5 +1,8 @@
 """Offline orchestration and final-evidence checks; no X4 execution."""
 import argparse
+import json
+import socket
+import time
 from pathlib import Path
 import sys
 import tempfile
@@ -85,5 +88,69 @@ class MultiPair(unittest.TestCase):
   for bad in ([events[0]], [events[0],{**events[1],'index':events[0]['index']}],
               [events[0],{**events[1],'sector_macro':'missing'}]):
    with self.assertRaises(ValueError):c._validate_result({**result,'events':bad})
+
+class ContinuousPair(unittest.TestCase):
+ def test_progress_preserves_completed_prefix_and_fences_bad_next(self):
+  c=m.Coordinator({'sector_a':(1,)},defer_source_ack=True,continuous=True)
+  self.addCleanup(c.cleanup_after_owned_processes)
+  for seq in range(1,11):
+   event={'event_sequence':seq,'index':m.archive.COUNT+seq,'sector_macro':'sector_a','macro':'ship_a','faction':'argon'}
+   c._accept_progress({'event':'progress','completed':event},128)
+  self.assertEqual(len(c.progress),10)
+  bad={**event,'event_sequence':11,'index':m.archive.COUNT+11,'sector_macro':'unknown'}
+  with self.assertRaises(ValueError):c._accept_progress({'event':'progress','completed':bad},128)
+  self.assertEqual(len(c.progress),10)
+  terminal={'event':'result','ok':True,'tcp_admitted':True,'tcp_job_receipt':True,'source_md_ack_observed':True,
+            'client_md_ffi_asserted_by_owner':True,'synthetic_server_checkpoint_and_admission':True,
+            'source_activation_is_birth':False,'descriptor_atomic':False,'frame_identity_proven':False,
+            'snapshot_finished':True,'completed_count':10}
+  c._validate_result(terminal);c.result=terminal;c.tickets['client']={}
+  source=b'[X4LAN] AUTH_SOURCE_SINGLE STATE binding 10\n[X4LAN] AUTH_SOURCE_SINGLE STATE observing 10\n[X4LAN] AUTH_SOURCE_SINGLE STATE finishing 12\n[X4LAN] AUTH_SOURCE_SINGLE STATE done 12\n'
+  lines=[m.client_evidence.base.load.TAG.decode()+'pause_observed|x',m.client_evidence.TAG+'RUNNING 10']
+  lines += [m.client_evidence.TAG+'LOCAL_APPLIED '+str(m.archive.COUNT+seq)+' '+str(10+seq) for seq in range(1,11)]
+  with patch.object(m.client_evidence.pair,'load_observation',return_value={'loaded':True}):
+   self.assertTrue(c.verify_final({'server':source,'client':('\n'.join(lines)+'\n').encode()}))
+   with self.assertRaises(ValueError):c.verify_final({'server':source,'client':('\n'.join(lines[:-1])+'\n').encode()})
+  with self.assertRaises(ValueError):c._validate_result({**terminal,'completed_count':11})
+
+class ProgressFraming(unittest.TestCase):
+ def test_burst_over_twenty_frames_needs_no_per_byte_guard(self):
+  a,b=socket.socketpair();self.addCleanup(a.close);self.addCleanup(b.close)
+  values=[{'event':'progress','completed':{'event_sequence':i,'index':m.archive.COUNT+i,
+           'sector_macro':'sector_a','macro':'ship_a','faction':'argon'}} for i in range(1,26)]
+  b.sendall(b''.join(json.dumps(v).encode()+b'\n' for v in values))
+  reader=m.ProgressFrames(a);checks=[]
+  for value in values:self.assertEqual(json.loads(reader.read(time.monotonic()+2,lambda:checks.append(1))),value)
+  self.assertLessEqual(len(checks),30)
+ def test_buffered_frame_cannot_bypass_guard(self):
+  a,b=socket.socketpair();self.addCleanup(a.close);self.addCleanup(b.close)
+  b.sendall(b'first\nsecond\n');reader=m.ProgressFrames(a)
+  self.assertEqual(reader.read(time.monotonic()+2,lambda:None),b'first')
+  def bad():raise RuntimeError('guard failed')
+  with self.assertRaises(RuntimeError):reader.read(time.monotonic()+2,bad)
+  self.assertEqual(list(reader.available()),[b'second'])
+ def test_terminal_frame_retains_extra_buffer_for_rejection(self):
+  a,b=socket.socketpair();self.addCleanup(a.close);self.addCleanup(b.close)
+  b.sendall(b'{"event":"result"}\ntrailing\n');reader=m.ProgressFrames(a)
+  self.assertEqual(reader.read(time.monotonic()+2,lambda:None),b'{"event":"result"}')
+  self.assertNotEqual(reader.buffer,b'')
+ def test_guard_fault_recovers_queued_complete_frames_only(self):
+  a,b=socket.socketpair();self.addCleanup(a.close);self.addCleanup(b.close)
+  values=[{'event':'progress','completed':{'event_sequence':i,'index':m.archive.COUNT+i,
+           'sector_macro':'sector_a','macro':'ship_a','faction':'argon'}} for i in range(1,26)]
+  b.sendall(b''.join(json.dumps(v).encode()+b'\n' for v in values)+b'{"event":')
+  reader=m.ProgressFrames(a);checks=[]
+  def guard():
+   checks.append(1)
+   if len(checks)==2:raise RuntimeError('context failed')
+  with self.assertRaises(RuntimeError):reader.read(time.monotonic()+2,guard)
+  recovered=[json.loads(frame) for frame in reader.available()]
+  self.assertEqual(recovered,values)
+  coord=m.Coordinator({'sector_a':(1,)},defer_source_ack=True,continuous=True)
+  self.addCleanup(coord.cleanup_after_owned_processes)
+  for value in recovered:coord._accept_progress(value,len(json.dumps(value)))
+  self.assertEqual(len(coord.progress),25)
+  with self.assertRaises(ValueError):coord._accept_progress(recovered[-1],128)
+  self.assertEqual(reader.buffer,b'{"event":')
 
 if __name__=='__main__':unittest.main()

@@ -181,6 +181,15 @@ artificial client seed were used. This does not establish birth detection,
 frame equivalence, complete coverage or playable multiplayer. See [the two-event
 record](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#two-consecutive-source-events).
 
+The first continuous-window native diagnostic failed before `FINISHED`. Its
+client X4 log records 19 local applications (10055–10073) followed by a
+generic owner error; the source log samples 20 `delivering` states. The saved
+worker result contains only two completed progress records, and later client
+logs do not prove TCP or source acknowledgements. The last event outcome and
+failure cause remain unknown; owned-process cleanup was confirmed. A slow
+bytewise supervisor reader is a possible explanation for the short saved
+prefix, not a proven reconstruction. See [the failed diagnostic](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#continuous-window-diagnostic).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

@@ -30,4 +30,7 @@ class Install(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             lib=Path(tmp)/'fake.so'
             subprocess.run(['cc','-shared','-fPIC','-O2',str(ROOT/'tests/fixtures/multi_create_running_owner_abi.c'),'-o',str(lib)],check=True,capture_output=True)
-            subprocess.run(['luajit','tests/authority_participant_job_session.lua'],cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(lib)),check=True,capture_output=True,text=True,timeout=5)
+            for mode in ('0','1','2'):
+                env=dict(os.environ,LD_PRELOAD=str(lib))
+                if mode!='0':env['TEST_CLIENT_FAULT']=mode
+                subprocess.run(['luajit','tests/authority_participant_job_session.lua'],cwd=ROOT,env=env,check=True,capture_output=True,text=True,timeout=5)

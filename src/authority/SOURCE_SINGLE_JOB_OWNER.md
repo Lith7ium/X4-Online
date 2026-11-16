@@ -51,8 +51,10 @@ configured finite number up to the real queue sequence limit; the separate
 host has observed an empty queue with matching observed and acknowledged counts.
 It then sends `S|lease|attempt|FINISHED|epoch|generation|count` once, after the
 last REARM. A count of zero is inconclusive; the empty queue is a point sample,
-not proof of complete event coverage. Continuous mode still has the configured
-owner timeout, bounded native queue and registry limits. A supervisor must read
+not proof of complete event coverage. After the GO handshake, continuous mode has no owner-wide lifetime deadline;
+individual host, descriptor and IPC operations remain bounded, and the external
+supervisor owns session/process lifetime. Bounded native queue and registry
+limits still apply. A supervisor must read
 the terminal message on the same exclusively owned socket and fail closed on
 loss or mismatch. The game may still have lost other events, and queue overflow
 or any guard, response, identity or timeout failure fences the whole run. No

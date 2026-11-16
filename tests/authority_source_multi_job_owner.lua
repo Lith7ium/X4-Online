@@ -1,7 +1,7 @@
 -- Actual FIFO host/probe + source IPC/gate, synthetic MD and two clients.
 local scenario=arg[1] or 'bounded'
-local continuous=scenario=='continuous' or scenario=='empty'
-local event_count=scenario=='empty' and 0 or 2
+local continuous=scenario=='continuous' or scenario=='empty' or scenario=='long' or scenario=='many'
+local event_count=scenario=='empty' and 0 or (scenario=='many' and 110 or 2)
 local invalidate=false
 local owner_module=dofile('src/authority/lua/source_single_job_owner.lua')
 local host_module=dofile('tools/dev/authority_job_registry_host.lua')
@@ -35,11 +35,11 @@ local function trigger(screen,op,args)
  return true
 end
 local function host_factory(report,source_acked,fail,finish)
- return host_module.new({enabled=true,epoch=epoch,baseline={},capacity=4,window=scenario=='empty' and 1 or 25,timeout=5,
+ return host_module.new({enabled=true,epoch=epoch,baseline={},capacity=128,window=scenario=='empty' and 1 or (scenario=='long' and 40 or (scenario=='many' and 180 or 25)),timeout=5,
   attach_saved_registry=true,exclusive_registry_consumer=true,expected_last=2,can_attach=function()return not running end,
   defer_ack=true,delivery_timeout=15,queue_acked=source_acked,expose_actor=true,probe=probe,
   register=function(n,fn)assert(not callbacks[n]);callbacks[n]=fn end,trigger=trigger,
-  convert64=function(v)return v end,to_lua_id=function(v)return tonumber(v)end,valid=function(v)return (v==42 or v==43) and not (invalidate and v==43) end,
+  convert64=function(v)return v end,to_lua_id=function(v)return tonumber(v)end,valid=function(v)return v>=42 and v<42+event_count and not (invalidate and v==43) end,
   clock=function()return now end,can_observe=function()return running end,report=report,done=function(summary)return finish(summary)end,fault=fail})
 end
 local descriptor_cb
@@ -60,7 +60,7 @@ if scenario=='empty' then
  assert(app:state()=='done' and out[#out]=='S|'..lease..'|'..attempt..'|FINISHED|'..epoch..'|'..gen..'|0' and acked==0)
  print('empty observation is inconclusive');return
 end
-for n=1,2 do
+for n=1,event_count do
  if n==2 and scenario=='known' then
   for _=1,12 do
    if app:state()=='failed' then break end
@@ -91,13 +91,14 @@ for n=1,2 do
  local oldops=#ops;for _=1,3 do tick()end;assert(#ops==oldops,'next head before REARM')
  incoming[#incoming+1]='P|'..lease..'|'..attempt..'|REARM|'..id;tick()
  assert(out[#out]=='S|'..lease..'|'..attempt..'|REARMED|'..id)
- assert(app:state()==((n==1 or continuous) and 'observing' or 'done'))
+ assert(app:state()==((n<event_count or continuous) and 'observing' or 'done'))
 end
 if continuous then
- now=28
+ now=scenario=='long' and 43 or (scenario=='many' and 182 or 28)
  for _=1,8 do if app:state()=='done' then break end;tick()end
- assert(app:state()=='done' and out[#out]=='S|'..lease..'|'..attempt..'|FINISHED|'..epoch..'|'..gen..'|2')
+ assert(app:state()=='done' and out[#out]=='S|'..lease..'|'..attempt..'|FINISHED|'..epoch..'|'..gen..'|'..event_count)
 end
-assert(requests[1]~=requests[2] and #requests[1]==32 and #requests[2]==32)
-assert(not fault and acked==2)
+local unique={}
+for _,id in ipairs(requests)do assert(#id==32 and not unique[id]);unique[id]=true end
+assert(#requests==event_count and not fault and acked==event_count)
 print('two FIFO heads delivered with per-event request IDs')

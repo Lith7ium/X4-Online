@@ -28,7 +28,8 @@ while time.monotonic()<end:
   if s is ctl:
    assert v[0]=='CMD' and v[-1]=='resume'
    ctl.send(('|'.join(['RECEIPT',v[1],v[2],v[3],v[4],'confirmed'])).encode())
-   candidate()
+   if count==0:job.send(('S|'+lease+'|'+attempt+'|FINISHED'+suffix+'|0').encode())
+   else:candidate()
   elif v[3]=='BOUND':job.send(('S|'+lease+'|'+attempt+'|ATTACHED'+suffix).encode())
   elif v[3]=='GO':job.send(('S|'+lease+'|'+attempt+'|GO_READY'+suffix).encode())
   elif v[3]=='BIND':
@@ -41,6 +42,7 @@ while time.monotonic()<end:
   elif v[3]=='REARM':
    job.send(('S|'+lease+'|'+attempt+'|REARMED|'+epoch+'|'+gen+'|'+str(seq)+'|'+str(10054+seq)).encode())
    if seq<count:seq+=1;candidate()
+   elif os.environ.get('CONTINUOUS')=='1':job.send(('S|'+lease+'|'+attempt+'|FINISHED'+suffix+'|'+str(seq)).encode())
   else:raise AssertionError(v)
 '''
 
@@ -52,12 +54,12 @@ def identity(proc):
     return {'pid':proc.pid,'start_ticks':int(fields[19]),'exe_dev':st.st_dev,'exe_ino':st.st_ino}
 
 class SourceWorker(unittest.TestCase):
-    def run_case(self,sector,count=1):
+    def run_case(self,sector,count=1,continuous=False):
         cc,cj,sc,sj=(udp() for _ in range(4))
         for s in (cc,cj,sc,sj):self.addCleanup(s.close)
         private,other=socket.socketpair();self.addCleanup(private.close);self.addCleanup(other.close)
         client=subprocess.Popen([sys.executable,'-c',CLIENT_SCRIPT],env=dict(os.environ,P=str(cc.getsockname()[1]),J=str(cj.getsockname()[1])))
-        source=subprocess.Popen([sys.executable,'-c',SOURCE_SCRIPT],env=dict(os.environ,CTL=str(sc.getsockname()[1]),JOB=str(sj.getsockname()[1]),SECTOR=sector,COUNT=str(count)),stdout=subprocess.PIPE)
+        source=subprocess.Popen([sys.executable,'-c',SOURCE_SCRIPT],env=dict(os.environ,CTL=str(sc.getsockname()[1]),JOB=str(sj.getsockname()[1]),SECTOR=sector,COUNT=str(count),CONTINUOUS='1' if continuous else '0'),stdout=subprocess.PIPE)
         def stop():
             for proc in (client,source):
                 if proc.poll() is None:proc.terminate()
@@ -69,19 +71,36 @@ class SourceWorker(unittest.TestCase):
            'job_epoch':'a'*32,'source_lease':'1'*32,'source_attempt':'2'*32,
            'source_control_lease':'3'*32,'source_world_epoch':'e'*32,'source_process':identity(source),
            'index':10055,'sectors':['sector_a']}
-        if count>1:c['max_events']=count
+        if continuous:c['continuous']=True
+        elif count>1:c['max_events']=count
         c=worker.config(json.dumps(c).encode())
         if sector=='sector_a':
             result=worker.run(cc,cj,sc,sj,private,c)
-            self.assertTrue(result['tcp_job_receipt']);self.assertTrue(result['source_md_ack_observed'])
+            self.assertEqual(result['tcp_job_receipt'],count>0);self.assertEqual(result['source_md_ack_observed'],count>0)
             self.assertTrue(result['synthetic_server_checkpoint_and_admission'])
             self.assertFalse(result['source_activation_is_birth'])
-            if count==1:self.assertEqual(result['sector_macro'],'sector_a')
+            if continuous:
+                self.assertTrue(result['snapshot_finished']);self.assertEqual(result['completed_count'],count)
+                other.setblocking(False);frames=other.recv(65536).decode().splitlines() if count else []
+                self.assertEqual([json.loads(f)['completed']['event_sequence'] for f in frames],list(range(1,count+1)))
+            elif count==1:self.assertEqual(result['sector_macro'],'sector_a')
             else:self.assertEqual([(e['event_sequence'],e['index']) for e in result['events']],[(1,10055),(2,10056)])
         else:
             with self.assertRaises(ValueError):worker.run(cc,cj,sc,sj,private,c)
             source.terminate();source.wait(timeout=3)
-            self.assertEqual(source.stdout.read(),b'' if count==1 else b'BIND\n') # no BIND for the unwitnessed event
+            self.assertEqual(source.stdout.read(),b'BIND\n'*(count-1)) # no BIND for the unwitnessed event
+            if continuous:
+                other.setblocking(False);frames=other.recv(65536).decode().splitlines()
+                self.assertEqual([json.loads(f)['completed']['event_sequence'] for f in frames],list(range(1,count)))
+
+    def test_continuous_more_than_eight_events_then_snapshot(self):
+        self.run_case('sector_a',10,True)
+
+    def test_continuous_empty_snapshot(self):
+        self.run_case('sector_a',0,True)
+
+    def test_continuous_missing_witness_preserves_completed_frames(self):
+        self.run_case('other_sector',10,True)
 
     def test_source_event_flows_through_real_admitted_tcp_and_back_to_source_ack(self):
         self.run_case('sector_a')

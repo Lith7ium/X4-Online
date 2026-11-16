@@ -103,13 +103,19 @@ class ExperimentalSourceJobBridge:
         if readable or bad:raise RuntimeError('unexpected queued source packet')
         self._check(deadline)
 
-    def run_one(self, *, allow_finished=False):
-        if type(allow_finished) is not bool:raise ValueError('invalid completion option')
+    def run_one(self, *, allow_finished=False, wait_without_deadline=False):
+        if (type(allow_finished) is not bool or type(wait_without_deadline) is not bool or
+            wait_without_deadline and not allow_finished):
+            raise ValueError('invalid completion or idle option')
         if threading.get_ident()!=self._owner or self._state!='idle':
             self._state='failed';raise RuntimeError('source bridge reentrant or unavailable')
-        deadline=time.monotonic()+self._timeout;self._state='candidate'
+        deadline=float('inf') if wait_without_deadline else time.monotonic()+self._timeout
+        self._state='candidate'
         try:
             body=self._recv(deadline)
+            # The unbounded option covers idle waiting only; once any datagram
+            # arrives every membership and delivery step is freshly bounded.
+            if wait_without_deadline:deadline=time.monotonic()+self._timeout
             if body and body[0]=='FINISHED':
                 if (not allow_finished or len(body)!=4 or body[1]!=self._epoch or
                     body[2]!=self._generation or body[3]!=str(self._last)):

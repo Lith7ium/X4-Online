@@ -126,12 +126,22 @@ Reservations do not detect duplicated file descriptors or direct raw socket
 reads retained outside these components. The supervisor must prohibit both.
 
 The Python bridge can optionally accept the source owner's correlated
-`FINISHED` after an observation window drains: call `run_one(allow_finished=True)`
+`FINISHED` after the host samples an empty queue following the observation
+window: call `run_one(allow_finished=True)`
 and a `None` result means the reported count equals the number of this bridge's
 completed ACK/REARM cycles. The bridge then enters `finished` and cannot read
 another event. It samples TCP quietness, a nonempty admitted set, continuity
 with the last event's membership, and source-socket quietness before accepting
-the completion. These are point-in-time checks, not proof of future liveness;
+the completion. The producer can add events during or after that sample; it is
+not a lossless drain or a session-shutdown proof. These are point-in-time checks,
+not proof of future liveness;
 count zero does not establish complete world coverage. Without explicit opt-in,
 `FINISHED` is a protocol failure. Source owner and bridge continuous operation
 remain offline-tested; no native continuous-run result is asserted.
+
+For an externally supervised continuous session, `run_one(allow_finished=True,
+wait_without_deadline=True)` permits an idle interval without a bridge-wide
+deadline. The supervisor guard is still sampled throughout that wait. On the
+first received datagram, the normal bounded operation deadline starts afresh;
+this option does not permit a stalled delivery or source ACK. The supervisor
+must itself stop the session and fence processes and sockets when required.

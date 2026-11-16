@@ -13,7 +13,7 @@ class SourceSingle(unittest.TestCase):
         subprocess.run(['luajit','tests/authority_source_multi_job_owner.lua'],cwd=ROOT,
                        check=True,capture_output=True,text=True,timeout=5)
     def test_continuous_waits_for_window_and_empty_snapshot(self):
-        for scenario in ('continuous', 'empty'):
+        for scenario in ('continuous', 'empty', 'long', 'many'):
             with self.subTest(scenario=scenario):
                 subprocess.run(['luajit','tests/authority_source_multi_job_owner.lua',scenario],cwd=ROOT,
                                check=True,capture_output=True,text=True,timeout=5)

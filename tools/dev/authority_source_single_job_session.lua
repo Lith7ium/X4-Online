@@ -25,6 +25,7 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
     end))
    local owner_cfg={enabled=true,
     sequence=1,index=cfg.authority_source_baseline+1,max_events=cfg.authority_source_max_events,
+    continuous=cfg.authority_source_continuous,
     lease=cfg.authority_source_lease,attempt=cfg.authority_source_attempt,epoch=cfg.authority_source_epoch,
     generation=cfg.authority_source_generation,descriptor_request=cfg.authority_source_descriptor_request,
     capacity=cfg.authority_source_capacity,

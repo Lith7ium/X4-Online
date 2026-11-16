@@ -30,8 +30,9 @@ def config(raw):
     required={'version','epoch','lease','attempt','generation','participant_lease','client_process','deadline',
               'job_epoch','source_lease','source_attempt','source_control_lease','source_world_epoch',
               'source_process','index','sectors'}
-    if type(c) is not dict or set(c) not in (required,required|{'max_events'}) or type(c['version']) is not int or c['version']!=1:
+    if type(c) is not dict or set(c) not in (required,required|{'max_events'},required|{'continuous'}) or type(c['version']) is not int or c['version']!=1:
         raise ValueError('invalid source worker configuration')
+    if 'continuous' in c and c['continuous'] is not True:raise ValueError('continuous must be explicitly enabled')
     if 'max_events' in c and (type(c['max_events']) is not int or not 2<=c['max_events']<=8):
         raise ValueError('invalid bounded event count')
     names=('epoch','lease','attempt','generation','participant_lease','job_epoch','source_lease',
@@ -109,23 +110,32 @@ def run(client_control,client_job,source_control,source_job,private,c):
         ctl.timeout=min(20,c['deadline']-time.monotonic()-30)
         if ctl.timeout<=0:raise TimeoutError('insufficient source resume budget')
         guard();ctl.resume((1,));guard()
-        events=[]
-        for seq in range(1,c.get('max_events',1)+1):
-            detail=bridge.run_one();guard()
+        events=[];seq=1;continuous=c.get('continuous') is True
+        while continuous or seq<=c.get('max_events',1):
+            detail=bridge.run_one(allow_finished=continuous);guard()
+            if detail is None:break
             if (detail.get('source_ack_observed') is not True or tuple(detail.get('members',()))!=tuple(members) or
                 detail['event']['sequence']!=seq or detail['event']['index']!=c['index']+seq-1):
                 raise RuntimeError('source job or source Ack differs')
-            event=detail['event'];events.append({'event_sequence':event['sequence'],'index':event['index'],
+            event=detail['event'];record={'event_sequence':event['sequence'],'index':event['index'],
                 'sector_macro':event['descriptor']['sector_macro'],'macro':event['descriptor']['macro'],
-                'faction':event['descriptor']['faction']})
+                'faction':event['descriptor']['faction']}
+            if continuous:
+                payload=json.dumps({'event':'progress','completed':record},separators=(',',':')).encode('ascii')
+                send_frame(private,payload,c['deadline'],guard)
+            else:events.append(record)
+            seq+=1
         result={'event':'result','ok':True,'tcp_admitted':True,'tcp_job_receipt':True,'source_md_ack_observed':True,
                 'client_md_ffi_asserted_by_owner':True,'synthetic_server_checkpoint_and_admission':True,
                 'source_activation_is_birth':False,'descriptor_atomic':False,'frame_identity_proven':False}
-        if 'max_events' in c:result['events']=events
+        if continuous:
+            if seq==1:result.update(tcp_job_receipt=False,source_md_ack_observed=False,client_md_ffi_asserted_by_owner=False)
+            result.update(snapshot_finished=True,completed_count=seq-1)
+        elif 'max_events' in c:result['events']=events
         else:result.update(events[0])
         return result
     return client_worker.run(client_control,client_job,private,c,None,delivery_action=delivery_action,
-                             extra_guard=source_guard,expected_jobs=c.get('max_events',1))
+                             extra_guard=source_guard,expected_jobs=None if c.get('continuous') is True else c.get('max_events',1))
 
 
 def main():

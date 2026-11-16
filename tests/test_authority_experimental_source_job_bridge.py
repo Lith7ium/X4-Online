@@ -57,15 +57,18 @@ class SourceBridgeTest(unittest.TestCase):
                      'guard':wrap(guard),'send':wrap(send),'release':wrap(release)}))
                 event={'epoch':self.epoch,'generation':self.generation,'sequence':1,'index':10055,
                        'descriptor':{'macro':'ship_test_macro','faction':'pioneers','sector_macro':'sector_a','x':1,'y':2,'z':3}}
-                if mode=='finished_zero':
+                if mode in ('finished_zero','finished_zero_delayed','finished_zero_guard'):
+                    if mode in ('finished_zero_delayed','finished_zero_guard'):time.sleep(.2)
                     sock.send(('S|'+self.lease+'|'+self.attempt+'|FINISHED|'+self.epoch+'|'+self.generation+'|0').encode())
                     return
+                if mode=='late_candidate_no_ready':time.sleep(.2)
                 candidate_ref.append(table(event));assert app['candidate'](app,candidate_ref[0])
                 rearmed=0
                 sock.settimeout(.1)
                 while not self.stop.is_set():
                     try:packet=sock.recv(4097).decode()
                     except socket.timeout:continue
+                    if mode=='late_candidate_no_ready' and '|BIND|' in packet:continue
                     if mode=='no_rearm' and '|REARM|' in packet:continue
                     if mode=='wrong_receipt' and '|RECEIPT|' in packet:
                         packet=packet.replace('peer_1','peer_9')
@@ -106,8 +109,9 @@ class SourceBridgeTest(unittest.TestCase):
         source=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);source.bind(('127.0.0.1',0))
         server.connect(source.getsockname());source.connect(server.getsockname())
         self.start_source(source,mode)
-        refused=[]
+        refused=[];guard_start=time.monotonic()
         def supervisor_guard():
+            if mode=='finished_zero_guard' and time.monotonic()-guard_start>.08:return False
             if mode=='guard_reentry':
                 for action in (self.base.case.host.tick,self.base.case.control.poll):
                     try:action()
@@ -115,12 +119,19 @@ class SourceBridgeTest(unittest.TestCase):
                     else:raise AssertionError('reentrant host/control access was allowed')
             return True
         bridge=ExperimentalSourceJobBridge(delivery,server,enabled=True,lease=self.lease,attempt=self.attempt,
-                   epoch=self.epoch,generation=self.generation,guard=supervisor_guard,timeout=2)
+                   epoch=self.epoch,generation=self.generation,guard=supervisor_guard,timeout=.05 if mode=='finished_zero_delayed' else (.3 if mode=='late_candidate_no_ready' else 2))
         if mode=='double_bind':
             with self.assertRaises(ValueError):ExperimentalSourceJobBridge(delivery,server,enabled=True,lease=self.lease,attempt=self.attempt,
                    epoch=self.epoch,generation=self.generation,guard=lambda:True,timeout=2)
-        if mode=='finished_zero':
-            self.assertIsNone(bridge.run_one(allow_finished=True));self.assertEqual(self.releases,[]);bridge.close();return
+        if mode=='late_candidate_no_ready':
+            with self.assertRaises(RuntimeError):bridge.run_one(allow_finished=True,wait_without_deadline=True)
+            self.assertEqual(bridge.state,'failed');self.assertEqual(self.releases,[]);return
+        if mode=='finished_zero_guard':
+            with self.assertRaises(RuntimeError):bridge.run_one(allow_finished=True,wait_without_deadline=True)
+            self.assertEqual(bridge.state,'failed');return
+        if mode in ('finished_zero','finished_zero_delayed'):
+            self.assertIsNone(bridge.run_one(allow_finished=True,wait_without_deadline=mode=='finished_zero_delayed'))
+            self.assertEqual(self.releases,[]);bridge.close();return
         if mode in ('ok','double_bind','mutate_guard','mutate_send','guard_reentry','two_events','finished','bad_finished','unexpected_finished','duplicate_finished','finish_control_not_quiet'):
             result=bridge.run_one();self.assertTrue(result['source_ack_observed']);self.assertEqual(len(result['members']),2)
             self.assertEqual(result['event']['descriptor']['x'],1)
@@ -160,6 +171,9 @@ class SourceBridgeTest(unittest.TestCase):
     def test_guard_cannot_reenter_host_or_control_reader(self):self.exercise('guard_reentry')
     def test_immediate_next_candidate_waits_for_rearm(self):self.exercise('two_events')
     def test_empty_window_completion_does_not_claim_delivery(self):self.exercise('finished_zero')
+    def test_idle_wait_does_not_consume_operation_deadline(self):self.exercise('finished_zero_delayed')
+    def test_idle_wait_still_checks_supervisor_guard(self):self.exercise('finished_zero_guard')
+    def test_idle_candidate_still_has_operation_timeout(self):self.exercise('late_candidate_no_ready')
     def test_correlated_finished_after_rearm(self):self.exercise('finished')
     def test_duplicate_finished_fences_host(self):self.exercise('duplicate_finished')
     def test_finished_rejects_non_quiet_tcp(self):self.exercise('finish_control_not_quiet')

@@ -25,7 +25,8 @@ UI=(('tools/dev/authority_checkpoint_marker_probe.lua','authority_checkpoint_mar
 def install(case,profile,ticket,settings):
     required={'control_port','control_lease','job_port','lease','attempt','epoch','generation','descriptor_request',
               'timeout','host_timeout','window','capacity','baseline'}
-    if type(settings) is not dict or set(settings) not in (required,required|{'max_events'}):raise ValueError('invalid source settings')
+    if type(settings) is not dict or set(settings) not in (required,required|{'max_events'},required|{'continuous'}):raise ValueError('invalid source settings')
+    if 'continuous' in settings and settings['continuous'] is not True:raise ValueError('continuous must be explicitly enabled')
     if 'max_events' in settings and (type(settings['max_events']) is not int or not 2<=settings['max_events']<=8):raise ValueError('invalid bounded source count')
     keys=('control_lease','lease','attempt','epoch','generation','descriptor_request')
     if any(type(settings[k]) is not str or not re.fullmatch(r'[0-9a-f]{32}',settings[k]) for k in keys):raise ValueError('invalid source token')
@@ -50,6 +51,7 @@ def install(case,profile,ticket,settings):
     text=text[:-2]+(',authority_marker_phase="load",authority_expected_marker='+literal(archive.MARKER)+
         ',authority_source_single_job_session=true'+
         (',authority_source_max_events='+str(settings['max_events']) if 'max_events' in settings else '')+
+        (',authority_source_continuous=true' if settings.get('continuous') is True else '')+
         ''.join(',authority_source_'+k+'='+literal(settings[k]) for k in keys)+
         ''.join(',authority_source_'+k+'='+format(settings[k],'.17g') for k in ('control_port','job_port','timeout','host_timeout','window','capacity','baseline'))+'}\n')
     config.write_text(text,encoding='ascii');config.chmod(0o600)
