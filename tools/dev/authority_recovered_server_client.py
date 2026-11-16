@@ -125,7 +125,8 @@ def verify_join_offer(ticket, marker, baseline):
 
 
 def client_registry_enabled(args):
-    return getattr(args, 'registry_status', False) is True or getattr(args, 'registry_enroll', False) is True
+    return (getattr(args, 'registry_status', False) is True or getattr(args, 'registry_enroll', False) is True
+            or getattr(args, 'registry_witness_join', False) is True)
 
 
 def read_registry_while_pumping(participant, baseline, deadline, check):
@@ -278,6 +279,14 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     if registry_observation is not None:
         client_registry, nonce, status = registry_observation
         protected += client_registry.install(case, nonce, status)
+        if getattr(args, 'registry_witness_join', False):
+            # Keep the saved witness script present, without asserting that the
+            # client's loaded references correspond to the server's objects.
+            import shutil
+            witness_script = case/'extensions/x4_lan_lab/md/authority_registry_witness.xml'
+            if witness_script.exists() or witness_script.is_symlink(): raise ValueError('client witness script already present')
+            shutil.copyfile(Path(__file__).resolve().with_name('authority_registry_witness.xml'), witness_script)
+            protected.append(witness_script)
     expected = {path:base.live.sha(path) for path in protected}
     command = base.load.readonly_save_command(case, game, binds, lock, args.display, auth, user, args.seed, target)
     pos = command.index('--die-with-parent')

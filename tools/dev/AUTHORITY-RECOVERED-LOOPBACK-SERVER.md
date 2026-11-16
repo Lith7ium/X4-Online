@@ -463,3 +463,41 @@ X4's serializer and originate from the same objects, so a consistent joint
 remapping would also pass: the test does not independently prove historical
 object identity, complete universe coverage, or cross-client synchronization.
 No client was admitted, and gameplay, Windows and Internet were not tested.
+
+### Prepared private witness join experiment
+
+The opt-in `--registry-witness-join --diagnostic-client` path accepts a clean,
+confirmed `create` witness source from this supervisor with the matching saved
+scripts. It verifies the server-side witness after recovery, checks the saved
+registry and witness relationship at each checkpoint, and uses the existing
+one-client load, admission, resume and last-disconnect save path. The listener
+is bound to loopback and is never published; after the private client exits,
+no further clients are admitted. A saved witness script is installed on the
+client, but the existing client observation checks only registry epoch and
+count, not the witness or cross-process object identity.
+
+This diagnostic deliberately permits changed saved raw component IDs, whose
+relationship is checked against the saved witness in this experiment. It does
+not change the regular recovery fingerprint guard or establish independent
+historical identity. A confirmed checkpoint pointer alone is not usable
+provenance: cleanup and supervisor result must also succeed; join outputs do
+not satisfy the `create` witness-source requirement or ordinary recovery's
+script-set guard. On isolated Linux runs, the server recovered the source and
+verified the 10,082-entry witness, but neither attempted join reached a client
+X4 process. One run ended with a disconnected remote-load helper; another
+timed out after requesting a server save. The latter did not confirm its
+candidate checkpoint. Both runs reported owned-process cleanup. Neither is
+evidence of successful admission or gameplay.
+
+The remote-load helper's deadline is now bounded to its own accepted range.
+The recovery probe also stops periodic HELLO packets after activation, and the
+local bridge drains queued HELLOs before a new command. A loopback UDP test
+showed that enough queued HELLOs can otherwise drop the subsequent receipt;
+the precise cause of the native timeout was not recorded and is not proven.
+
+The `verify` witness path uses a pinned source guard after its full initial
+validation. Repeated checks hash the compressed source and inspect the
+confirmed pointers, manifest and file identities, without repeatedly parsing
+the same XML. Source-script and staged-copy checks remain separate. This guard
+does not fence a writer and does not establish historical object identity;
+the supervisor must retain its existing source and process isolation.

@@ -14,6 +14,7 @@ from pathlib import Path
 from .marker_evidence import verify_saved_marker
 
 _HEX = re.compile(r'[0-9a-f]{32}\Z')
+_MAX_QUEUED_PACKETS = 4096
 
 
 class LocalControlBridge:
@@ -51,6 +52,19 @@ class LocalControlBridge:
         self._poisoned = True
         old_timeout = self._sock.gettimeout()
         try:
+            # Save verification can leave periodic HELLOs filling the receive
+            # queue. Drain only known pre-command traffic on this owner thread;
+            # a stale response from the peer makes the state indeterminate.
+            self._sock.setblocking(False)
+            hello = f'HELLO|{self._lease}|{self._epoch}'.encode('ascii')
+            for _ in range(_MAX_QUEUED_PACKETS):
+                try: data, peer = self._sock.recvfrom(769)
+                except BlockingIOError: break
+                if peer == self._peer and data != hello:
+                    raise RuntimeError('unexpected native control receipt before command')
+            else:
+                raise RuntimeError('native control receive queue did not drain')
+            self._sock.settimeout(old_timeout)
             self._sock.sendto(command.encode('ascii'), self._peer)
             deadline = time.monotonic() + self._timeout
             while True:

@@ -113,6 +113,38 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
     return fixture
 
 
+
+def witness_mode(args):
+    """Allow joining a witness source only in the explicit single-client probe."""
+    join = getattr(args, 'registry_witness_join', False)
+    if type(join) is not bool or (join and (
+            getattr(args, 'diagnostic_client', False) is not True or
+            getattr(args, 'registry_witness', None) is not None or
+            getattr(args, 'registry_enroll', False) or getattr(args, 'diagnostic_overlap', False) or
+            getattr(args, 'diagnostic_clients', None) is not None)):
+        raise ValueError('witness join requires exactly one diagnostic client')
+    phase = 'verify' if join else getattr(args, 'registry_witness', None)
+    if phase not in (None, 'create', 'verify'):
+        raise ValueError('invalid witness phase')
+    if phase and not join and (getattr(args, 'registry_enroll', False) or
+            getattr(args, 'diagnostic_client', False) or getattr(args, 'diagnostic_overlap', False) or
+            getattr(args, 'diagnostic_clients', None) is not None):
+        raise ValueError('witness diagnostic cannot admit clients')
+    return join, phase
+
+
+def verify_witness_source(store, checkpoint, guard, source_scripts):
+    """Fence the pinned source and the witness scripts at every owner guard."""
+    if guard is None:
+        # Create diagnostics start from a registry without a sealed witness.
+        if store.latest_marked_confirmed()!=checkpoint or live.sha(checkpoint.path)!=checkpoint.sha256:
+            raise ValueError('witness diagnostic source changed')
+    elif guard.check() is not True:
+        raise ValueError('witness source guard did not confirm source')
+    if any(read_evidence(path)!=data for path,data in source_scripts.items()):
+        raise ValueError('witness diagnostic source scripts changed')
+    return True
+
 class _WitnessFinished(Exception):
     """Private, no-listener diagnostic completed its isolated checkpoint."""
 
@@ -344,16 +376,12 @@ def run(args):
     diagnostics = []
     active_clients = []
     try:
-        witness_phase = getattr(args,'registry_witness',None)
-        if witness_phase not in (None,'create','verify'):
-            raise ValueError('invalid witness phase')
-        if witness_phase and (getattr(args,'registry_enroll',False) or getattr(args,'diagnostic_client',False) or
-                getattr(args,'diagnostic_overlap',False) or getattr(args,'diagnostic_clients',None) is not None):
-            raise ValueError('witness diagnostic cannot admit clients')
+        witness_join, witness_phase = witness_mode(args)
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage)
         if source_store.directory == source.DEFAULT_STORE.resolve():
+            if witness_join: raise ValueError('witness join requires an own verified source')
             fixture = source.verify(source_store.directory, checkpoint, profile)
         else:
             fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=(getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or bool(witness_phase)), witness_source=(witness_phase=='verify'))
@@ -381,6 +409,7 @@ def run(args):
                     'limit':200000,'save_path':str(profile/'save')}
             protected.extend(registry_check.install(case,registry_nonce,registry_expected,enroll=enrollment))
         witness_check = None
+        witness_source_guard = None
         if witness_phase:
             if registry_expected[0]!='ready':raise ValueError('witness requires a populated registry')
             import authority_recovery_registry_witness as witness_check
@@ -391,6 +420,12 @@ def run(args):
             if witness_phase=='verify':
                 source_scripts.append(source_store.directory.parent/'case/extensions/x4_lan_lab/md/authority_registry_witness.xml')
             witness_source_scripts={p:read_evidence(p) for p in source_scripts}
+            if witness_phase=='verify':
+                import authority_witness_source_guard
+                witness_source_guard=authority_witness_source_guard.WitnessSourceGuard(source_store,checkpoint)
+                if witness_source_guard.status!=registry_expected:
+                    raise ValueError('witness source status changed during initialization')
+            verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
             witness_nonce=secrets.token_hex(16)
             protected.extend(witness_check.install(case,witness_nonce,registry_expected[1],registry_expected[2],witness_phase))
         clock = None
@@ -437,10 +472,8 @@ def run(args):
             if identity is None: raise RuntimeError('recovery receipt without owned X4')
             if live.sha(target) != checkpoint.sha256 or any(live.sha(p) != h for p,h in expected.items()):
                 raise ValueError('recovery save or protected configuration changed')
-            if witness_check and (source_store.latest_marked_confirmed()!=checkpoint or
-                    live.sha(checkpoint.path)!=checkpoint.sha256 or
-                    any(read_evidence(p)!=data for p,data in witness_source_scripts.items())):
-                raise ValueError('witness diagnostic source changed')
+            if witness_check:
+                verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
             check()
         peer = bridge.activate(sock, watch, lease, epoch, deadline, check, verify)
         if registry_check is not None:
@@ -479,7 +512,7 @@ def run(args):
                 'count':registry_expected[2] if len(registry_expected)>2 else None,
                 'mapping_sha256':registry_expected[3] if len(registry_expected)>3 else None,
                 'coverage_proven':False,'native_load_bytes_proven':False}
-        if witness_check:
+        if witness_check and not witness_join:
             # A private checkpoint solely to supply the second diagnostic process.
             # No TCP listener, client admission, or normal world session exists here.
             check()
@@ -596,6 +629,19 @@ def run(args):
                                              departure_checkpoint_sha256=baseline.sha256,
                                              departure_checkpoint_marker=baseline.marker)
                 results.append(diagnostic_result)
+            if witness_join:
+                baseline = diagnostic_client.settle_departure(host, world, control, diagnostic.server_tcp, deadline, verify_diagnostic,
+                    diagnostic_result['client_ticket'], diagnostic_result['client_loaded_marker'])
+                listener.close(); listener = None
+                final = settle_shutdown(control, world, store, check); control = None
+                if final != baseline: raise ValueError('witness join final checkpoint changed')
+                verify()
+                result.update(success=True, final_world_state='paused', final_checkpoint_id=final.checkpoint_id,
+                    final_checkpoint_sha256=final.sha256, diagnostic_client=results[0],
+                    witness_join={'server_witness_verified':True,'client_witness_verified':False,
+                        'historical_identity_proven':False,'cross_process_identity_proven':False,
+                        'loopback_only':True,'no_further_client_admission':True})
+                raise _WitnessFinished()
             if count == 1: result['diagnostic_client'] = results[0]
             else: result['diagnostic_clients'] = results
         # Publish only after the private diagnostic socket has been accepted.
@@ -654,10 +700,8 @@ def run(args):
                 if (live.sha(target) != checkpoint.sha256 or
                         any(live.sha(path) != digest for path,digest in expected.items())):
                     raise ValueError('final protected recovery inputs changed')
-                if witness_check and (source_store.latest_marked_confirmed()!=checkpoint or
-                        live.sha(checkpoint.path)!=checkpoint.sha256 or
-                        any(read_evidence(p)!=data for p,data in witness_source_scripts.items())):
-                    raise ValueError('final witness source changed')
+                if witness_check:
+                    verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
             except BaseException as error:
                 result.update(success=False, error='final recovery evidence invalid: '+str(error))
         if lockbox:
@@ -707,6 +751,7 @@ def main():
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')
     parser.add_argument('--registry-witness',choices=('create','verify'),help='isolated paused diagnostic; never admit clients')
+    parser.add_argument('--registry-witness-join',action='store_true',help='private one-client witness join experiment; not identity proof')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

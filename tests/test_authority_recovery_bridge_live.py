@@ -119,6 +119,9 @@ class RecoveryBridgeTests(unittest.TestCase):
             self.assertLess(bridge.index('if not X4LAN_AUTHORITY_RECOVERY_READY()'),bridge.index('if not activated then'))
             self.assertLess(bridge.index('if not activated then'),bridge.index('if not bridge then'))
             self.assertIn("assert(C.IsGamePaused()",bridge)
+            self.assertIn("net:send('RECOVERY_READY|'",bridge)
+            self.assertIn("net:send('ACTIVATED|'",bridge)
+            self.assertNotIn("net:send('HELLO|'",bridge)
             self.assertIn("return state=='done' and not failed",recover)
             if shutil.which('luajit'):
                 for f in ('authority_checkpoint_marker_probe.lua','authority_recovery_probe.lua','authority_world_bridge_probe.lua'):

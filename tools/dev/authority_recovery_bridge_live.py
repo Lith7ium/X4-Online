@@ -89,6 +89,15 @@ end)
  end
 """
     probe = replace_once(probe, ' if not bridge then\n', gate+' if not bridge then\n')
+    # Recovery has its own READY/ACTIVATED handshake. Afterwards the peer is
+    # already known, so periodic HELLO traffic serves no purpose and can fill
+    # the supervisor's UDP receive queue during synchronous save verification.
+    # Keep the ordinary, non-recovery world-bridge probe unchanged.
+    probe = replace_once(probe, """ if now>=next_hello then
+  assert(net:send('HELLO|'..cfg.authority_control_lease..'|'..cfg.authority_world_epoch)==true)
+  next_hello=now+.25
+ end
+""", '')
     (ui/'authority_world_bridge_probe.lua').write_text(probe)
     files = [*extension.BASE_UI, 'ui/authority_checkpoint_marker_probe.lua', 'ui/authority_recovery_probe.lua',
              'ui/authority_control_state.lua', 'ui/x4_control_engine.lua', 'ui/local_control_bridge.lua',

@@ -3,6 +3,7 @@ import importlib.util
 import gzip
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import shutil
 import socket
 import tempfile
@@ -29,6 +30,24 @@ from lockstep.launcher.joinfiles import FileService
 from test_authority_experimental_local_host import Engine, Participants
 from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
 
+
+
+class WitnessJoinModeTests(unittest.TestCase):
+    def test_join_requires_explicit_single_client_and_preserves_other_modes(self):
+        self.assertEqual(MODULE.witness_mode(SimpleNamespace()), (False, None))
+        self.assertEqual(MODULE.witness_mode(SimpleNamespace(registry_witness='verify')), (False, 'verify'))
+        self.assertEqual(MODULE.witness_mode(SimpleNamespace(registry_witness_join=True, diagnostic_client=True)), (True, 'verify'))
+        for options in (
+            {'registry_witness_join': True},
+            {'registry_witness_join': True, 'diagnostic_client': True, 'registry_witness': 'verify'},
+            {'registry_witness_join': True, 'diagnostic_client': True, 'registry_enroll': True},
+            {'registry_witness_join': True, 'diagnostic_client': True, 'diagnostic_overlap': True},
+            {'registry_witness_join': True, 'diagnostic_client': True, 'diagnostic_clients': 2},
+            {'registry_witness_join': 1, 'diagnostic_client': True},
+            {'registry_witness': 'verify', 'diagnostic_client': True},
+        ):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                MODULE.witness_mode(SimpleNamespace(**options))
 
 class Control:
     def __init__(self): self._peers = {}
@@ -148,6 +167,36 @@ class PreviousSourceTests(unittest.TestCase):
         self.result['owned_processes_remaining']=[]; self.write_result()
         (self.profile/'content.xml').write_bytes(b'different content')
         with self.assertRaises(ValueError): MODULE.verify_previous_source(self.store,self.checkpoint,self.profile)
+    def test_witness_source_requires_clean_create_and_exact_scripts(self):
+        md=self.origin/'case/extensions/x4_lan_lab/md'
+        for name in ('authority_ship_registry.xml', 'authority_registry_witness.xml'):
+            shutil.copyfile(ROOT/'tools/dev'/name, md/name)
+        self.result['witness_diagnostic']={'phase':'create'}; self.write_result()
+        self.assertTrue(MODULE.verify_previous_source(self.store, self.checkpoint, self.profile,
+                                                      registry_status=True, witness_source=True))
+        # Normal recovery never silently accepts the extra witness script.
+        with self.assertRaises(ValueError):
+            MODULE.verify_previous_source(self.store, self.checkpoint, self.profile, registry_status=True)
+        self.result['success']=False; self.write_result()
+        with self.assertRaises(ValueError):
+            MODULE.verify_previous_source(self.store, self.checkpoint, self.profile,
+                                          registry_status=True, witness_source=True)
+        self.result['success']=True
+        self.result.pop('witness_diagnostic'); self.result['witness_join']={'server_witness_verified':True}
+        self.write_result()
+        with self.assertRaises(ValueError):
+            MODULE.verify_previous_source(self.store, self.checkpoint, self.profile,
+                                          registry_status=True, witness_source=True)
+        self.result['witness_diagnostic']={'phase':'verify'}; self.write_result()
+        with self.assertRaises(ValueError):
+            MODULE.verify_previous_source(self.store, self.checkpoint, self.profile,
+                                          registry_status=True, witness_source=True)
+        self.result['witness_diagnostic']['phase']='create'; self.write_result()
+        (md/'authority_registry_witness.xml').write_text('modified')
+        with self.assertRaises(ValueError):
+            MODULE.verify_previous_source(self.store, self.checkpoint, self.profile,
+                                          registry_status=True, witness_source=True)
+
     def test_unconfirmed_new_generation_is_refused(self):
         save=self.root/'different.gz'; save.write_bytes(gzip.compress(XML.encode()))
         self.store.publish(save,marker=MARKER)

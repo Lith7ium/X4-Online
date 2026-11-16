@@ -13,14 +13,45 @@ import time
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
-sys.path.insert(0,str(ROOT/'src'))
+sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
 from authority.load_messages import Offer
 from authority.trusted_load_messages import encode_bound_offer, decode_load_claim
 from authority.trusted_marker_load_session import MarkerBoundOffer
 from lockstep.launcher.joinfiles import FileService
+import authority_remote_load_pair_live as pair
 
 
 class OwnerTest(unittest.TestCase):
+    def test_overlong_owner_deadline_is_rejected_before_offer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); (root/'save').mkdir()
+            listener=socket.socket(); listener.bind(('127.0.0.1',0)); listener.listen()
+            tcp=socket.create_connection(listener.getsockname()); server,_=listener.accept(); listener.close()
+            parent,child=socket.socketpair();proc=None
+            try:
+                proc=subprocess.Popen([sys.executable,str(ROOT/'tools/dev/authority_remote_load_owner.py'),
+                    str(tcp.fileno()),str(child.fileno())],pass_fds=(tcp.fileno(),child.fileno()))
+                tcp.close();child.close()
+                config={'file_port':1,'file_token':'a'*32,'deadline':time.monotonic()+4000,
+                        'download':str(root/'download'),'target':str(root/'save/save_009.xml.gz')}
+                parent.sendall(json.dumps(config).encode()+b'\n')
+                self.assertEqual(proc.wait(timeout=4),1)
+                server.settimeout(2); self.assertEqual(server.recv(1),b'')
+                self.assertFalse((root/'download').exists())
+            finally:
+                parent.close();child.close();tcp.close();server.close()
+                if proc is not None and proc.poll() is None: proc.kill();proc.wait()
+
+    def test_helper_deadline_never_extends_owner_or_accepts_expired(self):
+        now=time.monotonic()
+        self.assertEqual(pair.remote_owner_deadline(now+20),now+20)
+        bounded=pair.remote_owner_deadline(now+4000)
+        self.assertLess(bounded,time.monotonic()+3600)
+        self.assertLessEqual(bounded,now+4000)
+        for value in (now-1, float('nan'), float('inf'), True):
+            with self.subTest(value=value), self.assertRaises(TimeoutError):
+                pair.remote_owner_deadline(value)
+
     def test_invalid_supervisor_command_never_sends_claim(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'save').mkdir(); data=b'other-test-save'
@@ -91,7 +122,7 @@ class OwnerTest(unittest.TestCase):
                                    str(tcp.fileno()),str(child.fileno())],pass_fds=(tcp.fileno(),child.fileno()))
             tcp.close();child.close();self.addCleanup(lambda:proc.kill() if proc.poll() is None else None)
             parent.settimeout(6)
-            cfg={'file_port':service.port,'file_token':token,'deadline':time.monotonic()+8,
+            cfg={'file_port':service.port,'file_token':token,'deadline':pair.remote_owner_deadline(time.monotonic()+4000),
                  'download':str(root/'download'),'target':str(root/'save/save_009.xml.gz')}
             parent.sendall(json.dumps(cfg).encode()+b'\n')
             with parent.makefile('rb',buffering=0) as reader:

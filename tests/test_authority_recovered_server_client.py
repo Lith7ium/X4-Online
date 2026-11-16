@@ -17,6 +17,11 @@ import authority_recovered_loopback_server as supervisor
 
 
 class ServerClientTests(unittest.TestCase):
+    def test_witness_join_explicitly_enables_registry_observation(self):
+        self.assertFalse(subject.client_registry_enabled(SimpleNamespace()))
+        self.assertTrue(subject.client_registry_enabled(SimpleNamespace(registry_witness_join=True)))
+        self.assertFalse(subject.client_registry_enabled(SimpleNamespace(registry_witness_join=1)))
+
     def make_world(self):
         checkpoint = SimpleNamespace(checkpoint_id='checkpoint-second', sha256='b'*64, marker='c'*32)
         store = SimpleNamespace(latest_marked_confirmed=Mock(return_value=checkpoint),

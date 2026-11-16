@@ -23,6 +23,17 @@ from authority.trusted_load_messages import decode_bound_offer
 from authority_helper_lifecycle import OwnedHelper
 
 
+def remote_owner_deadline(overall):
+    """Bound this helper's lifetime without extending the caller's deadline."""
+    import math
+    now = time.monotonic()
+    if type(overall) not in (int, float) or not math.isfinite(overall) or overall <= now:
+        raise TimeoutError('remote load deadline expired or invalid')
+    # The helper validates strictly less than now+3600 at startup. Leave a
+    # margin rather than relying on identical clock reads or floating rounding.
+    return min(overall, now + 3590)
+
+
 class RemoteParticipant(native.TCPMarkedParticipant):
     def join(self, world):
         handle = super().join(world)
@@ -54,7 +65,7 @@ class RemoteParticipant(native.TCPMarkedParticipant):
             child.close()
             self.client_tcp.close(); self.client_tcp = None
             target = profile/'save'/native.marked.base.snapshot.SLOT
-            config = {'file_port':service.port, 'file_token':service.token, 'deadline':self.run_deadline,
+            config = {'file_port':service.port, 'file_token':service.token, 'deadline':remote_owner_deadline(self.run_deadline),
                       'download':str(out/'download'), 'target':str(target)}
             self.remote_ipc.settimeout(min(1, native.marked.remaining(self.run_deadline)))
             self.remote_ipc.sendall(json.dumps(config, separators=(',',':')).encode('ascii')+b'\n')

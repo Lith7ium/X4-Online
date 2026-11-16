@@ -1,6 +1,6 @@
 -- Offline doubles for the generated private probe. Never loads X4.
 local script=assert(arg[1]); local now=0; local ready=false; local paused=true
-local update; local packets={}; local sent={}; local errors={}; local created=0
+local update; local packets={}; local sent={}; local errors={}; local created,updates=0,0
 local net={send=function(_,v) sent[#sent+1]=v;return true end,
  receive=function() return table.remove(packets,1) end}
 package.loaded.ffi={cdef=function()end,C={IsPlayerValid=function()return true end,
@@ -13,7 +13,7 @@ X4LAN_AUTHORITY_RECOVERY_READY=function()return ready end
 X4LAN_AUTHORITY_RECOVERY_UPDATE=function()end
 X4LAN_AUTHORITY_X4_CONTROL_ENGINE={new=function()return {} end,
  register_save_event=function()return true end}
-X4LAN_AUTHORITY_LOCAL_CONTROL_BRIDGE={new=function()created=created+1;return {update=function()return true end}end}
+X4LAN_AUTHORITY_LOCAL_CONTROL_BRIDGE={new=function()created=created+1;return {update=function()updates=updates+1;return true end}end}
 GetCurRealTime=function()return now end;GetSaveList=function()return {} end
 SetScript=function(_,f)update=f end;RegisterEvent=function()end
 DebugError=function(msg)errors[#errors+1]=msg end
@@ -23,6 +23,11 @@ ready=true;update();now=4;update()
 assert(sent[1]=='RECOVERY_READY|'..prefix and created==0)
 packets[1]='ACTIVATE|'..prefix;update();assert(sent[2]=='ACTIVATED|'..prefix and created==0)
 update();assert(created==1 and #errors==0)
+-- No heartbeat must fill the UDP queue while host-side save validation blocks;
+-- the actual control bridge must still be serviced on every subsequent frame.
+local before=updates
+for _=1,1000 do now=now+.25;update() end
+assert(#sent==2 and updates==before+1000 and #errors==0)
 -- A new UI instance faults on an unexpected activation instead of enabling the bridge.
 created=0;sent={};errors={};packets={};now=0
 assert(loadfile(script))();update();now=4;packets[1]='ACTIVATE|wrong';update()
