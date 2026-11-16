@@ -15,7 +15,11 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev'),str(ROOT/'tests')]
 import authority_tcp_native_live as subject
 import authority_remote_load_pair_live as remote
+import authority_recovered_server_client as sequential
 from authority.checkpoints import CheckpointStore
+from authority.experimental_local_host import ExperimentalLocalHost
+from authority.experimental_tcp_control import ExperimentalTCPControl
+from authority.trusted_marker_load_session import TrustedMarkerLoadSession
 from authority.save_transfer import SaveOffers
 from authority.world import WorldCoordinator
 from lockstep.launcher.joinfiles import FileService
@@ -35,6 +39,79 @@ class FreshEngine(Engine):
 
 
 class HookIntegrationTest(unittest.TestCase):
+    def test_two_sequential_remote_owner_workers_with_simulated_x4(self):
+        # Real coordinator, file transfers, TCP owner/worker handoff and EOF;
+        # the client X4 log/identity and UDP simulation receipts are synthetic.
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); (root/'store').mkdir(); (root/'game').mkdir()
+            (root/'game/X4').symlink_to('/proc/self/exe')
+            store=CheckpointStore(root/'store'); service=FileService('f'*32,slots=(1,)).start()
+            engine=FreshEngine(root); engine._timeout=5
+            world=WorldCoordinator('a'*32,engine,store,SaveOffers(service,store))
+            session=TrustedMarkerLoadSession(world,enabled=True)
+            control=ExperimentalTCPControl(session,enabled=True,idle_timeout=30,keepalive_enabled=True)
+            host=ExperimentalLocalHost(world,control,service,enabled=True)
+            world._participants=subject.GuardedTCPParticipants(host,enabled=True,timeout=5)
+            listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            listener.bind(('127.0.0.1',0));listener.listen(2)
+            deadline=time.monotonic()+30; participants=[]; results=[]; previous=None
+            identity=(os.getpid(),subject.marked.base.live.start_ticks(os.getpid()))
+            try:
+                for index in range(2):
+                    out=root/('diagnostic-%02d' % index); (out/'client/save').mkdir(parents=True)
+                    participant=sequential.ServerClient(deadline,root/'source'); participants.append(participant)
+                    participant.checkpoint=SimpleNamespace(checkpoint_id='initial',marker='0'*32)
+                    participant.session,participant.control,participant.host=session,control,host
+                    participant.participants=world._participants
+                    participant.client_tcp=socket.create_connection(listener.getsockname(),timeout=2)
+                    participant.server_tcp,_=listener.accept()
+                    handle=host.adopt(participant.server_tcp)
+                    baseline=sequential.prepare_join_baseline(host,world,deadline,lambda:True,previous)
+                    ticket,target=participant.offer_and_download(world,service,handle,out/'client',out/'client')
+                    sequential.verify_join_offer(ticket,participant.marker,baseline)
+                    udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);udp.bind(('127.0.0.1',0));udp.settimeout(.05)
+                    stop=threading.Event(); destination=participant.sock.getsockname()
+                    def fake_client():
+                        while not stop.is_set():
+                            udp.sendto(('HELLO|'+participant.lease+'|'+'a'*32).encode(),destination)
+                            try: data,peer=udp.recvfrom(1024)
+                            except socket.timeout: continue
+                            except OSError: return
+                            row=data.decode().split('|')
+                            if len(row)==5 and row[0]=='CMD':
+                                _,lease,epoch,number,operation=row
+                                udp.sendto('|'.join(('RECEIPT',lease,epoch,number,operation,'confirmed')).encode(),peer)
+                    thread=threading.Thread(target=fake_client);thread.start()
+                    result={}
+                    original_accept=session.accept
+                    try:
+                        with patch.object(participant,'verify_logs'), patch.object(participant,'check_server_files',return_value=True), \
+                             patch.object(subject.marked.base.client,'game_identity',return_value=identity):
+                            participant.on_ready(world=world,handle=handle,ticket=ticket,target=target,
+                                server_identity=identity,server_proc=object(),server_started=identity[1],
+                                client_identity=identity,client_proc=object(),client_started=identity[1],
+                                game=root/'game',out=out,deadline=deadline,result=result,check_protected=lambda:True)
+                        self.assertTrue(result['client_admitted'])
+                        self.assertTrue(result['helper_clean_exit'])
+                        participant.cleanup_diagnostic()
+                        previous=sequential.settle_departure(host,world,control,participant.server_tcp,
+                            deadline,lambda:True,ticket,participant.marker)
+                        results.append((ticket,participant.marker,previous))
+                    finally:
+                        session.accept=original_accept
+                        stop.set();udp.close();thread.join(2)
+                        self.assertFalse(thread.is_alive())
+                self.assertEqual(results[1][0]['checkpoint_id'],results[0][2].checkpoint_id)
+                self.assertEqual(results[1][0]['sha256'],results[0][2].sha256)
+                self.assertEqual(results[1][1],results[0][2].marker)
+                self.assertNotEqual(results[1][2].checkpoint_id,results[0][2].checkpoint_id)
+                self.assertEqual(world.session.state,'paused')
+                self.assertEqual(world.session.players,())
+            finally:
+                for participant in reversed(participants): participant.cleanup_diagnostic()
+                if not (control._closed or control._failed): control.close()
+                listener.close();service.close();service.thread.join(2)
+
     def test_eof_check_refuses_unexpected_data(self):
         listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         listener.bind(('127.0.0.1',0));listener.listen(1)

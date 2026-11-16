@@ -130,8 +130,48 @@ the supervisor reports no owned processes remaining.
 The later `serve` loop reports zero accepted and zero admitted connections:
 the diagnostic client was accepted before that loop and is counted in the
 separate `diagnostic_client` result. No second real client joined this run.
-The outcome does not establish repeat real-client joins, Windows, Internet,
-gameplay, world consistency or the complete persistent shared-world scenario.
+The outcome does not establish Windows, Internet, gameplay, world consistency
+or the complete persistent shared-world scenario.
+
+The experimental `--diagnostic-clients 2` option instead prepares two private
+Linux client processes in sequence before publishing the endpoint. It waits for
+the first connection's EOF, pause and marked save, then requires the second
+client's offered checkpoint ID, hash and marker to match that confirmed save.
+Each client has separate private artifacts and helper ownership. It does not
+test simultaneous clients, gameplay, Windows or Internet access.
+During download pumping and UDP enrollment, cancellation is checked between
+polls. A synchronous engine or participant command already in progress can
+still delay cancellation until its bounded response or timeout; an uncertain
+command fences the run and must not be treated as a confirmed checkpoint.
+
+## Recovered server with two sequential real Linux clients
+
+On 2026-11-16 the `--diagnostic-clients 2` path ran once in private profiles
+over loopback, with artifacts under `.local/authority-two-sequential-clients-once-01`.
+The two separate client X4 logs each record a load request, a marker and a
+pause in that order. The second marker is
+`d555fa965c14f1f63ac940f635e3e6c0`; its request identifies
+`checkpoint-41eece0c14fb48419574bb9b47cb273e`, SHA-256
+`81d9f96388c1073765f028e337f83a5848edfc0903d7df4a5678876b7e8c5c9e`.
+Independent hashes of each retained client save copy match its corresponding
+checkpoint file and ticket. An independent artifact audit also verified the
+intermediate and final saved markers. The marker and matching files do not
+prove the exact bytes X4 consumed.
+
+The supervisor reports that the first client disconnected, then the server
+paused and saved the checkpoint offered to the second client; it reports both
+clients admitted and both server/client resumes confirmed via the participant
+path. The second departure produced the final paused checkpoint
+`checkpoint-c7776916f5924040bc84933cd9269117`, SHA-256
+`af3c2d9a13ba7719d271d2edb96dac8c8b9fba2c794f5675f4145f76526e6623`,
+which was independently rehashed. These admission and operation-order claims
+are supervisor results, not an independent packet capture. The supervisor
+reports no owned processes remaining and the orchestrator reports cleanup
+confirmed; the independent audit found `CURRENT` and `CONFIRMED` equal, the
+endpoint and lock absent, and no X4 processes. The later accept-loop counters
+exclude both diagnostic clients.
+The clients ran sequentially, not together; gameplay, shared-world consistency,
+Windows and Internet access remain unproven.
 
 ## Internal diagnostic procedure
 

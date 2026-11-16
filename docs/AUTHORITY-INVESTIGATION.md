@@ -143,6 +143,13 @@ attention is not a simple sector-wide Boolean: existing analysis distinguishes c
 object attention and player-relative zone attention. How to delegate its actual
 engine state is still an open native question.
 
+The owner confirmed that when the responsible client leaves an area or
+disconnects, another client present there should take over; if none is present,
+the server becomes responsible again. Selecting a successor, identifying
+presence, fencing the former writer and recovering the last confirmed state
+remain open technical questions. The assignment and handover are not yet
+implemented or proven.
+
 The world runs while at least one player participates. On the last departure,
 the server must stop simulation and commit a usable save; the first returning
 player loads a matching server checkpoint and the world resumes. For a join

@@ -149,6 +149,17 @@ def stop_owned_processes(processes, helpers_stopped, errors):
     return None if uncertain else remaining
 
 
+def cleanup_diagnostics(diagnostics, errors):
+    """Attempt every helper cleanup even if another client's cleanup fails."""
+    clean = True
+    for diagnostic in reversed(diagnostics):
+        try: diagnostic.cleanup_diagnostic()
+        except BaseException as error:
+            clean = False
+            errors.append('diagnostic helper cleanup unconfirmed: '+type(error).__name__)
+    return clean
+
+
 def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1):
     """Accept and pump local peers until deadline, including while world is empty.
 
@@ -221,7 +232,7 @@ def run(args):
     processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=None
     endpoint=out/'endpoint.json'; deadline=time.monotonic()+args.timeout
     watch=target=checkpoint=expected=None
-    diagnostic = None
+    diagnostics = []
     try:
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
@@ -309,18 +320,45 @@ def run(args):
                 return value
         world._engine = GuardedEngine()
         serving[0] = True
-        if getattr(args, 'diagnostic_client', False):
-            # One opt-in local test client, all resources still registered to
+        diagnostic_count = getattr(args, 'diagnostic_clients', None)
+        if diagnostic_count is not None and (type(diagnostic_count) is not int or diagnostic_count != 2):
+            raise ValueError('only two sequential diagnostic clients are supported')
+        if diagnostic_count is not None and getattr(args, 'diagnostic_client', False):
+            raise ValueError('choose one diagnostic mode')
+        if getattr(args, 'diagnostic_client', False) or diagnostic_count == 2:
+            # Opt-in local test clients, all resources still registered to
             # this supervisor and protected by its single global lock.
             import authority_recovered_server_client as diagnostic_client
-            diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory)
-            diagnostic_result = diagnostic_client.run_one(diagnostic, args=args, out=out, game=game,
-                home=home, uid=user.pw_uid, steam=steam, auth=auth, user=user.pw_name,
-                processes=processes, server_proc=proc, server_started=started, server_identity=identity,
-                checkpoint=checkpoint, recovery_target=target, server_expected=expected,
-                recovery_watch=watch, listener=listener, host=host, service=service, world=world,
-                session=session, control=control, check_server=verify)
-            result['diagnostic_client'] = diagnostic_result
+            count = diagnostic_count or 1
+            results = []
+            baseline = None
+            def cancel_diagnostic():
+                if stop[0]: raise InterruptedError('diagnostic cancelled')
+            def verify_diagnostic():
+                cancel_diagnostic()
+                verify()
+                cancel_diagnostic()
+            for index in range(count):
+                diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory)
+                diagnostics.append(diagnostic)
+                diagnostic_out = out if count == 1 else out/('diagnostic-%02d' % (index+1))
+                if count != 1: diagnostic_out.mkdir(mode=0o700)
+                diagnostic_result = diagnostic_client.run_one(diagnostic, args=args, out=diagnostic_out, game=game,
+                    home=home, uid=user.pw_uid, steam=steam, auth=auth, user=user.pw_name,
+                    processes=processes, server_proc=proc, server_started=started, server_identity=identity,
+                    checkpoint=checkpoint, recovery_target=target, server_expected=expected,
+                    recovery_watch=watch, listener=listener, host=host, service=service, world=world,
+                    session=session, control=control, check_server=verify_diagnostic, server_out=out,
+                    expected_baseline=baseline, cancel_check=cancel_diagnostic)
+                if count != 1:
+                    baseline = diagnostic_client.settle_departure(host, world, control, diagnostic.server_tcp, deadline, verify_diagnostic,
+                        diagnostic_result['client_ticket'], diagnostic_result['client_loaded_marker'])
+                    diagnostic_result.update(departure_checkpoint_id=baseline.checkpoint_id,
+                                             departure_checkpoint_sha256=baseline.sha256,
+                                             departure_checkpoint_marker=baseline.marker)
+                results.append(diagnostic_result)
+            if count == 1: result['diagnostic_client'] = results[0]
+            else: result['diagnostic_clients'] = results
         # Publish only after the private diagnostic socket has been accepted.
         # The endpoint contains a bearer secret; its directory is owner-only.
         fd = os.open(endpoint, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
@@ -359,12 +397,7 @@ def run(args):
         if sock is not None:
             try: sock.close()
             except BaseException as error: errors.append('socket cleanup: '+type(error).__name__)
-        helpers_stopped = True
-        if diagnostic is not None:
-            try: diagnostic.cleanup_diagnostic()
-            except BaseException as error:
-                helpers_stopped = False
-                errors.append('diagnostic helper cleanup unconfirmed: '+type(error).__name__)
+        helpers_stopped = cleanup_diagnostics(diagnostics, errors)
         remaining = stop_owned_processes(processes, helpers_stopped, errors)
         result['owned_processes_remaining']=remaining
         if remaining: errors.append('owned processes remain')
@@ -388,9 +421,10 @@ def run(args):
         try:
             if live.steam_identity(home,user.pw_uid) != steam: errors.append('Steam identity changed')
         except BaseException as error: errors.append('Steam identity unavailable: '+type(error).__name__)
-        if diagnostic is not None and remaining == []:
-            try: diagnostic.redact()
-            except BaseException as error: errors.append('diagnostic lease cleanup: '+type(error).__name__)
+        if remaining == []:
+            for diagnostic in reversed(diagnostics):
+                try: diagnostic.redact()
+                except BaseException as error: errors.append('diagnostic lease cleanup: '+type(error).__name__)
         config=out/'case/extensions/x4_lan_lab/ui/config.lua'
         try:
             if config.is_file():
@@ -415,8 +449,11 @@ def main():
     parser.add_argument('--store',type=Path,default=source.DEFAULT_STORE)
     parser.add_argument('--display',required=True); parser.add_argument('--timeout',type=float,default=3600)
     parser.add_argument('--seed',type=int,default=276944566)
-    parser.add_argument('--diagnostic-client', action='store_true',
+    diagnostic_options = parser.add_mutually_exclusive_group()
+    diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')
+    diagnostic_options.add_argument('--diagnostic-clients', type=int, choices=(2,),
+                        help='start two sequential private Linux diagnostic clients before serving other peers')
     try: result=run(parser.parse_args())
     except (OSError,ValueError,RuntimeError) as error: parser.exit(1,'REFUSED: '+str(error)+'\n')
     print(json.dumps(result,indent=2)); return 0 if result['success'] else 1

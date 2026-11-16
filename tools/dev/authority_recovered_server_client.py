@@ -6,15 +6,49 @@ bounded first connection ends, the caller may continue its normal accept loop.
 Neither Windows, internet, gameplay nor exact bytes consumed by X4 are proven.
 """
 from pathlib import Path
+import re
 import socket
 import time
 
 import authority_recovered_remote_load_pair_live as combined
 import authority_recovery_tcp_join_live as recovery
+from authority.marker_evidence import verify_saved_marker
 
 
 class ServerClient(combined.RecoveredRemoteParticipant):
     """Reuse the paired runner without ever closing the server's control."""
+    cancel_check = None
+
+    def pump_loading(self):
+        if self.cancel_check is not None: self.cancel_check()
+        result = super().pump_loading()
+        if self.cancel_check is not None: self.cancel_check()
+        return result
+
+    def enroll(self, epoch, deadline):
+        """Preserve enrollment validation while checking diagnostic cancellation."""
+        if self.cancel_check is None:
+            return super().enroll(epoch, deadline)
+        if self.fault or self.peer is not None:
+            raise RuntimeError('participant unavailable or already enrolled')
+        if not isinstance(epoch, str) or not re.fullmatch(r'[0-9a-f]{32}', epoch):
+            raise ValueError('invalid world epoch')
+        self.epoch = epoch
+        expected = f'HELLO|{self.lease}|{epoch}'.encode('ascii')
+        try:
+            while time.monotonic() < deadline:
+                self.cancel_check()
+                try: data, peer = self.sock.recvfrom(769)
+                except socket.timeout: continue
+                self.cancel_check()
+                if data == expected and peer[0] == '127.0.0.1':
+                    self.peer = peer
+                    return
+            raise TimeoutError('participant enrollment timed out')
+        except BaseException:
+            self.fault = True
+            raise
+
     def cleanup_diagnostic(self):
         errors = []
         for helper in reversed(self.helpers):
@@ -32,24 +66,86 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         return True
 
 
-def record_client_evidence(result, ticket, marker):
+def record_client_evidence(result, ticket, marker, client_identity, server_identity):
     """Record only noncredential correlation data after final checks succeed."""
     fields = recovery.base.client.FIELDS
-    if (type(ticket) is not dict or set(ticket) != set(fields) or
-            type(marker) is not str):
+    if (type(ticket) is not dict or set(ticket) != set(fields) or type(marker) is not str or
+            any(type(identity) is not tuple or len(identity) != 2 or
+                any(type(value) is not int or value <= 0 for value in identity)
+                for identity in (client_identity, server_identity)) or client_identity == server_identity):
         raise ValueError('invalid diagnostic correlation data')
     result.update(client_ticket={field: ticket[field] for field in fields},
                   client_loaded_marker=marker,
                   client_checkpoint_id=ticket['checkpoint_id'],
                   client_checkpoint_sha256=ticket['sha256'],
+                  client_x4_pid=client_identity[0], client_x4_start_ticks=client_identity[1],
+                  server_x4_pid=server_identity[0], server_x4_start_ticks=server_identity[1],
                   client_final_log_and_inputs_verified=True,
                   client_owned_process_stopped=True)
+
+
+def confirmed_baseline(world, expected=None):
+    """Require the current paused baseline to agree with the confirmed store."""
+    state = world.session
+    if (state.state != 'paused' or state.pending is not None or state.save_required or
+            state.baseline_id is None or world._baseline is None):
+        raise RuntimeError('join baseline is not confirmed and paused')
+    saved = world._store.latest_marked_confirmed()
+    if (world._baseline != (state.baseline_id, saved) or world._store.latest() != saved or
+            (expected is not None and saved != expected)):
+        raise ValueError('join baseline differs from confirmed checkpoint')
+    return saved
+
+
+def prepare_join_baseline(host, world, deadline, check, expected=None):
+    """Complete the join's pending pause/save, or reuse its paused baseline."""
+    while world.session.pending is not None:
+        recovery.marked.remaining(deadline)
+        check()
+        if world.session.pending.operation not in ('pause', 'save'):
+            raise RuntimeError('unexpected operation while preparing diagnostic join')
+        host.tick(min(.1, recovery.marked.remaining(deadline)))
+        check()
+    return confirmed_baseline(world, expected)
+
+
+def verify_join_offer(ticket, marker, baseline):
+    if (ticket['checkpoint_id'] != baseline.checkpoint_id or ticket['sha256'] != baseline.sha256 or
+            marker != baseline.marker):
+        raise ValueError('offered checkpoint differs from confirmed join baseline')
+
+
+def settle_departure(host, world, control, peer, deadline, check, ticket, marker):
+    """Observe EOF and require a fresh marked save before another client."""
+    if peer not in control._peers:
+        raise RuntimeError('diagnostic peer disappeared before EOF observation')
+    recovery.tcp.await_eof(peer, deadline, check)
+    while True:
+        recovery.marked.remaining(deadline)
+        check()
+        if (not control._peers and not world.session.players and
+                world.session.pending is None and world.session.state == 'paused'):
+            break
+        host.tick(min(.1, recovery.marked.remaining(deadline)))
+        check()
+    saved = confirmed_baseline(world)
+    if (saved.checkpoint_id == ticket['checkpoint_id'] or saved.marker == marker or
+            world._load_offers or world._offers.names):
+        raise ValueError('departure did not produce a fresh unoffered checkpoint')
+    with world._offers.service.lock:
+        if world._offers.service.offered:
+            raise ValueError('file offers remain after diagnostic departure')
+    if verify_saved_marker(saved, saved.marker, script_name='X4AuthorityCheckpointMarker',
+                           cue_name='MarkerState') is not True:
+        raise ValueError('departure checkpoint marker not verified')
+    check()
+    return saved
 
 
 def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             processes, server_proc, server_started, server_identity, checkpoint,
             recovery_target, server_expected, recovery_watch, listener, host, service,
-            world, session, control, check_server):
+            world, session, control, check_server, server_out=None, expected_baseline=None, cancel_check=None):
     """Load one genuine local client, confirm admission/resume and disconnect.
 
     Must run on the server's owner/main thread; it registers its X4 in the
@@ -57,12 +153,15 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     X4 cleanup and must retain the global lock if that cleanup is uncertain.
     """
     base = recovery.base
+    if cancel_check is not None and not callable(cancel_check):
+        raise ValueError('invalid diagnostic cancellation check')
+    participant.cancel_check = cancel_check
     deadline = participant.run_deadline
     participant.checkpoint = checkpoint
     participant.target = recovery_target
     participant.server_expected = server_expected
     participant.recovery_watch = recovery_watch
-    participant.server_library = out/'case/extensions/x4_lan_lab/native/x4lan_net.so'
+    participant.server_library = (server_out or out)/'case/extensions/x4_lan_lab/native/x4lan_net.so'
     participant.session, participant.control, participant.host = session, control, host
     participant.participants = world._participants
     client_out = out/'client'; client_out.mkdir(mode=0o700)
@@ -78,14 +177,10 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     except BaseException:
         accepted.close()
         raise
-    # Do not ask for an offer until this first join's pause/save completed.
-    for operation in ('pause', 'save'):
-        check_server()
-        pending = world.session.pending
-        if pending is None or pending.operation != operation: raise RuntimeError('unexpected diagnostic join operation')
-        host.tick(min(.1, recovery.marked.remaining(deadline)))
-        check_server()
+    # A later join can reuse the paused, last-disconnect checkpoint.
+    baseline = prepare_join_baseline(host, world, deadline, check_server, expected_baseline)
     ticket, target = participant.offer_and_download(world, service, handle, client_out, profile)
+    verify_join_offer(ticket, participant.marker, baseline)
     config = base.client.install_probe(case, profile, ticket)
     recovery.marked.identity.inject(case, 'load')
     participant.install(case)
@@ -157,6 +252,6 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             check_server()
             participant.redact()
             participant.config = None
-            record_client_evidence(result, ticket, participant.marker)
+            record_client_evidence(result, ticket, participant.marker, client_identity, server_identity)
             return result
         time.sleep(.1)

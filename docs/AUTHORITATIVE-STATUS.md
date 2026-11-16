@@ -8,6 +8,16 @@ eventually trade, fight, board and command ships. The simulation may pause
 when nobody is connected and during joins. See the detailed experiment notes
 for evidence and restrictions.
 
+One recovered Linux X4 server subsequently served two real local Linux X4
+clients in sequence. Each client log records a load request, marker and pause;
+retained client save copies hash to their respective checkpoint files. The
+supervisor reports both admissions and resumes, a save after the first
+disconnect offered to the second client, and a paused final checkpoint after
+the second disconnect. These supervisor results are not an independent packet
+capture, and matching files do not prove exact file consumption by X4. This
+does not establish simultaneous clients, gameplay, Windows or Internet access.
+See the [sequential-client run](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#recovered-server-with-two-sequential-real-linux-clients).
+
 One isolated Linux loopback run exercised a recovered X4 server with two
 sequential TCP save downloads, then restarted a second X4 server from the first
 server's confirmed final checkpoint and downloaded another save. The restart
