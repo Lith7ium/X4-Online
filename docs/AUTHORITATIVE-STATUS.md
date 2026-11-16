@@ -21,6 +21,14 @@ network address and socket read. DNS resolution, an in-progress filesystem
 call or a caller callback cannot be interrupted; a verified file can exist in
 the caller-owned download directory when a late deadline check fails. Offline
 and loopback socket tests cover this behavior, not a Windows or Internet join.
+The experimental remote client now retries the server's explicit `not_ready`
+offer response and waits for that response until the existing overall load
+deadline. A synchronous server pause/save or a long download can still exceed
+the independent server idle timeout; end-to-end joining remains unproven.
+The native UDP library's build tool now writes only to an explicitly selected
+new directory. A local Windows crossbuild produced a PE DLL with the Lua entry
+point and Windows monotonic clock imports; loading that DLL in Windows X4 and
+binding it to an authoritative session have not been tested.
 For a high-attention area, the user confirmed that if its responsible player
 leaves or disconnects, another player present in that area should take over;
 if none is present, responsibility returns to the server. The handover

@@ -33,7 +33,7 @@ class RemoteLoadClientTests(unittest.TestCase):
             size=len(self.data),name='j1.xml.gz')
         self.bound=MarkerBoundOffer(self.offer,self.marker)
 
-    def connect(self, *, ack_attempt=None, after_ack=b'', offer=None, after_offer=b''):
+    def connect(self, *, ack_attempt=None, after_ack=b'', offer=None, after_offer=b'', not_ready_count=0, offer_delay=0, io_timeout=2):
         listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM);listener.bind(('127.0.0.1',0));listener.listen(1)
         listener.settimeout(3);client=socket.create_connection(listener.getsockname(),timeout=3)
         errors=[]; claims=[]
@@ -42,7 +42,11 @@ class RemoteLoadClientTests(unittest.TestCase):
                 conn,_=listener.accept();conn.settimeout(3)
                 with conn:
                     stream=conn.makefile('rb')
+                    for _ in range(not_ready_count):
+                        if stream.readline()!=offer_request(): raise AssertionError('unexpected offer request')
+                        conn.sendall(b'{\"version\":1,\"kind\":\"not_ready\"}\n')
                     if stream.readline()!=offer_request(): raise AssertionError('unexpected offer request')
+                    if offer_delay: time.sleep(offer_delay)
                     conn.sendall(encode_bound_offer(offer or self.bound)+b'\n'+after_offer)
                     line=stream.readline()
                     if not line: return
@@ -54,7 +58,7 @@ class RemoteLoadClientTests(unittest.TestCase):
         thread=threading.Thread(target=serve,daemon=True);thread.start()
         self.addCleanup(lambda:thread.join(4))
         obj=ExperimentalRemoteLoadClient(client,enabled=True,file_host='127.0.0.1',file_port=self.service.port,
-            file_token=self.token,file_slot=1,deadline=time.monotonic()+5,io_timeout=2)
+            file_token=self.token,file_slot=1,deadline=time.monotonic()+5,io_timeout=io_timeout)
         self.addCleanup(obj.close)
         return obj,claims,errors
 
@@ -66,6 +70,63 @@ class RemoteLoadClientTests(unittest.TestCase):
     def observations(self,obj):
         attempt=self.offer.attempt_id
         obj.load_requested(attempt);obj.loaded_marker(attempt,self.marker);obj.paused(attempt,True)
+
+    def test_not_ready_then_offer_retries_on_same_socket(self):
+        obj,claims,errors=self.connect(not_ready_count=2)
+        self.staged(obj); self.observations(obj); obj.claim(self.offer.attempt_id)
+        self.assertEqual(len(claims),1)
+        self.assertFalse(errors)
+
+    def test_not_ready_retry_obeys_overall_deadline(self):
+        obj,_,_=self.connect(not_ready_count=10)
+        obj._deadline=time.monotonic()+.25
+        with self.assertRaises(TimeoutError): obj.request_offer()
+        with self.assertRaises(RuntimeError): obj.request_offer()
+
+    def test_offer_can_wait_past_io_timeout_but_within_deadline(self):
+        obj,_,errors=self.connect(offer_delay=.2,io_timeout=.05)
+        self.assertEqual(obj.request_offer(),self.bound)
+        self.assertFalse(errors)
+
+    def test_silent_offer_wait_ends_at_absolute_deadline(self):
+        obj,_,_=self.connect(offer_delay=.3,io_timeout=.05)
+        obj._deadline=time.monotonic()+.1
+        with self.assertRaises(TimeoutError): obj.request_offer()
+        with self.assertRaises(RuntimeError): obj.request_offer()
+
+    def test_offer_wait_reports_eof_without_waiting_for_deadline(self):
+        listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        listener.bind(('127.0.0.1',0)); listener.listen(1)
+        client=socket.create_connection(listener.getsockname(),timeout=2)
+        def serve():
+            conn,_=listener.accept()
+            with conn: conn.recv(4096)
+            listener.close()
+        thread=threading.Thread(target=serve,daemon=True); thread.start()
+        self.addCleanup(lambda:thread.join(2))
+        obj=ExperimentalRemoteLoadClient(client,enabled=True,file_host='127.0.0.1',file_port=self.service.port,
+            file_token=self.token,file_slot=1,deadline=time.monotonic()+2,io_timeout=.05)
+        self.addCleanup(obj.close)
+        start=time.monotonic()
+        with self.assertRaises(ConnectionError): obj.request_offer()
+        self.assertLess(time.monotonic()-start,1)
+
+    def test_unexpected_input_after_not_ready_faults(self):
+        listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        listener.bind(('127.0.0.1',0)); listener.listen(1)
+        client=socket.create_connection(listener.getsockname(),timeout=2)
+        def serve():
+            conn,_=listener.accept()
+            with conn:
+                conn.recv(4096)
+                conn.sendall(b'{"version":1,"kind":"not_ready"}\nunexpected\n')
+            listener.close()
+        thread=threading.Thread(target=serve,daemon=True); thread.start()
+        self.addCleanup(lambda:thread.join(2))
+        obj=ExperimentalRemoteLoadClient(client,enabled=True,file_host='127.0.0.1',file_port=self.service.port,
+            file_token=self.token,file_slot=1,deadline=time.monotonic()+3,io_timeout=1)
+        self.addCleanup(obj.close)
+        with self.assertRaises(ConnectionError): obj.request_offer()
 
     def test_real_loopback_transfer_claim_and_no_overread(self):
         obj,claims,errors=self.connect(after_ack=b'next-command\n')

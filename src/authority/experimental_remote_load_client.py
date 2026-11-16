@@ -79,8 +79,8 @@ class ExperimentalRemoteLoadClient:
             self._fault(); raise
         finally: self._busy = False
 
-    def _wait(self, *, write=False):
-        duration = min(self._remaining(), self._io_timeout)
+    def _wait(self, *, write=False, offer_response=False):
+        duration = self._remaining() if offer_response else min(self._remaining(), self._io_timeout)
         read, writable, exceptional = select.select([] if write else [self._conn],
             [self._conn] if write else [], [self._conn], duration)
         self._remaining()
@@ -95,11 +95,11 @@ class ExperimentalRemoteLoadClient:
             if sent <= 0: raise ConnectionError('control connection closed')
             view = view[sent:]
 
-    def _read_frame(self):
+    def _read_frame(self, *, offer_response=False):
         # Never consume a subsequent participant command from the same stream.
         data = bytearray()
         while len(data) <= MAX_MESSAGE:
-            self._wait()
+            self._wait(offer_response=offer_response)
             try: chunk = self._conn.recv(1)
             except BlockingIOError: continue
             if not chunk: raise ConnectionError('control connection closed')
@@ -108,12 +108,39 @@ class ExperimentalRemoteLoadClient:
         raise ValueError('control frame exceeds limit')
 
     def request_offer(self):
+        """Wait for a baseline within the existing overall load deadline.
+
+        A not_ready response can occur while the server pauses and saves for
+        this join. Retry only that exact protocol response, without overlapping
+        requests or extending the caller's deadline. Other responses still fail
+        closed. The offer response may take until the overall deadline because
+        server pause/save is synchronous; EOF and socket errors remain visible.
+        Other socket waits retain io_timeout.
+        """
         with self._operation('new'):
-            self._send(offer_request())
-            self._bound = decode_bound_offer(self._read_frame())
-            self._load = ExperimentalClientLoad(enabled=True,offer=self._bound.offer,expected_marker=self._bound.marker)
-            self._state = 'offered'
-            return self._bound
+            while True:
+                self._send(offer_request())
+                raw = self._read_frame(offer_response=True)
+                try:
+                    reply = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs,
+                                       parse_constant=_reject_constant)
+                except (UnicodeError, json.JSONDecodeError, RecursionError):
+                    reply = None
+                if (type(reply) is dict and set(reply) == {'version', 'kind'} and
+                        type(reply['version']) is int and reply['version'] == 1 and
+                        reply['kind'] == 'not_ready'):
+                    # No pipelining: unexpected data or EOF before the next
+                    # request is a protocol failure, not another response.
+                    delay = min(0.1, self._remaining())
+                    readable, _, exceptional = select.select([self._conn], [], [self._conn], delay)
+                    self._remaining()
+                    if readable or exceptional:
+                        raise ConnectionError('unexpected input between offer requests')
+                    continue
+                self._bound = decode_bound_offer(raw)
+                self._load = ExperimentalClientLoad(enabled=True,offer=self._bound.offer,expected_marker=self._bound.marker)
+                self._state = 'offered'
+                return self._bound
 
     def download(self, new_directory):
         """Download to a new exclusively owned directory; no retry or load."""

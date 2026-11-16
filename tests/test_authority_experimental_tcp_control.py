@@ -4,6 +4,8 @@ from pathlib import Path
 import socket
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests')]
 from authority.checkpoints import CheckpointStore
 from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
+from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 from authority.save_transfer import SaveOffers
 from authority.trusted_load_messages import decode_bound_offer, encode_load_claim
 from authority.trusted_marker_load_session import TrustedMarkerLoadSession
@@ -82,6 +85,32 @@ class TCPControlTest(unittest.TestCase):
         self.ready_world()
         bound = self.offer(peer)
         self.assertEqual(bound.offer.connection_handle, self.world.session.players[0][0])
+
+    def test_remote_client_retries_while_world_is_preparing(self):
+        peer = self.connect()
+        handle = self.world.session.players[0][0]
+        done = threading.Event(); result = []; errors = []
+        def request():
+            client = ExperimentalRemoteLoadClient(peer, enabled=True, file_host='127.0.0.1',
+                file_port=1, file_token='a'*32, file_slot=1, deadline=time.monotonic()+3, io_timeout=2)
+            try: result.append(client.request_offer())
+            except BaseException as error: errors.append(error)
+            finally:
+                client.close(); done.set()
+        worker = threading.Thread(target=request, daemon=True); worker.start()
+        self.addCleanup(lambda: worker.join(3))
+        self.owner.poll(.5)  # request before pause/save has completed
+        self.assertEqual(next(iter(self.owner._peers.values()))['out'],
+                         b'{"version":1,"kind":"not_ready"}\n')
+        self.owner.poll(.5)  # send not_ready
+        self.ready_world()
+        end = time.monotonic()+2
+        while not done.is_set() and time.monotonic()<end:
+            self.owner.poll(.05)
+        worker.join(1)
+        self.assertFalse(errors)
+        self.assertEqual(len(result),1)
+        self.assertEqual(result[0].offer.connection_handle, handle)
 
     def test_resume_gate_requires_drained_ack_and_fences_eof(self):
         peer = self.connect(); self.ready_world(); bound = self.offer(peer)
