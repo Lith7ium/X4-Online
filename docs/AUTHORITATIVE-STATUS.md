@@ -15,6 +15,12 @@ simulates the whole world. The mechanism for determining a client's visible
 ships and map view remains to be established, as do subscription transitions,
 refresh and missed-update recovery. A sector view must not be assumed to grant
 visibility of every ship in that sector.
+The experimental remote checkpoint download now propagates the load attempt's
+absolute monotonic deadline through the shared file fetcher, including each
+network address and socket read. DNS resolution, an in-progress filesystem
+call or a caller callback cannot be interrupted; a verified file can exist in
+the caller-owned download directory when a late deadline check fails. Offline
+and loopback socket tests cover this behavior, not a Windows or Internet join.
 For a high-attention area, the user confirmed that if its responsible player
 leaves or disconnects, another player present in that area should take over;
 if none is present, responsibility returns to the server. The handover

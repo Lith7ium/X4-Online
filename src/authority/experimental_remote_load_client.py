@@ -30,8 +30,9 @@ class ExperimentalRemoteLoadClient:
 
     A caller supplies an already-connected IPv4 TCP stream, a file endpoint,
     and a monotonic absolute deadline. `download` uses the existing file fetcher:
-    its timeout bounds inactivity, not total download time. The deadline is
-    checked again on return. The caller must keep the download and staged paths
+    its socket operations are capped by the same absolute deadline. DNS,
+    filesystem calls and callbacks cannot be interrupted; the deadline is
+    checked after each returns. The caller must keep the download and staged paths
     exclusive, and establish that reported observations belong to the still-live
     X4 process. No native file consumption or peer authenticity is proven.
     """
@@ -121,7 +122,7 @@ class ExperimentalRemoteLoadClient:
             save = SaveOffer(offer.name, offer.sha256, offer.size, offer.checkpoint_id)
             host, port, token, slot = self._endpoint
             path = receive(host,port,token,slot,save,Path(new_directory),retries=0,
-                           timeout=min(self._io_timeout,self._remaining()))
+                           timeout=min(self._io_timeout,self._remaining()),deadline=self._deadline)
             self._state = 'downloaded'
             return path
 

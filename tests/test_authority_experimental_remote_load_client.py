@@ -113,6 +113,7 @@ class RemoteLoadClientTests(unittest.TestCase):
         obj,_,_=self.connect(); obj.request_offer()
         obj._deadline=time.monotonic()+0.02
         def slow_receive(*args,**kwargs):
+            self.assertEqual(kwargs['deadline'], obj._deadline)
             time.sleep(.04)
             return self.root/'synthetic-result'
         with patch.object(subject,'receive',side_effect=slow_receive):

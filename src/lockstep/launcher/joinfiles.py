@@ -13,6 +13,7 @@ length and keeps the file only when the size and SHA-256 match the host's, which
 (the relay's NGJOINSTATE names the package's)."""
 import hashlib
 import hmac
+import math
 from pathlib import Path
 import re
 import secrets
@@ -36,6 +37,50 @@ class FetchError(Exception):
     pass
 
 
+class FetchDeadline(FetchError, TimeoutError):
+    """The caller's monotonic transfer deadline was exhausted."""
+
+
+def _remaining(deadline):
+    if deadline is None:
+        return None
+    if type(deadline) not in (int, float) or not math.isfinite(deadline):
+        raise ValueError('invalid transfer deadline')
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise FetchDeadline('join-file transfer deadline expired')
+    return remaining
+
+
+def _connect(host, port, timeout, deadline):
+    if deadline is None:
+        return socket.create_connection((host, port), timeout=timeout)
+    # getaddrinfo may block outside Python's control. Once it returns, each
+    # candidate gets only the time still available to the entire transfer.
+    _remaining(deadline)
+    addresses = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    last = None
+    for family, socktype, proto, _, address in addresses:
+        _remaining(deadline)
+        conn = None
+        try:
+            conn = socket.socket(family, socktype, proto)
+            conn.settimeout(min(timeout, _remaining(deadline)))
+            conn.connect(address)
+            _remaining(deadline)
+            return conn
+        except BaseException as error:
+            if conn is not None:
+                conn.close()
+            if not isinstance(error, OSError) or isinstance(error, FetchDeadline):
+                raise
+            last = error
+    _remaining(deadline)
+    if last is not None:
+        raise last
+    raise OSError('no addresses found')
+
+
 def mac(token, slot, nonce, name, offset):
     text = f'X4JF|{PROTOCOL}|{slot}|{nonce}|{name}|{offset}'
     return hmac.new(token.encode('ascii'), text.encode('ascii'), hashlib.sha256).hexdigest()
@@ -46,10 +91,15 @@ def request_line(token, slot, name, offset=0, nonce=None):
     return f'X4JF|{PROTOCOL}|{slot}|{nonce}|{name}|{offset}|{mac(token, slot, nonce, name, offset)}\n'.encode('ascii')
 
 
-def sha256_file(path):
+def sha256_file(path, *, deadline=None):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
-        for block in iter(lambda: f.read(CHUNK), b''):
+        while True:
+            _remaining(deadline)
+            block = f.read(CHUNK)
+            _remaining(deadline)
+            if not block:
+                break
             h.update(block)
     return h.hexdigest()
 
@@ -212,8 +262,24 @@ class FileService:
 OFFER_WAIT_S = 180   # the relay answers saved before the host has read the notice and hashed the files: 'name' is retried this long
 
 
-def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progress=None, timeout=TIMEOUT_S, offer_wait_s=OFFER_WAIT_S, expect_size=None):
-    """Download name from the host into dest (resuming dest.part); returns the SHA-256. Raises FetchError."""
+def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progress=None, timeout=TIMEOUT_S, offer_wait_s=OFFER_WAIT_S, expect_size=None, *, deadline=None):
+    """Download and verify, optionally bounded by an absolute monotonic deadline.
+
+    DNS resolution, filesystem calls and user callbacks cannot be interrupted;
+    the deadline is checked after they return. Partial files remain available
+    for an explicitly requested retry, just as without a deadline. A filesystem
+    operation can finish after the deadline: in particular, a verified target
+    may exist even though the post-replace deadline check reports failure.
+    """
+    if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+        raise ValueError('invalid transfer deadline')
+    def budget():
+        left = _remaining(deadline)
+        return timeout if left is None else min(timeout, left)
+    def sleep_bounded(delay):
+        left = _remaining(deadline)
+        time.sleep(delay if left is None else min(delay, left))
+        _remaining(deadline)
     if not NAME.fullmatch(name):
         raise FetchError(f'not a join file name: {name}')
     if expect_size is not None and (type(expect_size) is not int or expect_size <= 0):
@@ -223,17 +289,22 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
     dest.parent.mkdir(parents=True, exist_ok=True)
     last, attempt, offer_deadline = None, 0, time.monotonic() + offer_wait_s
     while attempt <= retries:
+        _remaining(deadline)
         if attempt:
-            time.sleep(min(2 ** attempt, 20))
+            sleep_bounded(min(2 ** attempt, 20))
         attempt += 1
         offset = part.stat().st_size if part.is_file() else 0
         try:
-            with socket.create_connection((host, port), timeout=timeout) as conn:
-                conn.settimeout(timeout)
-                conn.sendall(request_line(token, slot, name, offset))
+            with _connect(host, port, timeout, deadline) as conn:
+                request = request_line(token, slot, name, offset)
+                conn.settimeout(budget())
+                conn.sendall(request)
+                _remaining(deadline)
                 head = b''
                 while not head.endswith(b'\n'):
+                    conn.settimeout(budget())
                     data = conn.recv(1)
+                    _remaining(deadline)
                     if not data or len(head) > LINE_MAX:
                         raise FetchError('the host closed the connection before its answer')
                     head += data
@@ -242,7 +313,7 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
                     reason = f[1] if len(f) > 1 else '?'
                     if reason == 'name' and time.monotonic() < offer_deadline:
                         attempt -= 1          # not offered yet: wait for the host, without using up a retry
-                        time.sleep(2)
+                        sleep_bounded(2)
                         last = FetchError(f'{name}: not offered by the host within {offer_wait_s} s')
                         continue
                     if reason in ('busy',):
@@ -270,24 +341,31 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
                 with open(part, 'ab') as out:
                     got = offset
                     while got < size:
+                        conn.settimeout(budget())
                         data = conn.recv(min(CHUNK, size - got))
+                        _remaining(deadline)
                         if not data:
                             break
                         out.write(data)
+                        _remaining(deadline)
                         got += len(data)
                         if progress:
                             progress(name, got, size)
+                            _remaining(deadline)
                 if got < size:
                     last = FetchError(f'{name}: connection lost at {got} of {size} bytes')
                     continue
-            if sha256_file(part) != digest:
+            if sha256_file(part, deadline=deadline) != digest:
                 part.unlink()
                 last = FetchError(f'{name}: the downloaded bytes do not match SHA-256 {digest[:16]}..')
                 continue
+            _remaining(deadline)
             part.replace(dest)
+            _remaining(deadline)
             return digest
         except FetchError:
             raise
         except (OSError, ValueError) as error:
+            _remaining(deadline)
             last = FetchError(f'{name}: {error}')
     raise last or FetchError(f'{name}: no attempt left')

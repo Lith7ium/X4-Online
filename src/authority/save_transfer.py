@@ -79,7 +79,7 @@ class SaveOffers:
                 self.names.remove(offer.name)
 
 
-def receive(host, port, token, slot, offer, new_directory, *, retries=5, timeout=60):
+def receive(host, port, token, slot, offer, new_directory, *, retries=5, timeout=60, deadline=None):
     """Receive into a newly created directory owned exclusively by the caller.
 
     The underlying transport resumes interrupted attempts during this call and
@@ -89,15 +89,24 @@ def receive(host, port, token, slot, offer, new_directory, *, retries=5, timeout
     output path or follow a concurrently inserted partial-file symlink. The
     caller must verify content compatibility and perform native
     load admission separately; receiving bytes does not establish readiness.
+    The optional absolute monotonic deadline bounds socket I/O but cannot
+    interrupt DNS resolution or a filesystem call in progress. On failure the
+    caller retains the directory, any partial file, and potentially a verified
+    target if replace completed as the deadline expired, for inspection/cleanup.
     """
     if not isinstance(offer, SaveOffer):
         raise ValueError('a validated save offer is required')
     directory = Path(new_directory)
+    joinfiles._remaining(deadline)
     directory.mkdir(mode=0o700)  # parent must exist; refuse existing paths
+    joinfiles._remaining(deadline)
     target = directory / 'save.xml.gz'
     joinfiles.fetch(host, port, token, slot, offer.name, target,
                     expect_sha=offer.sha256, expect_size=offer.size,
-                    retries=retries, timeout=timeout, offer_wait_s=0)
-    if target.stat().st_size != offer.size:
+                    retries=retries, timeout=timeout, offer_wait_s=0, deadline=deadline)
+    joinfiles._remaining(deadline)
+    size = target.stat().st_size
+    joinfiles._remaining(deadline)
+    if size != offer.size:
         raise ValueError('received save size differs from offer')
     return target
