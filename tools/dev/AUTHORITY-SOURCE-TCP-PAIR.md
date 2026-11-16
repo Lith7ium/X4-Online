@@ -144,3 +144,26 @@ retroactively determine this attempt's refusal branch. The synthetic admission,
 artificial client seed/loadout, one local client, non-atomic descriptor,
 unproven frame identity and lack of birth, whole-universe, Windows/Internet,
 persistence or gameplay proof remain as above.
+
+
+The third attempt, `.local/authority-source-tcp-continuous-03`, also failed
+before `FINISHED`. The client log records 16 `LOCAL_APPLIED` entries,
+10055–10070, followed by the more specific
+`ERROR event_refused_create_witness`. The installed client code correlates the
+refusal with the pending MD request, and the installed MD receiver emits this
+code when its grouped Create witness guard is false. That group combines
+baseline index, operational/class, docking/storage, reverse registry,
+unique-sector and witness-sector conditions. The individual failed condition,
+the attempted head's sector and chosen witness index were not logged and
+cannot be recovered from this record. The source log samples 17 `delivering`
+states and ends in the last such state; it does not identify that head.
+
+The supervisor result retains 16 worker-reported completed records across the
+same five sector macros listed for attempt 02, and reports no queue snapshot,
+uncertain in-flight outcome and confirmed owned-process cleanup with none
+remaining. The worker result and code support the corresponding receipt,
+source MD Ack and REARM assertions for those 16 records; there is no packet
+trace. `create_witness` does not establish which particular witness predicate
+failed or whether an alternative saved witness would have succeeded. A
+correlated, read-only witness probe is under investigation; neither automatic
+recovery nor a successful multi-witness native run is claimed.

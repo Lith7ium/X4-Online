@@ -198,6 +198,12 @@ but the particular MD refusal branch remains unknown. The saved result reports
 confirmed owned cleanup. These bounded local tests do not establish complete
 coverage or playable multiplayer. [Details](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#continuous-window-diagnostic).
 
+A third continuous-window attempt retained 16 worker records and logged 16
+client applications before a correlated `create_witness` refusal. The grouped
+witness guard failed, but the sector, witness index and specific predicate
+for the refused head were not recorded. No `FINISHED` snapshot was reached;
+owned cleanup was confirmed. [Details](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#continuous-window-diagnostic).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity
