@@ -64,6 +64,44 @@ persistent multiplayer world. Normal profiles and saves must never be used.
 
 Offline tests use synthetic saved artifacts and fake X4 owners/processes plus
 real local UDP/TCP and a gated helper. They do not start X4 or reread the large
-census archive. Before a native run, the complete source/overlay/protocol and
-cleanup path needs independent review; a failed or ambiguous diagnostic is not
-retried against an already mutated profile.
+census archive. The integration received independent review before the bounded
+native run below; a failed or ambiguous diagnostic must not be retried against
+an already mutated profile.
+
+## Bounded native Linux/Linux run
+
+The disposable `.local/authority-census-pair-01` result reports success,
+confirmed owned cleanup and no remaining owned processes. It reports job
+sequence 1 and newly allocated registry index 10055, with a descriptor for
+`ship_gen_m_tugboat_01_a_macro`, faction `pioneers`, in
+`cluster_115_sector001_macro`, at sector coordinates
+(-132217.25, 6004.3818359375, 169081.453125). The selected saved-sector
+witness was registry index 1318; the pinned witness artifact lists that index
+under the same sector with a zone as its immediate saved component parent.
+This is a job activation and new registry entry, not proof of ship birth.
+
+Both X4 logs record load request, saved marker inspection, pause receipt and
+local READY, followed by repeated CHECKED receipts. The source log records
+DESCRIPTOR then WITNESS_OK; the client log records WITNESS_OK. The source's
+logged game time advanced from about 3.04 to 13.08 seconds, then remained at
+13.08 through its descriptor and witness receipts; the client's logged time
+remained about 3.04. According to the reviewed coordinator and its successful
+result, the source witness preceded one localhost TCP descriptor exchange,
+the client witness preceded its TCP ACK, and helper and X4 cleanup were
+confirmed. Those cross-process steps and descriptor values are reported by the
+coordinator, not independently established by a saved TCP packet trace; the
+individual X4 log labels do not contain the descriptor or actor IDs.
+
+The pinned source save and both private staged copies have compressed SHA-256
+`64a233ac6a85194b8276212709e78a6c48bbcc0f73c19842622aa098f1408cb8`;
+the existing witness JSON hashes to
+`006b07a39be4cff6a3fac7555b26d40ffe834594304c231dd659b23bfdc85349`.
+The recorded private Lua and MD scripts match the reviewed sources or expected
+module-export transformations, and saved-state MD scripts match the archive.
+Matching file hashes do not prove which bytes X4 consumed, and the witness
+artifact hash does not independently establish its derivation from the save.
+
+This single diagnostic requests neither replica creation nor a game save. It
+does not prove matching runtime coordinate frames, complete ship-state or
+universe synchronization, event coverage, Windows/Internet operation,
+combat, trade, boarding or playable shared-world persistence.

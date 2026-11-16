@@ -52,6 +52,12 @@ Native Linux evidence so far:
   is one fixture, not full ship-state synchronization, Windows/Internet or
   gameplay; the seed is a test input. The detailed record distinguishes the
   X4 log receipts from the coordinator's ACK and cleanup report.
+* In a separate two-X4 Linux localhost diagnostic, the source registered one
+  job activation at index 10055, paused, and reported its descriptor. The
+  coordinator reports a saved sector witness verified locally in both
+  processes before the TCP ACK. This does not prove ship birth, replica creation
+  or a shared coordinate frame; log and coordinator evidence have different
+  limits detailed in the diagnostic.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
   accepted a trusted client load claim over TCP, and confirmed resume and pause
   through TCP participant control. A second join was simulated. Another run
@@ -93,6 +99,7 @@ the complete persistent shared-world scenario require actual end-to-end tests.
 Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [saved-registry job attach](../tools/dev/AUTHORITY-JOB-ATTACH.md),
 [local job descriptor](../tools/dev/AUTHORITY-JOB-DESCRIPTOR-PROBE.md),
+[two-X4 census descriptor](../tools/dev/AUTHORITY-CENSUS-PAIR-READ.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-sector local creation](../tools/dev/AUTHORITY-SECTOR-CREATE-PREPARATION.md),
