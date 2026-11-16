@@ -288,105 +288,188 @@ class ExperimentalTCPMotion:
         self._preflight=None
         return bool(survivors)
 
-    def apply_once(self,raw,*,guard=None,_source=None):
+    def apply_once(self, raw, *, guard=None, _source=None):
         """Opt-in one-peer apply/readback after an exactly confirmed motion sample.
 
         This is a caller assertion; a failure after dispatch cannot undo a write.
         """
-        self._reserved(_source);d=self._delivery;host=d._host;host._check()
-        if not host._control._motion_idle(): raise RuntimeError('drain latest motion before apply')
+        self._reserved(_source)
+        delivery = self._delivery
+        host = delivery._host
+        host._check()
+        if not host._control._motion_idle():
+            raise RuntimeError('drain latest motion before apply')
         try:
-            if not self._allow_apply or self._apply_attempted or self._failed or d._failed:
+            if not self._allow_apply or self._apply_attempted or self._failed or delivery._failed:
                 raise RuntimeError('one-shot motion apply unavailable')
-            if guard is not None and not callable(guard):raise ValueError('invalid operation guard')
-            value=motion_value(raw);key=(value['epoch'],value['generation'],value['index'])
-            state=self._tracks.get(key);members=d.membership();handles,peers=d._peers();incarnations=dict(d._incarnations)
-            if len(members)!=1 or len(handles)!=1:raise RuntimeError('one admitted apply participant required')
-            h=handles[0];peer=('peer_'+str(h),incarnations[h]);digest=motion_digest(value)
-            if (not state or state['closed'] or state['peer_samples'].get(peer)!=(value['sequence'],digest) or
-                self._preflight!=(key,peer,value['sequence'],digest) or
-                members!=({'id':peer[0],'incarnation':peer[1]},)):
+            if guard is not None and not callable(guard):
+                raise ValueError('invalid operation guard')
+            sample = motion_value(raw)
+            track_key = (sample['epoch'], sample['generation'], sample['index'])
+            track = self._tracks.get(track_key)
+            members = delivery.membership()
+            handles, peers = delivery._peers()
+            incarnations = dict(delivery._incarnations)
+            if len(members) != 1 or len(handles) != 1:
+                raise RuntimeError('one admitted apply participant required')
+            handle = handles[0]
+            peer_identity = ('peer_' + str(handle), incarnations[handle])
+            digest = motion_digest(sample)
+            if (not track or track['closed'] or
+                track['peer_samples'].get(peer_identity) != (sample['sequence'], digest) or
+                self._preflight != (track_key, peer_identity, sample['sequence'], digest) or
+                members != ({'id': peer_identity[0], 'incarnation': peer_identity[1]},)):
                 raise ValueError('apply sample is not the confirmed participant sample')
             host._control._reader_free()
         except BaseException:
-            self._failed=True;d._failed=True;host._failed=True;raise
-        lease=object();host._control._reader_lease=lease;host._busy=True;d._active=True;self._apply_attempted=True
+            self._failed = True
+            delivery._failed = True
+            host._failed = True
+            raise
+        reader_lease = object()
+        host._control._reader_lease = reader_lease
+        host._busy = True
+        delivery._active = True
+        self._apply_attempted = True
         try:
-            deadline=time.monotonic()+d._timeout
-            def check():
-                if guard is not None and guard() is not True:raise RuntimeError('motion apply guard failed')
-                if (time.monotonic()>=deadline or self._failed or d._failed or host._failed or host._busy is not True or
-                    d._active is not True or host._control._reader_lease is not lease or d._incarnations!=incarnations):
-                    raise RuntimeError('motion apply state changed')
-            check();ExperimentalTCPParticipants._quiet(d,peers,deadline)
-            req={'version':1,'kind':'motion_apply','connection_handle':h,'session_epoch':host._world.session.world_epoch,
-                 'incarnation':incarnations[h],'request_id':value['sequence'],'sample':value}
-            expected={k:req[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
-            expected.update(kind='motion_applied_receipt',status='applied',sample_sha256=digest)
-            data=json.dumps(req,sort_keys=True,separators=(',', ':'),allow_nan=False).encode('ascii')+b'\n'
-            if len(data)>MAX_MESSAGE+1:raise ValueError('motion apply frame too large')
-            conn,p=peers[h]
-            ExperimentalTCPParticipants._exchange(d,conn,p,[],data,expected,deadline,check=check if guard else None)
-            check();current,current_peers=d._peers()
-            if current!=handles or current_peers[h]!=peers[h] or d._incarnations!=incarnations:
-                raise RuntimeError('motion apply membership changed')
-            ExperimentalTCPParticipants._quiet(d,peers,deadline);check();return True
-        except BaseException:
-            self._failed=True;d._failed=True;host._failed=True;raise
-        finally:
-            changed=host._control._reader_lease is not lease
-            if not changed:host._control._reader_lease=None
-            else:self._failed=True;d._failed=True;host._failed=True
-            d._active=False;host._busy=False
-            if changed:raise RuntimeError('motion apply reader lease changed')
+            deadline = time.monotonic() + delivery._timeout
 
-    def preflight(self,raw,*,guard=None,_source=None):
+            def check_context():
+                if guard is not None and guard() is not True:
+                    raise RuntimeError('motion apply guard failed')
+                if (time.monotonic() >= deadline or self._failed or delivery._failed or host._failed or
+                    host._busy is not True or delivery._active is not True or
+                    host._control._reader_lease is not reader_lease or delivery._incarnations != incarnations):
+                    raise RuntimeError('motion apply state changed')
+
+            check_context()
+            ExperimentalTCPParticipants._quiet(delivery, peers, deadline)
+            request = {'version': 1, 'kind': 'motion_apply', 'connection_handle': handle,
+                       'session_epoch': host._world.session.world_epoch, 'incarnation': incarnations[handle],
+                       'request_id': sample['sequence'], 'sample': sample}
+            expected = {k: request[k] for k in ('version', 'connection_handle', 'session_epoch',
+                                                 'incarnation', 'request_id')}
+            expected.update(kind='motion_applied_receipt', status='applied', sample_sha256=digest)
+            payload = json.dumps(request, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('ascii') + b'\n'
+            if len(payload) > MAX_MESSAGE + 1:
+                raise ValueError('motion apply frame too large')
+            connection, connection_peer = peers[handle]
+            ExperimentalTCPParticipants._exchange(delivery, connection, connection_peer, [], payload,
+                                                  expected, deadline, check=check_context if guard else None)
+            check_context()
+            current, current_peers = delivery._peers()
+            if current != handles or current_peers[handle] != peers[handle] or delivery._incarnations != incarnations:
+                raise RuntimeError('motion apply membership changed')
+            ExperimentalTCPParticipants._quiet(delivery, peers, deadline)
+            check_context()
+            return True
+        except BaseException:
+            self._failed = True
+            delivery._failed = True
+            host._failed = True
+            raise
+        finally:
+            lease_changed = host._control._reader_lease is not reader_lease
+            if not lease_changed:
+                host._control._reader_lease = None
+            else:
+                self._failed = True
+                delivery._failed = True
+                host._failed = True
+            delivery._active = False
+            host._busy = False
+            if lease_changed:
+                raise RuntimeError('motion apply reader lease changed')
+
+    def preflight(self, raw, *, guard=None, _source=None):
         """Read-only, correlated preflight for the last confirmed peer sample."""
-        self._reserved(_source);d=self._delivery;host=d._host;host._check();self._preflight=None
-        if not host._control._motion_idle(): raise RuntimeError('drain latest motion before preflight')
+        self._reserved(_source)
+        delivery = self._delivery
+        host = delivery._host
+        host._check()
+        self._preflight = None
+        if not host._control._motion_idle():
+            raise RuntimeError('drain latest motion before preflight')
         try:
-            if not self._allow_apply or self._apply_attempted or self._failed or d._failed:
+            if not self._allow_apply or self._apply_attempted or self._failed or delivery._failed:
                 raise RuntimeError('motion preflight unavailable')
-            if guard is not None and not callable(guard):raise ValueError('invalid operation guard')
-            value=motion_value(raw);key=(value['epoch'],value['generation'],value['index'])
-            state=self._tracks.get(key);members=d.membership();handles,peers=d._peers();incarnations=dict(d._incarnations)
-            if len(members)!=1 or len(handles)!=1:raise RuntimeError('one admitted preflight participant required')
-            h=handles[0];peer=('peer_'+str(h),incarnations[h]);digest=motion_digest(value)
-            if (not state or state['closed'] or state['peer_samples'].get(peer)!=(value['sequence'],digest) or
-                members!=({'id':peer[0],'incarnation':peer[1]},)):
+            if guard is not None and not callable(guard):
+                raise ValueError('invalid operation guard')
+            sample = motion_value(raw)
+            track_key = (sample['epoch'], sample['generation'], sample['index'])
+            track = self._tracks.get(track_key)
+            members = delivery.membership()
+            handles, peers = delivery._peers()
+            incarnations = dict(delivery._incarnations)
+            if len(members) != 1 or len(handles) != 1:
+                raise RuntimeError('one admitted preflight participant required')
+            handle = handles[0]
+            peer_identity = ('peer_' + str(handle), incarnations[handle])
+            digest = motion_digest(sample)
+            if (not track or track['closed'] or
+                track['peer_samples'].get(peer_identity) != (sample['sequence'], digest) or
+                members != ({'id': peer_identity[0], 'incarnation': peer_identity[1]},)):
                 raise ValueError('preflight sample is not the confirmed participant sample')
             host._control._reader_free()
         except BaseException:
-            self._failed=True;d._failed=True;host._failed=True;raise
-        lease=object();host._control._reader_lease=lease;host._busy=True;d._active=True
+            self._failed = True
+            delivery._failed = True
+            host._failed = True
+            raise
+        reader_lease = object()
+        host._control._reader_lease = reader_lease
+        host._busy = True
+        delivery._active = True
         try:
-            deadline=time.monotonic()+d._timeout
-            def check():
-                if guard is not None and guard() is not True:raise RuntimeError('motion preflight guard failed')
-                if (time.monotonic()>=deadline or self._failed or d._failed or host._failed or host._busy is not True or
-                    d._active is not True or host._control._reader_lease is not lease or d._incarnations!=incarnations):
+            deadline = time.monotonic() + delivery._timeout
+
+            def check_context():
+                if guard is not None and guard() is not True:
+                    raise RuntimeError('motion preflight guard failed')
+                if (time.monotonic() >= deadline or self._failed or delivery._failed or host._failed or
+                    host._busy is not True or delivery._active is not True or
+                    host._control._reader_lease is not reader_lease or delivery._incarnations != incarnations):
                     raise RuntimeError('motion preflight state changed')
-            check();ExperimentalTCPParticipants._quiet(d,peers,deadline)
-            req={'version':1,'kind':'motion_preflight','connection_handle':h,'session_epoch':host._world.session.world_epoch,
-                 'incarnation':incarnations[h],'request_id':value['sequence'],'sample':value}
-            expected={k:req[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
-            expected.update(kind='motion_preflight_receipt',sample_sha256=digest)
-            choices=tuple(dict(expected,status=status) for status in ('near','ready'))
-            data=json.dumps(req,sort_keys=True,separators=(',', ':'),allow_nan=False).encode('ascii')+b'\n'
-            if len(data)>MAX_MESSAGE+1:raise ValueError('motion preflight frame too large')
-            conn,p=peers[h]
-            answer=ExperimentalTCPParticipants._exchange(d,conn,p,[],data,choices,deadline,check=check if guard else None)
-            check();current,current_peers=d._peers()
-            if current!=handles or current_peers[h]!=peers[h] or d._incarnations!=incarnations:
+
+            check_context()
+            ExperimentalTCPParticipants._quiet(delivery, peers, deadline)
+            request = {'version': 1, 'kind': 'motion_preflight', 'connection_handle': handle,
+                       'session_epoch': host._world.session.world_epoch, 'incarnation': incarnations[handle],
+                       'request_id': sample['sequence'], 'sample': sample}
+            expected = {k: request[k] for k in ('version', 'connection_handle', 'session_epoch',
+                                                 'incarnation', 'request_id')}
+            expected.update(kind='motion_preflight_receipt', sample_sha256=digest)
+            choices = tuple(dict(expected, status=status) for status in ('near', 'ready'))
+            payload = json.dumps(request, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('ascii') + b'\n'
+            if len(payload) > MAX_MESSAGE + 1:
+                raise ValueError('motion preflight frame too large')
+            connection, connection_peer = peers[handle]
+            response = ExperimentalTCPParticipants._exchange(delivery, connection, connection_peer, [], payload,
+                                                             choices, deadline,
+                                                             check=check_context if guard else None)
+            check_context()
+            current, current_peers = delivery._peers()
+            if current != handles or current_peers[handle] != peers[handle] or delivery._incarnations != incarnations:
                 raise RuntimeError('motion preflight membership changed')
-            ExperimentalTCPParticipants._quiet(d,peers,deadline);check()
-            if answer['status']=='ready':self._preflight=(key,peer,value['sequence'],digest)
-            return answer['status']
+            ExperimentalTCPParticipants._quiet(delivery, peers, deadline)
+            check_context()
+            if response['status'] == 'ready':
+                self._preflight = (track_key, peer_identity, sample['sequence'], digest)
+            return response['status']
         except BaseException:
-            self._failed=True;d._failed=True;host._failed=True;raise
+            self._failed = True
+            delivery._failed = True
+            host._failed = True
+            raise
         finally:
-            changed=host._control._reader_lease is not lease
-            if not changed:host._control._reader_lease=None
-            else:self._failed=True;d._failed=True;host._failed=True
-            d._active=False;host._busy=False
-            if changed:raise RuntimeError('motion preflight reader lease changed')
+            lease_changed = host._control._reader_lease is not reader_lease
+            if not lease_changed:
+                host._control._reader_lease = None
+            else:
+                self._failed = True
+                delivery._failed = True
+                host._failed = True
+            delivery._active = False
+            host._busy = False
+            if lease_changed:
+                raise RuntimeError('motion preflight reader lease changed')
