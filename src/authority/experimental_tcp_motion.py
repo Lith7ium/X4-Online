@@ -1,0 +1,144 @@
+"""Opt-in serial motion messages on the existing admitted TCP delivery owner.
+
+The owner must bind each epoch/generation/index to a real source lifetime before
+calling track(). A receipt confirms the participant callback only: no X4 write,
+frame equivalence, native velocity, lifecycle detection or recovery is implied.
+"""
+import copy
+import hashlib
+import json
+import math
+import re
+import time
+
+from .experimental_tcp_job_delivery import ExperimentalTCPJobDelivery
+from .experimental_tcp_participants import ExperimentalTCPParticipants
+from .load_messages import MAX_MESSAGE
+
+_TOKEN = re.compile(r'[0-9a-f]{32}\Z')
+_SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}\Z')
+_MAX = 9007199254740991
+_COMMON = {'version', 'epoch', 'generation', 'index', 'sequence'}
+_SNAPSHOT = _COMMON | {'sector_macro', 'source_time', 'x', 'y', 'z', 'velocity'}
+
+
+def motion_value(value, *, despawn=False):
+    """Validate exact portable fields and return a detached copy."""
+    if type(despawn) is not bool or type(value) is not dict or set(value) != (_COMMON if despawn else _SNAPSHOT):
+        raise ValueError('invalid motion fields')
+    if type(value['version']) is not int or value['version'] != 1:
+        raise ValueError('invalid motion version')
+    if any(type(value[k]) is not str or not _TOKEN.fullmatch(value[k]) for k in ('epoch', 'generation')):
+        raise ValueError('invalid motion lineage')
+    if any(type(value[k]) is not int or not 1 <= value[k] <= _MAX for k in ('index', 'sequence')):
+        raise ValueError('invalid motion identity')
+    def number(n, lo, hi):
+        if type(n) not in (int, float): return False
+        try: return math.isfinite(n) and lo <= n <= hi
+        except OverflowError: return False
+    if not despawn:
+        if type(value['sector_macro']) is not str or not _SECTOR.fullmatch(value['sector_macro']):
+            raise ValueError('invalid motion frame')
+        if not number(value['source_time'], 0, 1e12) or any(not number(value[k], -1e7, 1e7) for k in ('x','y','z')):
+            raise ValueError('invalid motion sample')
+        vel=value['velocity']
+        if vel is not None and (type(vel) is not dict or set(vel)!={'x','y','z'} or
+                any(not number(vel[k], -5000, 5000) for k in ('x','y','z'))):
+            raise ValueError('invalid motion rate')
+    return copy.deepcopy(value)
+
+
+def motion_digest(value, *, despawn=False):
+    raw=json.dumps(motion_value(value, despawn=despawn),sort_keys=True,separators=(',', ':'),allow_nan=False).encode('ascii')
+    return hashlib.sha256(raw).hexdigest()
+
+
+class ExperimentalTCPMotion:
+    """Share the job owner's socket lease; callbacks own real game binding."""
+    def __init__(self, delivery, *, enabled=False, min_interval=1/60, max_tracks=100000):
+        if (enabled is not True or type(delivery) is not ExperimentalTCPJobDelivery or
+            type(min_interval) not in (int,float) or not math.isfinite(min_interval) or not 1/240 <= min_interval <= 10 or
+            type(max_tracks) is not int or not 1 <= max_tracks <= 100000):
+            raise ValueError('invalid enabled motion owner')
+        delivery._host._check()
+        if getattr(delivery, '_motion_owner', None) is not None:raise ValueError('motion owner already bound')
+        delivery._motion_owner=self;self._delivery=delivery;self._tracks={};self._current={}
+        self._min_interval=float(min_interval);self._max_tracks=max_tracks;self._failed=False
+
+    def track(self, epoch, generation, index):
+        self._delivery._host._check()
+        if self._failed or self._delivery._failed:raise RuntimeError('motion owner unavailable')
+        try:probe=motion_value({'version':1,'epoch':epoch,'generation':generation,'index':index,'sequence':1},despawn=True)
+        except (TypeError,ValueError):
+            self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
+            raise
+        key=(probe['epoch'],probe['generation'],probe['index'])
+        if key in self._tracks or len(self._tracks)>=self._max_tracks:
+            self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
+            raise ValueError('duplicate or full motion registry')
+        current=self._current.get((epoch,index))
+        if current is not None and not self._tracks[current]['closed']:
+            self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
+            raise ValueError('previous lifetime is still active')
+        self._tracks[key]={'sequence':0,'time':None,'sent':None,'frame':None,'closed':False}
+        self._current[(epoch,index)]=key
+
+    def send(self, raw, *, despawn=False):
+        d=self._delivery;host=d._host;host._check()
+        if self._failed or d._failed:raise RuntimeError('motion owner unavailable')
+        try:value=motion_value(raw,despawn=despawn)
+        except (TypeError,ValueError):
+            self._failed=True;d._failed=True;host._failed=True
+            raise
+        key=(value['epoch'],value['generation'],value['index'])
+        state=self._tracks.get(key);now=time.monotonic()
+        if not state or state['closed'] or value['sequence']<=state['sequence'] or (despawn and state['sequence']==0):
+            self._failed=True;d._failed=True;host._failed=True
+            raise ValueError('unknown, stale or despawned motion')
+        if not despawn:
+            if state['time'] is not None and value['source_time']<=state['time']:
+                self._failed=True;d._failed=True;host._failed=True
+                raise ValueError('non-monotone source time')
+            if state['frame'] is not None and value['sector_macro']!=state['frame'] and value['velocity'] is not None:
+                self._failed=True;d._failed=True;host._failed=True
+                raise ValueError('frame transition requires unknown velocity')
+            if state['sent'] is not None and now-state['sent']<self._min_interval:
+                raise ValueError('motion rate limited')
+        try:
+            members=d.membership();handles,peers=d._peers()
+            if not members:raise RuntimeError('no admitted motion recipients')
+            host._control._reader_free()
+        except BaseException:
+            self._failed=True;d._failed=True;host._failed=True
+            raise
+        lease=object();host._control._reader_lease=lease
+        host._busy=True;d._active=True
+        try:
+            deadline=time.monotonic()+d._timeout
+            ExperimentalTCPParticipants._quiet(d,peers,deadline)
+            for h in handles:
+                incarnation=d._incarnations[h]
+                req={'version':1,'kind':'motion_despawn' if despawn else 'motion_snapshot',
+                     'connection_handle':h,'session_epoch':host._world.session.world_epoch,
+                     'incarnation':incarnation,'request_id':value['sequence'],'sample':value}
+                expected={k:req[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
+                expected.update(kind='motion_receipt',status='accepted',sample_sha256=motion_digest(value,despawn=despawn))
+                data=json.dumps(req,sort_keys=True,separators=(',', ':'),allow_nan=False).encode('ascii')+b'\n'
+                if len(data)>MAX_MESSAGE+1:raise ValueError('motion frame too large')
+                conn,peer=peers[h];others=[p[0] for n,p in peers.items() if n!=h]
+                ExperimentalTCPParticipants._exchange(d,conn,peer,others,data,expected,deadline)
+                current,current_peers=d._peers()
+                if current!=handles or any(current_peers[k]!=peers[k] for k in handles):raise RuntimeError('motion membership changed')
+                ExperimentalTCPParticipants._quiet(d,peers,deadline)
+            state['sequence']=value['sequence'];state['sent']=time.monotonic();state['closed']=despawn
+            if not despawn:state['time']=value['source_time'];state['frame']=value['sector_macro']
+            return True
+        except BaseException:
+            self._failed=True;d._failed=True;host._failed=True
+            raise
+        finally:
+            changed=host._control._reader_lease is not lease
+            if not changed:host._control._reader_lease=None
+            else:self._failed=True;d._failed=True;host._failed=True
+            d._active=False;host._busy=False
+            if changed:raise RuntimeError('motion socket lease changed')
