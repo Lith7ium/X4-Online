@@ -11,8 +11,11 @@ function M.new(o)
  assert((o.role=='server' or o.role=='client') and token(o.lease) and token(o.attempt) and token(o.epoch) and token(o.nonce))
  assert(finite(o.timeout) and o.timeout>0 and o.timeout<=600 and (type(o.net)=='table' or type(o.net)=='userdata'))
  assert(finite(o.window) and o.window>=1 and o.window<=180)
+ assert(o.defer_ack==nil or type(o.defer_ack)=='boolean')
+ if o.defer_ack then assert(o.role=='server' and type(o.delivery)=='table' and type(o.delivery.new)=='function') end
  for _,k in ipairs({'clock','observe','guard','pause','resume','host_factory','descriptor_factory','witness_factory','baseline_request','log'})do assert(type(o[k])=='function',k..' required')end
- local phase='new';local failed,busy=false,false;local host,desc,witness,row,actor,descriptor,jobseq,windex,wmacro
+ local phase='new';local failed,busy=false,false;local host,desc,witness,row,actor,descriptor,jobseq,windex,wmacro,gate,gate_event
+ local peer={id='replica',incarnation=o.attempt}
  local last,deadline,host_deadline,paused_game,pending_check,check_counter=nil,nil,nil,nil,nil,0
  local prefix=table.concat({'CENSUS',o.lease,o.role,o.attempt,o.epoch},'|')
  local cmd=table.concat({'CMD',o.lease,o.role,o.attempt,o.epoch},'|')
@@ -52,7 +55,7 @@ function M.new(o)
   if r.classification=='new_registry_entry' then
    if r.index~=10055 or a==nil or row~=nil then return fail() end
    row={epoch=r.epoch,index=r.index,sequence=r.sequence,classification=r.classification};actor=a;jobseq=r.sequence;phase='captured'
-  elseif r.classification~='previously_observed' and r.classification~='previously_unobserved_existing_index' then return fail() end
+  elseif o.defer_ack or (r.classification~='previously_observed' and r.classification~='previously_unobserved_existing_index') then return fail() end
   return true
  end
  local function request_witness(index,macro)
@@ -75,10 +78,23 @@ function M.new(o)
    if o.role=='server' and (seq~=jobseq or not descriptor or p[9]~=descriptor.sector_macro) then return fail() end
    if not check(true) then return false end
    jobseq,windex,wmacro=seq,index,p[9];request_witness(index,wmacro);return true
+  elseif p[6]=='DELIVERY_ACK' and #p==8 and o.defer_ack and phase=='finished' then
+   if p[7]~=string.format('%.0f',jobseq) or p[8]~=string.format('%.0f',row.index) or not check(true) or not gate_event then return fail() end
+   phase='ack_wait'
+   local ok=gate:ack(peer,gate_event)
+   if not ok or not check(true) then return fail() end
+   return true
   end
   return fail()
  end
  local api={}
+ local function queue_acked(epoch,sequence,index)
+  if failed or busy or phase~='ack_wait' or not check(true) or not gate or
+    epoch~=o.epoch or sequence~=jobseq or index~=row.index then return fail() end
+  local ok=gate:source_acked(epoch,sequence,index)
+  if not ok or not check(true) then return fail() end
+  phase='source_ack_pending';return true
+ end
  function api:baseline_event(value)
   if busy or failed or o.role~='client' or phase~='client_baseline' or value~=o.nonce..'|'..o.epoch..'|10054|ok' then return fail() end
   if not check(true) then return fail() end
@@ -107,7 +123,7 @@ function M.new(o)
     local success,t=pcall(o.clock);assert(success and finite(t) and t>=0);last=t;deadline=t+o.timeout
     local valid,p,g=check(true);assert(valid);paused_game=g
     if o.role=='server' then
-     host=assert(o.host_factory(report,fault,no_event));phase='attaching';assert(host:start())
+     host=assert(o.host_factory(report,fault,no_event,function() return paused_game~=nil and check(true)==true end,queue_acked));phase='attaching';assert(host:start())
     else phase='client_baseline';assert(o.baseline_request(o.epoch,o.nonce)==true) end
    end
    local expected=true
@@ -123,7 +139,8 @@ function M.new(o)
    elseif phase=='running' then
     local alive,s=host:tick();assert(alive and s~='failed' and not failed)
    elseif phase=='captured' then
-    assert(host:state()=='waiting');local good=pcall(o.pause);assert(good);phase='pause_wait'
+    assert(host:state()==(o.defer_ack and 'await_delivery' or 'waiting'));if o.defer_ack then host_deadline=nil end
+    local good=pcall(o.pause);assert(good);phase='pause_wait'
    elseif phase=='pause_wait' then
     local valid,p,g=check(nil);assert(valid);if p then paused_game=g;phase='descriptor_start' end
    elseif phase=='no_event_stop' then
@@ -133,18 +150,32 @@ function M.new(o)
    elseif phase=='no_event_pending' then
     assert(check(true) and host:state()=='done');phase='inconclusive';assert(emit('NO_EVENT',nil,true))
    elseif phase=='descriptor_start' then
-    assert(check(true) and host:state()=='waiting');desc=assert(o.descriptor_factory(row,actor));phase='descriptor_wait';assert(desc:start())
-   elseif phase=='descriptor_wait' then assert(check(true) and host:state()=='waiting' and desc:tick())
+    assert(check(true) and host:state()==(o.defer_ack and 'await_delivery' or 'waiting'));desc=assert(o.descriptor_factory(row,actor));phase='descriptor_wait';assert(desc:start())
+   elseif phase=='descriptor_wait' then assert(check(true) and host:state()==(o.defer_ack and 'await_delivery' or 'waiting') and desc:tick())
    elseif phase=='descriptor_pending' then
-    assert(check(true) and host:state()=='waiting');local d=descriptor;local vals={string.format('%.0f',jobseq),'10055',d.macro,d.owner,d.sector_macro,string.format('%.17g',d.x),string.format('%.17g',d.y),string.format('%.17g',d.z)}
-    phase='descriptor_sent';assert(emit('DESCRIPTOR',table.concat(vals,'|'),true))
-   elseif phase=='witness_wait' then assert(check(true) and witness:tick() and (not host or host:state()=='waiting'))
+    assert(check(true) and host:state()==(o.defer_ack and 'await_delivery' or 'waiting'));local d=descriptor;local vals={string.format('%.0f',jobseq),'10055',d.macro,d.owner,d.sector_macro,string.format('%.17g',d.x),string.format('%.17g',d.y),string.format('%.17g',d.z)}
+    phase='descriptor_sent'
+    if o.defer_ack then
+     gate_event={epoch=o.epoch,generation=o.attempt,sequence=jobseq,index=row.index,descriptor={macro=d.macro,faction=d.owner,sector_macro=d.sector_macro,x=d.x,y=d.y,z=d.z}}
+     gate=assert(o.delivery.new({enabled=true,generation=o.attempt,timeout=math.min(o.timeout,300),clock=o.clock,
+      membership=function()return {peer}end,send=function()return emit('DESCRIPTOR',table.concat(vals,'|'),true)end,
+      release=function(epoch,sequence,index)return host:confirm_delivery(epoch,sequence,index)end}))
+     assert(gate:begin(gate_event))
+    else assert(emit('DESCRIPTOR',table.concat(vals,'|'),true)) end
+   elseif phase=='witness_wait' then assert(check(true) and witness:tick() and (not host or host:state()==(o.defer_ack and 'await_delivery' or 'waiting')))
    elseif phase=='witness_pending' then
-    assert(check(true) and (not host or host:state()=='waiting'));phase='finished';assert(emit('WITNESS_OK',table.concat({string.format('%.0f',jobseq),string.format('%.0f',windex),wmacro},'|'),true))
+    assert(check(true) and (not host or host:state()==(o.defer_ack and 'await_delivery' or 'waiting')));phase='finished';assert(emit('WITNESS_OK',table.concat({string.format('%.0f',jobseq),string.format('%.0f',windex),wmacro},'|'),true))
+   elseif phase=='source_ack_pending' then
+    assert(o.defer_ack and host:state()=='waiting' and gate:state()=='idle' and check(true))
+    phase='source_acked';assert(emit('SOURCE_ACKED',table.concat({string.format('%.0f',jobseq),string.format('%.0f',row.index)},'|'),true))
    elseif phase=='descriptor_sent' or phase=='finished' or phase=='ready' or phase=='client_baseline' or phase=='inconclusive' then
-    if host and (phase=='descriptor_sent' or phase=='finished') then assert(host:state()=='waiting') end
+    if host and (phase=='descriptor_sent' or phase=='finished') then assert(host:state()==(o.defer_ack and 'await_delivery' or 'waiting')) end
     if phase=='inconclusive' then assert(host and host:state()=='done') end
+   elseif phase=='ack_wait' or phase=='source_acked' then
+    assert(o.defer_ack and host and host:state()==(phase=='ack_wait' and 'front' or 'waiting'))
    else error('invalid phase') end
+   if o.defer_ack and host and (host:state()=='await_delivery' or host:state()=='front') and phase~='running' and phase~='captured' and phase~='pause_wait' then assert(host:tick()) end
+   if gate and (gate:state()=='waiting' or gate:state()=='released') then assert(gate:tick()) end
    if pending_check then
     local n=pending_check;pending_check=nil;local wanted=true
     if phase=='running' or phase=='captured' or phase=='no_event_stop' then wanted=false elseif phase=='resuming' or phase=='pause_wait' or phase=='no_event_wait' then wanted=nil end

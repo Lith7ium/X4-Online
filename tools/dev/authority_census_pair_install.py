@@ -22,6 +22,8 @@ _GLOBALS={'authority_sector_witness_runtime.lua':'X4LAN_SECTOR_WITNESS_RUNTIME',
 
 def install(case,profile,ticket,config,nonce,timeout,window):
     role=config.get('role')
+    deferred=config.get('defer_source_ack',False)
+    if type(deferred) is not bool or (deferred and role!='server'):raise ValueError('invalid deferred source setting')
     if (role not in ('server','client') or config.get('epoch')!=archive.REGISTRY_EPOCH
         or any(not isinstance(config.get(k),str) or not re.fullmatch(r'[0-9a-f]{32}',config[k]) for k in ('lease','attempt'))
         or not re.fullmatch(r'[0-9a-f]{32}',nonce) or type(config.get('port')) is not int or not 1<=config['port']<=65535
@@ -32,11 +34,17 @@ def install(case,profile,ticket,config,nonce,timeout,window):
     md_names=list(_BASE_MD)+['authority_sector_witness_runtime.xml']
     if role=='server':md_names+=['authority_job_ship_events.xml','authority_paused_job_descriptor.xml']
     else:md_names+=['authority_census_job_baseline.xml']
-    for name in md_names:shutil.copyfile(ROOT/'tools/dev'/name,md/name)
+    for name in md_names:
+        source=archive.saved_state_script(name) if name in _BASE_MD else ROOT/'tools/dev'/name
+        shutil.copyfile(source,md/name)
     for name in _COMMON_UI:
         text=(ROOT/'tools/dev'/name).read_text()
         if name in _GLOBALS:text=pair_transfer.once(text,'return M\n',_GLOBALS[name]+'=M\nreturn M\n')
         (ui/name).write_text(text)
+    extra_ui=()
+    if deferred:
+        extra_ui=('authority_job_delivery.lua',)
+        shutil.copyfile(ROOT/'src/authority/lua/job_delivery.lua',ui/extra_ui[0])
     marker=ui/'authority_checkpoint_marker_probe.lua'
     marker.write_text(pair_transfer.once(marker.read_text(),"if phase~='load' or state~='inspect' or type(marker)~='string'",
         "if marker~=cfg.authority_expected_marker or phase~='load' or state~='inspect' or type(marker)~='string'"))
@@ -46,10 +54,11 @@ def install(case,profile,ticket,config,nonce,timeout,window):
         'authority_census_pair=true,authority_census_role="'+role+'",authority_census_epoch="'+config['epoch']+'",'
         'authority_census_attempt="'+config['attempt']+'",authority_census_lease="'+config['lease']+'",'
         'authority_census_nonce="'+nonce+'",authority_census_port='+str(config['port'])+',authority_census_timeout='+
-        format(timeout,'.17g')+',authority_census_window='+format(window,'.17g')+'}\n')
+        format(timeout,'.17g')+',authority_census_window='+format(window,'.17g')+
+        (',authority_census_deferred_ack=true' if deferred else '')+'}\n')
     config_path.write_text(text,encoding='ascii');config_path.chmod(0o600)
     manifest=lab/'ui.xml';text=manifest.read_text();hook='    <file name="ui/authority_download_load_probe.lua" />\n'
-    manifest.write_text(pair_transfer.once(text,hook,''.join('    <file name="ui/'+n+'" />\n' for n in _COMMON_UI)+hook))
+    manifest.write_text(pair_transfer.once(text,hook,''.join('    <file name="ui/'+n+'" />\n' for n in (*extra_ui,*_COMMON_UI))+hook))
     owner=ui/'authority_download_load_probe.lua';text=owner.read_text()
     hook="local state='initial';local failed=false\n"
     text=pair_transfer.once(text,hook,hook+'local pause_requested=false;local pause_confirmed=false\n')
@@ -69,5 +78,5 @@ def install(case,profile,ticket,config,nonce,timeout,window):
     native.mkdir(exist_ok=True);lib=native/'x4lan_net.so';pair_transfer.compile_net(compiler,lib)
     if {p.name for p in md.iterdir()}!=set(md_names):raise ValueError('unexpected private census scripts')
     return [config_path,lab/'ui.xml',lab/'content.xml',profile/'content.xml',profile/'config.xml',lib]+[
-        md/name for name in md_names]+[ui/name for name in (*_COMMON_UI,'sha256.lua','client_load_barrier.lua',
+        md/name for name in md_names]+[ui/name for name in (*extra_ui,*_COMMON_UI,'sha256.lua','client_load_barrier.lua',
         'x4_client_load_engine.lua','authority_download_load_probe.lua')]

@@ -1,5 +1,6 @@
 """Synthetic runtime reader checks; never starts X4."""
 from pathlib import Path
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,27 @@ import authority_census_runtime_read_live as subject
 
 
 class CensusRuntimeTests(unittest.TestCase):
+    def test_save_specific_scripts_are_exact_and_mismatch_is_rejected(self):
+        registry=subject.archive.saved_state_script('authority_ship_registry.xml')
+        self.assertEqual(hashlib.sha256(registry.read_bytes()).hexdigest(),
+                         '8b7c9887c9c1476e45fe84a60243547d96e09b11d4c40fabd151930af517e939')
+        self.assertNotEqual(registry.read_bytes(),(ROOT/'tools/dev/authority_ship_registry.xml').read_bytes())
+        with self.assertRaises(ValueError):subject.archive.saved_state_script('../other.xml')
+        with tempfile.TemporaryDirectory() as temp:
+            source=Path(temp)/'source';store=source/'checkpoints';store.mkdir(parents=True)
+            origin=source/'server/case';md=origin/'extensions/x4_lan_lab/md';md.mkdir(parents=True)
+            content=origin/'home/.config/EgoSoft/X4/45841/content.xml';content.parent.mkdir(parents=True)
+            profile=Path(temp)/'profile';profile.mkdir();content.write_text('same');(profile/'content.xml').write_text('same')
+            names=('authority_checkpoint_marker.xml','authority_ship_registry.xml','authority_identity_fixture.xml')
+            for name in names:(md/name).write_bytes(subject.archive.saved_state_script(name).read_bytes())
+            subject.origin_scripts(store,profile)
+            for name in names:
+                path=md/name;old=path.read_bytes();path.write_bytes(old+b' changed')
+                with self.assertRaisesRegex(ValueError,'saved-state scripts differ'):subject.origin_scripts(store,profile)
+                path.write_bytes(old)
+            (profile/'content.xml').write_text('different')
+            with self.assertRaisesRegex(ValueError,'extension lists differ'):subject.origin_scripts(store,profile)
+
     def test_lua_reads_over_103_and_fails_closed(self):
         for mode in ('ok','wrong_id','pause_loss','duplicate','timeout'):
             with self.subTest(mode=mode):
@@ -38,6 +60,8 @@ class CensusRuntimeTests(unittest.TestCase):
                         attempt_id='b'*32,slot='save_009')
             protected=subject.install(case,profile,ticket,1,'c'*32,105,600)
             self.assertIn(md/'authority_census_runtime_read.xml',protected)
+            self.assertEqual((md/'authority_ship_registry.xml').read_bytes(),
+                             subject.archive.saved_state_script('authority_ship_registry.xml').read_bytes())
             owner=(ui/'authority_download_load_probe.lua').read_text()
             self.assertEqual(owner.count("SetScript('onUpdate'"),1)
             self.assertIn('if not X4LAN_CENSUS_RUNTIME_READY() then return end',owner)

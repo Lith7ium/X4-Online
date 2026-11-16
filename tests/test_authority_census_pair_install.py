@@ -36,14 +36,15 @@ X4LAN_CENSUS_PAIR_TICK();X4LAN_CENSUS_PAIR_TICK();assert(calls==1 and ticks==2)
 
     def test_both_roles_have_one_owner_and_no_client_queue_or_create(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for role in ('server','client'):
-                case=Path(tmp)/role/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
+            for role,deferred in (('server',False),('client',False),('server',True)):
+                case=Path(tmp)/(role+str(deferred))/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
                 ui.mkdir(parents=True);md.mkdir();(profile/'save').mkdir(parents=True)
                 for p in (ui/'native_gate_snapshot.lua',md/'native_gate_battle.xml',ui/'config.lua',ui/'sha256.lua',
                           lab/'content.xml',profile/'content.xml',profile/'config.xml'):p.write_text('test')
                 ticket=dict(world_epoch='a'*32,connection_handle=1,baseline_id=1,load_generation=1,
                     checkpoint_id=m.archive.CHECKPOINT_ID,sha256=m.archive.SHA256,attempt_id='b'*32,slot='save_009')
                 cfg={'role':role,'epoch':m.archive.REGISTRY_EPOCH,'attempt':'c'*32,'lease':'d'*32,'port':12345}
+                if deferred:cfg['defer_source_ack']=True
                 protected=m.install(case,profile,ticket,cfg,'e'*32,600,60)
                 owner=(ui/'authority_download_load_probe.lua').read_text()
                 self.assertEqual(owner.count("SetScript('onUpdate'"),1);self.assertIn('X4LAN_CENSUS_PAIR_TICK()',owner)
@@ -57,9 +58,16 @@ X4LAN_CENSUS_PAIR_TICK();X4LAN_CENSUS_PAIR_TICK();assert(calls==1 and ticks==2)
                 self.assertNotIn('authority_ship_create_receiver.xml',names)
                 self.assertEqual((md/'authority_identity_fixture.xml').read_bytes(),
                                  (ROOT/'tools/dev/authority_identity_fixture.xml').read_bytes())
+                self.assertEqual((md/'authority_ship_registry.xml').read_bytes(),
+                                 m.archive.saved_state_script('authority_ship_registry.xml').read_bytes())
                 self.assertNotIn('<create_ship',''.join(p.read_text() for p in md.glob('*.xml') if p.name!='authority_identity_fixture.xml'))
                 self.assertNotIn('X4AuthorityIdentity',''.join((ui/name).read_text() for name in m._COMMON_UI))
                 self.assertIn(lab/'native/x4lan_net.so',protected)
                 self.assertIn(ui/'config.lua',protected);self.assertIn(ui/'authority_census_pair_session.lua',protected)
+                if deferred:
+                    self.assertIn(ui/'authority_job_delivery.lua',protected)
+                    self.assertIn('authority_census_deferred_ack=true',(ui/'config.lua').read_text())
+                    self.assertIn('ui/authority_job_delivery.lua',(lab/'ui.xml').read_text())
+                else:self.assertFalse((ui/'authority_job_delivery.lua').exists())
 
 if __name__=='__main__':unittest.main()

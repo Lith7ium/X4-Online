@@ -56,6 +56,8 @@ def load_observation(raw,ticket,*,partial=False):
 
 def run(args):
     if sys.platform!='linux' or os.geteuid()==0:raise ValueError('unprivileged Linux required')
+    deferred=getattr(args,'defer_source_ack',False)
+    if type(deferred) is not bool:raise ValueError('invalid deferred source ACK mode')
     out=base.snapshot.output_path(args.out);store=base.base.local_directory(args.store)
     census.ensure_separate(out,store)
     target_out=out.resolve();witness=inputs.WITNESS_PATH.resolve(strict=True)
@@ -85,7 +87,8 @@ def run(args):
         check_cancel();verified=inputs.verify_once(store);check_cancel()
         result.update(source_checkpoint_id=archive.CHECKPOINT_ID,source_sha256=archive.SHA256,
                       registry_epoch=archive.REGISTRY_EPOCH,witness_artifact_sha256=verified.witness_sha256)
-        coord=coordinator.CensusCoordinator(verified.witness_candidates)
+        coord=(coordinator.CensusCoordinator(verified.witness_candidates,defer_source_ack=True) if deferred
+               else coordinator.CensusCoordinator(verified.witness_candidates))
         for role in ('server','client'):
             check_cancel();roleout=out/role;roleout.mkdir(mode=0o700)
             case,profile,binds,lock=base.snapshot.prepare_case(roleout,game,home)
@@ -99,6 +102,7 @@ def run(args):
                     'checkpoint_id':archive.CHECKPOINT_ID,'sha256':archive.SHA256,
                     'attempt_id':secrets.token_hex(16),'slot':'save_009'}
             config=coord.add_role(role);nonce=secrets.token_hex(16)
+            if deferred and role=='server':config['defer_source_ack']=True
             try:protected=installer.install(e['case'],e['profile'],ticket,config,nonce,args.timeout,args.window)
             except pair_transfer.CompilerCleanupUnconfirmed as error:
                 compiler_error=error;raise
@@ -173,7 +177,8 @@ def run(args):
         details=coord.run({'deadline':deadline,'check':lambda:inspect_context(require_load=True)=={'server','client'}})
         inspect_context(require_load=True)
         if (type(details) is not dict or details.get('tcp_ack_after_client_replica') is not True
-            or details.get('ship_creation_requested') is not True or details.get('artificial_seed') != 7183):
+            or details.get('ship_creation_requested') is not True or details.get('artificial_seed') != 7183
+            or (deferred and details.get('source_queue_acked') is not True)):
             raise RuntimeError('replica completion unconfirmed')
         result.update(success=True,participant=details,witness_artifact_sha256=verified.witness_sha256)
     except coordinator.NoNewRegistryEntry as error:
@@ -256,6 +261,8 @@ def main():
     p.add_argument('--store',type=Path,default=archive.DEFAULT_STORE);p.add_argument('--display',required=True)
     p.add_argument('--timeout',type=float,default=600);p.add_argument('--window',type=float,default=60)
     p.add_argument('--seed',type=int,default=276944566)
+    p.add_argument('--defer-source-ack',action='store_true',
+                   help='experimental: hold the source queue head until replica TCP ACK and source MD ACK')
     try:result=run(p.parse_args())
     except (OSError,ValueError,RuntimeError) as error:p.exit(1,'REFUSED: '+str(error)+'\n')
     print(json.dumps(result,indent=2));return 0 if result['success'] else 1

@@ -15,7 +15,8 @@ function M.new(o)
  if o.defer_ack then
   assert(finite(o.delivery_timeout) and o.delivery_timeout>0 and o.delivery_timeout<=600)
   assert(type(o.queue_acked)=='function','queue_acked required')
- else assert(o.delivery_timeout==nil,'delivery timeout requires deferred ACK') end
+  assert(o.can_hold_delivery==nil or type(o.can_hold_delivery)=='function')
+ else assert(o.delivery_timeout==nil and o.can_hold_delivery==nil,'delivery options require deferred ACK') end
  local attach=o.attach_saved_registry==true
  assert(o.attach_saved_registry==nil or type(o.attach_saved_registry)=='boolean')
  if attach then
@@ -36,6 +37,16 @@ function M.new(o)
  local initial_last=attach and o.expected_last or #o.baseline
  local queue_init_attempted=false
  local delivery,notifying=nil,false
+ local function source_ok()
+  local before=phase
+  local running=o.can_observe()
+  if failed or phase~=before then return false end
+  if running==true then return true end
+  if not (o.defer_ack and type(o.can_hold_delivery)=='function' and
+   (phase=='await_delivery' or (phase=='front' and driver and driver:state()=='ack') or notifying)) then return false end
+  local held=o.can_hold_delivery()
+  return held==true and not failed and phase==before
+ end
  local function now()
   local value=o.clock();assert(finite(value) and (not last_clock or value>=last_clock),'clock invalid')
   last_clock=value;return value
@@ -104,7 +115,7 @@ function M.new(o)
   if attach and (phase=='registry_status_epoch' or phase=='registry_status_count' or phase=='queue_preflight' or phase=='queue_init') then
    assert(o.can_attach()==true,'paused attach context lost')
   end
-  if started and o.can_observe()~=true then error('source observation stopped') end
+  if started and source_ok()~=true then error('source observation stopped') end
   if hard_stop and t>hard_stop then error('observation drain timeout') end
   if deadline and t>deadline then error('response timeout') end
   if phase=='queue_preflight' and screen==QUEUE and name=='Uninitialized' then
@@ -164,10 +175,10 @@ function M.new(o)
      assert(delivery and value==delivery.sequence,'queue ACK mismatch')
      local d=delivery;delivery=nil;notifying=true
      local sent,accepted=pcall(o.queue_acked,d.epoch,d.sequence,d.index)
-     notifying=false
      assert(sent and accepted==true and not failed and phase=='waiting','queue ACK callback failed')
      local after=now()
-     assert(after<deadline and after<hard_stop and o.can_observe()==true,'queue ACK callback expired')
+     assert(after<deadline and after<hard_stop and source_ok()==true,'queue ACK callback expired')
+     notifying=false
     end
     deadline=nil
    end
@@ -186,13 +197,13 @@ function M.new(o)
   if failed or notifying or not o.defer_ack or phase~='await_delivery' then fail('unexpected delivery confirmation');return false end
   local ok,err=pcall(function()
    local t=now()
-   assert(t<deadline and t<hard_stop and o.can_observe()==true,'delivery confirmation expired')
+   assert(t<deadline and t<hard_stop and source_ok()==true,'delivery confirmation expired')
    assert(not failed and phase=='await_delivery' and driver:state()=='await_delivery','state changed before confirmation')
    phase='front';deadline=t+o.timeout
    assert(driver:confirm_delivery(epoch,sequence,index),'delivery confirmation refused')
    assert(not failed and phase=='front' and driver:state()=='ack','state changed during delivery confirmation')
    local after=now()
-   assert(after<deadline and after<hard_stop and o.can_observe()==true,'ACK dispatch expired')
+   assert(after<deadline and after<hard_stop and source_ok()==true,'ACK dispatch expired')
    assert(not failed and phase=='front' and driver:state()=='ack','state changed after delivery confirmation')
   end)
   if not ok then fail(tostring(err));return false end
@@ -222,7 +233,7 @@ function M.new(o)
   if failed or phase=='done' then return false,phase end
   local ok,err=pcall(function()
    local t=now()
-   if started and not o.can_observe() then error('source observation stopped') end
+   if started and not source_ok() then error('source observation stopped') end
    if hard_stop and t>hard_stop then error('observation drain timeout') end
    if deadline and t>deadline then error('response timeout') end
    if phase=='attached_wait_running' then
@@ -267,6 +278,13 @@ function M.new_x4(cfg)
   local current=C.GetSaveFolderPath()
   return current~=nil and current~=ffi.NULL and ffi.string(current):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path
    and C.IsPlayerValid() and not C.IsGamePaused()
+ end
+ if cfg.can_hold_delivery then
+  opts.can_hold_delivery=function()
+   local current=C.GetSaveFolderPath()
+   return current~=nil and current~=ffi.NULL and ffi.string(current):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path
+    and C.IsPlayerValid() and C.IsGamePaused() and cfg.can_hold_delivery()==true
+  end
  end
  if opts.attach_saved_registry then
   opts.can_attach=function()

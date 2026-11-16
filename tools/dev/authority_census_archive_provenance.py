@@ -24,6 +24,15 @@ COUNT = 10054
 DEFAULT_STORE = ROOT / '.local/authority-registry-census-01/checkpoints'
 
 
+def saved_state_script(name):
+    """Select the exact save-era scripts for this pinned census checkpoint."""
+    if name == 'authority_ship_registry.xml':
+        return ROOT / 'tools/dev/fixtures/census-20261115/authority_ship_registry.xml'
+    if name in ('authority_checkpoint_marker.xml', 'authority_identity_fixture.xml'):
+        return ROOT / 'tools/dev' / name
+    raise ValueError('unexpected saved-state script')
+
+
 def fingerprints(store):
     """Sample archive identities and reject symlinks, including ancestors."""
     store = Path(os.path.abspath(store))

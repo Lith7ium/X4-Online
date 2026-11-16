@@ -33,6 +33,7 @@ class Runner(unittest.TestCase):
             auth=root/'auth';auth.write_bytes(b'');store=root/'old'/'checkpoints';store.mkdir(parents=True)
             witness=root/'witness.json';witness.write_bytes(b'');out=root/'new'
             args=SimpleNamespace(out=out,store=store,timeout=300,window=30,seed=1,game=game,display=':0')
+            args.defer_source_ack=mode.startswith('deferred_')
             user=SimpleNamespace(pw_dir=str(root),pw_uid=1000,pw_gid=1000,pw_name='tester')
             set_=lambda obj,name,value:stack.enter_context(patch.object(obj,name,value))
             set_(m.os,'geteuid',lambda:1000);stack.enter_context(patch.dict(m.os.environ,{'XAUTHORITY':str(auth)}))
@@ -60,7 +61,9 @@ class Runner(unittest.TestCase):
                     target=p/'save'/'save_009.xml.gz';target.write_bytes(b'save');out[role]=(target,staged_fp,m.archive.SHA256);staged_targets[role]=target
                 return out
             staging=set_(m.inputs,'stage_pair',Mock(side_effect=stage));set_(m.installer,'_BASE_MD',())
+            installed=[]
             def install(_,__,___,config,*rest):
+                installed.append(dict(config))
                 if mode=='swap_before_first' and config['role']=='client':staged_targets['server'].write_bytes(b'changed')
                 return []
             set_(m.installer,'install',install)
@@ -87,7 +90,9 @@ class Runner(unittest.TestCase):
                     raise m.coordinator.NoNewRegistryEntry('no new registry entry observed')
                 coord.replica_dispatch_attempted=True
                 if mode=='dispatch_uncertain':raise RuntimeError('replica dispatch outcome uncertain')
-                return {'tcp_ack_after_client_replica':True,'ship_creation_requested':True,'artificial_seed':7183}
+                details={'tcp_ack_after_client_replica':True,'ship_creation_requested':True,'artificial_seed':7183}
+                if mode=='deferred_ok':details['source_queue_acked']=True
+                return details
             coord.run.side_effect=run
             coord.cleanup_before_owned_processes.return_value=mode!='helper_failure'
             def post_cleanup():
@@ -96,7 +101,7 @@ class Runner(unittest.TestCase):
             coord.cleanup_after_owned_processes.side_effect=post_cleanup
             coord.verify_final.return_value=mode!='final_fault'
             coord.verify_no_event_final.return_value=mode!='no_event_bad_final'
-            set_(m.coordinator,'CensusCoordinator',lambda _:coord)
+            set_(m.coordinator,'CensusCoordinator',lambda _,**kw:coord)
             def sig(number,handler):handlers[number]=handler;return m.signal.SIG_DFL
             set_(m.signal,'signal',sig)
             lockfile=root/'lock';lockfile.write_bytes(b'')
@@ -127,7 +132,9 @@ class Runner(unittest.TestCase):
             expected_processes=0 if mode=='swap_before_first' else 1 if mode=='swap_before_second' else 2
             self.assertEqual(len(procs),expected_processes)
             self.assertEqual(stopping.call_count,0 if mode=='helper_failure' else expected_processes)
-            if mode=='ok':
+            if args.defer_source_ack:
+                self.assertEqual(installed,[{'role':'server','defer_source_ack':True},{'role':'client'}])
+            if mode in ('ok','deferred_ok'):
                 self.assertTrue(result['success']);self.assertTrue(result['owned_cleanup_confirmed'])
                 self.assertEqual(result['owned_processes_remaining'],[]);release.assert_called_once()
                 self.assertTrue(result['ship_creation_requested']);self.assertFalse(result['multiplayer_proven'])
@@ -143,7 +150,7 @@ class Runner(unittest.TestCase):
             return result
 
     def test_lifecycle_and_fencing(self):
-        for mode in ('ok','signal_verify','signal_second','helper_failure','stop_error','final_fault','swap_before_first','swap_before_second',
+        for mode in ('ok','deferred_ok','deferred_missing_ack','signal_verify','signal_second','helper_failure','stop_error','final_fault','swap_before_first','swap_before_second',
                      'no_event','no_event_bad_final','no_event_udp_error','no_event_lock_error','no_event_steam_error',
                      'live_md_error','no_event_final_md_error','dispatch_uncertain'):
             with self.subTest(mode=mode):self.simulate(mode)

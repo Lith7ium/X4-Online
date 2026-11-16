@@ -9,6 +9,7 @@ function X4LAN_CENSUS_PAIR_TICK()
     host=X4LAN_AUTHORITY_JOB_REGISTRY_HOST,probe=X4LAN_AUTHORITY_JOB_REGISTRY_PROBE,
     descriptor=X4LAN_AUTHORITY_PAUSED_JOB_DESCRIPTOR,descriptor_core=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,
     witness=X4LAN_SECTOR_WITNESS_RUNTIME,role=cfg.authority_census_role,
+    defer_ack=cfg.authority_census_deferred_ack,delivery=X4LAN_AUTHORITY_JOB_DELIVERY,
     epoch=cfg.authority_census_epoch,attempt=cfg.authority_census_attempt,lease=cfg.authority_census_lease,
     nonce=cfg.authority_census_nonce,port=cfg.authority_census_port,timeout=cfg.authority_census_timeout,
     window=cfg.authority_census_window,expected_save_path=cfg.authority_load_save_path,

@@ -82,3 +82,67 @@ confirmed owned cleanup and no remaining owned processes. Its sampled
 protection checks do not independently prove which exact bytes X4 consumed or
 continuous pause, nor do they establish shared coordinate frames, full state
 replication, Windows/Internet behavior or gameplay.
+
+## Deferred source queue experiment
+
+The pinned census checkpoint predates correlated registry responses. Its
+private overlays therefore use the save-era byte-identical registry script in
+`tools/dev/fixtures/census-20261115/authority_ship_registry.xml`, while the
+current correlated registry script remains separate. Provenance still compares
+the archived saved-state scripts and the staged overlays byte for byte; this
+fixture does not change the archived save or bypass those checks.
+
+The separate `--defer-source-ack` opt-in prepares an additional experimental
+source path. It holds one source queue head while the existing client replica
+and TCP exchange run, then sends a source release only after the exchange and
+another context guard succeed. The experiment reports success only after the
+source reports its matching MD `Acked` event. The fresh run attempt is also the
+queue generation; the private UDP envelope binds attempt, epoch, role and lease,
+and the release and receipt carry the sequence and index. The supervisor is the
+one simulated delivery participant, not a real Windows player.
+
+The TCP ACK contains the attempt, epoch and sequence/index identities, not a
+descriptor hash. Its association with the descriptor relies on the fresh
+attempt, a single validated descriptor/exchange and exact received-descriptor
+comparison. An uncertain release is not retried; a missing source receipt does
+not establish whether MD removed the item. Synthetic fake-owner tests exercise
+success, missing/foreign/premature source receipts and uncertain TCP outcomes.
+The earlier recorded run above used the non-deferred path. The deferred path's
+bounded native observation is recorded below; it is not proof of gameplay,
+complete replica state or general creation coverage.
+
+While the source waits, the owner requires its isolated profile, confirmed
+pause and unchanged sampled game time; the host is ticked with a dedicated
+bounded pause guard. These observations are not an atomic or continuous pause
+guarantee. Known or previously unobserved existing registry entries cause the
+deferred case to fail instead of being silently acknowledged. A source ACK
+already dispatched before a later guard or communication failure cannot be
+rolled back. The offline tests use fake MD and client communication.
+
+### Native deferred observation
+
+`.local/authority-census-deferred-01` refused before launching X4 because the
+current registry script differed byte-for-byte from the saved checkpoint's
+script. The save-era fixture described above restores the exact comparison;
+the original failure record remains unchanged.
+
+`.local/authority-census-deferred-02` reports success for one activation and
+one approximate replica in two isolated Linux X4 processes. The server engine
+log records `READY`, `DESCRIPTOR`, `WITNESS_OK`, then `SOURCE_ACKED`; the client
+engine log records `READY`, `WITNESS_READY`, `REPLICA DONE`, then `WITNESS_OK`.
+The coordinator result reports index 10055, job sequence 1, the TCP ACK after
+the replica callback, and `source_queue_acked=true`. The code accepts the latter
+only after the matching MD `Acked` event. There is no independent TCP packet
+trace: the ordering across processes and descriptor values are coordinator
+evidence corroborated by the separate X4 log labels.
+
+The reported descriptor was `ship_gen_m_tugboat_01_a_macro`, faction
+`pioneers`, sector `cluster_115_sector001_macro`, position approximately
+`(-132217.234375, 6004.3818359375, 169081.375)` and witness index 1318. The
+replica uses artificial seed 7183 and an approximate loadout. An allocated
+registry entry after an activation does not establish a ship's birth. The TCP
+receiver is the local supervisor's callback; this was not a second independent
+network participant. The result reports no requested checkpoint, confirmed
+owned cleanup and no remaining owned processes. Its sampled guards do not prove
+continuous pause, exact X4 file consumption or a shared coordinate frame.
+There was no multi-client, Windows, Internet, combat, trading or gameplay test.

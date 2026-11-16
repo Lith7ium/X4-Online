@@ -27,7 +27,7 @@ def origin_scripts(store,profile):
     if _read_regular(origin/'home/.config/EgoSoft/X4/45841/content.xml',65536)!=_read_regular(profile/'content.xml',65536):
         raise ValueError('archive and private extension lists differ')
     for name in ('authority_checkpoint_marker.xml','authority_ship_registry.xml','authority_identity_fixture.xml'):
-        if _read_regular(origin/'extensions/x4_lan_lab/md'/name,1<<20)!=_read_regular(ROOT/'tools/dev'/name,1<<20):
+        if _read_regular(origin/'extensions/x4_lan_lab/md'/name,1<<20)!=_read_regular(archive.saved_state_script(name),1<<20):
             raise ValueError('archive and read probe saved-state scripts differ: '+name)
 
 
@@ -39,7 +39,9 @@ def install(case,profile,ticket,slot,nonce,limit,deadline):
     md_names=('authority_checkpoint_marker.xml','authority_ship_registry.xml','authority_identity_fixture.xml',
               'authority_census_runtime_read.xml')
     ui_names=('authority_checkpoint_marker_probe.lua','authority_registry_resolve_string.lua','authority_census_runtime_read.lua')
-    for name in md_names: shutil.copyfile(ROOT/'tools/dev'/name,md/name)
+    for name in md_names:
+        source=archive.saved_state_script(name) if name!='authority_census_runtime_read.xml' else ROOT/'tools/dev'/name
+        shutil.copyfile(source,md/name)
     for name in ui_names: shutil.copyfile(ROOT/'tools/dev'/name,ui/name)
     marker=ui/'authority_checkpoint_marker_probe.lua';text=marker.read_text()
     hook="if phase~='load' or state~='inspect' or type(marker)~='string'"

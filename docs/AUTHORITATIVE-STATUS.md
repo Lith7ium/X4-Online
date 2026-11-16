@@ -65,6 +65,16 @@ Native Linux evidence so far:
   evidence; there is no packet trace. The replica uses an artificial seed and
   approximate loadout. This is one paused fixture, not continuous ship-state
   synchronization, proven shared frames, Windows/Internet or gameplay.
+* A later isolated two-X4 Linux run held one job event at the source while one
+  approximate client replica was created and inspected. The coordinator
+  reported a localhost TCP ACK before releasing the source event, and the
+  server log recorded `SOURCE_ACKED` after the MD acknowledgement. The
+  cross-process order rests on coordinator code and result, not a packet trace.
+  The TCP receiver was a local supervisor callback, the seed and loadout were
+  artificial, and one activation does not prove ship birth. This does not
+  establish multiple clients, Windows/Internet or gameplay. An earlier attempt
+  was refused before X4 launch due to an exact saved-script mismatch; a
+  byte-identical save-era fixture preserved that provenance check.
 * In an isolated player-seat calibration, an NPC with an observed pilot and
   started Patrol returned a valid assigned pilot while its control-post
   reservation lookup reported empty. The positive control failed before the
