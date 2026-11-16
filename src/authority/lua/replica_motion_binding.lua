@@ -20,6 +20,7 @@ end
 local function new_binding(o,screen)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  local c={};for k,v in pairs(o)do c[k]=v end
+ assert(c.md_issue==nil or type(c.md_issue)=='function')
  assert(token(c.epoch) and token(c.generation) and token(c.nonce) and integer(c.index) and name(c.sector_macro))
  assert(finite(c.timeout) and c.timeout>0 and c.timeout<=300 and finite(c.max_age) and c.max_age>0 and c.max_age<=300)
  for _,k in ipairs({'clock','guard','issue','inspect','complete'})do assert(type(c[k])=='function',k..' required')end
@@ -108,7 +109,7 @@ local function new_x4(o,screen,baseline)
  ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);bool IsValidComponent(UniverseID);bool IsComponentOperational(UniverseID);
  bool IsComponentClass(UniverseID,const char*);UniverseID GetContextByClass(UniverseID,const char*,bool);const char* GetSaveFolderPath(void);]]
  local C=ffi.C;local parse,u64=c.resolve.parse_hex,c.resolve.actor_u64
- local clock,issue,to_lua,to64,data=GetCurRealTime,AddUITriggeredEvent,ConvertStringToLuaID,ConvertIDTo64Bit,GetComponentData
+ local clock,issue,to_lua,to64,data=GetCurRealTime,c.md_issue or AddUITriggeredEvent,ConvertStringToLuaID,ConvertIDTo64Bit,GetComponentData
  local external,expected=c.guard,c.expected_save_path
  local function environment()
   local path=C.GetSaveFolderPath()
@@ -142,6 +143,7 @@ local function new_x4(o,screen,baseline)
  c.clock=clock;c.guard=guard;c.inspect=inspect
  c.issue=function(target,op,args)
   if baseline then args.baseline=baseline end
+  if c.md_issue then return issue(target,op,args)==true end
   return issue(target,op,args)~=false
  end
  return new_binding(c,screen)

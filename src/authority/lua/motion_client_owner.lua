@@ -1,7 +1,7 @@
 -- Default-off local motion bind IPC; one existing UI owner drives start/tick.
 -- The optional disposable setter keeps actor handles local; no extra update hook or TCP reader.
 local M={};local MAX=9007199254740991
-local owners=setmetatable({},{__mode='k'});local registered=false
+local owners=setmetatable({},{__mode='k'});local registered=false;local external_router=nil
 local function token(v,n)return type(v)=='string' and #v==n and v:match('^[0-9a-f]+$')~=nil end
 local function integer(v)return type(v)=='number' and v==v and v>=1 and v<=MAX and v%1==0 end
 local function natural(v)
@@ -263,12 +263,30 @@ end
 function M.new_x4(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(type(o.binding)=='table' and type(o.binding.new_x4)=='function' and type(RegisterEvent)=='function' and type(GetCurRealTime)=='function')
- assert(not registered,'motion event router already reserved');registered=true
  local c={};for k,v in pairs(o)do c[k]=v end
+ local router=c.event_router
+ if router~=nil then
+  assert(type(router)=='table' and type(router.issue)=='function' and type(router.owns)=='function' and token(c.router_generation,32) and
+   type(c.stop)=='function' and c.saved_apply==nil)
+  assert(not registered and (external_router==nil or external_router==router),'motion event router already reserved')
+  external_router=router
+ else
+  assert(not registered and external_router==nil,'motion event router already reserved');registered=true
+ end
  local register=RegisterEvent;local native=c.binding.new_x4;c.clock=GetCurRealTime
- c.register=function(fn)return register('X4AuthorityReplicaMotionBind.Result',fn)~=false end
+ local owner,issue,owns
+ if router then
+  issue,owns=router.issue,router.owns
+  local external=c.guard;assert(type(external)=='function')
+  c.guard=function()
+   return owner~=nil and router.issue==issue and router.owns==owns and owns(router,c.router_generation,c.nonce,c.epoch,owner)==true and
+    external()==true and router.issue==issue and router.owns==owns and owns(router,c.router_generation,c.nonce,c.epoch,owner)==true
+  end
+  c.register=function()return true end
+ else c.register=function(fn)return register('X4AuthorityReplicaMotionBind.Result',fn)~=false end end
  c.factory=function(opt)
   opt.enabled=true;opt.expected_save_path=c.expected_save_path;opt.guard=c.guard;opt.resolve=c.resolve
+  if router then opt.md_issue=function(screen,op,args)return issue(router,screen,op,args)end end
   return native(opt)
  end
  if c.saved_baseline~=nil then
@@ -277,10 +295,11 @@ function M.new_x4(o)
    type(s.binding)=='table' and type(s.binding.new_x4)=='function','invalid saved baseline route')
   local baseline,baseline_guard,saved_native=s.baseline,s.guard,s.binding.new_x4
   c.saved_baseline={enabled=true,baseline=baseline,guard=baseline_guard,
-   register=function(fn)return register('X4AuthoritySavedBaselineMotionBind.Result',fn)~=false end,
+   register=router and function()return true end or function(fn)return register('X4AuthoritySavedBaselineMotionBind.Result',fn)~=false end,
    factory=function(opt)
     opt.enabled=true;opt.baseline=baseline;opt.saved_baseline_guard=baseline_guard
     opt.expected_save_path=c.expected_save_path;opt.guard=c.guard;opt.resolve=c.resolve;opt.replica=c.binding
+    if router then opt.md_issue=function(screen,op,args)return issue(router,screen,op,args)end end
     return saved_native(opt)
    end}
  end
@@ -296,7 +315,7 @@ function M.new_x4(o)
     return native_apply(opt)
    end}
  end
- return M.new(c)
+ owner=M.new(c);return owner
 end
 X4LAN_MOTION_CLIENT_OWNER=M
 return M

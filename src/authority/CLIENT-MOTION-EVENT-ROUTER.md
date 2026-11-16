@@ -10,13 +10,21 @@ factory relies on its caller to provide exclusive registration.
 The caller must register the two event names exactly once for one process/load
 incarnation, retain exclusive control of registration and the X4 update loop,
 and route the local binder's `AddUITriggeredEvent` call through `issue`.
-The existing `replica_motion_binding.new_x4` does not yet support an injected
-issuer, and `motion_client_owner.new_x4` reserves its own event registration;
-there is therefore no existing native caller of this router.
+`replica_motion_binding.new_x4` accepts an explicit `md_issue` function;
+`motion_client_owner.new_x4` can explicitly receive `event_router` and
+`router_generation`, delegate Bind events to that router and check that its
+own nonce, registry epoch and local generation remain the active association.
+The default owners still reserve/register their own listeners, and a module
+incarnation refuses mixing the default and externally routed modes. The
+external mode currently forbids the separately opted-in saved-position setter,
+whose event is not routed. No recovered-session installer currently selects
+this route.
 
 The outer owner supplies fresh, distinct 128-bit local generation and request
 nonce values for each activation, and the unchanged saved-registry epoch. It
-attaches only a ready owner. The guard must independently fence the actual
+attaches a newly created owner before starting it, or a ready generic owner.
+The caller must fail the enclosing session if starting an attached owner fails.
+The guard must independently fence the actual
 process, profile, checkpoint/load incarnation and association among owner,
 generation, nonce and registry epoch; these arguments are assertions supplied
 to the callback, not self-authenticating evidence. Router generation is local:
@@ -46,5 +54,8 @@ cross-process ship/frame identity remain separate requirements.
 
 `tests/authority_client_motion_event_router.lua` exercises routing, bounded
 state, stale and unknown callbacks, STOP fences and reentrancy with simulated
-owners and callbacks. No X4 process, real MD serialization, FD handoff, Windows,
-internet, visible motion or gameplay is covered.
+owners and callbacks. `tests/authority_client_motion_router_x4.lua` composes
+the router with actual local Lua motion owners and saved/replica binders, using
+fake X4 ABI and simulated MD, and rotates the local owner and nonce after STOP.
+No X4 process, real MD serialization, FD handoff, Windows, internet, visible
+motion or gameplay is covered.

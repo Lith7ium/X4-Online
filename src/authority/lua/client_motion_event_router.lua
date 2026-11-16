@@ -11,7 +11,7 @@ function M.new(o)
  local fixed={};for k,v in pairs(o)do fixed[k]=v end;o=fixed
  assert(integer(o.max_generations) and o.max_generations<=4096 and integer(o.max_tracks) and o.max_tracks<=100000)
  for _,k in ipairs({'register','send','guard','retire_guard','fault'})do assert(type(o[k])=='function',k)end
- local state,busy='new',false
+ local state,busy,checking='new',false,false
  local current,pending=nil,nil
  local used_nonce,used_generation={},{};local count=0
  local api={}
@@ -21,8 +21,11 @@ function M.new(o)
  end
  local function context()
   if state=='failed' then return false end
+  if checking then return fail('guard_reentrant')end
+  checking=true
   local old=state;local ok,v=pcall(o.guard,current and current.generation or nil,current and current.nonce or nil,
    current and current.epoch or nil,current and current.owner or nil)
+  checking=false
   return ok and v==true and state==old
  end
  local function run(fn)
@@ -48,7 +51,7 @@ function M.new(o)
     not used_nonce[nonce] and not used_generation[nonce] and not used_generation[generation] and not used_nonce[generation] and count<o.max_generations and
     type(owner)=='table' and type(owner.state)=='function' and type(owner.event)=='function' and context())
    local state_fn,event_fn=owner.state,owner.event
-   local ok,s=pcall(state_fn,owner);assert(ok and s=='ready' and owner.state==state_fn and owner.event==event_fn and state=='idle' and context())
+   local ok,s=pcall(state_fn,owner);assert(ok and (s=='new' or s=='ready') and owner.state==state_fn and owner.event==event_fn and state=='idle' and context())
    count=count+1;used_nonce[nonce]=true;used_generation[generation]=true
    current={generation=generation,nonce=nonce,epoch=registry_epoch,owner=owner,owner_state=state_fn,
     owner_event=event_fn,requests={},tracks=0};state='active';assert(context())
@@ -109,6 +112,13 @@ function M.new(o)
   end)
  end
  function api:state()return state end
+ function api:owns(generation,nonce,epoch,owner)
+  local valid=state=='active' and current~=nil and current.generation==generation and current.nonce==nonce and
+   current.epoch==epoch and current.owner==owner and owner.event==current.owner_event and owner.state==current.owner_state
+  if not valid or not context() then return false end
+  return state=='active' and current~=nil and current.generation==generation and current.nonce==nonce and
+   current.epoch==epoch and current.owner==owner and owner.event==current.owner_event and owner.state==current.owner_state
+ end
  return api
 end
 -- The enclosing manifest must load this module once; failed/partial native
