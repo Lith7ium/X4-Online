@@ -6,7 +6,11 @@ local mode=arg[1];local epoch=('a'):rep(32);local nonce=('b'):rep(32)
 local requests={};local now=1;local dock=false;local calls=0;local healthy=true;local armed=false;local owner
 function GetCurRealTime()return now end
 function AddUITriggeredEvent(screen,op,args)assert(screen=='X4AuthorityRegistryMotionCandidate' and op=='Read');requests[#requests+1]=args;return true end
-function ConvertStringToLuaID(v)return ffi.new('uint64_t',tonumber(v))end
+function ConvertStringToLuaID(...)
+ assert(select('#',...)==1,'ConvertStringToLuaID requires exactly one argument')
+ local value=...
+ return ffi.new('uint64_t',tonumber(value))
+end
 function ConvertIDTo64Bit(v)return v end
 function GetComponentData(v,...)
  if v==41 then

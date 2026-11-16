@@ -88,7 +88,8 @@ function M.new_x4(o)
  c.clock=clock;c.guard=function()return environment() and ext()==true and base(c.epoch,c.baseline)==true and environment()end
  c.issue=function(screen,op,args)return trigger(screen,op,args)~=false end
  local function ref(id)
-  local v=to_lua(tostring(id):gsub('ULL$',''));local kind=type(v)
+  local component_id_text=tostring(id):gsub('ULL$','')
+  local v=to_lua(component_id_text);local kind=type(v)
   if kind=='number' or kind=='cdata' then if u64(v)~=id then return nil end
   elseif kind~='userdata' then return nil end
   if u64(to64(v))~=id then return nil end;return v
