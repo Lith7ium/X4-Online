@@ -22,6 +22,20 @@ class JobDescriptorTest(unittest.TestCase):
         for term in ('$v.$request_id','$v.$epoch','$index','$ship.macro.id','$ship.owner.id','$ship.sector.macro.id'):
             self.assertIn(term,result)
 
+    def test_unavailable_is_the_else_for_an_inoperational_ship(self):
+        root = ET.parse(ROOT/'tools/dev/authority_job_descriptor_probe.xml').getroot()
+        registry_gate = root.find('./cues/cue/actions/do_if')
+        ship_gate = registry_gate.find('do_if')
+        # Static XML check: the operational predicate is a positive conjunct.
+        predicates = ship_gate.get('value').split(' and ')
+        self.assertIn('@$ship.isoperational', predicates)
+        self.assertIn('|ok|', ship_gate.find('raise_lua_event').get('param'))
+        branches = list(registry_gate)
+        unavailable = branches[branches.index(ship_gate) + 1]
+        self.assertEqual(unavailable.tag, 'do_else')
+        self.assertEqual(unavailable.find('raise_lua_event').get('param'),
+            "'%s|%s|%s|unavailable'.[$v.$request_id,$v.$epoch,$index]")
+
     def test_unavailable_diagnostics_are_static_rechecks_after_unchanged_responses(self):
         root = ET.parse(ROOT/'tools/dev/authority_job_descriptor_probe.xml').getroot()
         responses = list(root.iter('raise_lua_event'))

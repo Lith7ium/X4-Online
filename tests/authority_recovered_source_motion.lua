@@ -166,6 +166,32 @@ do
  input[1]='P|'..lease..'|'..attempt..'|STOP'..suffix..'|3';assert(app:tick() and app:state()=='stopped')
  events[2]('late');assert(app:state()=='failed')
 end
+-- The selected object can become unavailable before its descriptor is read.
+-- This injects the MD response; it does not execute MD or establish X4 behavior.
+do
+ local app,input,out,events,issued,faults,_,_,_,reports=rig(true)
+ local candidate=issued[1].args
+ events[2](candidate.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
+ assert(request_candidate(app,input))
+ assert(out[#out]=='S|'..lease..'|'..attempt..'|CANDIDATE'..suffix..'|1|candidate|1')
+ assert(#reports==1 and reports[1].status=='candidate' and reports[1].index==1)
+ input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|2|1|2'
+ assert(app:tick())
+ local descriptor=issued[2].args
+ assert(issued[2].kind=='bootstrap' and descriptor.index==1)
+ local request=descriptor.request_id..'|'..epoch..'|1'
+ events[1](request..'|unavailable')
+ assert(app:state()=='failed' and #faults==1 and faults[1]=='router_event_bootstrap_md_unavailable')
+ -- A late success must not turn the failed attempt into a registration.
+ events[1](request..'|ok|0x1|ship_a|argon|0x2|sector_a')
+ assert(app:state()=='failed' and not app:tick())
+ for _,packet in ipairs(out)do
+  assert(not packet:find('|SAVED_REGISTERED|',1,true))
+  assert(not packet:find('|SAMPLE|',1,true))
+  assert(not packet:find('|STOPPED|',1,true))
+ end
+end
 do
  local app,input,out,events,issued=rig(true)
  input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
