@@ -44,7 +44,9 @@ class RecoveryWatch(base.LoadWatch):
 
     def poll(self):
         try: fd=os.open(self.path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
-        except FileNotFoundError: return False
+        except FileNotFoundError:
+            if self.identity is None: return False
+            raise ValueError('recovery log disappeared') from None
         try:
             info=os.fstat(fd);identity=(info.st_dev,info.st_ino)
             if not stat.S_ISREG(info.st_mode) or info.st_size<self.offset or info.st_size>self.MAX_LOG:
@@ -105,6 +107,36 @@ def verify_source(store_dir,checkpoint,profile):
             raise ValueError('source and recovery extension configuration differs')
 
 
+def stop_recovery_process(proc, started, launch_attempted):
+    """Return (survivors, error); None means that process cleanup is unconfirmed.
+
+    This older runner starts the launcher without an exec gate. If its start
+    identity could not be recorded, stopping the launcher does not establish
+    that it never spawned X4 or that all descendants have stopped.
+    """
+    if proc is None:
+        if launch_attempted:
+            return None, 'launcher start outcome unconfirmed'
+        return [], None
+    if started is None:
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=15)
+        except BaseException:
+            return None, 'launcher cleanup failed; process identity unavailable'
+        return None, 'owned process identity unavailable'
+    try:
+        remaining = snapshot.stop_owned(proc, started)
+        if not isinstance(remaining, list) or any(type(pid) is not int or pid <= 0 for pid in remaining):
+            raise ValueError('invalid owned cleanup result')
+    except BaseException:
+        return None, 'process cleanup failed'
+    if remaining:
+        return remaining, 'owned processes remain'
+    return remaining, None
+
+
 def run(args):
     if sys.platform!='linux' or os.geteuid()==0: raise ValueError('unprivileged Linux user required')
     out=snapshot.output_path(args.out);store_dir=base.local_directory(args.store);store=CheckpointStore(store_dir)
@@ -120,7 +152,7 @@ def run(args):
     user=pwd.getpwuid(os.geteuid());home=Path(user.pw_dir);steam=live.steam_identity(home,user.pw_uid)
     out.mkdir(mode=0o700,parents=True,exist_ok=False)
     result={'success':False,'scope':'one isolated Linux X4 restart; no client, admission, multiplayer or gameplay'}
-    proc=started=lock_fd=lock_stat=None;handlers={}
+    proc=started=lock_fd=lock_stat=None;handlers={};launch_attempted=False
     try:
         case,profile,binds,lock=snapshot.prepare_case(out,game,home)
         stage=out/'staged-profile';stage.mkdir(mode=0o700)
@@ -143,8 +175,23 @@ def run(args):
         for path in protected:
             command[pos:pos]=['--ro-bind',str(path),str(path)];pos+=3
         with (out/'process.log').open('wb') as log:
-            proc=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
-            started=live.start_ticks(proc.pid);deadline=time.monotonic()+args.timeout
+            # A cancellation during Popen must not hide a child before its
+            # process handle and start identity can be recorded for cleanup.
+            pending_signal = [None]
+            previous_handlers = {}
+            def defer_signal(number, _frame):
+                pending_signal[0] = pending_signal[0] or number
+            try:
+                for number in handlers:
+                    previous_handlers[number] = signal.signal(number, defer_signal)
+                launch_attempted=True
+                proc=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+                started=live.start_ticks(proc.pid)
+            finally:
+                for number,handler in previous_handlers.items(): signal.signal(number,handler)
+            if pending_signal[0] is not None:
+                raise InterruptedError('signal '+str(pending_signal[0]))
+            deadline=time.monotonic()+args.timeout
             watch=RecoveryWatch(profile/'engine-output.log',checkpoint.marker);seen_game=None
             while True:
                 if time.monotonic()>=deadline: raise TimeoutError('recovery observation timed out')
@@ -166,14 +213,14 @@ def run(args):
                 time.sleep(.1)
     except (Exception,KeyboardInterrupt) as error: result['error']=str(error)
     finally:
-        if proc is not None and started is None and proc.poll() is None:
-            try: proc.terminate();proc.wait(timeout=15)
-            except (OSError,subprocess.TimeoutExpired): result.update(success=False,cleanup_error='launcher cleanup failed')
-        if started is not None:
-            try:
-                remaining=snapshot.stop_owned(proc,started);result['owned_processes_remaining']=remaining
-                if remaining: result.update(success=False,cleanup_error='owned processes remain')
-            except (OSError,subprocess.TimeoutExpired): result.update(success=False,cleanup_error='process cleanup failed')
+        cleanup_errors=[]
+        for number in handlers:
+            try: signal.signal(number, signal.SIG_IGN)
+            except BaseException: cleanup_errors.append('cannot fence cleanup signals')
+        remaining, process_error = stop_recovery_process(proc, started, launch_attempted)
+        result['owned_processes_remaining'] = remaining
+        if process_error is not None: cleanup_errors.append(process_error)
+        if cleanup_errors: result['success'] = False
         if result['success']:
             try:
                 while True:
@@ -184,9 +231,18 @@ def run(args):
                     any(live.sha(path)!=digest for path,digest in expected.items())): raise ValueError('final state invalid')
             except (OSError,ValueError): result.update(success=False,error='final receipt or staged state invalid')
         if lock_stat is not None:
-            try: live.release_lock_target(snapshot.LOCK_TARGET,lock_fd,lock_stat)
-            except (OSError,RuntimeError): result.update(success=False,cleanup_error='lock cleanup failed')
-        for number,handler in handlers.items(): signal.signal(number,handler)
+            if remaining == [] and not cleanup_errors:
+                try: live.release_lock_target(snapshot.LOCK_TARGET,lock_fd,lock_stat)
+                except BaseException: cleanup_errors.append('lock cleanup failed')
+            else:
+                cleanup_errors.append('lock retained: owned process stop unconfirmed')
+                try: os.close(lock_fd)
+                except BaseException: cleanup_errors.append('lock descriptor close failed')
+        if cleanup_errors: result.update(success=False,cleanup_error='; '.join(cleanup_errors))
+        for number,handler in handlers.items():
+            try: signal.signal(number,handler)
+            except BaseException:
+                result.update(success=False,cleanup_error='; '.join(filter(None,(result.get('cleanup_error'),'signal restoration failed'))))
         try:
             if live.steam_identity(home,user.pw_uid)!=steam: result.update(success=False,error='Steam identity changed')
         except (OSError,ValueError,RuntimeError): result.update(success=False,error='Steam identity unavailable')
