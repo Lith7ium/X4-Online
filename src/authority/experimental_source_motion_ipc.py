@@ -22,7 +22,7 @@ _MAX=9007199254740991
 
 class ExperimentalSourceMotionIPC:
     """One request at a time; no next pull until TCP recipients confirm."""
-    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None,saved_baseline=None,saved_guard=None,latest=False,saved_lifetime_guard=None,stop_enabled=False):
+    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None,saved_baseline=None,saved_guard=None,latest=False,saved_lifetime_guard=None,stop_enabled=False,candidate_indices=None):
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
@@ -39,6 +39,10 @@ class ExperimentalSourceMotionIPC:
                 motion._delivery._test_binding is not None)) or
             not ((saved_baseline is None and saved_guard is None) or
                  (type(saved_baseline) is int and 1<=saved_baseline<=_MAX and callable(saved_guard))) or
+            (candidate_indices is not None and (type(candidate_indices) is not tuple or not 1<=len(candidate_indices)<=32 or
+                saved_guard is None or stop_enabled is not True or latest or
+                any(type(n) is not int or not 1<=n<=saved_baseline for n in candidate_indices) or
+                len(set(candidate_indices))!=len(candidate_indices))) or
             type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=300 or
             timeout<=motion._delivery._timeout):
             raise ValueError('invalid source motion IPC')
@@ -55,6 +59,7 @@ class ExperimentalSourceMotionIPC:
         self._last_pull=None;self._observed={};self._latest=latest;self._pending_request=None;self._pending_deadline=None;self._pending_barrier_generation=None
         self._saved_baseline=saved_baseline;self._saved_guard=saved_guard;self._saved_lifetime_guard=saved_lifetime_guard;self._lifetime_only=False
         self._stop_enabled=stop_enabled
+        self._candidate_indices=candidate_indices;self._candidate_selected=None;self._candidate_attempted=False
         motion._source_owner=self
         if latest:motion._delivery._host._control._latest_source=self
     @property
@@ -185,7 +190,7 @@ class ExperimentalSourceMotionIPC:
     def bind_confirmed(self,index,*,_scheduler=None):
         """Caller asserts a source event was confirmed by the real job owner."""
         self._reserved(_scheduler)
-        if self._state!='ready' or threading.get_ident()!=self._owner:
+        if self._state!='ready' or threading.get_ident()!=self._owner or self._candidate_indices is not None:
             self._fail();raise RuntimeError('source motion registration unavailable')
         self._state='registering';deadline=time.monotonic()+self._timeout
         try:
@@ -201,7 +206,8 @@ class ExperimentalSourceMotionIPC:
         """
         self._reserved(_scheduler)
         if (self._state!='ready' or threading.get_ident()!=self._owner or self._saved_guard is None or
-            type(index) is not int or not 1<=index<=self._saved_baseline or index in self._indices):
+            type(index) is not int or not 1<=index<=self._saved_baseline or index in self._indices or
+            (self._candidate_indices is not None and index!=self._candidate_selected)):
             self._fail();raise RuntimeError('saved registration unavailable')
         self._state='registering';deadline=time.monotonic()+self._timeout
         try:
@@ -225,7 +231,8 @@ class ExperimentalSourceMotionIPC:
         except BaseException:self._fail();raise
     def pull(self,*,_scheduler=None):
         self._reserved(_scheduler)
-        if self._state!='ready' or threading.get_ident()!=self._owner:
+        if (self._state!='ready' or threading.get_ident()!=self._owner or
+            (self._candidate_indices is not None and self._candidate_selected is None)):
             self._fail();raise RuntimeError('source motion reentrant or unavailable')
         self._motion._delivery._host._control._reader_free()
         self._state='pulling';deadline=time.monotonic()+self._timeout
@@ -247,6 +254,45 @@ class ExperimentalSourceMotionIPC:
                 if e:raise RuntimeError('source motion socket error')
                 if r:break
             return self._consume(self._sock.recv(_MAX_PACKET+1),request,deadline,latest=False)
+        except BaseException:self._fail();raise
+
+    def request_candidate(self,*,_scheduler=None):
+        """Request one bounded, revalidated index from the same UDP owner.
+
+        Candidate is a transient local observation, not a reservation or a
+        cross-X4 identity claim. Inconclusive or ambiguous replies fault all
+        participants; registration must independently revalidate the index.
+        """
+        self._reserved(_scheduler)
+        if self._candidate_indices is None:raise RuntimeError('candidate report is not enabled')
+        if self._state!='ready' or threading.get_ident()!=self._owner or self._candidate_attempted:
+            self._fail();raise RuntimeError('candidate request unavailable')
+        self._candidate_attempted=True;self._state='candidate';deadline=time.monotonic()+self._timeout
+        try:
+            self._quiet(deadline,'candidate')
+            if self._next>=_MAX:raise RuntimeError('source motion request capacity')
+            self._next+=1;request=str(self._next)
+            packet='|'.join(['P',self._lease,self._attempt,'CANDIDATE',self._epoch,self._generation,request]).encode('ascii')
+            if self._sock.send(packet)!=len(packet):raise RuntimeError('candidate dispatch failed')
+            while True:
+                self._check(deadline,'candidate')
+                readable,_,bad=select.select([self._sock],[],[self._sock],min(.1,max(0,deadline-time.monotonic())))
+                self._check(deadline,'candidate')
+                if bad:raise RuntimeError('candidate socket error')
+                if readable:break
+            raw=self._sock.recv(_MAX_PACKET+1)
+            try:parts=raw.decode('ascii').split('|')
+            except UnicodeError:raise ValueError('invalid candidate response') from None
+            if (len(raw)>_MAX_PACKET or len(parts)!=9 or parts[:7]!=['S',self._lease,self._attempt,'CANDIDATE',self._epoch,self._generation,request]):
+                raise ValueError('foreign candidate response')
+            if parts[7]=='inconclusive' and parts[8] in ('no_candidate','registry_refused','getter_or_context_unavailable'):
+                raise RuntimeError('source candidate inconclusive: '+parts[8])
+            if parts[7]!='candidate' or not re.fullmatch(r'[1-9][0-9]*',parts[8]) or len(parts[8])>16:
+                raise ValueError('invalid candidate result')
+            index=int(parts[8])
+            if index not in self._candidate_indices:raise ValueError('candidate not in requested set')
+            self._quiet(deadline,'candidate');self._candidate_selected=index;self._state='ready'
+            return index
         except BaseException:self._fail();raise
     def _consume(self,data,request,deadline,*,latest):
         if not data or len(data)>_MAX_PACKET:raise ValueError('invalid source motion response')

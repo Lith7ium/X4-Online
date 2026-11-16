@@ -47,6 +47,36 @@ local function rig(with_selection)
  return session,input,out,events,issued,faults,function(v)paused=v end,function(v)now=v end,function(v)alive=v end,reports
 end
 local suffix='|'..epoch..'|'..gen
+local function request_candidate(app,input)
+ input[1]='P|'..lease..'|'..attempt..'|CANDIDATE'..suffix..'|1'
+ assert(app:tick());return app:tick()
+end
+-- A pending request waits for selection; no candidate packet is unsolicited.
+do
+ local app,input,out,events,issued=rig(true)
+ assert(#out==1 and out[1]:find('|HELLO|',1,true))
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick() and #out==2)
+ input[1]='P|'..lease..'|'..attempt..'|CANDIDATE'..suffix..'|1';assert(app:tick() and #out==2)
+ local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
+ assert(app:tick());assert(out[#out]=='S|'..lease..'|'..attempt..'|CANDIDATE'..suffix..'|1|candidate|1')
+ input[1]='P|'..lease..'|'..attempt..'|CANDIDATE'..suffix..'|2';assert(not app:tick())
+end
+-- A request before BOUND never produces a report.
+do
+ local app,input,out=rig(true)
+ input[1]='P|'..lease..'|'..attempt..'|CANDIDATE'..suffix..'|1'
+ assert(not app:tick());assert(#out==1 and out[1]:find('|HELLO|',1,true))
+end
+-- A queued follow-up fences the result before any candidate acknowledgement.
+for _,followup in ipairs({'', 'P|'..lease..'|'..attempt..'|PULL'..suffix..'|2'})do
+ local app,input,out,events,issued=rig(true)
+ local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
+ input[1]='P|'..lease..'|'..attempt..'|CANDIDATE'..suffix..'|1'
+ input[2]=followup
+ assert(app:tick());assert(not app:tick() and app:state()=='failed')
+ for _,v in ipairs(out)do assert(not v:find('|CANDIDATE|',1,true))end
+end
 local function initial()
  local app,input,out,events,issued,faults,pause,clock=rig()
  assert(out[1]=='S|'..lease..'|'..attempt..'|HELLO'..suffix)
@@ -97,12 +127,14 @@ do
  local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ineligible')
  q=issued[2].args;events[2](q.request_id..'|'..epoch..'|2|ok|0x1|0x2|sector_a')
  input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
+ assert(#reports==0 and #out==2)
+ assert(request_candidate(app,input));assert(out[#out]=='S|'..lease..'|'..attempt..'|CANDIDATE'..suffix..'|1|candidate|2')
  assert(#reports==1 and reports[1].index==2)
- input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|1|2|2';assert(app:tick())
+ input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|2|2|2';assert(app:tick())
  assert(issued[3].kind=='bootstrap' and issued[3].args.index==2)
  q=issued[3].args;events[1](q.request_id..'|'..epoch..'|2|ok|0x1|ship_a|argon|0x2|sector_a')
  assert(out[#out]:find('|SAVED_REGISTERED|',1,true) and #faults==0)
- input[1]='P|'..lease..'|'..attempt..'|STOP'..suffix..'|2';assert(app:tick() and app:state()=='stopped')
+ input[1]='P|'..lease..'|'..attempt..'|STOP'..suffix..'|3';assert(app:tick() and app:state()=='stopped')
  events[2]('late');assert(app:state()=='failed')
 end
 do
@@ -121,30 +153,32 @@ do
  local app,input,_,events,issued=rig(true)
  local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
  input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
- input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|1|2|2';assert(not app:tick() and app:state()=='failed')
+ assert(request_candidate(app,input))
+ input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|2|2|2';assert(not app:tick() and app:state()=='failed')
 end
 do
  local app,input,_,events,issued,_,_,_,_,reports=rig(true)
  for i=1,2 do local q=issued[i].args;events[2](q.request_id..'|'..epoch..'|'..i..'|ineligible')end
  input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
+ assert(request_candidate(app,input))
  assert(reports[1].status=='inconclusive')
- input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|1|1|2';assert(not app:tick() and app:state()=='failed')
+ input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|2|1|2';assert(not app:tick() and app:state()=='failed')
 end
 do
  local app,input,_,events,issued=rig('mutate')
  local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
  input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix
- assert(not app:tick() and app:state()=='failed')
+ assert(app:tick());assert(not request_candidate(app,input) and app:state()=='failed')
 end
 do
  local app,input,_,events,issued=rig('reenter')
  local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
  input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix
- assert(not app:tick() and app:state()=='failed')
+ assert(app:tick());assert(not request_candidate(app,input) and app:state()=='failed')
 end
 for _,kind in ipairs({'mutate_original','metatable'})do
  local app,input,_,events,issued=rig(kind)
  local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
  input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix
- assert(not app:tick() and app:state()=='failed')
+ assert(app:tick());assert(not request_candidate(app,input) and app:state()=='failed')
 end

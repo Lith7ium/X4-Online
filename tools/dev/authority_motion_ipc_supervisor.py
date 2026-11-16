@@ -62,7 +62,7 @@ def bind_source_motion(sock, motion, *, process, lease, attempt, epoch, generati
 
 def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, generation,
                                world, client_guard, timeout=30, validate_sample=None,
-                               saved_baseline=None, saved_guard=None, select_recipients=None):
+                               saved_baseline=None, saved_guard=None, select_recipients=None,candidate_indices=None):
     """Opt-in single diagnostic source; no assertion of cross-X4 identity."""
     if not callable(client_guard) or not callable(select_recipients):
         sock.close();raise ValueError('running client guard and interest selector required')
@@ -88,6 +88,6 @@ def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, 
         return ExperimentalSourceMotionIPC(sock,motion,enabled=True,lease=lease,attempt=attempt,
             epoch=epoch,generation=generation,guard=context,validate_peer=peer,timeout=timeout,
             validate_sample=validate_sample,saved_baseline=saved_baseline,saved_guard=saved_guard,
-            select_recipients=select_recipients,stop_enabled=True)
+            select_recipients=select_recipients,stop_enabled=True,candidate_indices=candidate_indices)
     except BaseException:
         sock.close();raise

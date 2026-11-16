@@ -77,4 +77,27 @@ class RecoveredMotionTests(unittest.TestCase):
  def test_real_lua_modules_compose_with_simulated_x4(self):
   subprocess.run(['luajit','tests/authority_recovered_source_motion.lua'],cwd=ROOT,check=True,capture_output=True,timeout=5)
 
+ def test_candidate_overlay_is_explicit_and_preserves_existing_md(self):
+  before={p:p.read_bytes() for p in self.md.iterdir()}
+  self.settings['selection']={'nonce':'6'*32,'candidates':(1,2)}
+  result=self.install()
+  for p,data in before.items():self.assertEqual(p.read_bytes(),data)
+  script=self.md/'authority_registry_motion_candidate.xml';module=self.ui/'authority_registry_motion_candidate.lua'
+  self.assertIn(script,result);self.assertIn(module,result);ET.parse(script)
+  config=(self.ui/'config.lua').read_text();owner=(self.ui/'authority_world_bridge_probe.lua').read_text()
+  self.assertIn('authority_motion_candidate_indices={1,2}',config)
+  self.assertIn('selection={nonce=cfg.authority_motion_candidate_nonce',owner)
+  for path in (module,self.ui/'authority_world_bridge_probe.lua'):
+   subprocess.run(['luajit','-b',str(path),'/dev/null'],check=True,capture_output=True)
+
+ def test_bad_candidate_context_is_rejected_before_mutation(self):
+  cfg=self.ui/'config.lua';before=cfg.read_bytes()
+  for selection in (None,{'nonce':'6'*32,'candidates':()}, {'nonce':'4'*32,'candidates':(1,)},
+                    {'nonce':'6'*32,'candidates':(1,1)}, {'nonce':'6'*32,'candidates':(3,)},
+                    {'nonce':'6'*32,'candidates':(True,)}):
+   with self.subTest(selection=selection):
+    self.settings['selection']=selection
+    with self.assertRaises(ValueError):self.install()
+    self.assertEqual(before,cfg.read_bytes())
+
 if __name__=='__main__':unittest.main()

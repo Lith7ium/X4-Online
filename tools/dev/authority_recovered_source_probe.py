@@ -16,11 +16,14 @@ from authority_motion_ipc_supervisor import bind_running_source_motion
 
 
 def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
-        identity, verify, verify_process, timeout=90):
-    if (type(index) is not int or index<1 or type(identity) is not tuple or len(identity)!=2 or
+        identity, verify, verify_process, timeout=90, candidate_indices=None):
+    if (((candidate_indices is None and (type(index) is not int or index<1 or index>settings['baseline'])) or
+         (candidate_indices is not None and (index is not None or type(candidate_indices) is not tuple or
+             not 1<=len(candidate_indices)<=32 or any(type(n) is not int or not 1<=n<=settings['baseline'] for n in candidate_indices) or
+             len(set(candidate_indices))!=len(candidate_indices)))) or type(identity) is not tuple or len(identity)!=2 or
         any(type(n) is not int or n<1 for n in identity) or not callable(verify) or not callable(verify_process) or
         type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=90 or
-        guard.status[:3]!=('ready',settings['epoch'],settings['baseline']) or index>settings['baseline']):
+        guard.status[:3]!=('ready',settings['epoch'],settings['baseline'])):
         raise ValueError('diagnostic source context invalid')
     pinned=world._baseline
     if (type(pinned) is not tuple or len(pinned)!=2 or pinned[1]!=baseline or
@@ -62,7 +65,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     source=bind_running_source_motion(sock,motion,process=process,lease=settings['lease'],attempt=settings['attempt'],
         epoch=settings['epoch'],generation=settings['generation'],world=world,client_guard=active_guard,timeout=timeout,
         saved_baseline=settings['baseline'],saved_guard=saved,select_recipients=lambda _sample,_members:[],
-        validate_sample=capture)
+        validate_sample=capture,candidate_indices=candidate_indices)
+    if candidate_indices is not None:index=source.request_candidate()
     source.register_saved(index)
     samples=[]
     for _ in range(20):
@@ -80,5 +84,6 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     if guard.stop() is not True:raise RuntimeError('checkpoint guard stop unconfirmed')
     active_guard()
     public=[{key:sample[key] for key in ('sequence','sector_macro','source_time','x','y','z','velocity')} for sample in samples]
-    return {'index':index,'samples':public,'source_stopped_before_disconnect':True,
+    return {'index':index,'candidate_selected':candidate_indices is not None,'candidate_is_reservation':False,
+            'samples':public,'source_stopped_before_disconnect':True,
             'server_only':True,'client_motion_proven':False,'cross_process_identity_proven':False}

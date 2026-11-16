@@ -82,7 +82,7 @@ function M.new(c)
    (not selector or selector:state()=='done') end,
   route=route,fault=function(reason)fail('router_'..tostring(reason))end}))
  ipc=assert(c.ipc_factory({saved_baseline={limit=c.baseline,guard=baseline},
-  guard=active,stop=function()return shutdown:stop()end,fault=function(reason)fail('ipc_'..tostring(reason))end}))
+  candidate_enabled=selection~=nil,guard=active,stop=function()return shutdown:stop()end,fault=function(reason)fail('ipc_'..tostring(reason))end}))
  assert(c.register(function(value)
   if shutdown:event(value)~=true then fail('event')end
  end)==true)
@@ -107,7 +107,7 @@ function M.new(c)
    assert(active() and shutdown:state()=='active')
    if selector and not reported then
     if selector:state()=='waiting' then assert(selector:tick()==true)end
-    if selector:state()=='done' then
+    if selector:state()=='done' and ipc:candidate_requested() then
      local result=assert(selector:result())
      local report
      if result.status=='candidate' then
@@ -120,8 +120,9 @@ function M.new(c)
      assert(exact(result,report))
      local expected={};for k,v in pairs(report)do expected[k]=v end
      assert(selection.report(report)==true and exact(report,expected) and exact(result,expected) and
-      selector:state()=='done' and context() and active());reported=true
-    else assert(selector:state()=='waiting')end
+      selector:state()=='done' and context() and active())
+     assert(ipc:candidate_complete(report)==true);reported=true
+    else assert(selector:state()=='waiting' or selector:state()=='done')end
    end
    assert(ipc:tick()==true)
    if ipc:state()=='stopped' then assert(shutdown:state()=='stopped' and ipc:check_stopped());return end
@@ -154,9 +155,9 @@ function M.new_x4(c)
  local selection
  if c.selection~=nil then
   local s=c.selection
-  assert(type(s)=='table' and type(s.report)=='function' and type(X4LAN_AUTHORITY_REGISTRY_MOTION_CANDIDATE)=='table')
+  assert(type(s)=='table' and type(X4LAN_AUTHORITY_REGISTRY_MOTION_CANDIDATE)=='table')
   assert(s.nonce~=c.lease and s.nonce~=c.attempt)
-  selection={nonce=s.nonce,candidates=s.candidates,report=s.report,
+  selection={nonce=s.nonce,candidates=s.candidates,report=function()return true end,
    register=function(f)return RegisterEvent('X4AuthorityRegistryMotionCandidate.Result',function(_,value)f(value)end)~=false end,
    factory=function(o)
     o.timeout=c.timeout;o.expected_save_path=c.expected_save_path;o.resolve=X4LAN_RESOLVE_STRING

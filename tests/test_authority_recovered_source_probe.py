@@ -26,6 +26,7 @@ class Probe(unittest.TestCase):
             'x':0,'y':0,'z':0,'velocity':None,'epoch':'a'*32,'generation':'d'*32}
         samples=iter([sample(1),sample(2)])
         class Source:
+            def request_candidate(self):events.append('candidate');return 1
             def register_saved(self,index):events.append(('register',index))
             def pull(self):events.append('pull');self.capture(next(samples))
             def stop_remote(self):events.append('source_stop');return stop
@@ -53,6 +54,13 @@ class Probe(unittest.TestCase):
              patch.object(subject,'bind_running_source_motion',side_effect=bind),patch.object(subject.os,'stat',return_value=SimpleNamespace(st_dev=1,st_ino=2)),patch.object(subject.time,'sleep'):
             with self.assertRaises(RuntimeError):subject.run(**kwargs)
         self.assertNotIn('close',events);self.assertNotIn('guard_stop',events)
+    def test_candidate_request_precedes_register_and_is_not_a_reservation(self):
+        events,kwargs,bind=self.context();kwargs['index']=None;kwargs['candidate_indices']=(1,2)
+        with patch.object(subject,'ExperimentalTCPJobDelivery'),patch.object(subject,'ExperimentalTCPMotion'), \
+             patch.object(subject,'bind_running_source_motion',side_effect=bind),patch.object(subject.os,'stat',return_value=SimpleNamespace(st_dev=1,st_ino=2)),patch.object(subject.time,'sleep'):
+            result=subject.run(**kwargs)
+        self.assertLess(events.index('candidate'),events.index(('register',1)))
+        self.assertTrue(result['candidate_selected']);self.assertFalse(result['candidate_is_reservation'])
     def test_out_of_range_or_wrong_registry_refused_before_binding(self):
         for change in ('index','status'):
             events,kwargs,bind=self.context()

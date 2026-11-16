@@ -141,6 +141,16 @@ def diagnostic_source_index(args, witness_join):
     return index
 
 
+def diagnostic_source_candidates(args, witness_join, index):
+    values=getattr(args,'diagnostic_source_candidates',None)
+    if values is None:return None
+    if (witness_join is not True or index is not None or type(values) not in (tuple,list) or
+        not 1<=len(values)<=32 or any(type(n) is not int or not 1<=n<=200000 for n in values) or
+        len(set(values))!=len(values)):
+        raise ValueError('bounded source candidates require private witness join')
+    return tuple(values)
+
+
 def finish_source_diagnostic(active, active_clients, guard_context, *, verify, probe):
     """Fence a retained client until the source probe has cooperatively stopped."""
     if active_clients or len(guard_context)!=1 or not callable(verify) or not callable(probe):
@@ -159,7 +169,7 @@ def redact_recovery_config(text):
     redacted,count=re.subn(r'authority_control_lease="[0-9a-f]{32}"',
         'authority_control_lease="redacted"',text)
     if count!=1:raise ValueError('invalid lease')
-    for name in ('lease','attempt','generation','nonce','saved_nonce'):
+    for name in ('lease','attempt','generation','nonce','saved_nonce','candidate_nonce'):
         key='authority_motion_'+name+'='
         if key in redacted:
             redacted,count=re.subn(key+r'"[0-9a-f]{32}"',key+'"redacted"',redacted)
@@ -419,6 +429,8 @@ def run(args):
     try:
         witness_join, witness_phase = witness_mode(args)
         source_index=diagnostic_source_index(args,witness_join)
+        source_candidates=diagnostic_source_candidates(args,witness_join,source_index)
+        source_enabled=source_index is not None or source_candidates is not None
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage)
@@ -471,8 +483,9 @@ def run(args):
             witness_nonce=secrets.token_hex(16)
             protected.extend(witness_check.install(case,witness_nonce,registry_expected[1],registry_expected[2],witness_phase,allow_resume=witness_join))
         source_settings=None
-        if source_index is not None:
-            if source_index>registry_expected[2]:raise ValueError('diagnostic index exceeds confirmed registry')
+        if source_enabled:
+            if any(index>registry_expected[2] for index in (source_candidates or (source_index,))):
+                raise ValueError('diagnostic index exceeds confirmed registry')
             import authority_recovered_source_motion_install
             source_sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
             source_sock.bind(('127.0.0.1',0))
@@ -484,6 +497,8 @@ def run(args):
                 reserved.add(value);return value
             source_settings={'port':source_sock.getsockname()[1],'lease':fresh(),'attempt':fresh(),
                 'generation':fresh(),'nonce':fresh(),'saved_nonce':fresh(),'timeout':120}
+            if source_candidates is not None:
+                source_settings['selection']={'nonce':fresh(),'candidates':source_candidates}
             protected.extend(authority_recovered_source_motion_install.install(case,profile,registry_expected,source_settings))
         clock = None
         if getattr(args, 'diagnostic_overlap', False):
@@ -666,7 +681,7 @@ def run(args):
             def verify_diagnostic():
                 cancel_diagnostic()
                 verify()
-                if source_index is not None:
+                if source_enabled:
                     for active in tuple(active_clients):
                         if active.participant.check_active(server_checked=True) is not True:
                             raise RuntimeError('diagnostic client unavailable')
@@ -679,9 +694,9 @@ def run(args):
                 if guard_context or guard.status!=registry_expected:
                     raise ValueError('confirmed diagnostic registry changed')
                 guard_context.append((guard,saved,pump))
-            if source_index is not None:overlap_guard[0]=verify_diagnostic
+            if source_enabled:overlap_guard[0]=verify_diagnostic
             for index in range(count):
-                diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory,keep_worker=(source_index is not None))
+                diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory,keep_worker=source_enabled)
                 diagnostics.append(diagnostic)
                 diagnostic_out = out if count == 1 else out/('diagnostic-%02d' % (index+1))
                 if count != 1: diagnostic_out.mkdir(mode=0o700)
@@ -692,17 +707,17 @@ def run(args):
                     recovery_watch=watch, listener=listener, host=host, service=service, world=world,
                     session=session, control=control, check_server=verify_diagnostic, server_out=out,
                     expected_baseline=baseline, cancel_check=cancel_diagnostic,
-                    check_base=base_diagnostic if source_index is not None else None,
-                    check_server_base=verify if source_index is not None else None,
-                    witness_guard_ready=guard_ready if source_index is not None else None)
-                if source_index is not None:
+                    check_base=base_diagnostic if source_enabled else None,
+                    check_server_base=verify if source_enabled else None,
+                    witness_guard_ready=guard_ready if source_enabled else None)
+                if source_enabled:
                     import authority_recovered_source_probe
                     def run_source(guard,saved,pump,active):
                         source_context=dict(source_settings,epoch=guard.status[1],baseline=guard.status[2])
                         return authority_recovered_source_probe.run(sock=source_sock,
                             settings=source_context,index=source_index,baseline=saved,guard=guard,pump=pump,
                             active=active,host=host,world=world,identity=identity,verify=verify_diagnostic,
-                            verify_process=check)
+                            verify_process=check,candidate_indices=source_candidates)
                     result['source_diagnostic'],diagnostic_result=finish_source_diagnostic(
                         diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source)
                 if count != 1:
@@ -833,7 +848,9 @@ def main():
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')
     parser.add_argument('--registry-witness',choices=('create','verify'),help='isolated paused diagnostic; never admit clients')
     parser.add_argument('--registry-witness-join',action='store_true',help='private one-client witness join experiment; not identity proof')
-    parser.add_argument('--diagnostic-source-index',type=int,help='private saved-registry index to sample on the server only')
+    source_options=parser.add_mutually_exclusive_group()
+    source_options.add_argument('--diagnostic-source-index',type=int,help='private saved-registry index to sample on the server only')
+    source_options.add_argument('--diagnostic-source-candidates',type=int,nargs='+',help='bounded explicit indices to inspect for a private source sample')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

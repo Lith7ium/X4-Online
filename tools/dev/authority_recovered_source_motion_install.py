@@ -29,14 +29,25 @@ def install(case,profile,status,settings):
         type(status[3]) is not str or not re.fullmatch(r'[0-9a-f]{64}',status[3])):
         raise ValueError('confirmed registry status required')
     fields={'port','lease','attempt','generation','nonce','saved_nonce','timeout'}
-    if type(settings) is not dict or set(settings)!=fields:raise ValueError('invalid motion settings')
+    if type(settings) is not dict or set(settings) not in (fields,fields|{'selection'}):raise ValueError('invalid motion settings')
     if type(settings['port']) is not int or not 1<=settings['port']<=65535:
         raise ValueError('invalid motion port')
     if (type(settings['timeout']) not in (int,float) or not math.isfinite(settings['timeout']) or
         not 0<settings['timeout']<=120):raise ValueError('invalid motion timeout')
     tokens=[settings[k] for k in ('lease','attempt','generation','nonce','saved_nonce')]
+    selection=settings.get('selection')
+    if 'selection' in settings and selection is None:raise ValueError('invalid bounded candidate selection')
+    if selection is not None:
+        if (type(selection) is not dict or set(selection)!={'nonce','candidates'} or
+            type(selection['nonce']) is not str or not HEX.fullmatch(selection['nonce']) or
+            type(selection['candidates']) is not tuple or not 1<=len(selection['candidates'])<=32 or
+            any(type(n) is not int or not 1<=n<=status[2] for n in selection['candidates']) or
+            len(set(selection['candidates']))!=len(selection['candidates']) or
+            selection['nonce'][:16] in (settings['nonce'][:16],settings['saved_nonce'][:16])):
+            raise ValueError('invalid bounded candidate selection')
+        tokens.append(selection['nonce'])
     if (any(type(t) is not str or not HEX.fullmatch(t) for t in tokens) or
-        len(set(tokens+[status[1]]))!=6 or settings['nonce'][:16]==settings['saved_nonce'][:16]):
+        len(set(tokens+[status[1]]))!=len(tokens)+1 or settings['nonce'][:16]==settings['saved_nonce'][:16]):
         raise ValueError('invalid or colliding motion context')
     case=Path(case);profile=Path(profile)
     if (case.is_symlink() or profile.is_symlink() or not profile.resolve().is_relative_to(case.resolve()) or
@@ -61,26 +72,34 @@ def install(case,profile,status,settings):
     control=re.search(r'authority_control_port=([0-9]+)',cfg)
     old_tokens=re.findall(r'authority_(?:control_lease|world_epoch)="([0-9a-f]{32})"',cfg)
     if (not control or int(control.group(1))==settings['port'] or len(old_tokens)!=2 or
-        len(set(tokens+[status[1]]+old_tokens))!=8):raise ValueError('motion and recovery contexts overlap')
+        len(set(tokens+[status[1]]+old_tokens))!=len(tokens)+3):raise ValueError('motion and recovery contexts overlap')
     manifest_hook='    <file name="ui/authority_world_bridge_probe.lua" />\n'
     owner_hook=" local ok,reason=bridge:update();assert(ok,reason)\n"
     state_hook='local activated=false\n'
     if (mf.count(manifest_hook)!=1 or owner.count(owner_hook)!=1 or owner.count(state_hook)!=1 or
             owner.count("SetScript('onUpdate'")!=1):
         raise ValueError('recovery owner hook missing or ambiguous')
-    files=[ui/name for _,name in MODULES]+[md/'authority_job_descriptor_probe.xml']
+    modules=list(MODULES)
+    if selection is not None:modules.insert(-1,('tools/dev/authority_registry_motion_candidate.lua','authority_registry_motion_candidate.lua'))
+    files=[ui/name for _,name in modules]+[md/'authority_job_descriptor_probe.xml']
+    if selection is not None:files.append(md/'authority_registry_motion_candidate.xml')
     if any(path.exists() or path.is_symlink() for path in files):raise ValueError('motion overlay would overwrite existing files')
     # All resources and hooks were validated before writing; this case is a
     # caller-owned disposable profile, never the normal X4 profile.
-    for (source,_),target in zip(MODULES,files):
+    for (source,_),target in zip(modules,files):
         with target.open('xb') as f:f.write((ROOT/source).read_bytes())
-    with files[-1].open('xb') as f:f.write((ROOT/'tools/dev/authority_job_descriptor_probe.xml').read_bytes())
-    modules=''.join('    <file name="ui/'+name+'" />\n' for _,name in MODULES)
-    manifest.write_text(mf.replace(manifest_hook,modules+manifest_hook),encoding='utf-8')
+    with (md/'authority_job_descriptor_probe.xml').open('xb') as f:f.write((ROOT/'tools/dev/authority_job_descriptor_probe.xml').read_bytes())
+    if selection is not None:
+        with (md/'authority_registry_motion_candidate.xml').open('xb') as f:f.write((ROOT/'tools/dev/authority_registry_motion_candidate.xml').read_bytes())
+    module_xml=''.join('    <file name="ui/'+name+'" />\n' for _,name in modules)
+    manifest.write_text(mf.replace(manifest_hook,module_xml+manifest_hook),encoding='utf-8')
     add=',authority_recovered_source_motion=true,authority_motion_epoch="'+status[1]+'",authority_motion_baseline='+str(status[2])
     add+=',authority_motion_port='+str(settings['port'])+',authority_motion_timeout='+format(settings['timeout'],'.17g')
     for name in ('lease','attempt','generation','nonce','saved_nonce'):
         add+=',authority_motion_'+name+'="'+settings[name]+'"'
+    if selection is not None:
+        add+=',authority_motion_candidate_nonce="'+selection['nonce']+'",authority_motion_candidate_indices={'
+        add+=','.join(str(n) for n in selection['candidates'])+'}'
     config.write_text(cfg[:-2]+add+'}\n',encoding='ascii');config.chmod(0o600)
     owner_add=''' if cfg.authority_recovered_source_motion then
   if not recovered_motion and not C.IsGamePaused() then
@@ -92,6 +111,9 @@ def install(case,profile,status,settings):
   if recovered_motion then assert(recovered_motion:tick())end
  end
 '''
+    if selection is not None:
+        owner_add=owner_add.replace('expected_save_path=cfg.authority_load_save_path}))',
+            'expected_save_path=cfg.authority_load_save_path,selection={nonce=cfg.authority_motion_candidate_nonce,candidates=cfg.authority_motion_candidate_indices}}))')
     owner=owner.replace(state_hook,state_hook+'local recovered_motion=nil\n')
     probe.write_text(owner.replace(owner_hook,owner_hook+owner_add),encoding='utf-8')
     return [config,manifest,probe,*files]

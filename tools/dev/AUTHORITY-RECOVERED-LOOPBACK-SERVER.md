@@ -561,3 +561,13 @@ synchronous filesystem operation cannot be interrupted by that check. Failure
 fences the diagnostic and requires process cleanup instead of granting the
 normal client-finish/pause sequence. The repeated full-save hashing is a
 single-index diagnostic cost, not a scalable fleet synchronization design.
+
+For a separate bounded selection experiment, `--diagnostic-source-candidates`
+accepts 1–32 distinct explicit saved-registry indices instead of the single
+index option. The selector reports only after a correlated `CANDIDATE` request
+on the already-bound source UDP socket; unsolicited reports are invalid. An
+inconclusive result, timeout or mismatched index faults the diagnostic. The
+chosen index is revalidated by the normal source bootstrap before sampling; it
+is a momentary local observation, not a reservation, identity proof or client
+motion delivery. The candidate report and full selection-mode supervisor path
+have offline coverage only; no native X4 run has established their behavior.

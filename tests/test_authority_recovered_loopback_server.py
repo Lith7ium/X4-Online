@@ -60,6 +60,13 @@ class WitnessJoinModeTests(unittest.TestCase):
             with self.subTest(index=index,join=join),self.assertRaises(ValueError):
                 MODULE.diagnostic_source_index(SimpleNamespace(diagnostic_source_index=index),join)
 
+    def test_source_candidates_are_bounded_explicit_and_exclusive(self):
+        self.assertIsNone(MODULE.diagnostic_source_candidates(SimpleNamespace(),False,None))
+        self.assertEqual(MODULE.diagnostic_source_candidates(SimpleNamespace(diagnostic_source_candidates=[1,2]),True,None),(1,2))
+        for values,join,index in (([],True,None),([1,1],True,None),([True],True,None),([200001],True,None),([1],False,None),([1],True,1), (list(range(1,34)),True,None)):
+            with self.subTest(values=values),self.assertRaises(ValueError):
+                MODULE.diagnostic_source_candidates(SimpleNamespace(diagnostic_source_candidates=values),join,index)
+
     def test_source_stop_precedes_client_finish_and_failure_keeps_client_owned(self):
         for mode in ('ok','missing_receipt','exception'):
             events=[];active=SimpleNamespace(finish=lambda:events.append('finish') or {'done':True})

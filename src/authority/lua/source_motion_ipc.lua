@@ -14,13 +14,16 @@ function M.new(c)
  assert(finite(c.timeout) and c.timeout>0 and c.timeout<=120)
  assert(type(c.clock)=='function' and type(c.guard)=='function' and type(c.fault)=='function')
  assert(c.stop==nil or type(c.stop)=='function') -- caller owns sampler, bootstrap and event-router shutdown
+ assert(c.candidate_enabled==nil or type(c.candidate_enabled)=='boolean')
+ if c.candidate_enabled then assert(c.saved_baseline~=nil)end
  if c.saved_baseline~=nil then
   assert(type(c.saved_baseline)=='table' and integer(c.saved_baseline.limit) and type(c.saved_baseline.guard)=='function')
   c.saved_baseline={limit=c.saved_baseline.limit,guard=c.saved_baseline.guard}
  end
  assert((type(c.net)=='table' or type(c.net)=='userdata') and type(c.net.send)=='function' and type(c.net.receive)=='function')
- if c.stop~=nil then assert(type(c.net.pending)=='function')end
+ if c.stop~=nil or c.candidate_enabled then assert(type(c.net.pending)=='function')end
  local state,busy='new',false;local last,deadline,request,seq,saved_index=nil,nil,nil,0,nil
+ local candidate_done,candidate_selected=false,nil
  local api={}
  local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
  local function check()
@@ -64,7 +67,9 @@ function M.new(c)
    if state=='binding' then
     assert(#p==6 and p[4]=='BOUND');state='ready';assert(send(context('ATTACHED')));deadline=nil
    elseif state=='ready' then
-    assert((#p==7 and (p[4]=='PULL' or (p[4]=='STOP' and c.stop))) or (#p==9 and p[4]=='REGISTER_SAVED' and c.saved_baseline))
+    assert((#p==7 and (p[4]=='PULL' or (p[4]=='STOP' and c.stop) or
+     (p[4]=='CANDIDATE' and c.candidate_enabled and not candidate_done))) or
+     (#p==9 and p[4]=='REGISTER_SAVED' and c.saved_baseline))
     assert(p[7]:match('^[1-9]%d*$') and #p[7]<=16)
     local n=tonumber(p[7]);assert(integer(n) and string.format('%.0f',n)==p[7] and n==seq+1)
     request=n;deadline=last+c.timeout
@@ -81,9 +86,12 @@ function M.new(c)
      assert(checked and queued==false and state=='stopping' and check())
      assert(send({'STOPPED',c.epoch,c.generation,string.format('%.0f',request)}))
      seq=request;request=nil;deadline=nil;state='stopped'
-    elseif p[4]=='PULL' then state='requested' else
+    elseif p[4]=='PULL' then
+     assert(not c.candidate_enabled or candidate_selected);state='requested'
+    elseif p[4]=='CANDIDATE' then state='candidate' else
      assert(p[8]:match('^[1-9]%d*$') and #p[8]<=16 and p[9]==string.format('%.0f',c.saved_baseline.limit))
      saved_index=tonumber(p[8]);assert(integer(saved_index) and saved_index<=c.saved_baseline.limit and string.format('%.0f',saved_index)==p[8])
+     assert(not c.candidate_enabled or saved_index==candidate_selected)
      state='register_saved';assert(check())
     end
    else error('unexpected packet')end
@@ -91,6 +99,28 @@ function M.new(c)
   busy=false;if not ok then return fail('packet')end;return true
  end
  function api:requested()return state=='requested' end
+ function api:candidate_requested()return state=='candidate' end
+ function api:candidate_complete(result)
+  if busy or state~='candidate' or candidate_done then return fail('candidate_complete')end
+  busy=true;local ok=pcall(function()
+   assert(check() and type(result)=='table' and getmetatable(result)==nil)
+   local fields={'CANDIDATE',c.epoch,c.generation,string.format('%.0f',request)}
+   if result.status=='candidate' then
+    assert(result.epoch==c.epoch and integer(result.index) and result.index<=c.saved_baseline.limit and result.runtime_reservation==false)
+    for k in pairs(result)do assert(k=='status' or k=='epoch' or k=='index' or k=='runtime_reservation')end
+    candidate_selected=result.index;fields[#fields+1]='candidate';fields[#fields+1]=string.format('%.0f',result.index)
+   else
+    assert(result.status=='inconclusive' and (result.reason=='no_candidate' or result.reason=='registry_refused' or result.reason=='getter_or_context_unavailable'))
+    for k in pairs(result)do assert(k=='status' or k=='reason')end
+    fields[#fields+1]='inconclusive';fields[#fields+1]=result.reason
+   end
+   -- Never acknowledge a result while an already queued follow-up may make
+   -- this same frame fail. Continue late-packet checks after the response.
+   local checked,queued=pcall(c.net.pending,c.net)
+   assert(checked and queued==false and state=='candidate' and check())
+   assert(send(fields));candidate_done=true;seq=request;request=nil;deadline=nil;state='ready'
+  end);busy=false;if not ok then return fail('candidate_complete')end;return true
+ end
  function api:saved_request()return state=='register_saved' and saved_index or nil end
  -- The caller must first complete the correlated bootstrap and sampler register.
  function api:saved_registered(index)
