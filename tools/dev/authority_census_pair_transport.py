@@ -1,4 +1,13 @@
-"""Single-use pidfd/gate-owned helper and job TCP exchange; no X4 start."""
+"""Single-use pidfd/gate-owned helper and job TCP exchange; no X4 start.
+
+The caller must exclusively own the process FD table entries used by this
+transport through cleanup. Other threads and the guard/witness callbacks must
+not close, replace or reuse those descriptor numbers. The transport does not
+pin its socket descriptors; cleanup can close a different resource if this
+contract is violated. In particular, the receiver is closed inside the job
+transport's own finally block, so checking only this class's cleanup would
+not cover every close. Descriptor checks cannot make check-and-close atomic.
+"""
 import json
 import os
 from pathlib import Path
