@@ -66,6 +66,14 @@ class ExperimentalTCPMotion:
         self._min_interval=float(min_interval);self._max_tracks=max_tracks;self._failed=False
         self._allow_apply=allow_apply;self._apply_attempted=False;self._preflight=None
 
+    def _peer_disconnected(self, identity):
+        """Discard per-track state for the exact disconnected incarnation."""
+        for state in self._tracks.values():
+            for name in ('peer_frames','peer_samples','latest_frames'):
+                state.get(name,{}).pop(identity,None)
+        if self._preflight is not None and self._preflight[1]==identity:
+            self._preflight=None
+
     def _reserved(self,owner):
         if self._source_owner is not None and (owner is None or owner is not self._source_lease):
             self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
@@ -264,7 +272,9 @@ class ExperimentalTCPMotion:
                     raise RuntimeError('motion receipt context changed')
                 state['peer_frames'][identity]=value['sector_macro']
                 state['peer_samples'][identity]=(value['sequence'],digest)
-            def discarded(identity=identity, peer=peer):
+            def discarded(identity=identity, h=h, conn=conn, peer=peer):
+                if control._peers.get(conn) is not peer or d._incarnations.get(h)!=identity[1]:
+                    return
                 active=peer.get('motion_active')
                 if identity not in state['peer_frames'] and not (
                         active is not None and active['key']==key and active['sent']>0):

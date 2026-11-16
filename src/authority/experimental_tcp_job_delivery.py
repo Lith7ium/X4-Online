@@ -70,6 +70,13 @@ class ExperimentalTCPJobDelivery:
         self._test_binding=None;self._test_bind_attempted=False;self._test_bind_busy=False
         host._control._job_delivery_owner=self
 
+    def _peer_disconnected(self, handle):
+        """Retire only this socket's incarnation after the owner drops it."""
+        incarnation=self._incarnations.pop(handle,None)
+        motion=getattr(self,'_motion_owner',None)
+        if incarnation is not None and motion is not None:
+            motion._peer_disconnected(('peer_'+str(handle),incarnation))
+
     def _admitted_peers(self):
         """Read the current admitted connection set without creating identities."""
         host=self._host;world=host._world.session

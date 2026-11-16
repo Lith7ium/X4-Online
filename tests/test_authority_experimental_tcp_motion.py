@@ -111,6 +111,55 @@ class MotionTCP(unittest.TestCase):
         self.assertEqual([(item[0],item[2]) for item in self.received],[(1,False),(2,False),(1,True)])
         self.assertTrue(self.motion._tracks[('b'*32,'c'*32,10055)]['closed'])
 
+    def test_disconnect_forgets_only_exact_incarnation_and_fences_late_callbacks(self):
+        self.setup_pair();self.case.control.enable_latest_motion(enabled=True)
+        self.motion.send(self.sample())
+        members=self.delivery.membership()
+        one=(members[0]['id'],members[0]['incarnation'])
+        two=(members[1]['id'],members[1]['incarnation'])
+        self.motion.enqueue_latest(self.sample(2,t=2))
+        self.motion.track('b'*32,'c'*32,10056)
+        self.motion.enqueue_latest({**self.sample(),'index':10056})
+        conn,peer=next((c,p) for c,p in self.case.control._peers.items() if p['handle']==2)
+        self.case.control._latest_motion.prepare(peer)
+        active=peer['motion_active'];active['sent']=1  # partial frame at disconnect
+        accepted,discarded=active['accepted'],active['discarded']
+        state=self.motion._tracks[('b'*32,'c'*32,10055)]
+        queued=self.motion._tracks[('b'*32,'c'*32,10056)]
+        self.assertIn(two,queued['latest_frames'])  # a second frame remains unsent
+        self.motion._preflight=(('b'*32,'c'*32,10055),two,1,'digest')
+        other=('peer_2','f'*32)  # a different incarnation is not this socket
+        state['latest_frames'][other]='sector_other'
+        self.expected_disconnect.add(2);self.case.control._drop(conn)
+        for field in ('peer_frames','peer_samples','latest_frames'):
+            self.assertNotIn(two,state[field]);self.assertIn(one,state[field])
+        self.assertNotIn(two,queued['latest_frames']);self.assertIn(one,queued['latest_frames'])
+        self.assertIsNone(self.motion._preflight)
+        self.assertEqual(state['latest_frames'][other],'sector_other')
+        self.assertNotIn(2,self.delivery._incarnations)
+        # A stale callback cannot restore dropped state or touch a new lifetime.
+        with self.assertRaises(RuntimeError):accepted()
+        discarded()
+        self.assertNotIn(two,state['peer_samples'])
+        self.assertEqual(state['latest_frames'][other],'sector_other')
+
+    def test_rejoined_socket_gets_fresh_motion_identity(self):
+        self.setup_pair();self.motion.send(self.sample())
+        old=self.delivery.membership()[1]
+        self.expected_disconnect.add(2)
+        conn=next(c for c,p in self.case.control._peers.items() if p['handle']==2)
+        self.case.control._drop(conn)
+        third=self.case.connect();self.case.host.tick(.1)  # pause existing player
+        self.case.offer_and_claim(third)
+        self.client(third,3);self.case.host.tick(.1)
+        self.assertEqual(self.case.world.session.state,'running')
+        members=self.delivery.membership();self.assertEqual([m['id'] for m in members],['peer_1','peer_3'])
+        self.assertNotEqual(old['incarnation'],members[1]['incarnation'])
+        self.motion.send(self.sample(2,t=2),recipients=[members[1]])
+        state=self.motion._tracks[('b'*32,'c'*32,10055)]
+        self.assertNotIn((old['id'],old['incarnation']),state['peer_samples'])
+        self.assertIn((members[1]['id'],members[1]['incarnation']),state['peer_samples'])
+
     def test_discarded_unstarted_snapshot_needs_no_despawn_recipient(self):
         self.setup_pair();self.case.control.enable_latest_motion(enabled=True)
         self.motion.enqueue_latest(self.sample())

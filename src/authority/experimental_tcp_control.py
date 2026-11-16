@@ -161,8 +161,11 @@ class ExperimentalTCPControl:
 
     def _drop(self, conn):
         try:
-            self._peers.pop(conn)
+            peer = self._peers.pop(conn)
             self._session.disconnect(conn)
+            delivery = self._job_delivery_owner
+            if delivery is not None:
+                delivery._peer_disconnected(peer['handle'])
             conn.close()
         except BaseException as error:
             try:
