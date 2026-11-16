@@ -11,7 +11,7 @@ class JobDescriptorTest(unittest.TestCase):
     def test_md_is_read_only_and_emits_one_correlated_result(self):
         root=ET.parse(ROOT/'tools/dev/authority_job_descriptor_probe.xml').getroot()
         self.assertEqual({n.tag for n in root.iter()}, {'mdscript','cues','cue','conditions','event_ui_triggered',
-            'actions','set_value','do_if','do_else','raise_lua_event'})
+            'actions','set_value','do_if','do_elseif','do_else','debug_text','raise_lua_event'})
         self.assertTrue(all(n.get('name','').startswith('$') for n in root.iter('set_value')))
         guards=' '.join(n.get('value','') for n in root.iter('do_if'))
         for term in ('not md.X4AuthorityShipRegistry.State.$faulted',
@@ -21,6 +21,30 @@ class JobDescriptorTest(unittest.TestCase):
         result=root.find('.//raise_lua_event').get('param')
         for term in ('$v.$request_id','$v.$epoch','$index','$ship.macro.id','$ship.owner.id','$ship.sector.macro.id'):
             self.assertIn(term,result)
+
+    def test_unavailable_diagnostics_are_static_rechecks_after_unchanged_responses(self):
+        root = ET.parse(ROOT/'tools/dev/authority_job_descriptor_probe.xml').getroot()
+        responses = list(root.iter('raise_lua_event'))
+        self.assertEqual(len(responses), 3)
+        self.assertEqual([node.get('param') for node in responses[1:]],
+            ["'%s|%s|%s|unavailable'.[$v.$request_id,$v.$epoch,$index]"] * 2)
+        expected = {
+            'ship_missing', 'ship_not_operational', 'not_ship', 'reverse_mismatch', 'sector_invalid',
+            'ship_macro_missing', 'owner_missing', 'sector_macro_missing', 'registry_faulted_field_missing',
+            'registry_ships_missing', 'registry_byship_missing', 'registry_epoch_missing', 'registry_last_missing',
+            'registry_faulted', 'epoch_mismatch', 'index_below_range', 'index_above_range',
+            'index_noninteger', 'all_pass_on_recheck',
+        }
+        labels = [node.get('text') for node in root.iter('debug_text')]
+        self.assertEqual(set(labels), {"'[X4LAN] AUTH_DESCRIPTOR_RECHECK " + label + "'" for label in expected})
+        self.assertEqual(len(labels), len(expected) + 1)  # each branch has its own all-pass label
+        unavailable_branches = [node for node in root.iter('do_else')
+                                if node.find('raise_lua_event') is not None]
+        self.assertEqual(len(unavailable_branches), 2)
+        for branch in unavailable_branches:
+            self.assertEqual(branch[0].tag, 'raise_lua_event')
+            self.assertTrue(all(node.tag == 'debug_text' for condition in branch[1:]
+                                for node in condition))
 
     @unittest.skipUnless(shutil.which('luajit'),'LuaJIT required')
     def test_lua_correlates_original_actor_and_fails_closed(self):

@@ -10,9 +10,75 @@
     <do_if value="@$ship.isoperational and $ship.isclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index and @$ship.sector.isclass.sector and $ship.macro and $ship.owner and $ship.sector.macro">
      <raise_lua_event name="'X4AuthorityJobDescriptorProbe.Result'" param="'%s|%s|%s|ok|%s|%s|%s|%s|%s'.[$v.$request_id,$v.$epoch,$index,$ship,$ship.macro.id,$ship.owner.id,$ship.sector,$ship.sector.macro.id]"/>
     </do_if>
-    <do_else><raise_lua_event name="'X4AuthorityJobDescriptorProbe.Result'" param="'%s|%s|%s|unavailable'.[$v.$request_id,$v.$epoch,$index]"/></do_else>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityJobDescriptorProbe.Result'" param="'%s|%s|%s|unavailable'.[$v.$request_id,$v.$epoch,$index]"/>
+     <!-- Diagnostic rechecks are point observations, not the original failure. -->
+     <do_if value="not $ship">
+      <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK ship_missing'"/>
+     </do_if>
+     <do_elseif value="not @$ship.isoperational">
+      <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK ship_not_operational'"/>
+     </do_elseif>
+     <do_elseif value="not @$ship.isclass.ship">
+      <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK not_ship'"/>
+     </do_elseif>
+     <do_elseif value="@md.X4AuthorityShipRegistry.State.$byship.{$ship} != $index">
+      <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK reverse_mismatch'"/>
+     </do_elseif>
+     <do_elseif value="not @$ship.sector.isclass.sector">
+      <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK sector_invalid'"/>
+     </do_elseif>
+     <do_elseif value="not @$ship.macro">
+      <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK ship_macro_missing'"/>
+     </do_elseif>
+     <do_elseif value="not @$ship.owner">
+      <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK owner_missing'"/>
+     </do_elseif>
+     <do_elseif value="not @$ship.sector.macro">
+      <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK sector_macro_missing'"/>
+     </do_elseif>
+     <do_else>
+      <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK all_pass_on_recheck'"/>
+     </do_else>
+    </do_else>
    </do_if>
-   <do_else><raise_lua_event name="'X4AuthorityJobDescriptorProbe.Result'" param="'%s|%s|%s|unavailable'.[$v.$request_id,$v.$epoch,$index]"/></do_else>
+   <do_else>
+    <raise_lua_event name="'X4AuthorityJobDescriptorProbe.Result'" param="'%s|%s|%s|unavailable'.[$v.$request_id,$v.$epoch,$index]"/>
+    <!-- Short-circuit missing state before reading values from the registry. -->
+    <do_if value="not md.X4AuthorityShipRegistry.State.$faulted?">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK registry_faulted_field_missing'"/>
+    </do_if>
+    <do_elseif value="not md.X4AuthorityShipRegistry.State.$ships?">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK registry_ships_missing'"/>
+    </do_elseif>
+    <do_elseif value="not md.X4AuthorityShipRegistry.State.$byship?">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK registry_byship_missing'"/>
+    </do_elseif>
+    <do_elseif value="not md.X4AuthorityShipRegistry.State.$epoch?">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK registry_epoch_missing'"/>
+    </do_elseif>
+    <do_elseif value="not md.X4AuthorityShipRegistry.State.$last?">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK registry_last_missing'"/>
+    </do_elseif>
+    <do_elseif value="@md.X4AuthorityShipRegistry.State.$faulted">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK registry_faulted'"/>
+    </do_elseif>
+    <do_elseif value="@$v.$epoch != @md.X4AuthorityShipRegistry.State.$epoch">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK epoch_mismatch'"/>
+    </do_elseif>
+    <do_elseif value="$index lt 1">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK index_below_range'"/>
+    </do_elseif>
+    <do_elseif value="$index gt @md.X4AuthorityShipRegistry.State.$last">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK index_above_range'"/>
+    </do_elseif>
+    <do_elseif value="$index != ($index)i">
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK index_noninteger'"/>
+    </do_elseif>
+    <do_else>
+     <debug_text text="'[X4LAN] AUTH_DESCRIPTOR_RECHECK all_pass_on_recheck'"/>
+    </do_else>
+   </do_else>
   </actions>
  </cue></cues>
 </mdscript>
