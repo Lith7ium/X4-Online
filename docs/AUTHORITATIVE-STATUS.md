@@ -17,6 +17,26 @@ enrollment, client gameplay, Windows or Internet access. The registry request
 ID is checked by the installed owner, not independently captured in the log.
 [Run details](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-read-only-registry-status).
 
+In a later isolated recovery run, the server enrolled 10,082 selected ships
+from observed faction lists into a previously uninitialized registry. The
+confirmed save contains a verified index-to-component mapping with 10,082
+entries; the source census reported 202,331 list entries and explicitly left
+universe coverage unknown. One loopback connection requested only a save
+offer; no client X4 loaded this checkpoint. Cross-client identity, gameplay,
+Windows and Internet access remain unproven. The current full check ran 4,215
+tests with one unexplained UDP socket-guard error and 56 skips; the affected
+test passed in isolation, which does not establish the cause of the full-run
+error. [Enrollment run details](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-initial-enrollment-of-observed-ships).
+
+A follow-up recovery from that checkpoint stopped before starting its intended
+client: the first new server save had the same registry epoch and count but a
+different saved mapping fingerprint, so the guard left it unconfirmed. All
+10,082 index-to-component IDs changed. The saved components at each index still
+had matching class, macro, owner and code; four connection attributes differed.
+This is consistent with save-ID renumbering but does not prove object identity.
+The raw component-ID fingerprint is therefore not stable across these saves;
+the guard remains fail-closed. [Details](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#initialized-registry-recovery-failed-before-client-start).
+
 Earlier, one recovered Linux X4 server served two real local Linux X4
 clients in sequence. Each client log records a load request, marker and pause;
 retained client save copies hash to their respective checkpoint files. The

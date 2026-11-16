@@ -322,7 +322,7 @@ def run(args):
         if source_store.directory == source.DEFAULT_STORE.resolve():
             fixture = source.verify(source_store.directory, checkpoint, profile)
         else:
-            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=getattr(args,'registry_status',False))
+            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=(getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False)))
         target = profile/'save/save_008.xml.gz'
         if any(target.parent.iterdir()): raise ValueError('new profile save directory not empty')
         os.link(staged, target, follow_symlinks=False); target.chmod(0o400)
@@ -332,7 +332,8 @@ def run(args):
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
         protected = bridge.install_probe(case, profile, sock.getsockname()[1], lease, epoch)
         registry_check = None
-        if getattr(args,'registry_status',False):
+        enrollment = None
+        if getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False):
             import authority_recovery_registry_status as registry_check
             registry_expected=registry_check.saved_status(checkpoint)
             if registry_expected[0]=='ready':
@@ -340,7 +341,11 @@ def run(args):
                 if read_evidence(old_registry)!=read_evidence(ROOT/'tools/dev/authority_ship_registry.xml'):
                     raise ValueError('saved registry script provenance unavailable')
             registry_nonce=secrets.token_hex(16)
-            protected.extend(registry_check.install(case,registry_nonce,registry_expected))
+            if getattr(args,'registry_enroll',False):
+                if registry_expected!=('uninitialized',):raise ValueError('refusing to initialize existing registry')
+                enrollment={'epoch':secrets.token_hex(16),'nonce':secrets.token_hex(16),
+                    'limit':200000,'save_path':str(profile/'save')}
+            protected.extend(registry_check.install(case,registry_nonce,registry_expected,enroll=enrollment))
         clock = None
         if getattr(args, 'diagnostic_overlap', False):
             import authority_overlap_clock
@@ -387,17 +392,24 @@ def run(args):
         peer = bridge.activate(sock, watch, lease, epoch, deadline, check, verify)
         if registry_check is not None:
             registry_check.matches_log(profile/'engine-output.log',registry_nonce,'startup',registry_expected)
+            if enrollment is not None:
+                count=registry_check.enrollment_receipt(profile/'engine-output.log',enrollment['nonce'],enrollment['epoch'],enrollment['limit'])
+                registry_expected=('bootstrap',enrollment['epoch'],count)
         recovered[0] = True
         check()
         result.update(source_checkpoint_id=checkpoint.checkpoint_id, source_sha256=checkpoint.sha256,
                       load_marker_observed=True, pause_observed=True)
         def verify_checkpoint(store_arg, checkpoint_id, save_name):
+            nonlocal registry_expected
             evidence=read_cycle_evidence(store_arg,checkpoint_id,save_name)
             if registry_check is not None:
                 saved=store_arg.get(checkpoint_id)
-                if registry_check.saved_status(saved)!=registry_expected:
-                    raise ValueError('checkpoint registry differs from recovered status')
-                registry_check.matches_log(profile/'engine-output.log',registry_nonce,saved.marker,registry_expected)
+                actual=registry_check.saved_status(saved)
+                registry_check.checkpoint_status(registry_expected,actual)
+                registry_check.matches_log(profile/'engine-output.log',registry_nonce,saved.marker,actual)
+                registry_expected=actual
+                if enrollment is not None:
+                    result['registry_status'].update(state='ready',mapping_sha256=actual[3],checkpoint_id=checkpoint_id)
             return evidence
         adapter = LocalControlBridge(enabled=True, sock=sock, peer=peer, lease=lease, world_epoch=epoch,
             profile=profile, store=store, verify_checkpoint=verify_checkpoint, timeout=130, marker_required=True)
@@ -605,6 +617,7 @@ def main():
     parser.add_argument('--display',required=True); parser.add_argument('--timeout',type=float,default=3600)
     parser.add_argument('--seed',type=int,default=276944566)
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
+    parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

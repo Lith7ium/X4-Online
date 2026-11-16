@@ -2,9 +2,14 @@
 local M={}
 function M.new(c)
  assert(type(c)=='table' and type(c.nonce)=='string' and #c.nonce==32 and c.nonce:match('^[0-9a-f]+$') and type(c.expected)=='string')
+ assert(c.fault==nil or type(c.fault)=='function')
  for _,k in ipairs({'clock','paused','issue','register','log','store'}) do assert(type(c[k])=='function') end
  local state='new';local count=0;local request,deadline,epoch,marker=nil,nil,nil,nil;local issuing=false
- local function fail() state='failed';return false end
+ local function fail()
+  local first=state~='failed';state='failed'
+  if first and c.fault then pcall(c.fault) end
+  return false
+ end
  local function check()
   local t=c.clock();return type(t)=='number' and t==t and t>=0 and t<math.huge and (not deadline or t<deadline) and c.paused()==true
  end
@@ -45,6 +50,13 @@ function M.new(c)
  function api:tick()
   if state=='failed' or (state=='pending' and not check()) then return fail() end
   return true
+ end
+ -- A bootstrap may change only a proven empty baseline, while paused, once.
+ function api:expect_bootstrap(epoch,n)
+  if state~='ready' or c.expected~='uninitialized' or not check() or
+   type(epoch)~='string' or #epoch~=32 or not epoch:match('^[0-9a-f]+$') or
+   type(n)~='number' or n%1~=0 or n<1 or n>200000 then return fail() end
+  c.expected=epoch..'|'..string.format('%.0f',n);return true
  end
  function api:ready() return state=='ready' end
  assert(c.register(function(_,v) assert(api:event(v)) end)==true)

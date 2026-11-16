@@ -6,13 +6,21 @@ bounded first connection ends, the caller may continue its normal accept loop.
 Neither Windows, internet, gameplay nor exact bytes consumed by X4 are proven.
 """
 from pathlib import Path
+import json
 import re
+import secrets
+import select
 import socket
+import sys
 import time
 
 import authority_recovered_remote_load_pair_live as combined
 import authority_recovery_tcp_join_live as recovery
 from authority.marker_evidence import verify_saved_marker
+from authority_helper_lifecycle import OwnedHelper
+from authority_tcp_native_worker import parse_json, read_line, send_frame
+
+REGISTRY_READER = Path(__file__).resolve().with_name('authority_recovered_registry_reader.py')
 
 
 class ServerClient(combined.RecoveredRemoteParticipant):
@@ -116,6 +124,61 @@ def verify_join_offer(ticket, marker, baseline):
         raise ValueError('offered checkpoint differs from confirmed join baseline')
 
 
+def client_registry_enabled(args):
+    return getattr(args, 'registry_status', False) is True or getattr(args, 'registry_enroll', False) is True
+
+
+def read_registry_while_pumping(participant, baseline, deadline, check):
+    """Pump TCP while a pidfd-owned, terminable helper inspects a checkpoint."""
+    check()
+    parent, child = socket.socketpair()
+    helper = None
+    try:
+        parent.setblocking(False)
+        helper = OwnedHelper([sys.executable, str(REGISTRY_READER), str(child.fileno())],
+                             registry=participant.helpers, pass_fds=(child.fileno(),))
+        child.close()
+        config = {key: str(getattr(baseline, key)) if key == 'path' else getattr(baseline, key)
+                  for key in ('checkpoint_id','path','sha256','size','marker')}
+        payload = json.dumps(config, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+        if len(payload) > 4096: raise ValueError('registry reader configuration too large')
+        helper.release()
+        def pump():
+            recovery.marked.remaining(deadline)
+            participant.pump_loading()
+        send_frame(parent, payload, deadline-1, pump)
+        response = parse_json(read_line(parent, 512, deadline-1, pump))
+        if type(response) is not dict or set(response) != {'status'} or type(response['status']) is not list:
+            raise ValueError('invalid registry reader response')
+        status = response['status']
+        if status == ['uninitialized']:
+            result = ('uninitialized',)
+        elif (len(status) == 4 and status[0] == 'ready' and type(status[1]) is str and
+              re.fullmatch(r'[0-9a-f]{32}', status[1]) and type(status[2]) is int and
+              1 <= status[2] <= 200000 and type(status[3]) is str and re.fullmatch(r'[0-9a-f]{64}', status[3])):
+            result = tuple(status)
+        else:
+            raise ValueError('invalid registry status from reader')
+        while helper.proc.poll() is None:
+            pump()
+            select.select([], [], [], min(.05, recovery.marked.remaining(deadline)))
+        if helper.proc.returncode != 0: raise RuntimeError('registry reader failed')
+    finally:
+        child.close(); parent.close()
+        if helper is not None: helper.stop()
+    check()
+    return result
+
+
+def guarded_registry_observation(check, verify):
+    """Verify status within the same guarded context used at pre-accept."""
+    if check() is not True: raise RuntimeError('client context unavailable')
+    if verify is not None:
+        if verify() is not True: raise RuntimeError('client registry observation unavailable')
+        if check() is not True: raise RuntimeError('client context changed')
+    return True
+
+
 def settle_departure(host, world, control, peer, deadline, check, ticket, marker):
     """Observe EOF and require a fresh marked save before another client."""
     if peer not in control._peers:
@@ -198,6 +261,13 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     baseline = prepare_join_baseline(host, world, deadline, check_server, expected_baseline)
     ticket, target = participant.offer_and_download(world, service, handle, client_out, profile)
     verify_join_offer(ticket, participant.marker, baseline)
+    registry_observation = None
+    if client_registry_enabled(args):
+        import authority_recovered_client_registry as client_registry
+        status = read_registry_while_pumping(participant, baseline, deadline, check_server)
+        confirmed_baseline(world, baseline)
+        verify_join_offer(ticket, participant.marker, baseline)
+        registry_observation = (client_registry, secrets.token_hex(16), status)
     config = base.client.install_probe(case, profile, ticket)
     recovery.marked.identity.inject(case, 'load')
     participant.install(case)
@@ -205,6 +275,9 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     protected += [case/'extensions/x4_lan_lab/ui'/name for name in
                   ('client_load_barrier.lua', 'x4_client_load_engine.lua', 'authority_download_load_probe.lua')]
     protected += participant.protected(case)
+    if registry_observation is not None:
+        client_registry, nonce, status = registry_observation
+        protected += client_registry.install(case, nonce, status)
     expected = {path:base.live.sha(path) for path in protected}
     command = base.load.readonly_save_command(case, game, binds, lock, args.display, auth, user, args.seed, target)
     pos = command.index('--die-with-parent')
@@ -236,8 +309,20 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                     server_started=server_started, server_identity=server_identity, client_proc=proc,
                     client_started=started, client_identity=client_identity, game=game, home=home,
                     uid=uid, steam=steam, target=target, ticket=ticket, expected=expected)
-            def check_protected(): return client_context(check_server)
-            def active_protected(): return client_context(check_base)
+            def registry_context(check):
+                verify = (lambda: client_registry.verify_log(profile/'engine-output.log', nonce, status, ticket,
+                                                             participant.marker)) if registry_observation is not None else None
+                return guarded_registry_observation(lambda: client_context(check), verify)
+            def check_protected(): return registry_context(check_server)
+            def active_protected(): return registry_context(check_base)
+            if registry_observation is not None:
+                check_protected()
+                result['client_registry_status'] = {
+                    'checkpoint_id': baseline.checkpoint_id, 'checkpoint_sha256': baseline.sha256,
+                    'state': status[0], 'epoch': status[1] if len(status) > 1 else None,
+                    'count': status[2] if len(status) > 2 else None,
+                    'saved_mapping_sha256': status[3] if len(status) > 3 else None,
+                    'cross_process_identity_proven': False, 'exact_loaded_file_proven': False}
             original_accept = session.accept
             try:
                 participant.on_ready(world=world, handle=handle, ticket=ticket, target=target,
@@ -273,6 +358,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                     raise ValueError('final client inputs changed')
                 relative_log = Path('case/home/.config/EgoSoft/X4/45841/engine-output.log')
                 participant.verify_logs(out/'server'/relative_log, out/'client'/relative_log, ticket, participant.marker)
+                if registry_observation is not None:
+                    client_registry.verify_log(out/'client'/relative_log, nonce, status, ticket, participant.marker)
                 check_server()
                 participant.redact()
                 participant.config = None

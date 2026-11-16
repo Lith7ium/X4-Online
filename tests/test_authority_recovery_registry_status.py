@@ -54,8 +54,45 @@ class StatusTests(unittest.TestCase):
             p.write_text(line);self.assertTrue(status.matches_log(p,n,m,('uninitialized',)))
             p.write_text(line+line)
             with self.assertRaises(ValueError):status.matches_log(p,n,m,('uninitialized',))
+    def test_first_save_binds_then_compares_full_mapping(self):
+        initial=('bootstrap','a'*32,2);actual=('ready','a'*32,2,'f'*64)
+        self.assertEqual(status.checkpoint_status(initial,actual),actual)
+        for bad in (('uninitialized',),('ready','b'*32,2,'f'*64),('ready','a'*32,1,'f'*64)):
+            with self.assertRaises(ValueError):status.checkpoint_status(initial,bad)
+        with self.assertRaises(ValueError):status.checkpoint_status(actual,('ready','a'*32,2,'e'*64))
+    def test_enrollment_receipt_unique_and_bounded(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'log';n='a'*32;e='b'*32
+            line='[X4LAN] AUTH_RECOVERY_ENROLL '+n+'|'+e+'|2\n'
+            p.write_text(line);self.assertEqual(status.enrollment_receipt(p,n,e,3),2)
+            for bad in (line+line,line.replace('|2','|4'),line.replace(e,'c'*32)):
+                p.write_text(bad)
+                with self.assertRaises(ValueError):status.enrollment_receipt(p,n,e,3)
+    def test_enrollment_owner(self):
+        subprocess.run(['luajit','tests/authority_recovery_registry_enroll.lua'],cwd=ROOT,check=True,capture_output=True)
     def test_lua_owner(self):
         subprocess.run(['luajit','tests/authority_recovery_registry_status.lua'],cwd=ROOT,check=True,capture_output=True)
+    def test_install_enrollment_exclusive_routing_and_status_transition(self):
+        with tempfile.TemporaryDirectory() as d:
+            case=Path(d)/'case';profile=Path(d)/'45841'
+            ui=case/'extensions/x4_lan_lab/ui';md=ui.parent/'md';ui.mkdir(parents=True);md.mkdir();profile.mkdir()
+            def fake_base(case,port,lease,epoch,marker_required):
+                (ui/'authority_world_bridge_probe.lua').write_text((ROOT/'tools/dev/authority_world_bridge_probe.lua').read_text())
+            with patch.object(recovery.bridge_install,'install_probe',side_effect=fake_base):
+                recovery.install_probe(case,profile,1234,'a'*32,'b'*32)
+            options={'epoch':'d'*32,'nonce':'e'*32,'limit':3,'save_path':str(profile/'save')}
+            files=status.install(case,'c'*32,('uninitialized',),enroll=options)
+            self.assertEqual(len(files),6)
+            owner=(ui/'authority_world_bridge_probe.lua').read_text()
+            self.assertIn("if registry_enroller and registry_enroller:state()~='done'",owner)
+            self.assertIn('registry_status:expect_bootstrap(epoch,count)',owner)
+            self.assertLess(owner.index('registry_enroller:state()'),owner.index('RECOVERY_READY|'))
+            for file in [*files,ui/'authority_world_bridge_probe.lua']:
+                if file.suffix=='.lua':subprocess.run(['luajit','-b',str(file),'/dev/null'],check=True,capture_output=True)
+    def test_reject_enroll_into_existing_registry(self):
+        with self.assertRaises(ValueError):
+            status.install('/not/used','a'*32,('ready','b'*32,1,'c'*64),
+                enroll={'epoch':'d'*32,'nonce':'e'*32,'limit':3,'save_path':'/tmp/45841/save'})
     def test_installs_into_real_recovery_owner_hooks(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);case=root/'case';profile=root/'45841'

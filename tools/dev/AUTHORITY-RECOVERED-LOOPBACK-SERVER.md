@@ -334,3 +334,73 @@ of that exchange. This run exercised only the uninitialized state, not an
 initialized register, ship enrollment, cross-process identity, client loading,
 gameplay, Windows or Internet operation. It does not independently prove which
 save bytes X4 consumed.
+
+## Optional initial enrollment of observed ships
+
+`--registry-enroll` is an experimental bootstrap for an uninitialized saved
+registry. The recovered paused X4 source must report an uninitialized registry
+before the owner initializes it with a new epoch. It enumerates eligible
+existing ships from observed faction lists, then enrolls them through the
+correlated registry owner. Before the first checkpoint is confirmed, its
+saved epoch, count and verified index-to-component mapping must match the
+bootstrap result; later saves compare the saved mapping fingerprint. A source
+with an existing registry is refused. This bootstrap does not establish that
+faction lists contain every ship in the universe, and it is not running
+creation, destruction or movement replication.
+
+On 2026-11-16, `.local/authority-registry-enroll-once-01` reported success for
+one isolated Linux X4 recovery. The census log reports 202,331 enumerated
+faction-list entries and 10,082 distinct eligible selected ships, explicitly
+with `coverage=unknown`. A local TCP connection requested a save offer only;
+no client X4, save download or load claim took place. The supervisor recorded
+`pause`, `save` and checkpoint publication, one accepted connection, zero
+admitted clients, a paused final world and no owned processes remaining. The
+orchestrator reported cleanup confirmed, checked the source and resulting
+checkpoint pointers, source integrity, startup and pre-save registry receipts,
+the save marker, the offered checkpoint and the saved mapping. These are
+supervisor and saved-file observations, not an independent packet capture or
+proof of the exact bytes loaded by X4.
+
+The confirmed checkpoint is `checkpoint-6c9b4ce5f0454fe4b3887bc36c213d9f`,
+SHA-256 `ce2de5d179017a404a95906c6a394a0ecd7e556c0049a78b60c1a4699d14b19f`,
+marker `f5b0355349b7c56f4891915298186ea6`. Its saved registry has epoch
+`4ba7be438ebb04ec5bb85fdb95b5a488`, count 10,082 and mapping SHA-256
+`6f5cadcc614831d49c143d020d1673f25cbd96a25c04dd5ded5c68d61b6040c7`.
+No client has been shown to restore this register, and neither client-to-server
+identity nor complete universe coverage follows from this run. Windows,
+Internet access and gameplay were not tested.
+
+The full check executed 4,215 tests with one UDP socket-guard error and 56
+skips. The affected test passed in isolation; the full-run error remains
+unexplained, and the repository's no-skips check is not satisfied.
+
+## Initialized registry recovery failed before client start
+
+The follow-up `.local/authority-registry-recovered-client-once-01` attempted
+to recover the confirmed 10,082-entry checkpoint above and then start a real
+Linux X4 diagnostic client. The server log recorded the recovered marker,
+pause, registry status and a new save. The supervisor stopped with
+`checkpoint registry differs from recovered status` during that save, before
+client startup or admission. Its result reported no owned processes remaining;
+the orchestrator reported confirmed cleanup. The newly published candidate
+`checkpoint-96f563f9122144c7a82a82e42bd36b26` remained **unconfirmed**.
+
+Read-only verification of both saved registries found valid forward/reverse
+bijections and 10,082 referenced ship components in each, with the same epoch
+`4ba7be438ebb04ec5bb85fdb95b5a488` and count. The original mapping fingerprint
+was `6f5cadcc614831d49c143d020d1673f25cbd96a25c04dd5ded5c68d61b6040c7`;
+the new fingerprint was
+`9ab23dfdcda16cb512bdf36716a66ef57c4cf30ab480e096462d7875c9c99f3e`.
+Every registry index pointed to a different saved component ID. Of the IDs,
+519 appeared in both sets and 9,563 appeared only in each respective set. At
+every index, the saved components' `class`, `macro`, `owner` and `code`
+attributes agreed; `connection` agreed for 10,078 indices and differed for
+four. Code uniqueness or non-emptiness was not established.
+
+The observations are consistent with component IDs being renumbered when X4
+loads and saves, but those attributes are not an independently established
+identity guarantee. The fingerprint hashes raw saved component IDs and is not
+stable across these two saves. The unchanged guard rejects the mismatch; the
+candidate is not promoted or made a source. This result does not demonstrate
+client registry loading, cross-process ship identity, gameplay, Windows or
+Internet connectivity.

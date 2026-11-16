@@ -32,3 +32,23 @@ local reentrant=M.new({nonce=string.rep('e',32),expected='uninitialized',clock=f
  log=function()error('must not log')end,store=function()error('must not store')end})
 assert(not reentrant:begin());assert(not reentrant:tick())
 print('recovery registry status checks passed')
+-- Fault callback is optional and called exactly once, including a late reply.
+do
+ local cb, faults;faults=0
+ local obj=M.new({nonce=string.rep('f',32),expected='uninitialized',clock=function()return 1 end,paused=function()return true end,
+  register=function(f)cb=f;return true end,issue=function()return true end,log=function()return true end,store=function()return true end,
+  fault=function()faults=faults+1 end})
+ assert(obj:begin());cb(nil,string.rep('f',32)..':1|Uninitialized|');assert(obj:ready())
+ assert(obj:expect_bootstrap(string.rep('a',32),2));assert(not obj:expect_bootstrap(string.rep('a',32),2))
+ assert(faults==1);assert(not obj:tick() and faults==1)
+end
+-- A stale response after a completed barrier is reported exactly once.
+do
+ local cb;local faults=0;local nonce=string.rep('9',32)
+ local obj=M.new({nonce=nonce,expected='uninitialized',clock=function()return 1 end,paused=function()return true end,
+  register=function(f)cb=f;return true end,issue=function()return true end,log=function()return true end,store=function()return true end,
+  fault=function()faults=faults+1 end})
+ assert(obj:begin());cb(nil,nonce..':1|Uninitialized|');assert(obj:ready())
+ assert(not pcall(cb,nil,nonce..':1|Uninitialized|'));assert(faults==1 and not obj:tick())
+ assert(not pcall(cb,nil,nonce..':1|Uninitialized|'));assert(faults==1)
+end
