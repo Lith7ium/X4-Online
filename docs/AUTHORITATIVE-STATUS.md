@@ -228,6 +228,14 @@ incompatibility with opaque Lua userdata has since been fixed and tested
 offline, but the failed run did not record the LuaID type; the precise cause
 and native effectiveness of the fix remain unproven.
 
+A third motion attempt reached source `done` and logged a client `BUFFERED`
+marker for index 10055, but its coordinator timed out without retaining a
+successful worker result. That marker precedes the reply and is provisional;
+it does not prove a TCP receipt or completed end-to-end transfer. A costly
+byte-at-a-time guarded result reader was replaced after this failure; the
+recorded artifacts do not establish whether that caused this particular
+timeout. Owned cleanup was reported confirmed. [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

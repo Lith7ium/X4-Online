@@ -23,7 +23,18 @@ import authority_source_single_job_install as source_install
 import authority_participant_motion_install as client_install
 from authority.experimental_tcp_motion import motion_value
 from authority_helper_lifecycle import OwnedHelper
-from authority_tcp_native_worker import read_line,parse_json
+from authority_tcp_native_worker import parse_json
+
+
+def finish_worker_output(sock,reader,deadline,guard):
+    """Reject both already-buffered and newly received bytes after one result."""
+    guard()
+    if reader.buffer:raise RuntimeError('extra buffered worker output')
+    remaining=deadline-time.monotonic()
+    if remaining<=0:raise TimeoutError('worker output deadline')
+    sock.settimeout(min(1,remaining))
+    if sock.recv(1)!=b'':raise RuntimeError('extra worker output')
+    guard()
 
 
 class MotionCoordinator(pair.Coordinator):
@@ -126,10 +137,10 @@ class MotionCoordinator(pair.Coordinator):
         if len(payload)>16384:raise ValueError('private worker configuration too large')
         self.private.settimeout(min(2,deadline-time.monotonic()));self.private.sendall(payload);guard()
         self.replica_dispatch_attempted=True;helper.release();guard()
-        result=parse_json(read_line(self.private,16384,deadline,guard));guard();self._validate_motion_result(result)
+        reader=pair.ProgressFrames(self.private)
+        result=parse_json(reader.read(deadline,guard));guard();self._validate_motion_result(result)
         if helper.proc.wait(timeout=min(5,max(.01,deadline-time.monotonic())))!=0:raise RuntimeError('worker failed')
-        self.private.settimeout(min(1,max(.01,deadline-time.monotonic())))
-        if self.private.recv(1)!=b'':raise RuntimeError('extra worker output')
+        finish_worker_output(self.private,reader,deadline,guard)
         guard();self.result=result
         self.output_details=dict(tcp_ack_after_client_replica=True,ship_creation_requested=True,artificial_seed=7183,
             source_queue_acked=True,source_activation_is_birth=False,descriptor_atomic=False,frame_identity_proven=False,

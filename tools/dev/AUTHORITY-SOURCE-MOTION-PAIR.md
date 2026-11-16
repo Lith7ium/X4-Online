@@ -32,7 +32,28 @@ the result to equal the independently retained exact actor uint64. Numeric and
 cdata inputs still additionally require an exact direct check. LuaJIT tests
 exercise real userdata, wrong and rounded reverse conversions and a uint64
 above 2^53. An opaque userdata return is a plausible explanation of attempt 02,
-not an observed return type or a proven cause; no native follow-up is claimed.
+not an observed return type or a proven cause.
+
+A third isolated attempt, `.local/authority-source-motion-pair-03`, returned
+`success=false` with `pair context changed`; owned cleanup was reported
+confirmed. The source X4 log reached `done`, and the separate client log
+recorded `LOCAL_APPLIED 10055`, then
+`BUFFERED 10055 1 cluster_115_sector001_macro 13.25216319499998`. The marker
+is emitted after the local MD/FFI binding and buffer push but before its UDP
+reply. It is therefore provisional evidence of that client-side step, not a
+retained TCP receipt or proof of complete delivery. The logs have independent
+game clocks and no packet trace; the precise worker outcome is not retained.
+
+The `pair context changed` message identifies expiry of the coordinator's
+deadline, capped at 110 seconds, in this run's guard path; other failed lifecycle
+checks would have raised their own errors. The terminal-result reader at that
+revision performed the full expensive guard before and after every individual
+byte. That design can exhaust the deadline on a long result and was replaced
+afterward by bounded chunked framing with the same guard/deadline checks and
+strict rejection of buffered or newly received trailing bytes. The available
+artifacts do not establish whether result reading was the actual cause of this
+particular timeout. The revision is tested offline only; this is not a native
+successful end-to-end result.
 
 `authority_source_motion_pair_live.py` is a default-off, single-event diagnostic
 using the existing private two-X4 lifecycle. It stages the pinned census save

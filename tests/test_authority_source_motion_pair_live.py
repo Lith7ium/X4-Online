@@ -1,8 +1,11 @@
 """Offline lifecycle, motion result, and correlated log checks; no X4 start."""
 import argparse
+import json
 from pathlib import Path
+import socket
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
@@ -50,6 +53,33 @@ class MotionPair(unittest.TestCase):
                'tools/dev/authority_multi_create_receiver.xml','tools/dev/authority_participant_job_session.lua',
                'tools/dev/authority_motion_ipc_supervisor.py'):
    self.assertIn(ROOT/path,sources)
+ def test_chunked_result_with_expensive_guard_and_strict_suffix_fence(self):
+  receive,send=socket.socketpair();self.addCleanup(receive.close);self.addCleanup(send.close)
+  result=self.result();result['motion_sample']['sector_macro']='sector_'+('a'*100)
+  wire=json.dumps(result,separators=(',',':')).encode()+b'\n'
+  self.assertGreater(len(wire),700);send.sendall(wire);send.shutdown(socket.SHUT_WR)
+  calls=[]
+  def costly_guard():calls.append(1);time.sleep(.002);return True
+  reader=m.pair.ProgressFrames(receive);deadline=time.monotonic()+2
+  self.assertEqual(json.loads(reader.read(deadline,costly_guard)),result)
+  m.finish_worker_output(receive,reader,deadline,costly_guard)
+  self.assertLess(len(calls),12)
+ def test_buffered_or_socket_suffix_cannot_be_accepted_as_one_result(self):
+  for suffix_in_buffer in (True,False):
+   receive,send=socket.socketpair()
+   try:
+    reader=m.pair.ProgressFrames(receive)
+    if suffix_in_buffer:reader.buffer.extend(b'foreign\n')
+    else:send.sendall(b'foreign\n')
+    send.shutdown(socket.SHUT_WR)
+    with self.assertRaises(RuntimeError):m.finish_worker_output(receive,reader,time.monotonic()+2,lambda:True)
+   finally:receive.close();send.close()
+ def test_buffered_result_still_requires_guard_and_deadline(self):
+  receive,send=socket.socketpair();self.addCleanup(receive.close);self.addCleanup(send.close)
+  reader=m.pair.ProgressFrames(receive);reader.buffer.extend(b'{"ok":true}\n')
+  def failed_guard():raise RuntimeError('context lost')
+  with self.assertRaisesRegex(RuntimeError,'context lost'):reader.read(time.monotonic()+2,failed_guard)
+  with self.assertRaises(TimeoutError):reader.read(time.monotonic()-1,lambda:True)
  def test_lifecycle_hooks_restored_on_refusal(self):
   with tempfile.TemporaryDirectory() as out:
    args=argparse.Namespace(window=1,out=Path(out))
