@@ -122,10 +122,19 @@ def _stat_tuple(s):return s.st_dev,s.st_ino,s.st_mode,s.st_size,s.st_mtime_ns,s.
 
 def stage_pair(verified,profiles):
     """Read source bytes once and write two exclusively created private slots."""
-    if not isinstance(verified,VerifiedInputs) or type(profiles) is not dict or set(profiles)!={'server','client'}:
+    return _stage(verified,profiles,{'server','client'})
+
+
+def stage_three(verified,profiles):
+    """Same guarded staging contract for one source and two distinct clients."""
+    return _stage(verified,profiles,{'server','client1','client2'})
+
+
+def _stage(verified,profiles,required):
+    if not isinstance(verified,VerifiedInputs) or type(profiles) is not dict or set(profiles)!=required:
         raise ValueError('invalid staging request')
     save_dirs={role:Path(profile)/'save' for role,profile in profiles.items()}
-    if save_dirs['server'].resolve()==save_dirs['client'].resolve():raise ValueError('profiles must be distinct')
+    if len({p.resolve() for p in save_dirs.values()})!=len(save_dirs):raise ValueError('profiles must be distinct')
     if any(p.is_relative_to(verified.source_path.parent.parent.parent) or
            verified.source_path.parent.parent.parent.is_relative_to(p) for p in (d.resolve() for d in save_dirs.values())):
         raise ValueError('staging and source must be disjoint')
@@ -168,7 +177,7 @@ def stage_pair(verified,profiles):
                 raise ValueError('staged save differs')
             results[role]=(target,fingerprint,sha)
         identities=[result[1][:2] for result in results.values()]
-        if len(set(identities))!=2 or (before.st_dev,before.st_ino) in identities:
+        if len(set(identities))!=len(required) or (before.st_dev,before.st_ino) in identities:
             raise ValueError('staged saves do not have independent identities')
         for role,directory in save_dirs.items():
             current=directory.lstat()

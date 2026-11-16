@@ -5,7 +5,7 @@ local hostmod=dofile('tools/dev/authority_job_registry_host.lua')
 local probe=dofile('tools/dev/authority_job_registry_probe.lua')
 local gate=dofile('src/authority/lua/job_delivery.lua')
 local epoch,attempt,lease,nonce=string.rep('a',32),string.rep('b',32),string.rep('c',32),string.rep('d',32)
-local function run(mode)
+local function run(mode,two)
  local handlers,events,input,output,ops={},{},{},{},{}
  local now,game,paused,queue_initialized=1,30,true,false
  local md_acked,started=false,false
@@ -26,6 +26,7 @@ local function run(mode)
   end,
   witness_factory=function(index,macro)return {start=function()return true end,tick=function()return true end,close=function()return true end,
    response=function()return true,{epoch=epoch,index=index,sector_macro=macro,local_witness_match=true}end}end}
+ if two then opts.delivery_peers={{id='client1',incarnation=string.rep('e',32)},{id='client2',incarnation=string.rep('f',32)}} end
  opts.host_factory=function(report,fault,done,hold,queue_acked)
   local h={enabled=true,attach_saved_registry=true,exclusive_registry_consumer=true,expected_last=10054,
    epoch=epoch,baseline={},capacity=4,window=30,timeout=5,probe=probe,expose_actor=true,
@@ -62,9 +63,14 @@ local function run(mode)
  assert(app:state()=='descriptor_wait');assert(app:descriptor_event('ok'));assert(tick() and app:state()=='descriptor_sent')
  input[1]=cmd..'|WITNESS|1|41|sector_a';assert(tick());assert(app:witness_event('ok'));assert(tick() and app:state()=='finished')
  for _,op in ipairs(ops)do assert(op~='Ack')end
+ if two then
+  input[1]=cmd..'|DELIVERY_ACK|1|10055|client1|'..string.rep('e',32)
+  assert(tick() and app:state()=='finished' and not md_acked and output[#output]:match('|PARTIAL_ACKED|1|10055|client1$'))
+ end
  if mode=='pause_lost' then paused=false
  elseif mode=='game_changed' then game=32 end
- input[1]=cmd..(mode=='foreign_ack' and '|DELIVERY_ACK|2|10055' or '|DELIVERY_ACK|1|10055')
+ input[1]=cmd..(mode=='foreign_ack' and '|DELIVERY_ACK|2|10055' or '|DELIVERY_ACK|1|10055')..
+  (two and '|client2|'..string.rep('f',32) or '')
  local accepted=tick()
  if mode=='pause_lost' or mode=='game_changed' or mode=='foreign_ack' then
   assert(not accepted and app:state()=='failed' and not md_acked)
@@ -77,4 +83,5 @@ local function run(mode)
  end
 end
 for _,mode in ipairs({'success','pause_lost','game_changed','foreign_ack','missing_md_ack'})do run(mode)end
+for _,mode in ipairs({'success','pause_lost','game_changed','foreign_ack','missing_md_ack'})do run(mode,true)end
 print('census deferred source integration passed')

@@ -75,6 +75,16 @@ Native Linux evidence so far:
   establish multiple clients, Windows/Internet or gameplay. An earlier attempt
   was refused before X4 launch due to an exact saved-script mismatch; a
   byte-identical save-era fixture preserved that provenance check.
+* One isolated three-X4 Linux run held a single job activation at the source
+  until two local client replicas were created and inspected. The source log
+  records a partial acknowledgement followed by the final source
+  acknowledgement; both client logs record their replica completion. The
+  ordering of the two TCP acknowledgements relative to those events rests on
+  coordinator code and result, without an independent packet trace. The TCP
+  receivers were local supervisor callbacks. Both replicas used artificial
+  seed 7183 and approximate loadouts; activation does not prove ship birth.
+  This is not complete-universe synchronization, Windows, Internet or gameplay
+  evidence. See [the three-X4 record](../tools/dev/AUTHORITY-CENSUS-REPLICA-TWO-CLIENTS.md).
 * In an isolated player-seat calibration, an NPC with an observed pilot and
   started Patrol returned a valid assigned pilot while its control-post
   reservation lookup reported empty. The positive control failed before the

@@ -2,6 +2,11 @@
 local cfg=X4LAN_CONFIG
 if not cfg or cfg.authority_census_pair~=true then return end
 local owner
+local peers
+if cfg.authority_census_two_peers==true then
+ assert(cfg.authority_census_role=='server' and cfg.authority_census_deferred_ack==true)
+ peers={{id='client1',incarnation=cfg.authority_census_peer1},{id='client2',incarnation=cfg.authority_census_peer2}}
+end
 function X4LAN_CENSUS_PAIR_TICK()
  local ok=pcall(function()
   if not owner then
@@ -9,7 +14,7 @@ function X4LAN_CENSUS_PAIR_TICK()
     host=X4LAN_AUTHORITY_JOB_REGISTRY_HOST,probe=X4LAN_AUTHORITY_JOB_REGISTRY_PROBE,
     descriptor=X4LAN_AUTHORITY_PAUSED_JOB_DESCRIPTOR,descriptor_core=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,
     witness=X4LAN_SECTOR_WITNESS_RUNTIME,role=cfg.authority_census_role,
-    defer_ack=cfg.authority_census_deferred_ack,delivery=X4LAN_AUTHORITY_JOB_DELIVERY,
+    defer_ack=cfg.authority_census_deferred_ack,delivery=X4LAN_AUTHORITY_JOB_DELIVERY,delivery_peers=peers,
     epoch=cfg.authority_census_epoch,attempt=cfg.authority_census_attempt,lease=cfg.authority_census_lease,
     nonce=cfg.authority_census_nonce,port=cfg.authority_census_port,timeout=cfg.authority_census_timeout,
     window=cfg.authority_census_window,expected_save_path=cfg.authority_load_save_path,

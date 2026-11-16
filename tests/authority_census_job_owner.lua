@@ -22,6 +22,7 @@ local function rig(role,opt)
   clock=function()return now end,observe=function()return paused,game end,guard=function()return not opt.bad_guard end,
   pause=function()paused=true end,resume=function()paused=false;game=31 end,baseline_request=function(e,n)assert(e==epoch and n==nonce);return true end,log=function(s)logs[#logs+1]=s end,
   defer_ack=opt.defer,delivery=opt.defer and dofile('src/authority/lua/job_delivery.lua') or nil,
+  delivery_peers=opt.two and {{id='client1',incarnation=string.rep('e',32)},{id='client2',incarnation=string.rep('f',32)}} or nil,
   host_factory=function(r,f,d,h,a)report,fault,done,hold,acked=r,f,d,h,a;return host end,
   descriptor_factory=function(r,a)assert(r.sequence==2 and r.index==10055 and a==actor);return {start=function()return true end,tick=function()return true end,close=function()if opt.descriptor_close_error then error('close') end;if opt.descriptor_close_reenter then app:fault() end;return true end,
    response=function(_,v)if opt.descriptor_error then error('response') end;if v~='ok' then return false end;return true,{epoch=epoch,index=10055,sequence=2,macro='ship_macro',owner='argon',sector_macro='sector_a',x=1,y=2,z=3}end} end,
@@ -30,6 +31,34 @@ local function rig(role,opt)
  app=assert(M.new(cfg));local cmd=table.concat({'CMD',lease,role,attempt,epoch},'|')
  return app,input,output,logs,cmd,opt,function(v)now=v end,function()if fault then fault() end end,
   function()assert(hostphase=='front');hostphase='waiting';return acked(epoch,2,10055)end,function(v)game=v end
+end
+local function two_ready()
+ local x,xi,xo,xl,xp,_,_,_,ack=rig('server',{defer=true,two=true})
+ assert(x:tick());xi[1]=xp..'|START';assert(x:tick());assert(x:tick());assert(x:tick());assert(x:tick());assert(x:tick())
+ assert(x:descriptor_event('ok'));assert(x:tick());xi[1]=xp..'|WITNESS|2|41|sector_a';assert(x:tick());assert(x:witness_event('ok'));assert(x:tick())
+ return x,xi,xo,xl,xp,ack
+end
+do
+ local x,xi,xo,xl,xp,ack=two_ready()
+ local descriptions=0;for _,label in ipairs(xl)do if label=='DESCRIPTOR' then descriptions=descriptions+1 end end;assert(descriptions==1)
+ xi[1]=xp..'|DELIVERY_ACK|2|10055|client1|'..string.rep('e',32)
+ assert(x:tick() and x:state()=='finished' and xo[#xo]:match('|PARTIAL_ACKED|2|10055|client1$'))
+ for _,label in ipairs(xl)do assert(label~='SOURCE_ACKED')end
+ xi[1]=xp..'|DELIVERY_ACK|2|10055|client2|'..string.rep('f',32)
+ assert(x:tick() and x:state()=='ack_wait');assert(ack());assert(x:tick() and x:state()=='source_acked')
+ assert(xo[#xo]:match('|SOURCE_ACKED|2|10055$'))
+end
+for _,bad in ipairs({'|DELIVERY_ACK|2|10055|client2|'..string.rep('f',32),
+ '|DELIVERY_ACK|2|10055|client1|'..string.rep('f',32),
+ '|DELIVERY_ACK|3|10055|client1|'..string.rep('e',32),
+ '|DELIVERY_ACK|2|10055'}) do
+ local x,xi,_,xl,xp=two_ready();xi[1]=xp..bad;assert(not x:tick() and x:state()=='failed')
+ for _,label in ipairs(xl)do assert(label~='SOURCE_ACKED')end
+end
+do
+ local x,xi,_,xl,xp=two_ready();local ack='|DELIVERY_ACK|2|10055|client1|'..string.rep('e',32)
+ xi[1]=xp..ack;assert(x:tick());xi[1]=xp..ack;assert(not x:tick() and x:state()=='failed')
+ for _,label in ipairs(xl)do assert(label~='SOURCE_ACKED')end
 end
 do
  local x,xi,_,xl,xp=rig('server',{defer=true,no_event='existing'})

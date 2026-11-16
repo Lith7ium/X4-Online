@@ -146,3 +146,11 @@ network participant. The result reports no requested checkpoint, confirmed
 owned cleanup and no remaining owned processes. Its sampled guards do not prove
 continuous pause, exact X4 file consumption or a shared coordinate frame.
 There was no multi-client, Windows, Internet, combat, trading or gameplay test.
+
+The later opt-in two-participant source variant prepares one descriptor report
+for `client1` and `client2` with distinct fresh incarnations. It emits a
+correlated `PARTIAL_ACKED` after the first participant while retaining the MD
+queue head, and dispatches the MD acknowledgement only after the second. The
+participant tokens and their actual connection binding remain the caller's
+responsibility. The current source-side checks use fake clients and simulated
+MD; they do not prove two-client X4 delivery or an Internet session.

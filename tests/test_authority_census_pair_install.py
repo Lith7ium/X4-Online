@@ -12,6 +12,19 @@ import authority_census_pair_install as m
 
 
 class Install(unittest.TestCase):
+    def test_invalid_two_peer_configuration_refused_before_install(self):
+        good=[{'id':'client1','incarnation':'1'*32},{'id':'client2','incarnation':'2'*32}]
+        cases=[list(reversed(good)),good[:1],
+               [good[0],{'id':'client2','incarnation':'1'*32}],
+               [good[0],{'id':'client2','incarnation':'bad'}],
+               [good[0],{'id':'client2','incarnation':'a'*32}]]
+        for peers in cases:
+            cfg={'role':'server','defer_source_ack':True,'attempt':'a'*32,'epoch':'b'*32,'participants':peers}
+            with self.subTest(peers=peers),self.assertRaisesRegex(ValueError,'participants'):
+                m.install(None,None,None,cfg,None,0,0)
+        with self.assertRaises(ValueError):
+            m.install(None,None,None,{'role':'client','defer_source_ack':True,'participants':good},None,0,0)
+
     @unittest.skipUnless(shutil.which('luajit'),'LuaJIT required')
     def test_session_binds_the_single_owner_configuration(self):
         script='''
@@ -36,8 +49,8 @@ X4LAN_CENSUS_PAIR_TICK();X4LAN_CENSUS_PAIR_TICK();assert(calls==1 and ticks==2)
 
     def test_both_roles_have_one_owner_and_no_client_queue_or_create(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for role,deferred in (('server',False),('client',False),('server',True)):
-                case=Path(tmp)/(role+str(deferred))/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
+            for role,deferred,two in (('server',False,False),('client',False,False),('server',True,False),('server',True,True)):
+                case=Path(tmp)/(role+str(deferred)+str(two))/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
                 ui.mkdir(parents=True);md.mkdir();(profile/'save').mkdir(parents=True)
                 for p in (ui/'native_gate_snapshot.lua',md/'native_gate_battle.xml',ui/'config.lua',ui/'sha256.lua',
                           lab/'content.xml',profile/'content.xml',profile/'config.xml'):p.write_text('test')
@@ -45,6 +58,7 @@ X4LAN_CENSUS_PAIR_TICK();X4LAN_CENSUS_PAIR_TICK();assert(calls==1 and ticks==2)
                     checkpoint_id=m.archive.CHECKPOINT_ID,sha256=m.archive.SHA256,attempt_id='b'*32,slot='save_009')
                 cfg={'role':role,'epoch':m.archive.REGISTRY_EPOCH,'attempt':'c'*32,'lease':'d'*32,'port':12345}
                 if deferred:cfg['defer_source_ack']=True
+                if two:cfg['participants']=[{'id':'client1','incarnation':'1'*32},{'id':'client2','incarnation':'2'*32}]
                 protected=m.install(case,profile,ticket,cfg,'e'*32,600,60)
                 owner=(ui/'authority_download_load_probe.lua').read_text()
                 self.assertEqual(owner.count("SetScript('onUpdate'"),1);self.assertIn('X4LAN_CENSUS_PAIR_TICK()',owner)
@@ -68,6 +82,7 @@ X4LAN_CENSUS_PAIR_TICK();X4LAN_CENSUS_PAIR_TICK();assert(calls==1 and ticks==2)
                     self.assertIn(ui/'authority_job_delivery.lua',protected)
                     self.assertIn('authority_census_deferred_ack=true',(ui/'config.lua').read_text())
                     self.assertIn('ui/authority_job_delivery.lua',(lab/'ui.xml').read_text())
+                    self.assertEqual('authority_census_two_peers=true' in (ui/'config.lua').read_text(),two)
                 else:self.assertFalse((ui/'authority_job_delivery.lua').exists())
 
 if __name__=='__main__':unittest.main()

@@ -24,6 +24,15 @@ def install(case,profile,ticket,config,nonce,timeout,window):
     role=config.get('role')
     deferred=config.get('defer_source_ack',False)
     if type(deferred) is not bool or (deferred and role!='server'):raise ValueError('invalid deferred source setting')
+    participants=config.get('participants')
+    if participants is not None:
+        if (not deferred or type(participants) is not list or len(participants)!=2 or
+            any(type(p) is not dict or set(p)!={'id','incarnation'} for p in participants) or
+            [p['id'] for p in participants]!=['client1','client2'] or
+            any(type(p['incarnation']) is not str or not re.fullmatch(r'[0-9a-f]{32}',p['incarnation']) for p in participants) or
+            len({p['incarnation'] for p in participants})!=2 or
+            any(p['incarnation'] in (config.get('attempt'),config.get('epoch')) for p in participants)):
+            raise ValueError('invalid source delivery participants')
     if (role not in ('server','client') or config.get('epoch')!=archive.REGISTRY_EPOCH
         or any(not isinstance(config.get(k),str) or not re.fullmatch(r'[0-9a-f]{32}',config[k]) for k in ('lease','attempt'))
         or not re.fullmatch(r'[0-9a-f]{32}',nonce) or type(config.get('port')) is not int or not 1<=config['port']<=65535
@@ -55,7 +64,9 @@ def install(case,profile,ticket,config,nonce,timeout,window):
         'authority_census_attempt="'+config['attempt']+'",authority_census_lease="'+config['lease']+'",'
         'authority_census_nonce="'+nonce+'",authority_census_port='+str(config['port'])+',authority_census_timeout='+
         format(timeout,'.17g')+',authority_census_window='+format(window,'.17g')+
-        (',authority_census_deferred_ack=true' if deferred else '')+'}\n')
+        (',authority_census_deferred_ack=true' if deferred else '')+
+        (',authority_census_two_peers=true,authority_census_peer1="'+participants[0]['incarnation']+
+         '",authority_census_peer2="'+participants[1]['incarnation']+'"' if participants is not None else '')+'}\n')
     config_path.write_text(text,encoding='ascii');config_path.chmod(0o600)
     manifest=lab/'ui.xml';text=manifest.read_text();hook='    <file name="ui/authority_download_load_probe.lua" />\n'
     manifest.write_text(pair_transfer.once(text,hook,''.join('    <file name="ui/'+n+'" />\n' for n in (*extra_ui,*_COMMON_UI))+hook))

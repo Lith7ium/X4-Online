@@ -21,11 +21,42 @@ import authority_census_runtime_read_live as census
 import authority_census_pair_inputs as inputs
 import authority_census_replica_install as installer
 import authority_census_replica_coordinator as coordinator
+import authority_census_replica_multi_coordinator as multi_coordinator
 import authority_job_attach_live as readonly
 import authority_sector_read_live as base
 import authority_sector_pair_live as pair
 import authority_sector_pair_transfer_live as pair_transfer
 import authority_two_x4_live as owned
+
+_MEMINFO=Path('/proc/meminfo')
+_CGROUP_MEMBERSHIP=Path('/proc/self/cgroup')
+_CGROUP_ROOT=Path('/sys/fs/cgroup')
+
+
+def check_three_process_resources(out, remaining):
+    """Conservative point-in-time gate, not proof of sufficient GPU/RAM."""
+    if type(remaining) is not int or not 1<=remaining<=3:raise ValueError('invalid process count')
+    lines=_MEMINFO.read_text().splitlines()
+    rows=[line.split() for line in lines if line.startswith('MemAvailable:')]
+    if len(rows)!=1 or len(rows[0])!=3 or rows[0][2]!='kB':raise RuntimeError('available memory unknown')
+    available=int(rows[0][1])*1024
+    groups=[line.split(':',2)[2] for line in _CGROUP_MEMBERSHIP.read_text().splitlines() if line.startswith('0::')]
+    if len(groups)!=1:raise RuntimeError('cgroup membership unknown')
+    root=_CGROUP_ROOT.resolve(strict=True);relative=Path(groups[0].lstrip('/'))
+    if '..' in relative.parts:raise RuntimeError('invalid cgroup path')
+    current=(root/relative).resolve(strict=True)
+    if not current.is_relative_to(root):raise RuntimeError('invalid cgroup path')
+    while current!=root:
+        limit=(current/'memory.max').read_text().strip()
+        used=int((current/'memory.current').read_text().strip())
+        if limit!='max':available=min(available,max(0,int(limit)-used))
+        current=current.parent
+    if (root/'memory.max').exists():
+        limit=(root/'memory.max').read_text().strip()
+        used=int((root/'memory.current').read_text().strip())
+        if limit!='max':available=min(available,max(0,int(limit)-used))
+    if available<(4+2*remaining)*1024**3 or shutil.disk_usage(out).free<2*1024**3:
+        raise RuntimeError('insufficient available memory or disk for three-process diagnostic')
 
 
 def load_observation(raw,ticket,*,partial=False):
@@ -57,7 +88,10 @@ def load_observation(raw,ticket,*,partial=False):
 def run(args):
     if sys.platform!='linux' or os.geteuid()==0:raise ValueError('unprivileged Linux required')
     deferred=getattr(args,'defer_source_ack',False)
-    if type(deferred) is not bool:raise ValueError('invalid deferred source ACK mode')
+    two_clients=getattr(args,'two_clients',False)
+    if type(deferred) is not bool or type(two_clients) is not bool or (two_clients and not deferred):
+        raise ValueError('two clients require deferred source ACK mode')
+    role_names=('server','client1','client2') if two_clients else ('server','client')
     out=base.snapshot.output_path(args.out);store=base.base.local_directory(args.store)
     census.ensure_separate(out,store)
     target_out=out.resolve();witness=inputs.WITNESS_PATH.resolve(strict=True)
@@ -75,7 +109,8 @@ def run(args):
     auth=auth.resolve(strict=True);user=pwd.getpwuid(os.geteuid());home=Path(user.pw_dir)
     steam=base.live.steam_identity(home,user.pw_uid)
     out.mkdir(mode=0o700,parents=True,exist_ok=False)
-    result={'success':False,'scope':'two isolated Linux X4; census descriptor to approximate client replica',
+    result={'success':False,'scope':('three isolated Linux X4; census descriptor to two approximate client replicas' if two_clients
+                                     else 'two isolated Linux X4; census descriptor to approximate client replica'),
             'checkpoint_requested':False,'ship_creation_requested':False,'multiplayer_proven':False,
             'continuous_pause_proven':False,'exact_loaded_file_proven':False,'runtime_frame_identity_proven':False}
     processes=[];roles={};handlers={};lock_fd=lock_stat=None;cancel=[None];coord=None;verified=None;compiler_error=None;no_event=False
@@ -84,18 +119,21 @@ def run(args):
         if cancel[0] is not None:raise InterruptedError('signal '+str(cancel[0]))
     try:
         for number in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):handlers[number]=signal.signal(number,remember)
+        if two_clients:check_three_process_resources(out,3)
         check_cancel();verified=inputs.verify_once(store);check_cancel()
         result.update(source_checkpoint_id=archive.CHECKPOINT_ID,source_sha256=archive.SHA256,
                       registry_epoch=archive.REGISTRY_EPOCH,witness_artifact_sha256=verified.witness_sha256)
-        coord=(coordinator.CensusCoordinator(verified.witness_candidates,defer_source_ack=True) if deferred
+        coord=(multi_coordinator.MultiCensusCoordinator(verified.witness_candidates) if two_clients else
+               coordinator.CensusCoordinator(verified.witness_candidates,defer_source_ack=True) if deferred
                else coordinator.CensusCoordinator(verified.witness_candidates))
-        for role in ('server','client'):
+        for role in role_names:
             check_cancel();roleout=out/role;roleout.mkdir(mode=0o700)
             case,profile,binds,lock=base.snapshot.prepare_case(roleout,game,home)
             census.origin_scripts(store,profile)
             roles[role]={'out':roleout,'case':case,'profile':profile,'binds':binds,'lock':lock,
                          'proc':None,'started':None,'identity':None,'log_snapshot':None}
-        staged=inputs.stage_pair(verified,{r:e['profile'] for r,e in roles.items()})
+        profiles={r:e['profile'] for r,e in roles.items()}
+        staged=inputs.stage_three(verified,profiles) if two_clients else inputs.stage_pair(verified,profiles)
         for role,e in roles.items():
             check_cancel();target,fp,sha=staged[role]
             ticket={'world_epoch':coord.attempt,'connection_handle':1,'baseline_id':1,'load_generation':1,
@@ -135,18 +173,21 @@ def run(args):
             check_cancel()
             if time.monotonic()>=deadline or base.live.steam_identity(home,user.pw_uid)!=steam:
                 raise RuntimeError('deadline or Steam identity changed after launch guard')
-        for role,e in roles.items():
+        for number,(role,e) in enumerate(roles.items()):
             check_before_launch()
+            if two_clients:check_three_process_resources(out,len(role_names)-number)
             e['proc'],e['started']=owned.spawn_owned_gated(e['command'],e['out']/'process.log',processes);check_cancel()
         def inspect_context(*,require_load):
             check_cancel()
             if time.monotonic()>=deadline or base.live.steam_identity(home,user.pw_uid)!=steam:
                 raise RuntimeError('deadline or Steam identity changed')
             if archive.fingerprints(store)!=verified.archive_fingerprints:raise ValueError('archive changed during run')
-            ready=set()
+            ready=set();seen_pids=set()
             for role,e in roles.items():
                 identity=base.load.game_identity(e['proc'],e['started'],game)
                 if identity is not None:
+                    if identity[0] in seen_pids:raise RuntimeError('X4 process shared by multiple roles')
+                    seen_pids.add(identity[0])
                     if e['identity'] is not None and e['identity']!=identity:raise RuntimeError(role+' X4 changed')
                     e['identity']=identity
                 elif e['identity'] is not None:raise RuntimeError(role+' X4 disappeared')
@@ -163,7 +204,7 @@ def run(args):
                     ready.add(role)
             check_cancel()
             if time.monotonic()>=deadline:raise TimeoutError('census deadline')
-            if require_load and ready!={'server','client'}:raise RuntimeError('both load/pause receipts required')
+            if require_load and ready!=set(role_names):raise RuntimeError('all load/pause receipts required')
             if require_load:
                 for role,e in roles.items():
                     if base.load.game_identity(e['proc'],e['started'],game)!=e['identity']:
@@ -171,14 +212,15 @@ def run(args):
             check_cancel()
             if time.monotonic()>=deadline:raise TimeoutError('census deadline')
             return ready
-        while inspect_context(require_load=False)!={'server','client'}:
+        while inspect_context(require_load=False)!=set(role_names):
             time.sleep(.2)
         inspect_context(require_load=True)
-        details=coord.run({'deadline':deadline,'check':lambda:inspect_context(require_load=True)=={'server','client'}})
+        details=coord.run({'deadline':deadline,'check':lambda:inspect_context(require_load=True)==set(role_names)})
         inspect_context(require_load=True)
         if (type(details) is not dict or details.get('tcp_ack_after_client_replica') is not True
             or details.get('ship_creation_requested') is not True or details.get('artificial_seed') != 7183
-            or (deferred and details.get('source_queue_acked') is not True)):
+            or (deferred and details.get('source_queue_acked') is not True)
+            or (two_clients and details.get('clients_confirmed')!=['client1','client2'])):
             raise RuntimeError('replica completion unconfirmed')
         result.update(success=True,participant=details,witness_artifact_sha256=verified.witness_sha256)
     except coordinator.NoNewRegistryEntry as error:
@@ -263,6 +305,7 @@ def main():
     p.add_argument('--seed',type=int,default=276944566)
     p.add_argument('--defer-source-ack',action='store_true',
                    help='experimental: hold the source queue head until replica TCP ACK and source MD ACK')
+    p.add_argument('--two-clients',action='store_true',help='experimental three-X4 loopback test; requires --defer-source-ack')
     try:result=run(p.parse_args())
     except (OSError,ValueError,RuntimeError) as error:p.exit(1,'REFUSED: '+str(error)+'\n')
     print(json.dumps(result,indent=2));return 0 if result['success'] else 1

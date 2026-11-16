@@ -112,4 +112,18 @@ class Inputs(unittest.TestCase):
              patch.object(m.archive,'fingerprints',return_value=fps):
             with self.assertRaisesRegex(ValueError,'identity changed'):m.stage_pair(verified,profiles)
 
+    def test_three_profiles_are_independent_and_share_no_inode(self):
+        store,source,content,sha,fps,verified,old=self.setup_staging()
+        profiles={'server':old['server'],'client1':old['client']}
+        profile=self.root/'new_experiment'/'client2'/'profile';(profile/'save').mkdir(parents=True)
+        profiles['client2']=profile
+        with patch.object(m.archive,'SIZE',len(content)),patch.object(m.archive,'SHA256',sha), \
+             patch.object(m.archive,'fingerprints',return_value=fps):
+            with self.assertRaises(ValueError):m.stage_three(verified,{**profiles,'client2':profiles['client1']})
+            result=m.stage_three(verified,profiles)
+        self.assertEqual(set(result),{'server','client1','client2'})
+        self.assertEqual(len({row[1][:2] for row in result.values()}),3)
+        self.assertTrue(all(row[0].read_bytes()==content and row[2]==sha for row in result.values()))
+        self.assertEqual(source.read_bytes(),content)
+
 if __name__=='__main__':unittest.main()

@@ -15,7 +15,18 @@ function M.new(o)
  if o.defer_ack then assert(o.role=='server' and type(o.delivery)=='table' and type(o.delivery.new)=='function') end
  for _,k in ipairs({'clock','observe','guard','pause','resume','host_factory','descriptor_factory','witness_factory','baseline_request','log'})do assert(type(o[k])=='function',k..' required')end
  local phase='new';local failed,busy=false,false;local host,desc,witness,row,actor,descriptor,jobseq,windex,wmacro,gate,gate_event
- local peer={id='replica',incarnation=o.attempt}
+ local peers={{id='replica',incarnation=o.attempt}};local next_peer=1
+ if o.delivery_peers~=nil then
+  assert(o.defer_ack and type(o.delivery_peers)=='table' and getmetatable(o.delivery_peers)==nil and #o.delivery_peers==2)
+  for k in pairs(o.delivery_peers) do assert(k==1 or k==2) end
+  local a,b=o.delivery_peers[1],o.delivery_peers[2]
+  assert(type(a)=='table' and getmetatable(a)==nil and type(b)=='table' and getmetatable(b)==nil and a.id=='client1' and b.id=='client2' and
+   token(a.incarnation) and token(b.incarnation) and a.incarnation~=b.incarnation and
+   a.incarnation~=o.attempt and b.incarnation~=o.attempt and a.incarnation~=o.epoch and b.incarnation~=o.epoch)
+  for k in pairs(a)do assert(k=='id' or k=='incarnation')end
+  for k in pairs(b)do assert(k=='id' or k=='incarnation')end
+  peers={{id=a.id,incarnation=a.incarnation},{id=b.id,incarnation=b.incarnation}}
+ end
  local last,deadline,host_deadline,paused_game,pending_check,check_counter=nil,nil,nil,nil,nil,0
  local prefix=table.concat({'CENSUS',o.lease,o.role,o.attempt,o.epoch},'|')
  local cmd=table.concat({'CMD',o.lease,o.role,o.attempt,o.epoch},'|')
@@ -78,11 +89,21 @@ function M.new(o)
    if o.role=='server' and (seq~=jobseq or not descriptor or p[9]~=descriptor.sector_macro) then return fail() end
    if not check(true) then return false end
    jobseq,windex,wmacro=seq,index,p[9];request_witness(index,wmacro);return true
-  elseif p[6]=='DELIVERY_ACK' and #p==8 and o.defer_ack and phase=='finished' then
+  elseif p[6]=='DELIVERY_ACK' and o.defer_ack and phase=='finished' then
+   if (#peers==1 and #p~=8) or (#peers==2 and #p~=10) then return fail() end
    if p[7]~=string.format('%.0f',jobseq) or p[8]~=string.format('%.0f',row.index) or not check(true) or not gate_event then return fail() end
-   phase='ack_wait'
-   local ok=gate:ack(peer,gate_event)
+   local peer=peers[next_peer]
+   if not peer or (#peers==2 and (p[9]~=peer.id or p[10]~=peer.incarnation)) then return fail() end
+   phase='ack_dispatch'
+   local ok,status=gate:ack(peer,gate_event)
    if not ok or not check(true) then return fail() end
+   next_peer=next_peer+1
+   if status=='pending' and next_peer<=#peers then
+    phase='finished'
+    return emit('PARTIAL_ACKED',table.concat({p[7],p[8],peer.id},'|'),true)
+   end
+   if status~='released' or next_peer~=#peers+1 then return fail() end
+   phase='ack_wait'
    return true
   end
   return fail()
@@ -157,8 +178,14 @@ function M.new(o)
     phase='descriptor_sent'
     if o.defer_ack then
      gate_event={epoch=o.epoch,generation=o.attempt,sequence=jobseq,index=row.index,descriptor={macro=d.macro,faction=d.owner,sector_macro=d.sector_macro,x=d.x,y=d.y,z=d.z}}
+     local announced=0
      gate=assert(o.delivery.new({enabled=true,generation=o.attempt,timeout=math.min(o.timeout,300),clock=o.clock,
-      membership=function()return {peer}end,send=function()return emit('DESCRIPTOR',table.concat(vals,'|'),true)end,
+      membership=function()return peers end,send=function(peer)
+       announced=announced+1
+       if not peers[announced] or peer.id~=peers[announced].id or peer.incarnation~=peers[announced].incarnation then return false end
+       if announced==#peers then return emit('DESCRIPTOR',table.concat(vals,'|'),true) end
+       return true
+      end,
       release=function(epoch,sequence,index)return host:confirm_delivery(epoch,sequence,index)end}))
      assert(gate:begin(gate_event))
     else assert(emit('DESCRIPTOR',table.concat(vals,'|'),true)) end
