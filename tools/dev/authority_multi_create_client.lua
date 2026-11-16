@@ -7,6 +7,7 @@ local fields={'macro','sector','owner','seed','x','y','z'}
 local refusal_create={create_replay=true,create_pending_clear=true,create_registry=true,create_ship=true,
  create_pending_set=true,create_input=true,create_witness=true,create_index=true,create_state=true}
 local refusal_inspect={inspect_binding=true,inspect_witness=true,inspect_descriptor=true}
+local refusal_witness={witness_state=true}
 local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
 local function integer(v,min)return type(v)=='number' and v==v and v>=min and v<=MAX and v%1==0 end
 local function finite(v)return type(v)=='number' and v==v and v~=math.huge and v~=-math.huge end
@@ -47,11 +48,13 @@ function M.new(o)
  assert(token(o.epoch) and token(o.nonce) and integer(o.baseline,1))
  assert(finite(o.timeout) and o.timeout>0 and o.timeout<=300)
  for _,k in ipairs({'clock','guard','issue','inspect','complete'})do assert(type(o[k])=='function',k..' required')end
+ assert(o.witness_audit==nil or type(o.witness_audit)=='function')
+ local witness_audit=o.witness_audit
  local phase,busy,issuing='new',false,false
  local last,deadline,request_seq,pending,highest=nil,nil,0,nil,o.baseline
- local records,actors={},{}
+ local records,actors={},{};local search
  local api={}
- local function fail(reason)phase='failed';pending=nil;deadline=nil;return false,reason end
+ local function fail(reason)phase='failed';pending=nil;deadline=nil;search=nil;return false,reason end
  local function call(fn,...)
   if busy then return fail('reentrant') end
   local old=phase;busy=true;local ok,a,b,c=pcall(fn,...);busy=false
@@ -61,11 +64,11 @@ function M.new(o)
  local function check()
   if phase=='failed' or phase=='closed' then return false end
   local ok,t=call(o.clock)
-  if not ok or not finite(t) or t<0 or (last and t<last) or (deadline and t>=deadline) then return fail('clock_or_timeout') end
+  if not ok or not finite(t) or t<0 or (last and t<last) or (deadline and t>=deadline) or (search and t>=search.deadline) then return fail('clock_or_timeout') end
   last=t
   local valid,guard=call(o.guard);if not valid or guard~=true then return fail('guard') end
   local checked,after=call(o.clock)
-  if not checked or not finite(after) or after<t or (deadline and after>=deadline) then return fail('clock_or_timeout') end
+  if not checked or not finite(after) or after<t or (deadline and after>=deadline) or (search and after>=search.deadline) then return fail('clock_or_timeout') end
   last=after;return true
  end
  local function dispatch(op,args,kind,d,actor)
@@ -83,14 +86,35 @@ function M.new(o)
   if phase~='new' then return fail('initialize_state') end
   return dispatch('Initialize',{epoch=o.epoch,baseline=o.baseline},'initialize')
  end
- function api:create(value)
+ local function issue_create(d,kind)
+  local args={epoch=o.epoch};for k,v in pairs(d)do args[k]=v end
+  return dispatch('Create',args,kind,d)
+ end
+ local function issue_witness(d,kind)
+  local index=search.candidates[search.next];d.witness_index=index
+  return dispatch('Witness',{epoch=o.epoch,sector=d.sector,witness_index=index},'witness_'..kind,d)
+ end
+ function api:create(value,candidates)
   if phase~='ready' then return fail('create_state') end
   local d=descriptor(value,o.baseline);if not d then return fail('descriptor') end
   local old=records[d.index];local kind
   if old then if not same(old.descriptor,d) then return fail('descriptor_conflict') end;kind='replay'
   else if highest>=MAX or d.index~=highest+1 then return fail('index_gap_or_unknown') end;kind='create' end
-  local args={epoch=o.epoch};for k,v in pairs(d)do args[k]=v end
-  return dispatch('Create',args,kind,d)
+  if candidates==nil then return issue_create(d,kind) end
+  if type(candidates)~='table' or getmetatable(candidates)~=nil then return fail('witness_candidates') end
+  local copy,seen={},{}
+  for k,v in pairs(candidates)do
+   if not integer(k,1) or k>o.baseline or not integer(v,1) or v>o.baseline or seen[v] then return fail('witness_candidates') end
+   copy[k]=v;seen[v]=true
+  end
+  local n=0;for _ in pairs(copy)do n=n+1 end
+  if n==0 then return fail('no_witness') end
+  for i=1,n do if copy[i]==nil then return fail('witness_candidates') end end
+  if d.witness_index~=copy[1] then return fail('witness_candidates') end
+  if not check() then return false end
+  local until_time=last+o.timeout;if not finite(until_time) then return fail('deadline') end
+  search={candidates=copy,next=1,deadline=until_time}
+  return issue_witness(d,kind)
  end
  function api:event(value)
   if phase~='pending' or issuing then return fail('unexpected_event') end
@@ -101,10 +125,26 @@ function M.new(o)
    local operation=pending.kind
    if rest=='' then return fail('refused') end -- legacy receiver
    if ((operation=='create' or operation=='replay') and refusal_create[rest]) or
-      ((operation=='inspect_create' or operation=='inspect_replay') and refusal_inspect[rest]) then
+      ((operation=='inspect_create' or operation=='inspect_replay') and refusal_inspect[rest]) or
+      ((operation=='witness_create' or operation=='witness_replay') and refusal_witness[rest]) then
     return fail('refused_'..rest)
    end
    return fail('refused_unknown')
+  end
+  if pending.kind=='witness_create' or pending.kind=='witness_replay' then
+   local idx,eligible=rest:match('^([1-9]%d*)|([01])$')
+   if kind~='Witness' or not search or not idx or idx~=string.format('%.0f',search.candidates[search.next]) then
+    return fail('witness_response')
+   end
+   local d,op=pending.descriptor,pending.kind=='witness_create' and 'create' or 'replay'
+   if witness_audit then
+    local ok,accepted=call(witness_audit,d.index,d.sector,search.candidates[search.next],eligible=='1')
+    if not ok or accepted~=true or not check() then return fail('witness_audit') end
+   end
+   if eligible=='1' then search=nil;return issue_create(d,op) end
+   search.next=search.next+1
+   if search.next>#search.candidates then return fail('no_witness') end
+   return issue_witness(d,op)
   end
   if pending.kind=='initialize' then
    if kind~='Initialized' or rest~=o.epoch then return fail('initialize_response') end
@@ -144,7 +184,7 @@ function M.new(o)
  end
  function api:tick()return check()end
  function api:state()return phase end
- function api:close()phase='closed';pending=nil;deadline=nil;return true end
+ function api:close()phase='closed';pending=nil;deadline=nil;search=nil;return true end
  return api
 end
 return M

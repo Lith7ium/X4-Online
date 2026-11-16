@@ -11,6 +11,21 @@ the indexed witness be operational, undocked, reverse-mapped and in the one
 local sector matching the requested macro. The MD Inspect repeats this check. A bounded native observation of this
 receiver in one isolated Linux X4 process is described below.
 
+An opt-in `create(descriptor, candidates)` accepts a dense, unique list of
+local saved-baseline indices, copied before any callbacks. A read-only MD
+`Witness` probe checks candidates one at a time with a fresh request ID, then
+dispatches exactly one Create using the first eligible index. The probe applies
+the same local witness and unique-sector checks as Create; Create and Inspect
+repeat their checks. Probe selection is a time-local observation, not a
+reservation: a moved or unavailable witness may still make Create fail, and
+there is no retry after Create. Exhaustion or search timeout fails closed.
+The existing `create(descriptor)` path remains unchanged. An optional
+`witness_audit(target_index, sector_macro, witness_index, eligible)` callback
+runs only after a correlated probe reply, before any next probe or Create. It
+must return true; failure, reentrancy or timeout fences the operation. Audit
+records are diagnostics for the local probe, not proof of cross-process sector
+identity or of a later successful Create.
+
 The exclusive caller must verify the common save/registry epoch, baseline
 index, compatible saved registry and witness provenance, supported macros,
 trusted actor ownership and isolated execution before initializing, provide a

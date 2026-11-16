@@ -29,6 +29,8 @@ from authority_tcp_native_worker import read_line,parse_json
 
 STATE=re.compile(r'STATE (binding|attaching|await_go|observing|selected|reading|delivering|finishing|done) ([-+0-9.eE]+)\Z',re.ASCII)
 _SOURCE_TAG='[X4LAN] AUTH_SOURCE_SINGLE '
+_WITNESS_TAG='[X4LAN] AUTH_WITNESS_PROBE '
+_WITNESS=re.compile(r'([1-9][0-9]*) ([A-Za-z0-9_]{1,128}) ([1-9][0-9]*) ([01])\Z',re.ASCII)
 _ALLOWED=re.compile(r'[A-Za-z0-9_]{1,128}\Z')
 
 
@@ -79,17 +81,18 @@ class ProgressFrames:
 
 class Coordinator:
     """Serialize one private pair; all X4 and FD ownership remains external."""
-    def __init__(self,candidates,*,defer_source_ack=False,max_events=1,continuous=False):
+    def __init__(self,candidates,*,defer_source_ack=False,max_events=1,continuous=False,multi_witness=False):
         if defer_source_ack is not True:raise ValueError('deferred source Ack required')
         if type(max_events) is not int or not 1<=max_events<=8:raise ValueError('invalid bounded event count')
         if type(continuous) is not bool or (continuous and max_events!=1):raise ValueError('invalid continuous mode')
-        self.max_events=max_events;self.continuous=continuous;self.progress=[];self.progress_bytes=0;self.snapshot_finished=False
+        if type(multi_witness) is not bool:raise ValueError('invalid witness mode')
+        self.max_events=max_events;self.continuous=continuous;self.multi_witness=multi_witness;self.progress=[];self.progress_bytes=0;self.snapshot_finished=False
         self._used={archive.REGISTRY_EPOCH};self.attempt=self.fresh();self.generation=self.fresh()
         self.roles={};self.launches={};self.helpers=[];self.private=None;self.child=None
         self.replica_dispatch_attempted=False;self.tickets={};self.result=None
         self.source_paths=self._sources()
         self.source_fingerprints={p:lifecycle.base.stable_read(p,1<<20,collect=False)[:2] for p in self.source_paths}
-        self.witnesses={name:items[0] for name,items in candidates.items() if items and _ALLOWED.fullmatch(name)}
+        self.witnesses={name:(tuple(items) if multi_witness else items[0]) for name,items in candidates.items() if items and _ALLOWED.fullmatch(name)}
         if not self.witnesses:raise ValueError('no usable saved-sector witnesses')
 
     @staticmethod
@@ -143,6 +146,7 @@ class Coordinator:
             'job_port':r['job'].getsockname()[1],'lease':r['lease'],'attempt':r['attempt'],
             'epoch':archive.REGISTRY_EPOCH,'generation':self.generation,'nonce':r['nonce'],
             'seed':7183,'timeout':25}
+        if self.multi_witness:settings['multi_witness']=True
         files=client_install.install(case,profile,ticket,settings,self.witnesses);self.check_sources();return files
 
     def run(self,context):
@@ -211,10 +215,12 @@ class Coordinator:
         details=dict(tcp_ack_after_client_replica=True,ship_creation_requested=True,artificial_seed=7183,
                     source_queue_acked=True,source_activation_is_birth=False,descriptor_atomic=False,
                     frame_identity_proven=False,synthetic_tcp_checkpoint_and_admission=True)
+        if self.multi_witness:details['multi_witness']=True
         if self.continuous:details.update(events=self.progress,snapshot_finished=True,queue_snapshot_only=True)
         elif self.max_events>1:details['events']=result['events']
         else:details.update(source_sequence=result['event_sequence'],registry_index=result['index'],
                     source_sector=result['sector_macro'],source_macro=result['macro'],source_faction=result['faction'])
+        self.output_details=details
         return details
 
     def _accept_progress(self,frame,size):
@@ -251,6 +257,34 @@ class Coordinator:
             type(event['sector_macro']) is not str or event['sector_macro'] not in self.witnesses or
             any(type(event[k]) is not str or not _ALLOWED.fullmatch(event[k]) for k in ('macro','faction'))):
             raise ValueError('invalid source event descriptor or order')
+
+    def _verify_witness_fallback(self,raw):
+        if not raw.endswith(b'\n'):raise ValueError('incomplete witness log')
+        events=self.progress if self.continuous else (self.result['events'] if self.max_events>1 else [self.result])
+        event_by_index={row['index']:row for row in events}
+        states={};applied=set();fallback=False
+        for line in raw.decode('utf-8').splitlines():
+            if _WITNESS_TAG in line:
+                match=_WITNESS.fullmatch(line.split(_WITNESS_TAG,1)[1].strip())
+                if not match:raise ValueError('invalid witness probe evidence')
+                index=int(match[1]);sector=match[2];witness=int(match[3]);eligible=match[4]=='1'
+                event=event_by_index.get(index)
+                if event is None or event['sector_macro']!=sector or index in applied:raise ValueError('foreign witness probe')
+                state=states.setdefault(index,{'sector':sector,'count':0,'accepted':False})
+                choices=self.witnesses.get(sector,())
+                if (state['sector']!=sector or state['accepted'] or state['count']>=len(choices) or
+                    choices[state['count']]!=witness):raise ValueError('invalid witness probe order')
+                state['count']+=1;state['accepted']=eligible
+            elif client_evidence.TAG in line:
+                content=line.split(client_evidence.TAG,1)[1].strip()
+                match=client_evidence.APPLIED.fullmatch(content)
+                if not match:continue
+                index=int(match[1]);state=states.get(index)
+                if index in applied or state is None or not state['accepted']:raise ValueError('local apply lacks witness selection')
+                if state['count']>1:fallback=True
+                applied.add(index)
+        if applied!=set(event_by_index) or not fallback:raise ValueError('no applied witness fallback observed')
+        return True
 
     def verify_final(self,logs):
         self.check_sources()
@@ -297,6 +331,9 @@ class Coordinator:
                 if not m or int(m[1])!=archive.COUNT+seq or not math.isfinite(t) or t<=running or t<last:
                     raise ValueError('invalid client apply order')
                 last=t
+        if self.multi_witness:
+            self._verify_witness_fallback(logs['client'])
+            self.output_details['fallback_observed']=True
         return True
 
     def cleanup_before_owned_processes(self):
@@ -319,7 +356,8 @@ class Coordinator:
 
 def run(args):
     if not math.isfinite(args.window) or not 1<=args.window<=80:raise ValueError('invalid source window')
-    count=getattr(args,'max_events',1);continuous=getattr(args,'continuous',False)
+    count=getattr(args,'max_events',1);continuous=getattr(args,'continuous',False);multi_witness=getattr(args,'multi_witness',False)
+    if type(multi_witness) is not bool:raise ValueError('invalid witness mode')
     if type(continuous) is not bool or (continuous and count!=1):raise ValueError('continuous conflicts with event count')
     if type(count) is not int or not 1<=count<=8:raise ValueError('invalid bounded event count')
     args.defer_source_ack=True;args.two_clients=False
@@ -327,7 +365,7 @@ def run(args):
     original=(lifecycle.coordinator.CensusCoordinator,lifecycle.installer.install,
               lifecycle.owned.spawn_owned_gated,lifecycle.load_observation)
     def make(candidates,*,defer_source_ack=False):
-        active[0]=Coordinator(candidates,defer_source_ack=defer_source_ack,max_events=count,continuous=continuous);return active[0]
+        active[0]=Coordinator(candidates,defer_source_ack=defer_source_ack,max_events=count,continuous=continuous,multi_witness=multi_witness);return active[0]
     def install(case,profile,ticket,config,nonce,timeout,window):
         return active[0].install(case,profile,ticket,config,nonce,timeout,window)
     def spawn(command,log,processes):
@@ -346,6 +384,7 @@ def run(args):
         result['scope']='two isolated Linux X4; source activation to client over local TCP/UDP; synthetic admission'
         result['source_activation_is_birth']=False;result['descriptor_atomic']=False
         result['frame_identity_proven']=False;result['multiplayer_proven']=False
+        if multi_witness:result['multi_witness']=True
         if continuous and active[0] is not None:
             c=active[0]
             if not result['success']:result['completed_events_worker_reported']=c.progress
@@ -367,6 +406,7 @@ def main():
     p.add_argument('--seed',type=int,default=276944566)
     p.add_argument('--max-events',type=int,default=1,help='opt-in bounded count, maximum 8')
     p.add_argument('--continuous',action='store_true',help='run until point-in-time queue snapshot at window end')
+    p.add_argument('--multi-witness',action='store_true',help='probe pinned local witness candidates before create')
     try:r=run(p.parse_args())
     except (OSError,ValueError,RuntimeError) as e:p.exit(1,'REFUSED: '+str(e)+'\n')
     print(json.dumps(r,indent=2));return 0 if r['success'] else 1

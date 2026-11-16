@@ -26,6 +26,27 @@ class Install(unittest.TestCase):
             self.assertIn('X4LAN_PARTICIPANT_JOB_TICK()',text)
             self.assertIn(ui/'job_client_owner.lua',files);self.assertIn(lab/'native/x4lan_net.so',files)
             self.assertNotIn('SetScript(', (ui/'authority_participant_job_session.lua').read_text())
+    def test_multi_mode_requires_the_complete_pinned_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            case=Path(tmp)/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
+            ui.mkdir(parents=True);md.mkdir();(profile/'save').mkdir(parents=True)
+            for p in (ui/'native_gate_snapshot.lua',md/'native_gate_battle.xml',ui/'config.lua',ui/'sha256.lua',
+                      lab/'content.xml',profile/'content.xml',profile/'config.xml'):p.write_text('test')
+            ticket=dict(world_epoch='f'*32,connection_handle=1,baseline_id=1,load_generation=1,
+                        checkpoint_id=m.archive.CHECKPOINT_ID,sha256=m.archive.SHA256,attempt_id='0'*32,slot='save_009')
+            candidates={name:list(values) for name,values in m.inputs.load_witness().items() if values}
+            settings={**self.settings(),'multi_witness':True}
+            one=next(name for name,values in candidates.items() if len(values)>1)
+            bad={**candidates,one:candidates[one][:-1]}
+            with self.assertRaises(ValueError):m.install(case,profile,ticket,settings,bad)
+            bad=dict(candidates);bad.pop(one)
+            with self.assertRaises(ValueError):m.install(case,profile,ticket,settings,bad)
+            bad={**candidates,one:list(reversed(candidates[one]))}
+            with self.assertRaises(ValueError):m.install(case,profile,ticket,settings,bad)
+            m.install(case,profile,ticket,settings,candidates)
+            config=(ui/'config.lua').read_text()
+            self.assertIn('['+m.base.base.lua_literal(one)+']={'+','.join(map(str,candidates[one]))+'}',config)
+
     def test_participant_and_job_share_one_tick(self):
         with tempfile.TemporaryDirectory() as tmp:
             lib=Path(tmp)/'fake.so'

@@ -74,3 +74,27 @@ does not establish source-to-client integration, multiple X4 clients,
 complete-universe reconciliation, a shared cross-process coordinate frame,
 Windows, Internet, gameplay, trade, combat or persistent multiplayer. The
 result makes no claim that the entire X4 log is free of unrelated errors.
+
+An opt-in multi-witness experiment is prepared for the source-to-TCP pair
+runner. Its installer requires the full eligible, pinned census candidate list
+for each represented sector; the indices are local saved-registry references,
+not process-specific actor handles sent over the network. The existing client
+owner copies and checks that list. The client asks MD to inspect candidates
+serially with distinct correlated request IDs before issuing one Create. The
+existing Create and Inspect checks remain in force; if the selected witness
+changes or the Create outcome is uncertain, the operation fails rather than
+trying another candidate after mutation may have begun. The operation deadline
+includes witness selection and Create/Inspect, so an exhausted candidate list
+or timeout is possible. Offline tests cover candidate fallback, exhaustion,
+invalid lists, timeout and no retry after Create refusal. No native
+multi-witness result or complete-universe coverage is asserted here.
+
+For a specifically opted-in fallback diagnostic, the participant logs only
+validated, request-correlated witness responses as target registry index,
+sector macro, saved witness index and eligible flag. The runner requires at
+least one target with an ineligible earlier candidate and an eligible later
+candidate, followed by that target's local apply and the worker's completed
+receipt/MD-Ack/REARM record. The marker alone is neither an apply nor a network
+acknowledgement. Marker order, candidate membership and the correlated completed
+index are checked; no actor handles are emitted. This evidence requirement is
+experimental and can make a test inconclusive even if ordinary delivery works.

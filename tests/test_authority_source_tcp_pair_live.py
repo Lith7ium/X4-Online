@@ -54,6 +54,14 @@ class Pair(unittest.TestCase):
   self.assertEqual(a['baseline'],m.archive.COUNT);self.assertEqual(b['seed'],7183)
   self.assertEqual(len({a['control_port'],a['job_port'],b['participant_port'],b['job_port']}),4)
   self.assertEqual(client.call_args.args[4],{'sector_a':1})
+ def test_multi_witness_preserves_all_candidates(self):
+  coord=m.Coordinator({'sector_a':(1,2,3)},defer_source_ack=True,multi_witness=True)
+  self.addCleanup(coord.cleanup_after_owned_processes)
+  coord.add_role('client')
+  with patch.object(m.client_install,'install',return_value=[]) as client:
+   coord.install(Path('/case'),Path('/profile'),{'world_epoch':coord.attempt},{'role':'client'},'x',120,60)
+  self.assertEqual(client.call_args.args[4],{'sector_a':(1,2,3)})
+  self.assertTrue(client.call_args.args[3]['multi_witness'])
  def test_lifecycle_hooks_restored_without_starting_x4(self):
   with tempfile.TemporaryDirectory() as out:
    args=argparse.Namespace(window=1,out=Path(out))
@@ -112,6 +120,20 @@ class ContinuousPair(unittest.TestCase):
    self.assertTrue(c.verify_final({'server':source,'client':('\n'.join(lines)+'\n').encode()}))
    with self.assertRaises(ValueError):c.verify_final({'server':source,'client':('\n'.join(lines[:-1])+'\n').encode()})
   with self.assertRaises(ValueError):c._validate_result({**terminal,'completed_count':11})
+
+class WitnessEvidence(unittest.TestCase):
+ def test_only_correlated_applied_fallback_is_accepted(self):
+  coord=m.Coordinator({'sector_a':(1,2,3)},defer_source_ack=True,multi_witness=True)
+  self.addCleanup(coord.cleanup_after_owned_processes)
+  coord.result=Pair().result()
+  p=m._WITNESS_TAG;j=m.client_evidence.TAG
+  first=p+'10055 sector_a 1 0\n';second=p+'10055 sector_a 2 1\n';applied=j+'LOCAL_APPLIED 10055 12\n'
+  self.assertTrue(coord._verify_witness_fallback((first+second+applied).encode()))
+  for invalid in (p+'10055 sector_a 1 1\n'+applied,
+                  second+applied,first+second,first+second+j+'LOCAL_APPLIED 10056 12\n',
+                  first+second+second+applied,first+second.replace('sector_a','sector_b')+applied,
+                  first+second.replace('10055','10056')+applied,first+applied+second):
+   with self.assertRaises(ValueError):coord._verify_witness_fallback(invalid.encode())
 
 class ProgressFraming(unittest.TestCase):
  def test_burst_over_twenty_frames_needs_no_per_byte_guard(self):

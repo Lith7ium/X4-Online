@@ -167,3 +167,37 @@ trace. `create_witness` does not establish which particular witness predicate
 failed or whether an alternative saved witness would have succeeded. A
 correlated, read-only witness probe is under investigation; neither automatic
 recovery nor a successful multi-witness native run is claimed.
+
+
+The fourth attempt, `.local/authority-source-tcp-continuous-04`, reported
+success with the opt-in multi-witness path in two isolated Linux X4 processes
+and one local TCP client. Its client log records 25 consecutive `LOCAL_APPLIED`
+indices 10055–10079, and the source log samples 25 `delivering` states before
+`done`. The worker result lists sequences 1–25 and reports eight sector macros.
+The source and client game-time values are independent samples, not a shared
+clock.
+
+For a concrete fallback, the client log records target index 10071 in
+`cluster_18_sector001_macro`: saved witness index 3632 returned 0 (unsuitable),
+then 4303 returned 1 (eligible), followed by `LOCAL_APPLIED 10071`. The same
+0-to-1 pair appears for indices 10072–10075, each followed by its local apply;
+the saved Census candidate ordering was independently checked. The installed client code emits those markers only after a request-correlated MD
+witness response; Create and Inspect then independently check the selected
+witness before the local apply marker. The result reports a completed worker
+event for index 10071 and `fallback_observed: true`. Markers alone are not
+network receipts or source acknowledgements.
+
+The worker/coordinator code and result support ordered TCP client receipt,
+source MD Ack and REARM for each reported event and a correlated `FINISHED`
+after the observation window. The result characterizes that completion as a
+queue snapshot: because the producer continues, it is not a durable drain or
+coverage proof. No packet trace or independently saved raw PID/socket-inode
+trace exists. The result also reports confirmed cleanup with no owned
+processes remaining.
+
+The TCP server checkpoint and admission were synthetic, and the client used
+artificial seed 7183 and an approximate loadout. Activations do not establish
+ship births; descriptors are not atomic, and cross-process frame identity is
+unproven. This bounded local diagnostic does not establish complete universe
+coverage, continuous ship movement, Windows/Internet connectivity, combat,
+trading, boarding or persistent shared-world gameplay.

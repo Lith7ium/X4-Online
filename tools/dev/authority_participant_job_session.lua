@@ -52,6 +52,15 @@ function X4LAN_PARTICIPANT_JOB_TICK()
     expected_save_path=cfg.authority_load_save_path,net=job_net_owner,
     client=X4LAN_MULTI_CREATE_CLIENT,inspector_module=X4LAN_MULTI_CREATE_INSPECTOR,resolve=X4LAN_RESOLVE_STRING,
     witness=function(sector)return cfg.authority_job_client_witnesses[sector]end,
+    witness_audit=function(index,sector,witness,eligible)
+     if not (type(index)=='number' and index>=1 and index%1==0 and
+       type(witness)=='number' and witness>=1 and witness%1==0 and
+       type(sector)=='string' and sector:match('^[A-Za-z0-9_]+$') and
+       type(eligible)=='boolean') then return false end
+     DebugError('[X4LAN] AUTH_WITNESS_PROBE '..string.format('%.0f',index)..' '..sector..' '..
+      string.format('%.0f',witness)..' '..(eligible and '1' or '0'))
+     return true
+    end,
     guard=function()return not failed end,fault=fail,
     audit=function(index)
      local game=tonumber(ffi.C.GetCurrentGameTime());if not game or game<0 or game>=math.huge then return false end

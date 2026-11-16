@@ -31,6 +31,39 @@
     </do_if>
    </actions>
   </cue>
+  <!-- Read-only per-candidate probe; Create and Inspect repeat these checks. -->
+  <cue name="Witness" instantiate="true">
+   <conditions><event_ui_triggered screen="'X4AuthorityMultiCreateReceiver'" control="'Witness'"/></conditions>
+   <actions>
+    <set_value name="$req" exact="event.param3"/>
+    <set_value name="$valid_request" exact="false"/>
+    <do_if value="$req.$request_id? and $req.$epoch? and $req.$sector? and $req.$witness_index? and State.$epoch?">
+     <do_if value="State.$baseline? and State.$faulted? and State.$pending? and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$faulted?">
+      <do_if value="md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and not State.$faulted and not State.$pending and not md.X4AuthorityShipRegistry.State.$faulted">
+       <do_if value="$req.$epoch == State.$epoch and $req.$epoch == md.X4AuthorityShipRegistry.State.$epoch and $req.$witness_index ge 1 and $req.$witness_index le State.$baseline and $req.$witness_index == ($req.$witness_index)i">
+        <set_value name="$valid_request" exact="true"/>
+       </do_if>
+      </do_if>
+     </do_if>
+    </do_if>
+    <do_if value="$valid_request">
+     <set_value name="$witness" exact="@md.X4AuthorityShipRegistry.State.$ships.{$req.$witness_index}"/>
+     <find_sector name="$matches" macro="macro.{$req.$sector}" multiple="true" required="false"/>
+     <set_value name="$eligible" exact="0"/>
+     <do_if value="$req.$witness_index ge 1 and $req.$witness_index le State.$baseline and $req.$witness_index == ($req.$witness_index)i and @$witness.isoperational and $witness.isclass.ship">
+      <do_if value="not $witness.dock.exists and not $witness.isinternallystored and @md.X4AuthorityShipRegistry.State.$byship.{$witness} == $req.$witness_index and @$matches.count == 1 and @$matches.{1}.isclass.sector">
+       <do_if value="@$witness.sector.isclass.sector and $witness.sector == $matches.{1} and $witness.sector.macro.id == $req.$sector">
+        <set_value name="$eligible" exact="1"/>
+       </do_if>
+      </do_if>
+     </do_if>
+     <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Witness|%s|%s'.[$req.$request_id,$req.$witness_index,$eligible]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|witness_state'.[$req.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
   <cue name="Create" instantiate="true">
    <conditions><event_ui_triggered screen="'X4AuthorityMultiCreateReceiver'" control="'Create'"/></conditions>
    <actions>

@@ -24,7 +24,9 @@ MODULES=(('tools/dev/authority_checkpoint_marker_probe.lua','authority_checkpoin
 
 def install(case,profile,ticket,settings,witnesses):
     required={'participant_port','participant_lease','job_port','lease','attempt','epoch','generation','nonce','seed','timeout'}
-    if type(settings) is not dict or set(settings)!=required:raise ValueError('invalid session settings')
+    if type(settings) is not dict or set(settings) not in (required,required|{'multi_witness'}):raise ValueError('invalid session settings')
+    if 'multi_witness' in settings and settings['multi_witness'] is not True:raise ValueError('multi witness must be explicitly enabled')
+    multi=settings.get('multi_witness') is True
     for k in ('participant_lease','lease','attempt','epoch','generation','nonce'):
         if type(settings[k]) is not str or not re.fullmatch(r'[0-9a-f]{32}',settings[k]):raise ValueError('invalid token')
     if len({settings[k] for k in ('participant_lease','lease','attempt','epoch','generation','nonce')})!=6 or settings['epoch']!=archive.REGISTRY_EPOCH:
@@ -35,10 +37,17 @@ def install(case,profile,ticket,settings,witnesses):
         raise ValueError('invalid ports, seed or timeout')
     if type(witnesses) is not dict or not witnesses or len(witnesses)>152:raise ValueError('invalid saved witnesses')
     saved_witnesses=inputs.load_witness()
+    if multi and set(witnesses)!={name for name,items in saved_witnesses.items() if items}:
+        raise ValueError('complete eligible witness sectors required')
     for name,idx in witnesses.items():
-        if type(name) is not str or not re.fullmatch(r'[A-Za-z0-9_]{1,128}',name) or type(idx) is not int or not 1<=idx<=archive.COUNT:
-            raise ValueError('invalid saved witness')
-        if idx not in saved_witnesses.get(name,()):raise ValueError('witness not present in pinned saved evidence')
+        if type(name) is not str or not re.fullmatch(r'[A-Za-z0-9_]{1,128}',name):raise ValueError('invalid saved witness sector')
+        if multi:
+            if type(idx) not in (list,tuple) or not idx or tuple(idx)!=saved_witnesses.get(name,()):
+                raise ValueError('complete pinned witness candidates required')
+            if any(type(v) is not int or not 1<=v<=archive.COUNT for v in idx):raise ValueError('invalid saved witness index')
+        else:
+            if type(idx) is not int or not 1<=idx<=archive.COUNT or idx not in saved_witnesses.get(name,()):
+                raise ValueError('witness not present in pinned saved evidence')
     config=base.load.install_probe(case,profile,ticket)
     lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md';native=lab/'native'
     names=BASE_MD+('authority_multi_create_receiver.xml',)
@@ -52,7 +61,8 @@ def install(case,profile,ticket,settings,witnesses):
         "if marker~=cfg.authority_expected_marker or phase~='load' or state~='inspect' or type(marker)~='string'"))
     literal=base.base.lua_literal;text=config.read_text(encoding='ascii')
     if not text.endswith('}\n'):raise ValueError('unexpected config')
-    ws='{'+','.join('['+literal(k)+']='+str(v) for k,v in sorted(witnesses.items()))+'}'
+    def witness_literal(v):return '{'+','.join(str(i) for i in v)+'}' if multi else str(v)
+    ws='{'+','.join('['+literal(k)+']='+witness_literal(v) for k,v in sorted(witnesses.items()))+'}'
     text=text[:-2]+(',authority_marker_phase="load",authority_expected_marker='+literal(archive.MARKER)+
         ',authority_participant_job_session=true,authority_participant_port='+str(settings['participant_port'])+
         ',authority_participant_lease='+literal(settings['participant_lease'])+',authority_job_client_port='+str(settings['job_port'])+

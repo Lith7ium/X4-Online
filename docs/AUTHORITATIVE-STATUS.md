@@ -204,6 +204,16 @@ witness guard failed, but the sector, witness index and specific predicate
 for the refused head were not recorded. No `FINISHED` snapshot was reached;
 owned cleanup was confirmed. [Details](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#continuous-window-diagnostic).
 
+A fourth local continuous-window diagnostic reported 25 consecutive completed
+events across eight reported sectors and a point-in-time queue snapshot. For
+index 10071 the client log shows witness 3632 rejected, witness 4303 accepted
+and a subsequent local apply; the same fallback appears for indices 10072–10075.
+The worker result reports these events completed.
+The per-event network/source acknowledgement chain and snapshot are supported
+by code and result, without a packet trace. Admission and client seed remain
+synthetic; birth, full coverage and cross-process frame identity are unproven.
+[Detailed evidence and limits](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#continuous-window-diagnostic).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

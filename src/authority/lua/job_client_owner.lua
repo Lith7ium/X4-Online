@@ -25,6 +25,7 @@ function M.new(o)
  assert(integer(o.baseline,1) and integer(o.seed,0) and o.seed<=2147483647)
  assert(type(o.timeout)=='number' and o.timeout>0 and o.timeout<=30)
  assert(o.audit==nil or type(o.audit)=='function')
+ assert(o.witness_audit==nil or type(o.witness_audit)=='function')
  for _,k in ipairs({'clock','guard','issue','witness','fault'})do assert(type(o[k])=='function',k..' required')end
  assert(type(o.client)=='table' and type(o.client.new)=='function' and type(o.inspector)=='table' and type(o.inspector.inspect)=='function' and type(o.inspector.arm_running)=='function')
  assert((type(o.net)=='table' or type(o.net)=='userdata') and type(o.net.send)=='function' and type(o.net.receive)=='function')
@@ -62,7 +63,7 @@ function M.new(o)
   return table.concat(p,'|')
  end
  client=assert(o.client.new({enabled=true,epoch=o.epoch,nonce=o.nonce,baseline=o.baseline,timeout=o.timeout,
-  clock=o.clock,guard=o.guard,issue=o.issue,
+  clock=o.clock,guard=o.guard,issue=o.issue,witness_audit=o.witness_audit,
   inspect=function(...)return o.inspector:inspect(...)end,
   complete=function(kind,result)
    if delivered or (phase=='initializing' and (kind~='initialize' or result.epoch~=o.epoch)) or
@@ -101,12 +102,26 @@ function M.new(o)
      not token(p[5],32) or p[6]~=o.epoch or p[7]~=o.generation or not token(p[10],64) then return false end
   local sequence,index=natural(p[8]),natural(p[9]);local x,y,z=number(p[14]),number(p[15]),number(p[16])
   if not sequence or sequence~=last_seq+1 or not index or not name(p[11]) or not name(p[12]) or not name(p[13]) or not x or not y or not z then return false end
-  local ok,w=call(o.witness,p[13]);if not ok or not integer(w,1) or w>o.baseline or not check() then return false,'witness' end
+  local ok,w=call(o.witness,p[13]);if not ok or not check() then return false,'witness' end
+  local candidates
+  if type(w)=='table' then
+   if getmetatable(w)~=nil then return false,'witness' end
+   local count=0
+   for k in pairs(w)do if not integer(k,1) or k>o.baseline then return false,'witness' end;count=count+1 end
+   if count==0 or count>o.baseline then return false,'witness' end
+   candidates={};local previous=0
+   for i=1,count do
+    local v=rawget(w,i)
+    if not integer(v,1) or v>o.baseline or v<=previous then return false,'witness' end
+    candidates[i]=v;previous=v
+   end
+   w=candidates[1]
+  elseif not integer(w,1) or w>o.baseline then return false,'witness' end
   pending={index=index,identity={p[5],p[6],p[7],p[8],p[9],p[10]}}
   deadline=last+o.timeout;phase='applying'
   local armed,value=call(o.inspector.arm_running,o.inspector)
   if not armed or value~=true or not check() then return false,'inspector_arm' end
-  local sent,accepted,detail=call(client.create,client,{index=index,macro=p[11],owner=p[12],sector=p[13],seed=o.seed,x=x,y=y,z=z,witness_index=w})
+  local sent,accepted,detail=call(client.create,client,{index=index,macro=p[11],owner=p[12],sector=p[13],seed=o.seed,x=x,y=y,z=z,witness_index=w},candidates)
   if not sent or accepted~=true then return false,'create_'..reason(detail) end
   if not check() then return false,'create_guard' end
   return true
