@@ -1,10 +1,9 @@
 # Two-sector receiver experiment: preparation only
 
-This default-off preparation is **not a runnable or native-start-ready
-experiment**. No process harness currently installs it, integrates the single
-X4 update/event dispatcher, fences a process, or validates a final log. The
-FFI adapter is tested with a fake X4 API, not a native X4 process. Do not load these scripts into X4 until
-those missing pieces are implemented and independently reviewed.
+This default-off experiment has an isolated process harness, but is **not yet
+native-start-ready** pending independent review of its process, callback and
+log fences. The FFI adapter and orchestration are tested only with fake X4
+APIs; no native create run is recorded.
 
 `authority_sector_create_receiver.xml` is a test-only copy of the existing
 receiver. The only behavioural change is sector resolution: the requested
@@ -44,13 +43,24 @@ X4. The enumeration is faction-wide for one macro; it is not a sector census,
 complete universe coverage or proof against every autonomous duplicate.
 
 Driver completion is `pending_fence`, never a final success: a late event
-permanently fails it. A future process harness must fence and check callbacks,
-logs and owned-process cleanup before publishing any successful result. The
-harness must confirm the pinned checkpoint/marker and pause, securely identify
-the disposable profile and owned process, guarantee exclusive event routing,
-independently inspect and test the X4 FFI signatures and handle conversions,
-fence timeouts and cleanup, reject stock MD/Lua errors, protect overlay files
-and archive bytes, and use a fresh output/profile with no save. It must also recheck save-derived
+permanently fails it. `authority_sector_create_live.py` prepares the pinned
+checkpoint in a private profile and uses the existing gated owned-process,
+archive, marker, pause, protected-file and final-log checks. It binds the whole
+private save directory read-only and never issues a save. The only load update
+owner calls `authority_sector_create_run.lua`; it checks profile, player,
+pause, game time and a deadline on each sampled frame, waits for a half-second
+settle after `pending_fence`, then emits a completion receipt. The private
+owner copy logs an error immediately on later callback faults; final validation
+rechecks the log after owned-process shutdown and refuses any such error. The
+source archive and output paths must be disjoint, and source fingerprints are
+checked again after a successful run. If process cleanup is unconfirmed, the
+underlying harness retains its lock. These are sampled checks, not an atomic
+proof of uninterrupted pause or an absolute guarantee against log ABA.
+
+The caller must still establish exclusive event routing, and X4 FFI signatures,
+handle conversions, MD cue semantics and the final callback/process boundary
+need independent review and native validation. A fault or late ambiguous
+mutation requires discarding the private process; no retry or save is safe. It must also recheck save-derived
 fixture macros and initial registry baseline. Pending or ambiguous mutation
 requires discarding the process; there is no rollback or crash consistency.
 

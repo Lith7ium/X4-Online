@@ -143,6 +143,15 @@ class ReadRunner(unittest.TestCase):
             handlers={}
             def signal_set(number,handler): handlers[number]=handler;return m.signal.SIG_DFL
             set_(m.signal,'signal',signal_set)
+            if mode in ('finalizer','finalizer_raises','finalizer_escalates','finalizer_truthy'):
+                def finalizer(result):
+                    self.assertFalse((out/'result.json').exists())
+                    self.assertTrue(all(handler==m.signal.SIG_IGN for handler in handlers.values()))
+                    result['finalizer_checked']=True
+                    if mode=='finalizer_raises': raise ValueError('source changed')
+                    if mode=='finalizer_escalates': result['success']=True
+                    if mode=='finalizer_truthy': result['success']=1
+                set_(m,'result_finalizer',finalizer)
             set_(m.base,'readonly_save_command',lambda *_:['bwrap','--die-with-parent'])
             def spawn(*_,**__):
                 if mode=='popen': handlers[m.signal.SIGTERM](m.signal.SIGTERM,None)
@@ -157,7 +166,11 @@ class ReadRunner(unittest.TestCase):
             stop=set_(m.snapshot,'stop_owned',Mock(side_effect=KeyboardInterrupt()) if mode=='stop_raises' else Mock(return_value=[99] if mode=='stop_survives' else []))
             result=m.run(args)
         self.assertFalse(result['success'])
-        self.assertEqual(result['error'],{'popen':'signal 15','gate_race':'signal 15','running':'KeyboardInterrupt','no_identity':'no start identity','stop_raises':'KeyboardInterrupt','stop_survives':'KeyboardInterrupt'}[mode])
+        self.assertEqual(result['error'],{'popen':'signal 15','gate_race':'signal 15','running':'KeyboardInterrupt','no_identity':'no start identity','stop_raises':'KeyboardInterrupt','stop_survives':'KeyboardInterrupt','finalizer':'KeyboardInterrupt','finalizer_raises':'final result check: source changed','finalizer_escalates':'final result check: finalizer cannot convert failure to success','finalizer_truthy':'final result check: finalizer must preserve boolean success'}[mode])
+        if mode.startswith('finalizer'):
+            self.assertTrue(result['finalizer_checked'])
+            import json
+            self.assertEqual(json.loads((out/'result.json').read_text()),result)
         if mode=='no_identity':
             stop.assert_not_called();proc.terminate.assert_called_once();proc.wait.assert_called_once()
             self.assertEqual(result['cleanup_error'],'owned process identity unavailable')
@@ -168,6 +181,11 @@ class ReadRunner(unittest.TestCase):
         self.assertTrue((out/'result.json').is_file());self.assertGreaterEqual(steam.call_count,2)
         self.assertTrue(all(handler==m.signal.SIG_DFL for handler in handlers.values()))
         if mode in ('popen','no_identity'): write.assert_not_called()
+
+    def test_finalizer_runs_fenced_before_single_publication(self):
+        for mode in ('finalizer','finalizer_raises','finalizer_escalates','finalizer_truthy'):
+            with self.subTest(mode=mode):
+                self.tearDown();self.setUp();self.simulate_interruption(mode)
 
     def test_interrupted_owned_process_is_cleaned_without_success(self): self.simulate_interruption('running')
     def test_signal_during_popen_does_not_release_gate(self): self.simulate_interruption('popen')

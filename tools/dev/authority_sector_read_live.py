@@ -28,6 +28,8 @@ import linux_snapshot_capture as snapshot
 
 MD=('authority_checkpoint_marker.xml','authority_ship_registry.xml','authority_sector_reference_fixture.xml')
 UI=('authority_checkpoint_marker_probe.lua','authority_registry_resolve_string.lua','authority_sector_read_probe.lua')
+# Optional experiment-specific checks run under signal fencing before publication.
+result_finalizer=None
 NUMBER=r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
 DONE=re.compile(r'DONE slot=([12]) pilot=(present|absent) order=([\w-]{1,96}) state=(started|critical|other|none) game=('+NUMBER+r') x=('+NUMBER+r') y=('+NUMBER+r') z=('+NUMBER+r')\Z',re.ASCII)
 
@@ -343,6 +345,16 @@ def run(args):
             if live.steam_identity(home,user.pw_uid)!=steam: result.update(success=False,error='Steam identity changed')
         except BaseException as error: cleanup_error('Steam identity unavailable',error)
         if cleanup_errors: result['cleanup_error']='; '.join(cleanup_errors)
+        if result_finalizer is not None:
+            was_success=result.get('success') is True
+            try:
+                result_finalizer(result)
+                if type(result.get('success')) is not bool:
+                    raise ValueError('finalizer must preserve boolean success')
+                if not was_success and result.get('success') is True:
+                    raise ValueError('finalizer cannot convert failure to success')
+            except BaseException as error:
+                result.update(success=False,error='final result check: '+(str(error) or type(error).__name__))
         try:
             (out/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
         finally:
