@@ -570,6 +570,16 @@ therefore reached, but the log alone does not prove it caused the timeout.
 Both results report no owned X4 processes remaining. Neither run proves
 delivery, visible movement, Windows or Internet gameplay.
 
+After the candidate API call was corrected, the third isolated attempt,
+`.local/authority-motion-client-once-03`, also reached server resume and then
+timed out while selecting a candidate. Its new progress record reports 90.14 s
+total: 57.80 s in source binding and 31.11 s in candidate selection. Across
+those phases it counted 57 full context guards taking 70.11 s and two saved
+checkpoint guards taking 20.02 s. These timings describe this run only; they
+do not independently identify a single offending guard or prove candidate
+identity. No samples or receipts were recorded, and the result reports no
+owned X4 processes remaining.
+
 An isolated offline benchmark used the Source IPC lifecycle over local UDP/TCP
 with a simulated source and client, real pidfd guard transport and the four
 existing `authority-witness-join-once-06` compressed saves (26,183,913 and
