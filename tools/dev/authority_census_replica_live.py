@@ -105,6 +105,37 @@ def validate_client_to_server_apply_completion(details, index):
         raise RuntimeError('client to server apply unconfirmed')
     return True
 
+def validate_client_to_server_observe_completion(details, index):
+    """Point observations are neither read-only nor delayed apply receipts."""
+    if type(details) is not dict:
+        raise RuntimeError('client to server observations unconfirmed')
+    read=dict(details,server_x4_motion_applied=False)
+    validate_client_authority_completion(read,index)
+    observed=details.get('observed_sequences')
+    if (details.get('server_observe_receipts') is not True or
+        type(observed) is not list or not 2<=len(observed)<=8 or
+        any(type(v) is not int or v<1 for v in observed) or
+        any(k in details for k in ('server_x4_motion_applied','server_apply_receipt'))):
+        raise RuntimeError('client to server observations unconfirmed')
+    return True
+
+def validate_authority_mode_completion(details,args,two_clients):
+    observe=getattr(args,'client_to_server_observe',False)
+    apply=getattr(args,'client_to_server_apply',False)
+    if type(observe) is not bool or type(apply) is not bool or (observe and apply):
+        raise RuntimeError('invalid client authority mode')
+    if observe:
+        if two_clients:raise RuntimeError('client to server observation pair required')
+        validate_client_to_server_observe_completion(details,getattr(args,'client_authority_index',None))
+    elif apply:
+        if two_clients:raise RuntimeError('client to server apply pair required')
+        validate_client_to_server_apply_completion(details,getattr(args,'client_authority_index',None))
+    elif getattr(args,'client_authority_index',None) is not None:
+        if two_clients:raise RuntimeError('client authority pair required')
+        validate_client_authority_completion(details,args.client_authority_index)
+    else:return False
+    return True
+
 
 def run(args):
     if sys.platform!='linux' or os.geteuid()==0:raise ValueError('unprivileged Linux required')
@@ -238,12 +269,8 @@ def run(args):
         inspect_context(require_load=True)
         details=coord.run({'deadline':deadline,'check':lambda:inspect_context(require_load=True)==set(role_names)})
         inspect_context(require_load=True)
-        if getattr(args,'client_to_server_apply',False) is True:
-            if two_clients:raise RuntimeError('client to server apply pair required')
-            validate_client_to_server_apply_completion(details,getattr(args,'client_authority_index',None))
-        elif getattr(args,'client_authority_index',None) is not None:
-            if two_clients:raise RuntimeError('client authority pair required')
-            validate_client_authority_completion(details,args.client_authority_index)
+        if validate_authority_mode_completion(details,args,two_clients):
+            pass
         elif getattr(args,'saved_index',None) is not None:
             if (two_clients or type(details) is not dict or details.get('saved_baseline_registered') is not True or
                 details.get('saved_index')!=args.saved_index or details.get('motion_client_bound_buffered') is not True or

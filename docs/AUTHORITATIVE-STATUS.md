@@ -362,6 +362,14 @@ away; the three-unit check failed. This measures a later position change in one
 local NPC trial, without identifying the responsible engine subsystem or
 demonstrating continuous client control. [Details](../tools/dev/AUTHORITY-CLIENT-TO-SERVER-APPLY-PAIR.md#attempt-03-later-position-measured).
 
+A separate opt-in Linux/Linux diagnostic subsequently recorded two guarded
+client-sample writes for the same saved NPC on the server. Both immediate
+server position reads matched the corresponding target to printed precision;
+the server position had changed before the next preflight. Its `OBSERVED`
+receipts and successful diagnostic result are point observations, not proof of
+continuous tracking or HA handover. The grant and admission were synthetic;
+Windows, Internet and gameplay remain untested. [Details](../tools/dev/AUTHORITY-CLIENT-TO-SERVER-OBSERVE-PAIR.md).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

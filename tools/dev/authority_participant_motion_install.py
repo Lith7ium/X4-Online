@@ -13,10 +13,11 @@ ROOT=Path(__file__).resolve().parents[2]
 
 def install(case, profile, ticket, settings, witnesses, motion):
     fields={'port','lease','attempt','epoch','generation','nonce','timeout','max_age','max_tracks'}
-    if type(motion) is not dict or set(motion) not in (fields,fields|{'saved_baseline'},fields|{'saved_baseline','saved_apply'},fields|{'saved_baseline','saved_apply','immediate_readback'}):raise ValueError('invalid motion settings')
+    if type(motion) is not dict or set(motion) not in (fields,fields|{'saved_baseline'},fields|{'saved_baseline','saved_apply'},fields|{'saved_baseline','saved_apply','immediate_readback'},fields|{'saved_baseline','saved_apply','immediate_readback','observe_limit'}):raise ValueError('invalid motion settings')
     if 'saved_baseline' in motion and motion['saved_baseline'] is not True:raise ValueError('saved baseline must be explicitly enabled')
     if 'saved_apply' in motion and motion['saved_apply'] is not True:raise ValueError('saved apply must be explicitly enabled')
     if 'immediate_readback' in motion and motion['immediate_readback'] is not True:raise ValueError('immediate readback must be explicitly enabled')
+    if 'observe_limit' in motion and (type(motion['observe_limit']) is not int or not 2<=motion['observe_limit']<=8):raise ValueError('invalid observe limit')
     if any(type(motion[k]) is not str or not re.fullmatch(r'[0-9a-f]{32}',motion[k]) for k in ('lease','attempt','epoch','generation','nonce')):
         raise ValueError('invalid motion token')
     if (motion['epoch']!=settings.get('epoch') or motion['generation']!=settings.get('generation') or
@@ -55,6 +56,7 @@ def install(case, profile, ticket, settings, witnesses, motion):
       ',authority_motion_client_max_tracks='+str(motion['max_tracks'])+
       (',authority_motion_client_saved_enabled=true' if motion.get('saved_baseline') else '')+
       (',authority_motion_apply_enabled=true' if motion.get('saved_apply') else '')+
-      (',authority_motion_apply_immediate_readback=true' if motion.get('immediate_readback') else '')+'}\n')
+      (',authority_motion_apply_immediate_readback=true' if motion.get('immediate_readback') else '')+
+      (',authority_motion_apply_observe_limit='+str(motion['observe_limit']) if 'observe_limit' in motion else '')+'}\n')
     config.write_text(text,encoding='ascii');config.chmod(0o600)
     return files+[mdfile]+([saved_md] if motion.get('saved_baseline') else [])+([apply_md] if motion.get('saved_apply') else [])+[ui/target for _,target in scripts]

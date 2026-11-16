@@ -38,7 +38,7 @@ def snapshot_value(value,epoch):
     return {**value,'position':list(value['position'])}
 
 def sample_series(samples,epoch,generation):
-    if type(samples) is not list or not 1<=len(samples)<=12:raise ValueError('invalid candidate samples')
+    if type(samples) is not list or not 1<=len(samples)<=32:raise ValueError('invalid candidate samples')
     out=[motion_value(s) for s in samples]
     for n,v in enumerate(out,1):
         if (v['epoch']!=epoch or v['generation']!=generation or v['index']!=base.INDEX or
@@ -57,7 +57,8 @@ def sample_series(samples,epoch,generation):
 
 def config(raw):
     c=parse_json(raw)
-    if type(c) is not dict or set(c)!=base._FIELDS|set(EXTRA)|{'server_snapshot'}:raise ValueError('invalid apply config')
+    if type(c) is not dict or set(c) not in (base._FIELDS|set(EXTRA)|{'server_snapshot'},base._FIELDS|set(EXTRA)|{'server_snapshot','observe_limit'}):raise ValueError('invalid apply config')
+    if 'observe_limit' in c and (type(c['observe_limit']) is not int or not 2<=c['observe_limit']<=8):raise ValueError('invalid observe limit')
     b={k:c[k] for k in base._FIELDS};base.config(json.dumps(b).encode())
     if c['sample_count']!=2 or any(type(c[k]) is not str or not base._TOKEN.fullmatch(c[k]) for k in EXTRA):
         raise ValueError('invalid apply context')
@@ -83,7 +84,9 @@ def run(cc,cj,ca,sc,sj,sm,private,c):
             guard()
             if time.monotonic()>=selection_deadline:raise TimeoutError('candidate window exhausted')
             return True
-        owner=ExperimentalTCPClientAuthorityMotion(delivery,enabled=True,grant=grant,guard=lambda v:selection_guard() and v==grant)
+        selecting=[True]
+        owner=ExperimentalTCPClientAuthorityMotion(delivery,enabled=True,grant=grant,
+            guard=lambda v:(selection_guard() if selecting[0] else guard()) and v==grant)
         samples=[];candidate=None;distance=None
         while len(samples)<12:
             selection_guard();v=owner.pull();selection_guard()
@@ -96,11 +99,11 @@ def run(cc,cj,ca,sc,sj,sm,private,c):
                 import select
                 select.select([private],[],[private],min(.05,max(0,selection_deadline-time.monotonic())));selection_guard()
         if candidate is None:raise RuntimeError('no candidate in bounded window')
-        selection_guard()
+        selection_guard();selecting[0]=False
         # Resume follows selection; only a point-in-time pause was observed.
         sc.settimeout(.1);expected=('HELLO|'+c['server_participant_lease']+'|'+c['epoch']).encode()
         while True:
-            selection_guard()
+            guard()
             try:data,peer=sc.recvfrom(769)
             except socket.timeout:continue
             if data!=expected or not client.socket_owner(peer,sc.getsockname(),identity):raise RuntimeError('wrong server control peer')
@@ -110,9 +113,9 @@ def run(cc,cj,ca,sc,sj,sm,private,c):
         ctl=LocalParticipantControl.__new__(LocalParticipantControl)
         ctl.sock=sc;ctl.lease=c['server_participant_lease'];ctl.peer=peer;ctl.epoch=c['epoch'];ctl.handle=1
         ctl.next_id=1;ctl.fault=False;ctl.timeout=min(20,c['deadline']-time.monotonic()-5)
-        selection_guard()
+        guard()
         if ctl.timeout<=0 or not peer_guard(peer,sc):raise RuntimeError('server control peer changed')
-        selection_guard()
+        guard()
         if ctl.resume((1,)) is not True or not peer_guard(peer,sc):
             raise RuntimeError('server resume not confirmed')
         timeout=min(20,c['deadline']-time.monotonic()-5)
@@ -120,20 +123,41 @@ def run(cc,cj,ca,sc,sj,sm,private,c):
         job=ExperimentalParticipantJobIPC(sj,enabled=True,lease=c['server_job_lease'],attempt=c['server_job_attempt'],
             epoch=c['job_epoch'],generation=c['generation'],guard=guard,validate_peer=lambda p:peer_guard(p,sj),timeout=timeout)
         motion=ExperimentalParticipantMotionIPC(sm,enabled=True,lease=c['server_motion_lease'],attempt=c['server_motion_attempt'],
-            epoch=c['job_epoch'],generation=c['generation'],guard=guard,validate_peer=lambda p:peer_guard(p,sm),timeout=timeout,allow_apply=True)
+            epoch=c['job_epoch'],generation=c['generation'],guard=guard,validate_peer=lambda p:peer_guard(p,sm),timeout=timeout,allow_apply='observe_limit' not in c,observe_limit=c.get('observe_limit'))
         try:
             job.wait_ready();motion.wait_ready();guard()
-            if motion(candidate,False) is not True:raise RuntimeError('server bind failed')
-            if motion.preflight(candidate)!='READY':raise RuntimeError('server preflight not ready')
-            guard()
-            if motion.apply_once(candidate) is not True:raise RuntimeError('server apply not confirmed')
-            guard()
+            selected=candidate['sequence'];observed=[];skipped=[]
+            while True:
+                if motion(candidate,False) is not True:raise RuntimeError('server bind failed')
+                status=motion.preflight(candidate);guard()
+                if 'observe_limit' not in c:
+                    if status!='READY':raise RuntimeError('server preflight not ready')
+                    if motion.apply_once(candidate) is not True:raise RuntimeError('server apply not confirmed')
+                    guard();break
+                if status=='NEAR':skipped.append(candidate['sequence'])
+                elif status=='READY':
+                    if motion.observe(candidate) is not True:raise RuntimeError('server observation not confirmed')
+                    observed.append(candidate['sequence']);guard()
+                else:raise RuntimeError('server preflight not ready')
+                if len(observed)==c['observe_limit']:break
+                if len(samples)>=32:raise RuntimeError('sample budget exhausted')
+                while True:
+                    guard();v=owner.pull();guard()
+                    if v is not None:
+                        samples.append(v);samples=sample_series(samples,c['job_epoch'],c['generation'])
+                        candidate=samples[-1];break
+                    import select
+                    select.select([private],[],[private],min(.05,max(0,c['deadline']-time.monotonic())));guard()
         finally:
             job.close();motion.close()
-        return {'event':'result','ok':True,'tcp_admitted':True,'synthetic_server_checkpoint_and_admission':True,
+        result={'event':'result','ok':True,'tcp_admitted':True,'synthetic_server_checkpoint_and_admission':True,
             'client_authority_registered':True,'index':base.INDEX,'sector_macro':base.SECTOR,'samples':samples,
-            'server_x4_motion_applied':True,'server_apply_receipt':True,'frame_identity_proven':False,
-            'server_snapshot':c['server_snapshot'],'candidate_distance':distance,'selected_sequence':candidate['sequence']}
+            'frame_identity_proven':False,
+            'server_snapshot':c['server_snapshot'],'candidate_distance':distance,'selected_sequence':selected}
+        if 'observe_limit' in c:
+            result.update(observed_sequences=observed,skipped_near_sequences=skipped,server_observe_receipts=True)
+        else:result.update(server_x4_motion_applied=True,server_apply_receipt=True)
+        return result
     return client.run(cc,cj,private,c,None,delivery_action=action,extra_guard=server_guard,
         expected_jobs=None,authority_udp=ca,authority_grant=grant)
 

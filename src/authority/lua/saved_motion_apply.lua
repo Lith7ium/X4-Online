@@ -17,6 +17,8 @@ function M.new(o)
  assert(finite(c.timeout) and c.timeout>1 and c.timeout<=30)
  assert(c.readonly==nil or c.readonly==true)
  assert(c.immediate_readback==nil or c.immediate_readback==true)
+ -- Separate experimental observation, never the delayed one-shot receipt.
+ assert(c.observe_immediate_only==nil or (c.observe_immediate_only==true and c.immediate_readback==true and not c.readonly))
  local state,busy,used='idle',false,false;local last,deadline,pending,written=nil,nil,nil,false
  local api={}
  local function snapshot()
@@ -97,6 +99,7 @@ function M.new(o)
      assert(timed and finite(game_now) and game_now>=gt and state=='pre' and check())
      stage='immediate_log';assert(report(('IMMEDIATE %s %d %d %s %.17g %.17g %.17g %.17g'):format(
       pending.request,pending.index,pending.sequence,pending.digest,pnow.x,pnow.y,pnow.z,game_now)))
+     if c.observe_immediate_only then state='observed';deadline=nil;return end
     end
     pending.write_time=last;pending.game=gt;state='settling'
    else

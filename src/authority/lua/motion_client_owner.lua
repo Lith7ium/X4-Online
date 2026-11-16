@@ -37,12 +37,14 @@ function M.new(o)
  local apply=c.saved_apply
  if apply~=nil then
   assert(saved and type(apply)=='table' and apply.enabled==true and type(apply.factory)=='function' and type(apply.register)=='function' and
-   (apply.immediate_readback==nil or apply.immediate_readback==true),'invalid saved apply')
-  apply={factory=apply.factory,register=apply.register,immediate_readback=apply.immediate_readback}
+   (apply.immediate_readback==nil or apply.immediate_readback==true) and
+   (apply.observe_limit==nil or (integer(apply.observe_limit) and apply.observe_limit>=2 and apply.observe_limit<=8 and apply.immediate_readback==true)),'invalid saved apply')
+  apply={factory=apply.factory,register=apply.register,immediate_readback=apply.immediate_readback,observe_limit=apply.observe_limit}
  end
  local state,busy='new',false;local last,pending,deadline,delivered=nil,nil,nil,nil
  local staged,bound,writer,operation_identity,apply_used,preflight_ready=nil,nil,nil,nil,false,false
  local operation_requests,operation_count,preflight_attempted={},0,false
+ local observe_count,stream_index,stream_sequence,stream_time,stream_binding=0,nil,nil,nil,nil
  local tracks,track_count={},0;local api={}
  local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
  local function check()
@@ -88,6 +90,10 @@ function M.new(o)
   local index,seq=natural(p[8]),natural(p[9]);if not index or not seq then return false end
   local t=number(p[12],0,1e12);local x,y,z=number(p[13],-1e7,1e7),number(p[14],-1e7,1e7),number(p[15],-1e7,1e7)
   if not t or not x or not y or not z then return false end
+  if apply and apply.observe_limit then
+   if observe_count>=apply.observe_limit or index>saved.baseline or
+    (stream_index and (index~=stream_index or seq<=stream_sequence or t<=stream_time)) then return false end
+  end
   local rate
   if p[16]=='-' and p[17]=='-' and p[18]=='-' then rate=nil
   else
@@ -95,6 +101,7 @@ function M.new(o)
    if not vx or not vy or not vz then return false end;rate={vx,vy,vz}
   end
   if not check() then return false end
+  if apply and apply.observe_limit then stream_index=index;stream_sequence=seq;stream_time=t end
   local arrival=last
   local entry=tracks[index]
   if entry and entry.sector~=p[10] then return false end
@@ -129,17 +136,20 @@ function M.new(o)
  local function accept_operation(raw,kind)
   local p=split(raw)
   if not apply or apply_used or not bound or #p~=10 or p[1]~='M' or p[2]~=c.lease or p[3]~=c.attempt or p[4]~=kind or
-   (kind=='APPLY' and not preflight_ready) or (kind=='PREFLIGHT' and preflight_attempted) or
+   (kind=='APPLY' and apply.observe_limit~=nil) or (kind=='OBSERVE' and (not apply.observe_limit or observe_count>=apply.observe_limit)) or
+   ((kind=='APPLY' or kind=='OBSERVE') and not preflight_ready) or (kind=='PREFLIGHT' and preflight_attempted) or
    operation_count>=100000 or operation_requests[p[5]] or
    not token(p[5],32) or p[6]~=c.epoch or p[7]~=c.generation or p[8]~=bound.index_text or
    p[9]~=bound.sequence_text or p[10]~=bound.digest then return false end
   operation_requests[p[5]]=true;operation_count=operation_count+1
   if kind=='PREFLIGHT' then preflight_attempted=true end
   if kind=='APPLY' then apply_used=true;preflight_ready=false end
+  if kind=='OBSERVE' then observe_count=observe_count+1;preflight_ready=false end
   operation_identity={p[5],p[6],p[7],p[8],p[9],p[10]};deadline=last+c.timeout
-  local active=kind=='APPLY' and 'applying' or 'preflighting';state=active
+  local active=kind=='PREFLIGHT' and 'preflighting' or 'applying';state=active
   writer=apply.factory({enabled=true,readonly=kind=='PREFLIGHT' and true or nil,
-   immediate_readback=kind=='APPLY' and apply.immediate_readback or nil,timeout=c.timeout,guard=function()
+   immediate_readback=kind~='PREFLIGHT' and apply.immediate_readback or nil,
+   observe_immediate_only=kind=='OBSERVE' and true or nil,timeout=c.timeout,guard=function()
    return state==active and check() and state==active and last>=bound.arrival and last-bound.arrival<=c.max_age
   end,fault=function(reason)
    local allowed={begin_guard=true,dispatch_guard=true,dispatch_issue=true,pre_guard=true,pre_response=true,pre_inspect=true,
@@ -162,7 +172,11 @@ function M.new(o)
     local active=state;assert(writer:tick() and state==active and check())
     local result=writer:state()
     if active=='applying' and result=='done' then
+     assert(not apply.observe_limit)
      assert(c.net:receive()==nil and check());assert(send(reply('APPLIED',operation_identity)))
+     state='ready';deadline=nil
+    elseif active=='applying' and result=='observed' then
+     assert(apply.observe_limit and c.net:receive()==nil and check());assert(send(reply('OBSERVED',operation_identity)))
      state='ready';deadline=nil
     elseif active=='preflighting' and (result=='near' or result=='ready') then
      assert(c.net:receive()==nil and check())
@@ -174,7 +188,7 @@ function M.new(o)
    if packet~=nil then
     assert(state=='ready' and type(packet)=='string' and #packet<=768)
     local p=split(packet)
-    if p[4]=='APPLY' or p[4]=='PREFLIGHT' then assert(accept_operation(packet,p[4])) else assert(not apply_used and accept(packet))end
+    if p[4]=='APPLY' or p[4]=='OBSERVE' or p[4]=='PREFLIGHT' then assert(accept_operation(packet,p[4])) else assert(not apply_used and accept(packet))end
    end
   end);busy=false;if not ok then return fail('tick')end;return true
  end
@@ -213,6 +227,10 @@ function M.new(o)
    assert(c.net:receive()==nil and check() and snapshot_unchanged())
    if apply and pending.route=='saved' then
     assert(staged and staged.index==pending.index and staged.sequence==pending.sequence)
+    if apply.observe_limit then
+     if stream_binding then assert(staged.actor_key==stream_binding.actor_key and staged.sector_key==stream_binding.sector_key and staged.zone_key==stream_binding.zone_key)
+     else stream_binding={actor_key=staged.actor_key,sector_key=staged.sector_key,zone_key=staged.zone_key} end
+    end
     bound={actor_key=staged.actor_key,sector_key=staged.sector_key,zone_key=staged.zone_key,index=pending.index,
      index_text=pending.identity[4],sequence=pending.sequence,sequence_text=pending.identity[5],sector=pending.sector,
      digest=pending.identity[7],arrival=pending.arrival,position={pending.position[1],pending.position[2],pending.position[3]}}
@@ -250,9 +268,10 @@ function M.new_x4(o)
  if c.saved_apply~=nil then
   local a=c.saved_apply
   assert(type(a)=='table' and a.enabled==true and type(a.module)=='table' and type(a.module.new_x4)=='function' and
-   (a.immediate_readback==nil or a.immediate_readback==true))
+   (a.immediate_readback==nil or a.immediate_readback==true) and
+   (a.observe_limit==nil or (integer(a.observe_limit) and a.observe_limit>=2 and a.observe_limit<=8 and a.immediate_readback==true)))
   local native_apply=a.module.new_x4;local apply_log=a.log
-  c.saved_apply={enabled=true,immediate_readback=a.immediate_readback,register=function(fn)return register('X4AuthoritySavedMotionApply.Result',fn)~=false end,
+  c.saved_apply={enabled=true,immediate_readback=a.immediate_readback,observe_limit=a.observe_limit,register=function(fn)return register('X4AuthoritySavedMotionApply.Result',fn)~=false end,
    factory=function(opt)
     opt.expected_save_path=c.expected_save_path;opt.test_profile='45841';opt.resolve=c.resolve;opt.log=apply_log
     return native_apply(opt)

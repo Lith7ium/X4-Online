@@ -25,12 +25,14 @@ class ExperimentalParticipantMotionIPC:
     The separate X4 update owner performs MD/FFI work asynchronously while
     this callback waits. Its deadline must be strictly shorter than TCP's.
     """
-    def __init__(self,sock,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=20,allow_apply=False):
+    def __init__(self,sock,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=20,allow_apply=False,observe_limit=None):
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
             any(type(x) is not str or not _TOKEN.fullmatch(x) for x in (lease,attempt,epoch,generation)) or
-            len({lease,attempt,epoch,generation})!=4 or type(allow_apply) is not bool or not callable(guard) or not callable(validate_peer) or
+            len({lease,attempt,epoch,generation})!=4 or type(allow_apply) is not bool or
+            (observe_limit is not None and (type(observe_limit) is not int or not 2<=observe_limit<=8 or allow_apply)) or
+            not callable(guard) or not callable(validate_peer) or
             type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=300):
             raise ValueError('invalid participant motion IPC context')
         try:sock.getpeername()
@@ -43,7 +45,7 @@ class ExperimentalParticipantMotionIPC:
         self._guard=guard;self._validate=validate_peer;self._timeout=float(timeout)
         self._owner=threading.get_ident();self._state='new';self._peer=None
         self._prefix=secrets.token_hex(8);self._next=0
-        self._allow_apply=allow_apply;self._bound=None;self._apply_attempted=False
+        self._allow_apply=allow_apply;self._observe_limit=observe_limit;self._observed=0;self._bound=None;self._apply_attempted=False
         self._preflight_ready=None;self._preflight_seen=set()
     @property
     def state(self):return self._state
@@ -125,7 +127,8 @@ class ExperimentalParticipantMotionIPC:
             self._fail();raise RuntimeError('motion IPC reentrant or unavailable')
         self._state='preflighting';deadline=time.monotonic()+self._timeout
         try:
-            if not self._allow_apply or self._apply_attempted or self._bound is None:
+            if (not (self._allow_apply or self._observe_limit is not None) or self._apply_attempted or
+                self._bound is None or (self._observe_limit is not None and self._observed>=self._observe_limit)):
                 raise RuntimeError('motion preflight unavailable')
             value=motion_value(raw);digest=motion_digest(value)
             identity=(value['epoch'],value['generation'],value['index'],value['sequence'],digest)
@@ -177,6 +180,34 @@ class ExperimentalParticipantMotionIPC:
             expected='|'.join(['R',self._lease,self._attempt,'APPLIED',*fields]).encode('ascii')
             if data!=expected:raise ValueError('motion apply response mismatch')
             self._quiet(deadline,'writing');self._state='ready';return True
+        except BaseException:self._fail();raise
+    def observe(self,raw):
+        """Request one correlated immediate measurement after a guarded write.
+
+        The reply is a point observation, not proof of continuing agreement.
+        Error or timeout leaves any game-side write uncertain; never retry.
+        """
+        if self._state!='ready' or threading.get_ident()!=self._owner:
+            self._fail();raise RuntimeError('motion IPC reentrant or unavailable')
+        self._state='observing';deadline=time.monotonic()+self._timeout
+        try:
+            if self._observe_limit is None or self._observed>=self._observe_limit or self._bound is None:
+                raise RuntimeError('motion observe unavailable')
+            value=motion_value(raw);digest=motion_digest(value)
+            identity=(value['epoch'],value['generation'],value['index'],value['sequence'],digest)
+            if identity!=self._bound or identity!=self._preflight_ready:
+                raise ValueError('motion observe lacks current READY preflight')
+            self._preflight_ready=None
+            if self._next>=0xffffffffffffffff:raise RuntimeError('motion request capacity')
+            self._next+=1;request=self._prefix+format(self._next,'016x')
+            fields=[request,value['epoch'],value['generation'],str(value['index']),str(value['sequence']),digest]
+            payload='|'.join(['M',self._lease,self._attempt,'OBSERVE',*fields]).encode('ascii')
+            self._quiet(deadline,'observing')
+            if self._sock.send(payload)!=len(payload):raise RuntimeError('motion observe send failed')
+            self._check(deadline,'observing');data,_=self._recv(deadline,'observing')
+            expected='|'.join(['R',self._lease,self._attempt,'OBSERVED',*fields]).encode('ascii')
+            if data!=expected:raise ValueError('motion observe response mismatch')
+            self._quiet(deadline,'observing');self._observed+=1;self._state='ready';return True
         except BaseException:self._fail();raise
     def close(self):
         if threading.get_ident()!=self._owner or self._state not in ('new','ready'):

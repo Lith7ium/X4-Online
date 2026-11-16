@@ -25,11 +25,11 @@ while time.monotonic()<end:
    m.send(('R|'+'8'*32+'|'+'9'*32+'|READY|'+'a'*32+'|'+'d'*32).encode())
   elif s is j:raise AssertionError('job operation forbidden')
   else:
-   assert v[0]=='M' and v[3] in ('BIND','PREFLIGHT','APPLY')
+   assert v[0]=='M' and v[3] in ('BIND','PREFLIGHT','APPLY','OBSERVE')
    with open(os.environ['LOG'],'a') as f:f.write(v[3]+':'+v[8]+'\n')
-   kind={'BIND':'BOUND','PREFLIGHT':'PREFLIGHTED','APPLY':'APPLIED'}[v[3]]
+   kind={'BIND':'BOUND','PREFLIGHT':'PREFLIGHTED','APPLY':'APPLIED','OBSERVE':'OBSERVED'}[v[3]]
    fields=v[4:11] if kind=='BOUND' else v[4:]
-   if kind=='PREFLIGHTED':fields=fields+[os.environ.get('STATUS','READY')]
+   if kind=='PREFLIGHTED':fields=fields+['NEAR' if os.environ.get('STATUS')=='NEAR_SECOND' and v[8]=='3' else os.environ.get('STATUS','READY') if os.environ.get('STATUS')!='NEAR_SECOND' else 'READY']
    m.send(('|'.join(['R','8'*32,'9'*32,kind]+fields)).encode())
 '''
 class Worker(unittest.TestCase):
@@ -40,7 +40,7 @@ class Worker(unittest.TestCase):
   for s in (cc,cj,ca,sc,sj,sm):self.addCleanup(s.close)
   x,y=socket.socketpair();self.addCleanup(x.close);self.addCleanup(y.close)
   fake=subprocess.Popen([sys.executable,'-c',SCRIPT],env=dict(os.environ,P=str(cc.getsockname()[1]),J=str(cj.getsockname()[1]),A=str(ca.getsockname()[1])))
-  server=subprocess.Popen([sys.executable,'-c',SERVER],env=dict(os.environ,P=str(sc.getsockname()[1]),J=str(sj.getsockname()[1]),M=str(sm.getsockname()[1]),LOG=str(log),STATUS='NEAR' if status=='NEAR' else 'READY'))
+  server=subprocess.Popen([sys.executable,'-c',SERVER],env=dict(os.environ,P=str(sc.getsockname()[1]),J=str(sj.getsockname()[1]),M=str(sm.getsockname()[1]),LOG=str(log),STATUS='NEAR' if status=='NEAR' else ('NEAR_SECOND' if status=='STREAM_SKIP' else 'READY')))
   def cleanup():
    for proc in (fake,server):
     if proc.poll() is None:proc.terminate()
@@ -54,8 +54,26 @@ class Worker(unittest.TestCase):
      'server_snapshot':{'role':'server','nonce':'0'*32,'epoch':'a'*32,'index':1318,'code':'WRG-830',
       'macro':'ship_ter_m_corvette_01_a_macro','faction':'pioneers','sector_macro':'cluster_115_sector001_macro',
      'game_time':3.,'position':[0. if status=='EXHAUST' else (-4.75 if status=='FOURTH' else -4.95),0.,0.]}}
+  if status in ('STREAM','STREAM_FAIL','STREAM_SKIP'):c['observe_limit']=2
   c=worker.config(json.dumps(c).encode())
-  if status=='READY':
+  if status=='STREAM':
+   result=worker.run(cc,cj,ca,sc,sj,sm,x,c)
+   self.assertEqual(result['observed_sequences'],[2,3]);self.assertTrue(result['server_observe_receipts'])
+   self.assertEqual(log.read_text().splitlines(),['RESUME','BIND:2','PREFLIGHT:2','OBSERVE:2','BIND:3','PREFLIGHT:3','OBSERVE:3'])
+  elif status=='STREAM_SKIP':
+   result=worker.run(cc,cj,ca,sc,sj,sm,x,c)
+   self.assertEqual(result['observed_sequences'],[2,4]);self.assertEqual(result['skipped_near_sequences'],[3])
+   self.assertEqual(log.read_text().splitlines(),['RESUME','BIND:2','PREFLIGHT:2','OBSERVE:2','BIND:3','PREFLIGHT:3','BIND:4','PREFLIGHT:4','OBSERVE:4'])
+  elif status=='STREAM_FAIL':
+   original=worker.ExperimentalParticipantMotionIPC.observe
+   def stop(obj,sample):
+    result=original(obj,sample)
+    if sample['sequence']==2:raise RuntimeError('uncertain write')
+    return result
+   with patch.object(worker.ExperimentalParticipantMotionIPC,'observe',stop):
+    with self.assertRaises(Exception):worker.run(cc,cj,ca,sc,sj,sm,x,c)
+   self.assertEqual(log.read_text().splitlines(),['RESUME','BIND:2','PREFLIGHT:2','OBSERVE:2'])
+  elif status=='READY':
    result=worker.run(cc,cj,ca,sc,sj,sm,x,c);self.assertTrue(result['server_apply_receipt'])
    self.assertEqual(result['samples'][1]['sequence'],2)
    self.assertEqual(log.read_text().splitlines(),['RESUME','BIND:2','PREFLIGHT:2','APPLY:2'])
@@ -90,6 +108,9 @@ class Worker(unittest.TestCase):
    with patch.object(adapter,'poll',broken_poll),patch.object(worker.ExperimentalParticipantMotionIPC,'preflight',after_preflight):
     with self.assertRaises(Exception):worker.run(cc,cj,ca,sc,sj,sm,x,c)
    self.assertEqual(log.read_text().splitlines(),['RESUME','BIND:2','PREFLIGHT:2'])
+ def test_stream_observes_two_samples_in_order(self):self.case('STREAM')
+ def test_stream_skips_near_without_write(self):self.case('STREAM_SKIP')
+ def test_stream_failure_never_retries(self):self.case('STREAM_FAIL')
  def test_ready_applies_only_second_sample(self):self.case('READY')
  def test_near_never_applies(self):self.case('NEAR')
  def test_participant_failure_after_preflight_never_applies(self):self.case('FAIL_THREAD')

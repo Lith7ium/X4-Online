@@ -89,7 +89,7 @@ function X4LAN_PARTICIPANT_JOB_TICK()
     if cfg.authority_motion_apply_enabled==true then
      assert(saved and type(X4LAN_SAVED_MOTION_APPLY)=='table')
      saved_apply={enabled=true,module=X4LAN_SAVED_MOTION_APPLY,
-      immediate_readback=cfg.authority_motion_apply_immediate_readback,log=function(line)
+      immediate_readback=cfg.authority_motion_apply_immediate_readback,observe_limit=cfg.authority_motion_apply_observe_limit,log=function(line)
       if type(line)~='string' or #line>512 or not line:match('^[%w%._%+%- ]+$') then return false end
       local kind=line:match('^(%u+[%u_]*) ')
       if kind~='INTENT' and kind~='WRITE_ENTERED' and kind~='IMMEDIATE' and kind~='POST_OBSERVED' and kind~='READBACK' and kind~='PREFLIGHT' then return false end
