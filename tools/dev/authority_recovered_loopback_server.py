@@ -158,6 +158,13 @@ def diagnostic_client_motion(args, source_enabled):
     return enabled
 
 
+def diagnostic_long_motion(args, witness_join, source_enabled, client_motion):
+    enabled = getattr(args, 'diagnostic_long_motion', False)
+    if type(enabled) is not bool or (enabled and not (witness_join and source_enabled and client_motion)):
+        raise ValueError('long motion requires one private witness join and client motion')
+    return enabled
+
+
 def diagnostic_guard_timing(args, source_enabled):
     enabled = getattr(args, 'diagnostic_guard_timing', False)
     if type(enabled) is not bool or (enabled and source_enabled is not True):
@@ -484,6 +491,7 @@ def run(args):
         source_enabled=source_index is not None or source_candidates is not None
         client_motion=diagnostic_client_motion(args,source_enabled)
         guard_timing=diagnostic_guard_timing(args,source_enabled)
+        long_motion=diagnostic_long_motion(args,witness_join,source_enabled,client_motion)
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage)
@@ -781,13 +789,17 @@ def run(args):
                         # X4's source owner has its own 120-second pending-operation
                         # deadlines, including binding begun at resume. A longer
                         # host budget does not extend those or guarantee completion.
+                        budgets = None
+                        if client_motion:
+                            budgets = {'total': 2400 if long_motion else 1200, 'source_bind_stage': 120,
+                                       'source_operation': 600 if long_motion else 300,
+                                       'tcp_send': 480 if long_motion else 240, 'client_bind': client_motion_timeout}
                         return run_source_probe_with_progress(result,authority_recovered_source_probe.run,sock=source_sock,
                             settings=source_context,index=source_index,baseline=saved,guard=guard,pump=pump,
                             active=active,host=host,world=world,identity=identity,verify=verify_diagnostic,
                             verify_process=check,candidate_indices=source_candidates,client_motion=client_motion,
-                            verify_stopped=verify if client_motion else None,
-                            diagnostic_timeouts={'total':1200, 'source_bind_stage':120, 'source_operation':300, 'tcp_send':240,
-                                'client_bind':client_motion_timeout} if client_motion else None)
+                            verify_stopped=verify if client_motion else None, diagnostic_timeouts=budgets,
+                            private_long_diagnostic=long_motion)
                     result['source_diagnostic'],diagnostic_result=finish_source_diagnostic(
                         diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source,
                         verify_after=verify_motion_stopped if client_motion else None,
@@ -921,6 +933,7 @@ def main():
     source_options.add_argument('--diagnostic-source-index',type=int,help='private saved-registry index to sample')
     source_options.add_argument('--diagnostic-source-candidates',type=int,nargs='+',help='bounded explicit indices to inspect for a private source sample')
     parser.add_argument('--diagnostic-client-motion',action='store_true',help='also require two confirmed motion receipts by one private Linux client')
+    parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',

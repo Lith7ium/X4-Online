@@ -63,15 +63,15 @@ def bind_source_motion(sock, motion, *, process, lease, attempt, epoch, generati
 def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, generation,
                                world, client_guard, timeout=30, validate_sample=None,
                                saved_baseline=None, saved_guard=None, select_recipients=None,candidate_indices=None,
-                               bind_timeout=None):
+                               bind_timeout=None, private_long_diagnostic=False):
     """Opt-in single diagnostic source; no assertion of cross-X4 identity.
 
     `bind_timeout`, when supplied, is a per-stage limit: the binding helper
     starts a fresh deadline for bind and again for handoff. The caller must
     separately enforce its overall diagnostic and process deadlines.
     """
-    if not callable(client_guard) or not callable(select_recipients):
-        sock.close();raise ValueError('running client guard and interest selector required')
+    if not callable(client_guard) or not callable(select_recipients) or type(private_long_diagnostic) is not bool:
+        sock.close();raise ValueError('running client guard, interest selector and diagnostic option required')
     try:
         if motion._delivery._host._world is not world:
             raise ValueError('motion owner belongs to another world')
@@ -92,9 +92,10 @@ def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, 
                             timeout=timeout if bind_timeout is None else bind_timeout)
         if context() is not True or peer(sock.getpeername()) is not True:
             raise RuntimeError('running source context changed after handoff')
+        options = {'private_long_diagnostic': True} if private_long_diagnostic is True else {}
         return ExperimentalSourceMotionIPC(sock,motion,enabled=True,lease=lease,attempt=attempt,
             epoch=epoch,generation=generation,guard=context,validate_peer=peer,timeout=timeout,
             validate_sample=validate_sample,saved_baseline=saved_baseline,saved_guard=saved_guard,
-            select_recipients=select_recipients,stop_enabled=True,candidate_indices=candidate_indices)
+            select_recipients=select_recipients,stop_enabled=True,candidate_indices=candidate_indices, **options)
     except BaseException:
         sock.close();raise

@@ -171,11 +171,13 @@ class Probe(unittest.TestCase):
 
     def test_extended_diagnostic_timeouts_preserve_sequence_and_fences(self):
         for mode in ('complete', 'deadline', 'idle_fence', 'bad_order', 'wrong_client_timeout',
-                     'changed_client_timeout', 'changed_client_socket', 'wrong_sent_timeout'):
+                     'changed_client_timeout', 'changed_client_socket', 'wrong_sent_timeout',
+                     'long_complete', 'long_deadline', 'long_bad_order', 'long_delivery_failure'):
             with self.subTest(mode=mode):
                 events, kwargs, _ = self.context()
                 clock = [1.0]
-                kwargs['guard'].deadline = 1000
+                long_mode = mode.startswith('long_')
+                kwargs['guard'].deadline = 3000 if long_mode else 1000
                 def slow_saved_guard():
                     clock[0] += 10
                     return True
@@ -188,7 +190,10 @@ class Probe(unittest.TestCase):
                     'total': 600, 'source_bind_stage': 120, 'source_operation': 300,
                     'tcp_send': 240, 'client_bind': 25,
                 }
-                if mode == 'bad_order':
+                if long_mode:
+                    kwargs['private_long_diagnostic'] = True
+                    kwargs['diagnostic_timeouts'].update(total=2400, source_operation=600, tcp_send=480)
+                if mode in ('bad_order', 'long_bad_order'):
                     kwargs['diagnostic_timeouts']['tcp_send'] = 25
                 kwargs['world'].session.players = kwargs['world'].session.ready_players = ((1, 'one'),)
                 peer = {'stage': 'admitted', 'deadline': None}
@@ -199,9 +204,10 @@ class Probe(unittest.TestCase):
                 kwargs['active'].participant._motion_worker_timeout_snapshot = 24 if mode == 'wrong_sent_timeout' else 25
                 selected = {'id': 'peer_1', 'incarnation': 'f'*32}
                 class Delivery:
-                    def __init__(self, _host, *, enabled, timeout):
+                    def __init__(self, _host, *, enabled, timeout, **options):
                         self_test.assertTrue(enabled)
-                        self_test.assertEqual(timeout, 240)
+                        self_test.assertEqual(timeout, 480 if long_mode else 240)
+                        self_test.assertEqual(options, {'private_long_diagnostic': True} if long_mode else {})
                     def membership(self): return (selected,)
                 class Motion:
                     def __init__(self, *_args, **_kwargs): self._tracks = {}
@@ -220,7 +226,8 @@ class Probe(unittest.TestCase):
                         events.append('candidate')
                         self.checked()
                         clock[0] += 10
-                        if mode == 'deadline': clock[0] = 601
+                        if mode in ('deadline', 'long_deadline'):
+                            clock[0] = 2401 if long_mode else 601
                         if mode == 'idle_fence': peer['deadline'] = clock[0] + 300
                         if mode == 'changed_client_timeout':
                             kwargs['active'].participant.motion_worker_config['timeout'] = 24
@@ -238,6 +245,8 @@ class Probe(unittest.TestCase):
                                   'index': 1, 'sequence': self.sequence, 'sector_macro': 'test',
                                   'source_time': self.sequence, 'x': 0, 'y': 0, 'z': 0, 'velocity': None}
                         self.capture(sample)
+                        if mode == 'long_delivery_failure':
+                            raise RuntimeError('delivery result unconfirmed')
                         self.motion._tracks[('a'*32, 'd'*32, 1)] = {
                             'peer_samples': {('peer_1', 'f'*32): (self.sequence, motion_digest(sample))}}
                         return sample
@@ -247,7 +256,8 @@ class Probe(unittest.TestCase):
                 source = Source()
                 self_test = self
                 def bind(_sock, motion, **options):
-                    self.assertEqual(options['timeout'], 300)
+                    self.assertEqual(options['timeout'], 600 if long_mode else 300)
+                    self.assertEqual(options.get('private_long_diagnostic', False), long_mode)
                     self.assertEqual(options['bind_timeout'], 120)
                     self.assertTrue(options['client_guard']())
                     self.assertTrue(options['saved_guard']('a'*32, 2))
@@ -269,7 +279,7 @@ class Probe(unittest.TestCase):
                      patch.object(subject.os, 'stat', return_value=SimpleNamespace(st_dev=1, st_ino=2)), \
                      patch.object(subject.os, 'fstat', return_value=SimpleNamespace(st_dev=3, st_ino=4)), \
                      patch.object(subject, 'check_process'), patch.object(subject, 'socket_owner', return_value=True):
-                    if mode == 'complete':
+                    if mode in ('complete', 'long_complete'):
                         result = subject.run(**kwargs)
                         self.assertTrue(result['client_motion_receipts_confirmed'])
                         self.assertGreaterEqual(kwargs['guard'].check.call_count, 8)
@@ -279,7 +289,11 @@ class Probe(unittest.TestCase):
                     else:
                         with self.assertRaises((ValueError, RuntimeError, TimeoutError)):
                             subject.run(**kwargs)
-                        self.assertNotIn(('register', 1), events)
+                        if mode == 'long_delivery_failure':
+                            self.assertEqual(events.count('pull'), 1)
+                            self.assertIn(('register', 1), events)
+                        else:
+                            self.assertNotIn(('register', 1), events)
                         self.assertNotIn('source_stop', events)
 
     @unittest.skipUnless(sys.platform=='linux','Linux process and socket ownership required')

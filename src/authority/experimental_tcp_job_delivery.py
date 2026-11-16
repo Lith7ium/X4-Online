@@ -58,9 +58,11 @@ class ExperimentalTCPJobDelivery:
     only after its exact receipt. Caller owns source/gate fencing on any fault;
     previously accepted client effects and source actions cannot be rolled back.
     """
-    def __init__(self, host, *, enabled=False, timeout=30):
+    def __init__(self, host, *, enabled=False, timeout=30, private_long_diagnostic=False):
         if (enabled is not True or type(host) is not ExperimentalLocalHost or
-                type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300):
+                type(private_long_diagnostic) is not bool or
+                type(timeout) not in (int, float) or not math.isfinite(timeout) or
+                not 0 < timeout <= (480 if private_long_diagnostic else 300)):
             raise ValueError('enabled host and bounded timeout required')
         host._check()
         if host._control._job_delivery_owner is not None:

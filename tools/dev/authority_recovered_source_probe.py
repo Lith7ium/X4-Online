@@ -66,7 +66,7 @@ class SourceProbeDiagnostics:
 def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         identity, verify, verify_process, timeout=90, candidate_indices=None,
         client_motion=False, verify_stopped=None, diagnostics=None,
-        diagnostic_timeouts=None):
+        diagnostic_timeouts=None, private_long_diagnostic=False):
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -85,6 +85,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or any(type(value) is not int or value < 1 for value in identity)
             or not callable(verify) or not callable(verify_process)
             or type(client_motion) is not bool
+            or type(private_long_diagnostic) is not bool
+            or (private_long_diagnostic and not client_motion)
             or (client_motion and not callable(verify_stopped))
             or (diagnostics is not None and not isinstance(diagnostics, SourceProbeDiagnostics))
             or type(timeout) not in (int, float) or not math.isfinite(timeout)
@@ -97,6 +99,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or world.session.state != 'running' or world.session.pending is not None or
             world.session.baseline_id is not None):
         raise RuntimeError('running source does not retain the admitted checkpoint')
+    if private_long_diagnostic and diagnostic_timeouts is None:
+        raise ValueError('private long diagnostic requires explicit budgets')
     source_timeout = timeout
     delivery_timeout = 15
     if diagnostic_timeouts is not None:
@@ -111,7 +115,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         values = (total, source_bind, source_timeout, delivery_timeout, client_bind)
         if (any(type(value) not in (int, float) or not math.isfinite(value) for value in values) or
                 not 0 < client_bind <= 30 or not 0 < source_bind <= 120 or
-                not client_bind < delivery_timeout < source_timeout <= 300 or
+                not client_bind < delivery_timeout < source_timeout <= (600 if private_long_diagnostic else 300) or
+                delivery_timeout > (480 if private_long_diagnostic else 300) or
                 not source_timeout < total <= 86400):
             raise ValueError('invalid extended diagnostic timeout ordering')
         timeout = total
@@ -218,7 +223,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             # Parsed source sample staged locally; not a delivered receipt.
             diagnostics.prevalidated_samples += 1
         return True
-    delivery = ExperimentalTCPJobDelivery(host, enabled=True, timeout=delivery_timeout)
+    delivery_options = {'private_long_diagnostic': True} if private_long_diagnostic else {}
+    delivery = ExperimentalTCPJobDelivery(host, enabled=True, timeout=delivery_timeout, **delivery_options)
     motion = ExperimentalTCPMotion(delivery, enabled=True)
     selected_recipient = None
     if client_motion:
@@ -240,6 +246,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     if diagnostics is not None:
         diagnostics.enter('bind_source')
     binding_options = {} if diagnostic_timeouts is None else {'bind_timeout': source_bind}
+    if private_long_diagnostic:
+        binding_options['private_long_diagnostic'] = True
     source = checked_operation(bind_running_source_motion,
         sock, motion, process=process, lease=settings['lease'], attempt=settings['attempt'],
         epoch=settings['epoch'], generation=settings['generation'], world=world,

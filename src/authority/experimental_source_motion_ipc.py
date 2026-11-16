@@ -22,7 +22,7 @@ _MAX=9007199254740991
 
 class ExperimentalSourceMotionIPC:
     """One request at a time; no next pull until TCP recipients confirm."""
-    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None,saved_baseline=None,saved_guard=None,latest=False,saved_lifetime_guard=None,stop_enabled=False,candidate_indices=None):
+    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None,saved_baseline=None,saved_guard=None,latest=False,saved_lifetime_guard=None,stop_enabled=False,candidate_indices=None,private_long_diagnostic=False):
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
@@ -43,7 +43,10 @@ class ExperimentalSourceMotionIPC:
                 saved_guard is None or stop_enabled is not True or latest or
                 any(type(n) is not int or not 1<=n<=saved_baseline for n in candidate_indices) or
                 len(set(candidate_indices))!=len(candidate_indices))) or
-            type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=300 or
+            type(private_long_diagnostic) is not bool or
+            (private_long_diagnostic and (saved_guard is None or stop_enabled is not True or latest)) or
+            type(timeout) not in (int,float) or not math.isfinite(timeout) or
+            not 0<timeout<=(600 if private_long_diagnostic else 300) or
             timeout<=motion._delivery._timeout):
             raise ValueError('invalid source motion IPC')
         peer=sock.getpeername()

@@ -567,6 +567,20 @@ time, a particular file operation, or the helper's internal guard duration.
 Measurement itself has a small cost. The option changes no wire protocol,
 guard, or timeout and is not evidence of a native run.
 
+The optional `--diagnostic-long-motion` budget is limited to the private
+one-client witness join with client motion enabled. It changes only this
+experiment's enclosing source operation budget to 600 seconds, TCP delivery
+budget to 480 seconds, and probe budget to 2400 seconds, all still bounded by
+the supervisor deadline. Normal budgets remain unchanged. The source bind
+and X4-side pending-operation limits remain 120 seconds; the client bind limit
+remains 25 seconds. A timeout fails the experiment; unconfirmed effects are
+not retried. The supervisor enforces the private witness-join scope; the
+importable experimental TCP delivery and source IPC constructors accept an
+explicit `private_long_diagnostic` option but cannot independently prove that
+scope. Other direct callers must supply their own fencing and are not covered
+by this diagnostic. This option has offline coverage only and does not
+establish that a long native run will succeed or that motion is visible in X4.
+
 Two isolated Linux runs attempted this delivery experiment on 2026-11-16.
 `.local/authority-motion-client-once-01` stopped before launching client X4:
 the motion installer rejected ticket identifiers encoded with Lua decimal
