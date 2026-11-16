@@ -495,6 +495,14 @@ local bridge drains queued HELLOs before a new command. A loopback UDP test
 showed that enough queued HELLOs can otherwise drop the subsequent receipt;
 the precise cause of the native timeout was not recorded and is not proven.
 
+In a subsequent isolated run using the original source checks, the new server
+checkpoint was confirmed and a Linux client loaded it, observed its marker,
+and reported the registry epoch and 10,082 entries. The operator cancelled the
+run after more than 20 minutes without another visible join milestone while
+the supervisor was repeatedly validating the source. Owned-process cleanup
+was confirmed. Admission, resume and the final disconnect save were not
+established by this run.
+
 The `verify` witness path uses a pinned source guard after its full initial
 validation. Repeated checks hash the compressed source and inspect the
 confirmed pointers, manifest and file identities, without repeatedly parsing
