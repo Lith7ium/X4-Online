@@ -51,6 +51,7 @@
   </library>
   <cue name="Front" instantiate="true"><conditions><event_ui_triggered screen="'X4AuthorityShipEventCompare'" control="'Front'"/></conditions><actions>
    <do_if value="State.$faulted? and not State.$faulted and event.param3.$epoch == State.$epoch and event.param3.$generation == State.$generation and State.$inflight == 0">
+    <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch">
     <do_if value="State.$head le State.$tail">
      <do_if value="@State.$actors.{State.$head} and @State.$kinds.{State.$head}">
       <set_value name="State.$inflight" exact="State.$head"/>
@@ -59,14 +60,19 @@
      <do_else><set_value name="State.$faulted" exact="true"/><raise_lua_event name="'X4AuthorityShipEventCompare.Faulted'" param="'queued_actor_unavailable'"/></do_else>
     </do_if>
     <do_else><raise_lua_event name="'X4AuthorityShipEventCompare.Result'" param="'%s|empty'.[event.param3.$request_id]"/></do_else>
+    </do_if>
+    <do_else><set_value name="State.$faulted" exact="true"/><raise_lua_event name="'X4AuthorityShipEventCompare.Faulted'" param="'registry_unhealthy'"/></do_else>
    </do_if>
    <do_else><raise_lua_event name="'X4AuthorityShipEventCompare.Faulted'" param="'front_refused'"/></do_else>
   </actions></cue>
   <cue name="Ack" instantiate="true"><conditions><event_ui_triggered screen="'X4AuthorityShipEventCompare'" control="'Ack'"/></conditions><actions>
    <do_if value="State.$faulted? and not State.$faulted and event.param3.$epoch == State.$epoch and event.param3.$generation == State.$generation and State.$inflight == State.$head and event.param3.$sequence == State.$head">
+    <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch">
     <remove_value name="State.$actors.{State.$head}"/><remove_value name="State.$kinds.{State.$head}"/><remove_value name="State.$indices.{State.$head}"/>
     <set_value name="State.$head" exact="State.$head + 1"/><set_value name="State.$inflight" exact="0"/>
     <raise_lua_event name="'X4AuthorityShipEventCompare.Result'" param="'%s|acked|%s'.[event.param3.$request_id,event.param3.$sequence]"/>
+    </do_if>
+    <do_else><set_value name="State.$faulted" exact="true"/><raise_lua_event name="'X4AuthorityShipEventCompare.Faulted'" param="'registry_unhealthy'"/></do_else>
    </do_if>
    <do_else><raise_lua_event name="'X4AuthorityShipEventCompare.Faulted'" param="'ack_refused'"/></do_else>
   </actions></cue>

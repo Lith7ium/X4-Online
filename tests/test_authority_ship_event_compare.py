@@ -25,3 +25,6 @@ class Compare(unittest.TestCase):
     self.assertNotIn('X4AuthorityShipRegistry',node.get('name',''))
   for label in ("'god'","'player_build'","'activation'","'galaxy_enter'","'capture_or_overflow'","'registry_binding'"):
    self.assertIn(label,text)
+  for name in ('Front','Ack'):
+   cue=next(c for c in r.findall('./cues/cue') if c.get('name')==name)
+   self.assertIn('registry_unhealthy',ET.tostring(cue,encoding='unicode'))

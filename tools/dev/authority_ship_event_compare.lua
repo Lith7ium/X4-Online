@@ -58,6 +58,7 @@ function M.new(o)
     local seq,idx=decimal(p[3],1),decimal(p[5],0)
     assert(seq==sequence and idx and (p[4]=='god' or p[4]=='player_build' or p[4]=='activation' or p[4]=='galaxy_enter'),'invalid_row')
     local k=cb.actor_key(p[6]);assert(type(k)=='string' and #k<=20 and k:match('^[1-9]%d*$'),'actor_key')
+    assert(state=='front' and check(),'actor_guard')
     local row={sequence=sequence,kind=p[4],registry_index=idx,actor_key=k}
     assert(cb.report(row)==true and row.sequence==sequence and row.kind==p[4] and row.registry_index==idx and row.actor_key==k,'report')
     assert(state=='front' and check(),'report_guard')
