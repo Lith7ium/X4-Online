@@ -18,10 +18,10 @@ function M.new(c)
    clock=GetCurRealTime,guard=guard,observe=function()return C.IsGamePaused(),tonumber(C.GetCurrentGameTime())end,pause=Pause,resume=Unpause,
    baseline_request=function(epoch,request_id)return AddUITriggeredEvent('X4AuthorityCensusJobBaseline','Read',{epoch=epoch,request_id=request_id})~=false end,
    log=function(v)DebugError('[X4LAN] AUTH_CENSUS_JOB '..(v=='FAULT' and 'ERROR FAULT' or v))end,
-   host_factory=function(report,fault)
+   host_factory=function(report,fault,no_event)
     return assert(c.host.new_x4({enabled=true,epoch=c.epoch,baseline={},expose_actor=true,attach_saved_registry=true,exclusive_registry_consumer=true,
      expected_last=10054,expected_save_path=c.expected_save_path,capacity=128,window=c.window,timeout=10,probe=c.probe,
-     report=report,done=function()return false end,fault=fault}))
+     report=report,done=no_event,fault=fault}))
    end,
    descriptor_factory=function(row,actor)
     return assert(c.descriptor.new_x4({enabled=true,core=c.descriptor_core,epoch=c.epoch,request_id=c.nonce,timeout=5,row=row,actor=actor,

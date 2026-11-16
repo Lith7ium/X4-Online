@@ -38,6 +38,14 @@ function M.new(o)
   return true
  end
  local function fault()fail()end
+ local function no_event(r)
+  if failed or phase~='running' or row~=nil or type(r)~='table' or r.registry_mode~='attached' or
+   r.baseline_count~=10054 or r.baseline_known_count~=0 or r.birth_confirmed~=false or r.delivery_confirmed~=false or
+   r.coverage~='unknown' or not finite(r.observed) or r.observed<0 or r.observed>2147483647 or r.observed%1~=0 or r.acknowledged~=r.observed or
+   (r.observed==0 and r.classification~='inconclusive_no_events') or
+   (r.observed>0 and r.classification~='local_activations_observed') then return fail() end
+  phase='no_event_stop';return true
+ end
  local function report(r,a)
   if failed or phase~='running' or type(r)~='table' or r.epoch~=o.epoch or not natural(r.index) or not natural(r.sequence) or
    r.birth_confirmed~=false or r.delivery_confirmed~=false then return fail() end
@@ -99,11 +107,11 @@ function M.new(o)
     local success,t=pcall(o.clock);assert(success and finite(t) and t>=0);last=t;deadline=t+o.timeout
     local valid,p,g=check(true);assert(valid);paused_game=g
     if o.role=='server' then
-     host=assert(o.host_factory(report,fault));phase='attaching';assert(host:start())
+     host=assert(o.host_factory(report,fault,no_event));phase='attaching';assert(host:start())
     else phase='client_baseline';assert(o.baseline_request(o.epoch,o.nonce)==true) end
    end
    local expected=true
-   if phase=='running' or phase=='captured' then expected=false elseif phase=='resuming' or phase=='pause_wait' then expected=nil end
+   if phase=='running' or phase=='captured' or phase=='no_event_stop' then expected=false elseif phase=='resuming' or phase=='pause_wait' or phase=='no_event_wait' then expected=nil end
    assert(check(expected))
    for _=1,4 do local packet=o.net:receive();if packet==nil then break end;assert(command(packet)) end
    if phase=='attaching' then
@@ -118,6 +126,12 @@ function M.new(o)
     assert(host:state()=='waiting');local good=pcall(o.pause);assert(good);phase='pause_wait'
    elseif phase=='pause_wait' then
     local valid,p,g=check(nil);assert(valid);if p then paused_game=g;phase='descriptor_start' end
+   elseif phase=='no_event_stop' then
+    assert(host:state()=='done');local good=pcall(o.pause);assert(good);phase='no_event_wait'
+   elseif phase=='no_event_wait' then
+    local valid,p,g=check(nil);assert(valid);if p then paused_game=g;phase='no_event_pending' end
+   elseif phase=='no_event_pending' then
+    assert(check(true) and host:state()=='done');phase='inconclusive';assert(emit('NO_EVENT',nil,true))
    elseif phase=='descriptor_start' then
     assert(check(true) and host:state()=='waiting');desc=assert(o.descriptor_factory(row,actor));phase='descriptor_wait';assert(desc:start())
    elseif phase=='descriptor_wait' then assert(check(true) and host:state()=='waiting' and desc:tick())
@@ -127,12 +141,13 @@ function M.new(o)
    elseif phase=='witness_wait' then assert(check(true) and witness:tick() and (not host or host:state()=='waiting'))
    elseif phase=='witness_pending' then
     assert(check(true) and (not host or host:state()=='waiting'));phase='finished';assert(emit('WITNESS_OK',table.concat({string.format('%.0f',jobseq),string.format('%.0f',windex),wmacro},'|'),true))
-   elseif phase=='descriptor_sent' or phase=='finished' or phase=='ready' or phase=='client_baseline' then
+   elseif phase=='descriptor_sent' or phase=='finished' or phase=='ready' or phase=='client_baseline' or phase=='inconclusive' then
     if host and (phase=='descriptor_sent' or phase=='finished') then assert(host:state()=='waiting') end
+    if phase=='inconclusive' then assert(host and host:state()=='done') end
    else error('invalid phase') end
    if pending_check then
     local n=pending_check;pending_check=nil;local wanted=true
-    if phase=='running' or phase=='captured' then wanted=false elseif phase=='resuming' or phase=='pause_wait' then wanted=nil end
+    if phase=='running' or phase=='captured' or phase=='no_event_stop' then wanted=false elseif phase=='resuming' or phase=='pause_wait' or phase=='no_event_wait' then wanted=nil end
     assert(emit('CHECKED',tostring(n),wanted))
    end
   end)

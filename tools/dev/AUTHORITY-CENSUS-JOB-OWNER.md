@@ -30,7 +30,15 @@ fault, overflow, lost pause, timeout or uncertain operation fails the case.
 
 Only a guarded tick after the descriptor callback emits the descriptor. It
 contains `jobseq`, index, macro, faction, sector macro and finite sector
-position, never a local actor or sector handle. The source then accepts one
+position, never a local actor or sector handle. If the source observation window finishes normally with no new index 10055,
+whether no activations or only already-known registry actors were observed,
+the owner validates the drained host summary, pauses, and emits NO_EVENT after
+a guarded tick. This is an inconclusive result, never success. Queue/registry
+faults, an invalid summary, timeout or lost pause remain FAULT and must not be
+relabelled NO_EVENT. The supervisor must complete both-process fencing and final
+log validation before reporting inconclusive.
+
+The source then accepts one
 WITNESS command only if the job sequence and sector macro match that descriptor.
 The client accepts its own one WITNESS while paused. The supervisor must select
 the **same** saved witness index and sector macro from its independently
@@ -52,6 +60,7 @@ not an Internet authentication design. X4 sends:
 CENSUS|lease|role|attempt|epoch|READY
 CENSUS|lease|server|attempt|epoch|DESCRIPTOR|jobseq|10055|macro|faction|sector_macro|x|y|z
 CENSUS|lease|role|attempt|epoch|WITNESS_OK|jobseq|saved_index|sector_macro
+CENSUS|lease|server|attempt|epoch|NO_EVENT
 CENSUS|lease|role|attempt|epoch|CHECKED|counter
 CENSUS|lease|role|attempt|epoch|FAULT
 ```
@@ -63,7 +72,7 @@ increasing positive decimals up to 2147483647, with at most one pending in an
 update. Unknown, duplicate, stale or unexpected packets fault the owner. Native
 UDP may silently lose datagrams; no mutating request is automatically retried.
 Value-free `AUTH_CENSUS_JOB` log markers are READY, DESCRIPTOR, WITNESS_OK,
-CHECKED and ERROR FAULT. Fault reporting and the sampled checks are best effort,
+CHECKED, NO_EVENT and ERROR FAULT. Fault reporting and the sampled checks are best effort,
 not atomic or continuous liveness guarantees. Continue ticking and monitoring
 through shutdown; late callbacks are failures.
 

@@ -1,19 +1,26 @@
 local M=dofile('tools/dev/authority_census_job_owner.lua');assert(M.new({})==nil)
 local epoch,attempt,lease,nonce=string.rep('a',32),string.rep('b',32),string.rep('c',32),string.rep('d',32)
 local function rig(role,opt)
- opt=opt or {};local now,game,paused=1,30,true;local input,output,logs={},{},{};local app,report,fault;local actor={id='private'}
+ opt=opt or {};local now,game,paused=1,30,true;local input,output,logs={},{},{};local app,report,fault,done;local hostphase='waiting';local actor={id='private'}
  local net={send=function(_,v)output[#output+1]=v;return true end,receive=function()return table.remove(input,1)end,close=function()end}
- local host={start=function()return true end,state=function()return 'waiting' end,tick=function()
+ local host={start=function()return true end,state=function()return hostphase end,tick=function()
   if opt.attach~=false then
    if not opt.started then opt.started=true;return true,'attached_wait_running' end
-   if not opt.reported then opt.reported=true;assert(report({epoch=epoch,index=10055,sequence=2,classification='new_registry_entry',birth_confirmed=false,delivery_confirmed=false},actor)) end
+   if not opt.reported then opt.reported=true
+    if opt.no_event then
+     local n=opt.no_event=='empty' and 0 or 1
+     if n==1 then assert(report({epoch=epoch,index=42,sequence=1,classification='previously_unobserved_existing_index',birth_confirmed=false,delivery_confirmed=false},actor)) end
+     hostphase='done';assert(done({registry_mode='attached',baseline_count=10054,baseline_known_count=0,birth_confirmed=false,delivery_confirmed=false,coverage='unknown',observed=n,acknowledged=opt.bad_count and n+1 or n,classification=n==0 and 'inconclusive_no_events' or 'local_activations_observed'}));return true,'done'
+    end
+    assert(report({epoch=epoch,index=10055,sequence=2,classification='new_registry_entry',birth_confirmed=false,delivery_confirmed=false},actor))
+   end
   end
   return true,'waiting'
  end}
  local cfg={enabled=true,role=role,lease=lease,epoch=epoch,attempt=attempt,nonce=nonce,timeout=100,window=30,net=net,
   clock=function()return now end,observe=function()return paused,game end,guard=function()return not opt.bad_guard end,
   pause=function()paused=true end,resume=function()paused=false;game=31 end,baseline_request=function(e,n)assert(e==epoch and n==nonce);return true end,log=function(s)logs[#logs+1]=s end,
-  host_factory=function(r,f)report,fault=r,f;return host end,
+  host_factory=function(r,f,d)report,fault,done=r,f,d;return host end,
   descriptor_factory=function(r,a)assert(r.sequence==2 and r.index==10055 and a==actor);return {start=function()return true end,tick=function()return true end,close=function()if opt.descriptor_close_error then error('close') end;if opt.descriptor_close_reenter then app:fault() end;return true end,
    response=function(_,v)if opt.descriptor_error then error('response') end;if v~='ok' then return false end;return true,{epoch=epoch,index=10055,sequence=2,macro='ship_macro',owner='argon',sector_macro='sector_a',x=1,y=2,z=3}end} end,
   witness_factory=function(index,macro)return {start=function()return true end,tick=function()return true end,close=function()if opt.close_error then error('close') end;if opt.close_reenter then app:fault() end;return true end,
@@ -42,4 +49,7 @@ local missing,_,missing_out,_,_,_,setclock=rig('client');assert(missing:tick());
 for _,kind in ipairs({'witness_error','close_error'})do local flags={[kind]=true};local x,xi,xo,xl,xp=rig('client',flags);assert(x:tick());assert(x:baseline_event(nonce..'|'..epoch..'|10054|ok'));assert(x:tick());xi[1]=xp..'|WITNESS|2|41|sector_a';assert(x:tick());assert(not x:witness_event('ok') and x:state()=='failed' and xl[#xl]=='FAULT');for _,label in ipairs(xl)do assert(label~='WITNESS_OK')end end
 local re,rei,_,rel,rep=rig('client',{close_reenter=true});assert(re:tick());assert(re:baseline_event(nonce..'|'..epoch..'|10054|ok'));assert(re:tick());rei[1]=rep..'|WITNESS|2|41|sector_a';assert(re:tick());assert(not re:witness_event('ok') and re:state()=='failed' and rel[#rel]=='FAULT')
 for _,kind in ipairs({'descriptor_error','descriptor_close_error','descriptor_close_reenter'})do local flags={[kind]=true};local x,xi,xo,xl,xp=rig('server',flags);assert(x:tick());xi[1]=xp..'|START';assert(x:tick());assert(x:tick());assert(x:tick());assert(x:tick());assert(x:tick() and x:state()=='descriptor_wait');assert(not x:descriptor_event('ok') and x:state()=='failed' and xl[#xl]=='FAULT');for _,label in ipairs(xl)do assert(label~='DESCRIPTOR')end end
+for _,case in ipairs({'empty','existing'})do local n,ni,no,nl,np=rig('server',{no_event=case});assert(n:tick());ni[1]=np..'|START';assert(n:tick());assert(n:tick() and n:state()=='no_event_stop');assert(n:tick() and n:state()=='no_event_wait');assert(n:tick() and n:state()=='no_event_pending');assert(n:tick() and n:state()=='inconclusive' and nl[#nl]=='NO_EVENT' and no[#no]:match('|NO_EVENT$'));assert(n:tick());for _,v in ipairs(nl)do assert(v~='DESCRIPTOR' and v~='WITNESS_OK' and v~='FAULT')end end
+local badsum,bsi,_,bsl,bsp=rig('server',{no_event='empty',bad_count=true});assert(badsum:tick());bsi[1]=bsp..'|START';assert(badsum:tick());assert(not badsum:tick() and bsl[#bsl]=='FAULT');for _,v in ipairs(bsl)do assert(v~='NO_EVENT')end
+local faulted,fti,_,ftl,ftp,_,_,ftr=rig('server',{no_event='empty'});assert(faulted:tick());fti[1]=ftp..'|START';assert(faulted:tick());assert(faulted:tick() and faulted:state()=='no_event_stop');ftr();assert(faulted:state()=='failed' and ftl[#ftl]=='FAULT');for _,v in ipairs(ftl)do assert(v~='NO_EVENT')end
 print('census owner tests passed')
