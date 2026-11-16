@@ -3,9 +3,49 @@
 
 use std::process::ExitCode;
 
-use x4mp_agent::elf::FileImage;
+use x4mp_agent::elf::{FileImage, Load};
 use x4mp_agent::pinned::{self, Image};
 use x4mp_agent::sha256::{hex, Sha256};
+
+/// Check the 4096-byte mappings used by the fixed30 agent against PT_LOAD
+/// memory ranges, including BSS and the partial pages occupied by a segment.
+fn report_constant_pages(loads: &[Load], pages: &[u64], mut report: impl FnMut(bool, String)) -> usize {
+    const PAGE_SIZE: u64 = 4096;
+    let mut failures = 0;
+    for &page in pages {
+        let Some(page_end) = page.checked_add(PAGE_SIZE).filter(|_| page % PAGE_SIZE == 0) else {
+            report(false, format!("FAIL scheduler const page 0x{page:x} has an invalid range"));
+            failures += 1;
+            continue;
+        };
+        let mut overlap = false;
+        let mut invalid = false;
+        for load in loads {
+            if load.memsz == 0 {
+                continue;
+            }
+            let Some(segment_end) = load.vaddr.checked_add(load.memsz)
+                .and_then(|end| end.checked_add(PAGE_SIZE - 1))
+                .map(|end| end & !(PAGE_SIZE - 1)) else {
+                invalid = true;
+                break;
+            };
+            let segment_start = load.vaddr & !(PAGE_SIZE - 1);
+            overlap |= page < segment_end && segment_start < page_end;
+        }
+        if invalid {
+            report(false, "FAIL scheduler image has an invalid segment range".to_string());
+            failures += 1;
+        } else if overlap {
+            report(false, format!("FAIL scheduler const page 0x{page:x} overlaps the image"));
+            failures += 1;
+        }
+    }
+    if failures == 0 {
+        report(true, "PASS scheduler const page candidates outside the image".to_string());
+    }
+    failures
+}
 
 fn main() -> ExitCode {
     let Some(path) = std::env::args_os().nth(1) else {
@@ -64,17 +104,66 @@ fn main() -> ExitCode {
         }
     }
     // fixed30's constant page must lie outside every PT_LOAD segment of the image.
-    for &page in &pinned::CONST_PAGE_CANDIDATES {
-        if image.loads.iter().any(|l| page < l.vaddr + l.filesz.max(1) && l.vaddr < page + 4096) {
-            eprintln!("FAIL scheduler const page 0x{page:x} overlaps the image");
-            failures += 1;
-        }
-    }
-    println!("PASS scheduler const page candidates outside the image");
+    failures += report_constant_pages(&image.loads, &pinned::CONST_PAGE_CANDIDATES, |passed, message| {
+        if passed { println!("{message}"); } else { eprintln!("{message}"); }
+    });
     if failures == 0 {
         println!("PASS executable {} build {}; no files modified", pinned::GAME_VERSION, pinned::STEAM_BUILD);
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_pass_only_when_every_page_is_outside_the_image() {
+        let load = Load { vaddr: 0x3000, offset: 0, filesz: 0x1000, memsz: 0x1000 };
+        let mut messages = Vec::new();
+        let failures = report_constant_pages(&[load], &[0x1000, 0x4000], |passed, message| {
+            messages.push((passed, message));
+        });
+        assert_eq!(failures, 0);
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].0 && messages[0].1.starts_with("PASS"));
+
+        messages.clear();
+        let failures = report_constant_pages(&[load], &[0x1000, 0x3000], |passed, message| {
+            messages.push((passed, message));
+        });
+        assert_eq!(failures, 1);
+        assert_eq!(messages.len(), 1);
+        assert!(!messages[0].0 && messages[0].1.contains("overlaps"));
+    }
+
+    #[test]
+    fn invalid_segment_or_page_ranges_do_not_report_pass() {
+        let invalid_load = Load { vaddr: u64::MAX, offset: 0, filesz: 2, memsz: 2 };
+        for (loads, pages) in [(vec![invalid_load], vec![0x1000]), (vec![], vec![u64::MAX]),
+                               (vec![], vec![0x1001])] {
+            let mut messages = Vec::new();
+            assert_eq!(report_constant_pages(&loads, &pages, |passed, message| {
+                messages.push((passed, message));
+            }), 1);
+            assert_eq!(messages.len(), 1);
+            assert!(!messages[0].0 && messages[0].1.contains("invalid"));
+        }
+    }
+
+    #[test]
+    fn rejects_bss_and_partial_page_overlaps() {
+        let bss_load = Load { vaddr: 0x3000, offset: 0, filesz: 0x1000, memsz: 0x3000 };
+        let partial_load = Load { vaddr: 0x3001, offset: 0, filesz: 1, memsz: 1 };
+        for (load, candidate) in [(bss_load, 0x4000), (partial_load, 0x3000)] {
+            let mut messages = Vec::new();
+            assert_eq!(report_constant_pages(&[load], &[candidate], |passed, message| {
+                messages.push((passed, message));
+            }), 1);
+            assert_eq!(messages.len(), 1);
+            assert!(!messages[0].0 && messages[0].1.contains("overlaps"));
+        }
     }
 }
