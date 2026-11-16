@@ -2,16 +2,22 @@
 from pathlib import Path
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
 import authority_load_live as load
+import authority_download_load_live as download
 import authority_recovered_client_motion_install as subject
+import authority_recovered_client_registry as registry
+import authority_recovered_server_client as recovered_client
+import authority_two_x4_identity_live as identity
 
 class Install(unittest.TestCase):
  def setUp(self):
@@ -22,9 +28,15 @@ class Install(unittest.TestCase):
   self.ui.mkdir(parents=True);self.md.mkdir()
   self.status=('ready','c'*32,100,'d'*64)
   self.settings={'port':2345,'lease':'1'*32,'attempt':'2'*32,'generation':'3'*32,'nonce':'4'*32,'router_generation':'5'*32,'timeout':5,'index':42}
-  cfg='X4LAN_CONFIG = {test_profile="45841",authority_download_load=true,authority_load_save_path='+load.lua_literal(str(self.profile/'save'))
-  cfg+=',authority_ticket={world_epoch="'+'e'*32+'",attempt_id="'+'f'*32+'"},authority_participant_port=1234,authority_participant_lease="'+'a'*32+'"}\n'
-  (self.ui/'config.lua').write_text(cfg)
+  # Use the real production load installer: it encodes ticket strings as Lua
+  # decimal byte escapes, which hand-written hex fixtures previously missed.
+  (self.ui/'native_gate_snapshot.lua').write_text('')
+  (self.md/'native_gate_battle.xml').write_text('')
+  (self.ui/'config.lua').write_text('')
+  ticket={'world_epoch':'e'*32,'connection_handle':1,'baseline_id':2,'load_generation':1,
+          'checkpoint_id':'checkpoint-'+'6'*32,'sha256':'7'*64,'attempt_id':'f'*32,'slot':'save_009'}
+  config=download.install_probe(self.case,self.profile,ticket)
+  cfg=config.read_text();config.write_text(cfg[:-2]+',authority_participant_port=1234,authority_participant_lease="'+'a'*32+'"}\n')
   (self.lab/'ui.xml').write_text('<ui>\n    <file name="ui/authority_download_load_probe.lua" />\n    <file name="ui/authority_two_x4_participant_probe.lua" />\n</ui>\n')
   (self.ui/'authority_two_x4_participant_probe.lua').write_text((ROOT/'tools/dev/authority_two_x4_participant_probe.lua').read_text())
   code=(ROOT/'tools/dev/authority_download_load_probe.lua').read_text()
@@ -54,13 +66,46 @@ class Install(unittest.TestCase):
  def test_refusals_do_not_mutate_input_files(self):
   files=(self.ui/'config.lua',self.lab/'ui.xml',self.ui/'authority_two_x4_participant_probe.lua',self.ui/'authority_download_load_probe.lua')
   original=[p.read_bytes() for p in files]
-  for key,value in (('port',1234),('index',101),('nonce','1'*32),('lease','a'*32),('timeout',float('nan'))):
+  for key,value in (('port',1234),('index',101),('nonce','1'*32),('lease','a'*32),
+                    ('generation','e'*32),('attempt','f'*32),('timeout',float('nan'))):
    with self.subTest(key=key):
     old=self.settings[key];self.settings[key]=value
     with self.assertRaises(ValueError):self.install()
     self.settings[key]=old;self.assertEqual([p.read_bytes() for p in files],original)
   with self.assertRaises(ValueError):subject.install(self.case,self.profile,('ready','c'*32,99,'d'*64),self.settings)
   self.assertEqual([p.read_bytes() for p in files],original)
+ def test_ticket_token_encodings_and_ambiguity(self):
+  for value in ('e'*32,load.lua_literal('e'*32)[1:-1]):
+   self.assertEqual(subject.read_ticket_token('authority_ticket={world_epoch="'+value+'"}','world_epoch'),'e'*32)
+  for text in ('world_epoch="'+r'\999'*32+'"', 'world_epoch="'+r'\097'*31+'"',
+               'world_epoch="'+r'\122'*32+'"', 'world_epoch="'+'e'*32+'",world_epoch="'+'f'*32+'"'):
+   with self.subTest(text=text),self.assertRaises(ValueError):subject.read_ticket_token('ticket={'+text+'}','world_epoch')
+ def test_real_recovery_client_installation_sequence(self):
+  case=Path(self.temp.name)/'production'/'case'
+  profile=case/'home/.config/EgoSoft/X4/45841'
+  (profile/'save').mkdir(parents=True)
+  lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
+  ui.mkdir(parents=True);md.mkdir();(lab/'native').mkdir()
+  (ui/'native_gate_snapshot.lua').write_text('')
+  (md/'native_gate_battle.xml').write_text('')
+  (ui/'config.lua').write_text('')
+  ticket={'world_epoch':'e'*32,'connection_handle':1,'baseline_id':2,'load_generation':1,
+          'checkpoint_id':'checkpoint-'+'6'*32,'sha256':'7'*64,'attempt_id':'f'*32,'slot':'save_009'}
+  download.install_probe(case,profile,ticket)
+  identity.inject(case,'load')
+  participant=recovered_client.ServerClient(time.monotonic()+10,case,keep_worker=True)
+  self.addCleanup(participant.cleanup_diagnostic)
+  fake_library=Path(self.temp.name)/'server-net.so';fake_library.write_bytes(b'not loaded in this test')
+  participant.server_library=fake_library
+  participant.install(case)
+  registry.install(case,'8'*32,self.status)
+  shutil.copyfile(ROOT/'tools/dev/authority_registry_witness.xml',md/'authority_registry_witness.xml')
+  motion_socket=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+  self.addCleanup(motion_socket.close);motion_socket.bind(('127.0.0.1',0))
+  settings=dict(self.settings,port=motion_socket.getsockname()[1])
+  installation=subject.install(case,profile,self.status,settings)
+  self.assertTrue(all(path.is_file() for path in installation.paths))
+  installation.redact();participant.redact()
  def test_redaction_rejects_replaced_config(self):
   result=self.install();config=self.ui/'config.lua';replacement=self.ui/'replacement';replacement.write_bytes(config.read_bytes());os.replace(replacement,config)
   with self.assertRaises(ValueError):result.redact()

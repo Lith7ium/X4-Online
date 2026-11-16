@@ -26,6 +26,31 @@ MD=('authority_saved_baseline_motion_bind.xml','authority_replica_motion_bind.xm
 SECRET_FIELDS=('lease','attempt','generation','nonce','router_generation')
 
 
+def read_ticket_token(config, field):
+    """Read exactly one canonical plain or decimal-escaped Lua hex token."""
+    assignment_pattern = r'(?<![A-Za-z0-9_])' + re.escape(field) + r'\s*='
+    value_pattern = assignment_pattern + r'\s*"([^"\n]*)"(?=\s*[,}])'
+    values = re.findall(value_pattern, config)
+    if len(re.findall(assignment_pattern, config)) != 1 or len(values) != 1:
+        raise ValueError('client ticket token missing or ambiguous')
+    encoded_token = values[0]
+    if HEX.fullmatch(encoded_token):
+        return encoded_token
+    if not re.fullmatch(r'(?:\\[0-9]{3}){32}', encoded_token):
+        raise ValueError('invalid client ticket token encoding')
+    byte_values = [int(encoded_token[index + 1:index + 4])
+                   for index in range(0, len(encoded_token), 4)]
+    if any(value > 255 for value in byte_values):
+        raise ValueError('invalid client ticket token encoding')
+    try:
+        decoded_token = bytes(byte_values).decode('ascii')
+    except UnicodeDecodeError:
+        raise ValueError('invalid client ticket token encoding') from None
+    if not HEX.fullmatch(decoded_token):
+        raise ValueError('invalid client ticket token encoding')
+    return decoded_token
+
+
 class Installation:
     """Protected file set and post-cleanup config redaction; caller fences X4."""
     def __init__(self,paths,config,settings):
@@ -102,10 +127,10 @@ def install(case,profile,status,settings):
         raise ValueError('client save path differs from private profile')
     port=re.findall(r'authority_participant_port=([0-9]+)',cfg)
     old_tokens=re.findall(r'authority_participant_lease="([0-9a-f]{32})"',cfg)
-    epochs=re.findall(r'world_epoch="([0-9a-f]{32})"',cfg)
-    claims=re.findall(r'attempt_id="([0-9a-f]{32})"',cfg)
-    if (len(port)!=1 or int(port[0])==settings['port'] or len(old_tokens)!=1 or len(epochs)!=1 or len(claims)!=1 or
-        len(set(tokens+[status[1],old_tokens[0],epochs[0],claims[0]]))!=9):
+    world_epoch=read_ticket_token(cfg,'world_epoch')
+    claim_attempt=read_ticket_token(cfg,'attempt_id')
+    if (len(port)!=1 or int(port[0])==settings['port'] or len(old_tokens)!=1 or
+        len(set(tokens+[status[1],old_tokens[0],world_epoch,claim_attempt]))!=9):
         raise ValueError('client motion context overlaps existing control')
     marker="expected='"+status[1]+'|'+str(status[2])+"'"
     if load_text.count(marker)!=1 or load_text.count('if not registry_status:ready() then return end')!=1:
