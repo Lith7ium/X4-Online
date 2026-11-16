@@ -283,3 +283,54 @@ It does not independently establish exactly which bytes X4 loaded, zero
 simulation before pause, any real client X4 load, gameplay, WAN, Windows or
 universe-wide state consistency. Its source archives must remain exclusively
 controlled and unchanged during the check.
+
+## Optional read-only registry status
+
+`--registry-status` installs the current experimental registry script and a
+single status owner in the existing private recovery update. It does not
+initialize the registry or enroll ships. The source's marked checkpoint is
+inspected first; a saved initialized registry must have a verified bijection
+and all indexed saved components, and the source's original MD script must be
+available and byte-identical. Uninitialized is also a valid status. Unsupported
+empty initialized states, missing or destroyed saved entries and ambiguous
+state fail closed. This check is not a complete inventory.
+
+After the recovered load marker and pause, the owner requests a correlated
+status before allowing bridge activation. Before each save marker it requests
+a fresh correlated status while paused. The supervisor checks the matching
+marker-tagged status and compares the newly published checkpoint's registry
+epoch, count and canonical saved index-to-component mapping fingerprint with
+the source before confirmation. Changed mappings fail closed; saved references
+are not independently proven stable across saves or equivalent live actors.
+The mode deliberately rejects changes to the baseline until registry
+lifecycle handling is implemented. It does not prove which file X4 consumed,
+cross-process identity, Windows, Internet or gameplay.
+
+On 2026-11-16, `.local/authority-registry-status-once-01` failed after the
+native server paused and saved. Its log records an uninitialized registry
+status after recovery and before the save marker, but the candidate checkpoint
+was not confirmed: the saved `State` cue was `waiting` with no children, a
+native representation the verifier did not yet recognize. The supervisor
+reported `ambiguous saved registry`, an empty owned-process list, and the outer
+orchestrator reported confirmed cleanup. A later read-only inspection with the
+corrected parser recognized the saved state and verified its marker; it did
+not confirm or republish that checkpoint.
+
+A fresh run, `.local/authority-registry-status-once-02`, reported success.
+One isolated Linux X4 server recovered a marked checkpoint; its log records the
+load request, source marker and pause, followed by uninitialized registry
+status at startup and before the new save marker. One local offer-only TCP
+connection triggered the save; no client X4, download, or load claim was
+used. The supervisor reported the server paused and no owned processes left.
+The orchestrator reported confirmed cleanup and checked the log against the
+nonce from the installed overlay. The confirmed checkpoint was
+`checkpoint-7c464277153f42aaa0e649c7c3b85431`, SHA-256
+`999897ec96fd01699b7b561e35f8204678408e9769c918cbf08a8c28b948867d`,
+with marker `b8a51230f68b1b23abb88593cac07f31`.
+
+The log lines do not contain the registry request ID; the installed owner
+checks it before emitting the status. There is no independent packet capture
+of that exchange. This run exercised only the uninitialized state, not an
+initialized register, ship enrollment, cross-process identity, client loading,
+gameplay, Windows or Internet operation. It does not independently prove which
+save bytes X4 consumed.

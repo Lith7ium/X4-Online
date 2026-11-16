@@ -63,7 +63,7 @@ def read_evidence(path, limit=65536):
         if fd >= 0: os.close(fd)
 
 
-def verify_previous_source(store, checkpoint, profile):
+def verify_previous_source(store, checkpoint, profile, *, registry_status=False):
     """Accept only a compatible, cleanly ended local supervisor generation.
 
     This is local provenance, not authentication or a concurrent-writer fence.
@@ -89,8 +89,12 @@ def verify_previous_source(store, checkpoint, profile):
     if read_evidence(store.directory/'CURRENT',4096) != read_evidence(store.directory/'CONFIRMED',4096):
         raise ValueError('source current checkpoint is not confirmed')
     case = origin/'case'; md = case/'extensions/x4_lan_lab/md'
-    if md.is_symlink() or {p.name for p in md.iterdir()} != {'authority_checkpoint_marker.xml','authority_identity_fixture.xml'}:
+    names={p.name for p in md.iterdir()}
+    base_names={'authority_checkpoint_marker.xml','authority_identity_fixture.xml'}
+    if md.is_symlink() or names not in ((base_names,base_names|{'authority_ship_registry.xml'}) if registry_status else (base_names,)):
         raise ValueError('source saved-state scripts differ')
+    if 'authority_ship_registry.xml' in names and read_evidence(md/'authority_ship_registry.xml') != read_evidence(ROOT/'tools/dev/authority_ship_registry.xml'):
+        raise ValueError('source registry script differs')
     if read_evidence(case/'home/.config/EgoSoft/X4/45841/content.xml') != read_evidence(Path(profile)/'content.xml'):
         raise ValueError('source and recovery content differ')
     if read_evidence(md/'authority_checkpoint_marker.xml') != read_evidence(ROOT/'src/authority/md/checkpoint_marker.xml'):
@@ -318,7 +322,7 @@ def run(args):
         if source_store.directory == source.DEFAULT_STORE.resolve():
             fixture = source.verify(source_store.directory, checkpoint, profile)
         else:
-            fixture = verify_previous_source(source_store, checkpoint, profile)
+            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=getattr(args,'registry_status',False))
         target = profile/'save/save_008.xml.gz'
         if any(target.parent.iterdir()): raise ValueError('new profile save directory not empty')
         os.link(staged, target, follow_symlinks=False); target.chmod(0o400)
@@ -327,6 +331,16 @@ def run(args):
         sock.bind(('127.0.0.1', 0)); sock.settimeout(.25)
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
         protected = bridge.install_probe(case, profile, sock.getsockname()[1], lease, epoch)
+        registry_check = None
+        if getattr(args,'registry_status',False):
+            import authority_recovery_registry_status as registry_check
+            registry_expected=registry_check.saved_status(checkpoint)
+            if registry_expected[0]=='ready':
+                old_registry=source_store.directory.parent/'case/extensions/x4_lan_lab/md/authority_ship_registry.xml'
+                if read_evidence(old_registry)!=read_evidence(ROOT/'tools/dev/authority_ship_registry.xml'):
+                    raise ValueError('saved registry script provenance unavailable')
+            registry_nonce=secrets.token_hex(16)
+            protected.extend(registry_check.install(case,registry_nonce,registry_expected))
         clock = None
         if getattr(args, 'diagnostic_overlap', False):
             import authority_overlap_clock
@@ -371,12 +385,29 @@ def run(args):
                 raise ValueError('recovery save or protected configuration changed')
             check()
         peer = bridge.activate(sock, watch, lease, epoch, deadline, check, verify)
+        if registry_check is not None:
+            registry_check.matches_log(profile/'engine-output.log',registry_nonce,'startup',registry_expected)
         recovered[0] = True
         check()
         result.update(source_checkpoint_id=checkpoint.checkpoint_id, source_sha256=checkpoint.sha256,
                       load_marker_observed=True, pause_observed=True)
+        def verify_checkpoint(store_arg, checkpoint_id, save_name):
+            evidence=read_cycle_evidence(store_arg,checkpoint_id,save_name)
+            if registry_check is not None:
+                saved=store_arg.get(checkpoint_id)
+                if registry_check.saved_status(saved)!=registry_expected:
+                    raise ValueError('checkpoint registry differs from recovered status')
+                registry_check.matches_log(profile/'engine-output.log',registry_nonce,saved.marker,registry_expected)
+            return evidence
         adapter = LocalControlBridge(enabled=True, sock=sock, peer=peer, lease=lease, world_epoch=epoch,
-            profile=profile, store=store, verify_checkpoint=read_cycle_evidence, timeout=130, marker_required=True)
+            profile=profile, store=store, verify_checkpoint=verify_checkpoint, timeout=130, marker_required=True)
+        if registry_check is not None:
+            result['registry_status']={'source_checkpoint_id':checkpoint.checkpoint_id,
+                'source_sha256':checkpoint.sha256,'state':registry_expected[0],
+                'epoch':registry_expected[1] if len(registry_expected)>1 else None,
+                'count':registry_expected[2] if len(registry_expected)>2 else None,
+                'mapping_sha256':registry_expected[3] if len(registry_expected)>3 else None,
+                'coverage_proven':False,'native_load_bytes_proven':False}
         service = owned.start_owned_file_service(secrets.token_hex(16), services)
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
         session = TrustedMarkerLoadSession(world, enabled=True)
@@ -573,6 +604,7 @@ def main():
     parser.add_argument('--store',type=Path,default=source.DEFAULT_STORE)
     parser.add_argument('--display',required=True); parser.add_argument('--timeout',type=float,default=3600)
     parser.add_argument('--seed',type=int,default=276944566)
+    parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

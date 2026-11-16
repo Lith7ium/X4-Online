@@ -6,6 +6,7 @@ cannot establish which object a separate running X4 instance resolved, complete
 universe coverage, or correct multiplayer behavior. No X4 process is started.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -28,11 +29,12 @@ class RegistryEvidenceError(ValueError):
     """The checkpoint registry is missing, ambiguous, or inconsistent."""
 
 
-def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None, include_sector_parents=False):
+def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None, include_sector_parents=False, include_mapping_fingerprint=False):
     if (not isinstance(checkpoint, Checkpoint) or not isinstance(expected_epoch, str)
             or not EPOCH.fullmatch(expected_epoch) or type(expected_count) is not int
             or not 1 <= expected_count <= MAX_ENTRIES):
         raise RegistryEvidenceError('invalid verification request')
+    if type(include_mapping_fingerprint) is not bool:raise RegistryEvidenceError('invalid mapping fingerprint option')
     if expected_rows is not None:
         if (not isinstance(expected_rows, (list, tuple)) or len(expected_rows) != expected_count
                 or any(not isinstance(row, tuple) or len(row) != 2 or type(row[0]) is not int
@@ -158,6 +160,11 @@ def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None, in
         result={'macro_rows_checked':expected_rows is not None, 'count':expected_count,'unique_saved_components':len(found),
                 'distinct_macros':len(set(found.values())), 'forward_reverse_match':True,
                 'runtime_binding_proven':False,'universe_coverage_proven':False}
+        if include_mapping_fingerprint:
+            digest=hashlib.sha256(b'X4AuthorityShipRegistry mapping v1\n')
+            for index in range(1,expected_count+1):
+                digest.update(f'{index}:{forward[index]}\n'.encode('ascii'))
+            result['mapping_sha256']=digest.hexdigest()
         if include_sector_parents:
             result.update(saved_sector_ancestor_count=len(sectors),ships_with_sector_ancestor=sector_found,
                 ships_without_sector_ancestor=expected_count-sector_found,ships_with_zone_ancestor=zone_found,

@@ -8,7 +8,16 @@ eventually trade, fight, board and command ships. The simulation may pause
 when nobody is connected and during joins. See the detailed experiment notes
 for evidence and restrictions.
 
-One recovered Linux X4 server subsequently served two real local Linux X4
+In an isolated Linux recovery test, X4 reported an uninitialized ship registry
+after load and again before a marked save; the supervisor confirmed the new
+checkpoint. An earlier attempt left its checkpoint unconfirmed because the
+save parser did not recognize X4's waiting State cue; the parser was corrected
+before the successful run. This does not demonstrate an initialized registry,
+enrollment, client gameplay, Windows or Internet access. The registry request
+ID is checked by the installed owner, not independently captured in the log.
+[Run details](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-read-only-registry-status).
+
+Earlier, one recovered Linux X4 server served two real local Linux X4
 clients in sequence. Each client log records a load request, marker and pause;
 retained client save copies hash to their respective checkpoint files. The
 supervisor reports both admissions and resumes, a save after the first

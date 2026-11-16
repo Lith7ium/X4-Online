@@ -41,7 +41,7 @@ class _DigestReader:
         return block
 
 
-def _parse(checkpoint, callback):
+def _parse(checkpoint, callback, *, characters=None):
     parser = expat.ParserCreate()
     path = []
     def start(name, attrs):
@@ -57,6 +57,8 @@ def _parse(checkpoint, callback):
         raise MarkerEvidenceError('DTD and external entities are unsupported')
     parser.StartElementHandler = start
     parser.EndElementHandler = end
+    if characters is not None:
+        parser.CharacterDataHandler = lambda value: characters(path, value)
     parser.StartDoctypeDeclHandler = reject
     parser.ExternalEntityRefHandler = reject
     fd = os.open(checkpoint.path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
