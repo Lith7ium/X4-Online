@@ -23,6 +23,10 @@ def stage_confirmed_recovery(store, private_profile):
     remains free for the normal experimental save controller. The returned pair
     is (verified checkpoint metadata, staged path). The saved marker and its
     reset load flag are checked, but no X4 load is performed or proven.
+
+    Cleanup errors from deleting the staged path are attached to the original
+    staging exception. File-object and directory-FD close failures can still
+    replace an earlier exception or prevent a later FD close from being tried.
     """
     if not isinstance(store, CheckpointStore):
         raise ValueError('checkpoint store required')
