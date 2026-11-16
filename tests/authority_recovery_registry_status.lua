@@ -52,3 +52,14 @@ do
  assert(not pcall(cb,nil,nonce..':1|Uninitialized|'));assert(faults==1 and not obj:tick())
  assert(not pcall(cb,nil,nonce..':1|Uninitialized|'));assert(faults==1)
 end
+-- A completed status observation is inert during resume, but cannot start a
+-- fresh marker observation until the world is paused again.
+do
+ local cb;local paused=true;local nonce=string.rep('8',32)
+ local obj=M.new({nonce=nonce,expected='uninitialized',clock=function()return 1 end,
+  paused=function()return paused end,register=function(f)cb=f;return true end,
+  issue=function()return true end,log=function()return true end,store=function()return true end})
+ assert(obj:begin());cb(nil,nonce..':1|Uninitialized|');assert(obj:ready())
+ paused=false;assert(obj:tick() and obj:ready())
+ assert(not obj:begin(string.rep('a',32)) and not obj:tick())
+end
