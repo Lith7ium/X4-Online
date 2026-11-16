@@ -1,0 +1,39 @@
+# Disposable positive-seat search probe
+
+This opt-in local diagnostic is a test component, not an installed feature or
+an automatic X4 runner. The caller owns one private X4 update loop, process,
+protected files and paused load, and registers exactly the result, inconclusive
+and refusal events for this probe. `new_x4` creates no callback or update loop.
+The caller supplies a fresh 32-hex nonce, the saved registry epoch, the private
+save path and a bounded deadline, starts once and never retries a request.
+
+The read-only MD cue searches the current `player.zone` and requests at most 32
+returned ships sorted by distance to the player's ship. The loop checks at most
+those 32, excludes the player and non-operational/docked/stored ships, and
+selects only a live ship with both an MD assigned pilot and a valid AI pilot
+post reporting an occupied slot reservation. X4's `sortlimit` bounds returned
+items and the loop, not its internal candidate search or sorting work. This is
+not a census, and no candidate among the selected ships does not establish that
+no positive control exists elsewhere. Missing/invalid slot or no candidate
+produces a correlated inconclusive event; a getter expression error or missing
+reply results in timeout/inconclusive, not an empty-seat observation.
+
+The local Lua probe independently checks the returned ship, sector and zone
+through FFI and requires a valid non-nil `GetComponentData(...,'assignedpilot')`
+result. The original exact local actor IDs are not sent outside the local Lua/MD
+callback or included in a result. Bad getter, ambiguous nil, invalid component
+or context gives an inconclusive result; correlation, pause, time, unexpected
+or late events fail closed. A timeout is an inconclusive observation, after
+which late events still fault. Results and replies are one-shot; caller must
+continue its own exclusive-owner, process, file, pause, event and deadline fences
+through guarded use and cleanup. These checks are snapshots, not an atomic view.
+
+A `candidate_observed` result says the MD reservation getter was nonempty and
+that assigned-pilot getters returned non-nil/valid for the same ship under the
+observed pause. It does not prove that the reservation and assignment identify
+the same person, that a person physically occupies a chair, high attention,
+coverage of nearby ships, or that a player's seat is free or controllable. It
+does not authorize saving or integration with the disabled fixture save bridge.
+This module has no real X4, Windows, Internet or gameplay evidence. Synthetic
+Lua and fake-FFI tests include an actor ID above 2^53 but do not establish
+native ID, getter or event-serialization behavior.
