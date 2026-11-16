@@ -60,6 +60,9 @@ class ServerClient(combined.RecoveredRemoteParticipant):
     def cleanup_diagnostic(self):
         self._active_check = None
         errors = []
+        for resource in reversed(getattr(self,'guard_resources',[])):
+            try: resource._cleanup()
+            except BaseException as error: errors.append(error)
         for helper in reversed(self.helpers):
             try: helper.stop()
             except BaseException as error: errors.append(error)
@@ -171,6 +174,69 @@ def read_registry_while_pumping(participant, baseline, deadline, check):
     return result
 
 
+class WitnessGuardPump:
+    """Switch once from admission pumping to non-reentrant active checks."""
+    def __init__(self,participant,deadline):
+        self.participant=participant;self.deadline=deadline;self.phase='admission'
+        self.active_guard=None;self.host=None;self.busy=False
+
+    def activate(self, *, host, guard):
+        if self.phase!='admission' or self.busy or not callable(guard):
+            self.phase='failed';raise RuntimeError('guard pump switch unavailable')
+        self.host=host;self.active_guard=guard;self.phase='active'
+
+    def __call__(self):
+        if self.busy or self.phase not in ('admission','active'):
+            self.phase='failed';raise RuntimeError('guard pump reentered or unavailable')
+        self.busy=True;phase=self.phase
+        try:
+            recovery.marked.remaining(self.deadline)
+            if phase=='admission':self.participant.pump_loading()
+            else:
+                control=self.host._control
+                owned=self.host._busy is False and control._reader_lease is None
+                if owned:
+                    control._reader_free();lease=object();control._reader_lease=lease;self.host._busy=True
+                else:
+                    lease=control._reader_lease
+                    if self.host._busy is not True or lease is None:
+                        raise RuntimeError('active guard TCP fence unavailable')
+                try:
+                    if self.active_guard() is not True:raise RuntimeError('active guard unavailable')
+                finally:
+                    changed=(self.host._control is not control or self.host._busy is not True or
+                             control._reader_lease is not lease)
+                    if owned:
+                        if control._reader_lease is lease:control._reader_lease=None
+                        self.host._busy=False
+                    if changed:raise RuntimeError('active guard changed TCP ownership')
+            if self.phase!=phase:raise RuntimeError('guard pump context changed')
+        except BaseException:
+            self.phase='failed';raise
+        finally:self.busy=False
+
+
+def prepare_witness_guard(participant, world, baseline, deadline, check):
+    """Initialize a fully validated saved-witness guard while admission pumps.
+
+    This is a private retained-client facility. Before making guard calls in
+    a running source reader lease the caller MUST replace pump with a
+    non-reentrant process/context fence; no live source is started here.
+    """
+    if participant.keep_worker is not True or not callable(check):
+        raise ValueError('retained diagnostic and guard required')
+    import authority_witness_guard_client
+    check()
+    pump=WitnessGuardPump(participant,deadline)
+    guard=authority_witness_guard_client.WitnessGuardClient(world._store,baseline,deadline=deadline,
+        registry=participant.helpers,pump=pump)
+    if not hasattr(participant,'guard_resources'):participant.guard_resources=[]
+    participant.guard_resources.append(guard)
+    if guard.check() is not True:raise RuntimeError('checkpoint guard unavailable')
+    check()
+    return guard,pump
+
+
 def guarded_registry_observation(check, verify):
     """Verify status within the same guarded context used at pre-accept."""
     if check() is not True: raise RuntimeError('client context unavailable')
@@ -224,7 +290,7 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             processes, server_proc, server_started, server_identity, checkpoint,
             recovery_target, server_expected, recovery_watch, listener, host, service,
             world, session, control, check_server, server_out=None, expected_baseline=None, cancel_check=None,
-            check_base=None, check_server_base=None):
+            check_base=None, check_server_base=None, witness_guard_ready=None):
     """Load one genuine local client, confirm admission/resume and disconnect.
 
     Must run on the server's owner/main thread; it registers its X4 in the
@@ -236,6 +302,9 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
         raise ValueError('invalid diagnostic cancellation check')
     if participant.keep_worker and (not callable(check_base) or not callable(check_server_base)):
         raise ValueError('retained client requires independent process and server guards')
+    if witness_guard_ready is not None and (not callable(witness_guard_ready) or
+            not participant.keep_worker or getattr(args,'registry_witness_join',False) is not True):
+        raise ValueError('witness guard requires retained witness join')
     participant.cancel_check = cancel_check
     deadline = participant.run_deadline
     participant.checkpoint = checkpoint
@@ -265,8 +334,15 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     registry_observation = None
     if client_registry_enabled(args):
         import authority_recovered_client_registry as client_registry
-        status = read_registry_while_pumping(participant, baseline, deadline, check_server)
+        if witness_guard_ready is None:
+            status = read_registry_while_pumping(participant, baseline, deadline, check_server)
+        else:
+            guard,pump=prepare_witness_guard(participant,world,baseline,deadline,check_server)
+            witness_guard_ready(guard,baseline,pump)
+            status=guard.status
         confirmed_baseline(world, baseline)
+        if witness_guard_ready is not None and guard.check() is not True:
+            raise RuntimeError('checkpoint changed during admission')
         verify_join_offer(ticket, participant.marker, baseline)
         registry_observation = (client_registry, secrets.token_hex(16), status)
     config = base.client.install_probe(case, profile, ticket)

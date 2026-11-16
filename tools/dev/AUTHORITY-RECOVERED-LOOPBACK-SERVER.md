@@ -531,3 +531,33 @@ confirmed pointers, manifest and file identities, without repeatedly parsing
 the same XML. Source-script and staged-copy checks remain separate. This guard
 does not fence a writer and does not establish historical object identity;
 the supervisor must retain its existing source and process isolation.
+
+The separate `--diagnostic-source-index N` option is available only together
+with the private one-client witness join. It selects one explicit index within
+the confirmed registry; X4 must independently resolve a valid, operational,
+undocked ship. The server alone samples the ship twice, confirms source STOP,
+and only then finishes the client and starts its departure pause/save. No
+motion is delivered to the client. Source- and client-process ownership,
+local UDP ownership, source errors and checkpoint provenance remain fenced.
+The guard is initialized in an owned helper during admission while the control
+connection is pumped; its active callback takes the TCP-reader fence and does
+not pump the control connection. The historical join checkpoint is pinned for
+this diagnostic only and is not a current recoverable running-world snapshot.
+The source result proves neither cross-process ship identity nor gameplay.
+
+An isolated offline benchmark used the Source IPC lifecycle over local UDP/TCP
+with a simulated source and client, real pidfd guard transport and the four
+existing `authority-witness-join-once-06` compressed saves (26,183,913 and
+26,221,799 bytes). One run took 23.934 s including setup, obtained two samples
+and acknowledged STOP within an outer 60 s interruption limit. It counted 616
+original-checkpoint hashes, 616 server-copy hashes, 705 client-copy hashes,
+43 baseline CHECKs and the baseline STOP check. The guard snapshots were
+constructed solely for this benchmark without the expensive XML initialization;
+the production helper still performs its full validation. This is not a native
+X4 or Windows/Internet measurement, a latency guarantee, or an integrity proof.
+It is a single observation under the local conditions of that run. The 90 s
+source diagnostic deadline is checked around guards and IPC; an individual
+synchronous filesystem operation cannot be interrupted by that check. Failure
+fences the diagnostic and requires process cleanup instead of granting the
+normal client-finish/pause sequence. The repeated full-save hashing is a
+single-index diagnostic cost, not a scalable fleet synchronization design.

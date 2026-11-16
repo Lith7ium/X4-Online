@@ -33,6 +33,52 @@ from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
 
 
 class WitnessJoinModeTests(unittest.TestCase):
+    def test_redaction_requires_confirmed_process_cleanup(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'config.lua';original='authority_control_lease="'+('a'*32)+'"'
+            for remaining in (None,[123]):
+                path.write_text(original)
+                with self.assertRaises(RuntimeError):MODULE.redact_stopped_server_config(path,remaining)
+                self.assertEqual(path.read_text(),original)
+            MODULE.redact_stopped_server_config(path,[])
+            self.assertEqual(path.read_text(),'authority_control_lease="redacted"')
+
+    def test_source_tokens_are_redacted_and_ambiguous_tokens_refused(self):
+        keys=('lease','attempt','generation','nonce','saved_nonce')
+        config='authority_control_lease="'+('a'*32)+'",'+','.join(
+            'authority_motion_'+key+'="'+('b'*32)+'"' for key in keys)
+        redacted=MODULE.redact_recovery_config(config)
+        self.assertNotIn('a'*32,redacted);self.assertNotIn('b'*32,redacted)
+        self.assertEqual(redacted.count('"redacted"'),6)
+        with self.assertRaises(ValueError):MODULE.redact_recovery_config(config+',authority_motion_nonce="'+('b'*32)+'"')
+        with self.assertRaises(ValueError):MODULE.redact_recovery_config(config.replace('authority_motion_attempt="'+('b'*32)+'"','authority_motion_attempt="bad"'))
+
+    def test_source_index_requires_explicit_witness_join_and_range(self):
+        self.assertIsNone(MODULE.diagnostic_source_index(SimpleNamespace(),False))
+        self.assertEqual(MODULE.diagnostic_source_index(SimpleNamespace(diagnostic_source_index=1),True),1)
+        for index,join in ((True,True),(0,True),(200001,True),(1,False)):
+            with self.subTest(index=index,join=join),self.assertRaises(ValueError):
+                MODULE.diagnostic_source_index(SimpleNamespace(diagnostic_source_index=index),join)
+
+    def test_source_stop_precedes_client_finish_and_failure_keeps_client_owned(self):
+        for mode in ('ok','missing_receipt','exception'):
+            events=[];active=SimpleNamespace(finish=lambda:events.append('finish') or {'done':True})
+            clients=[];context=[('guard','baseline','pump')]
+            def verify():
+                self.assertEqual(clients,[active]);events.append('verify')
+            def probe(*args):
+                self.assertEqual(args,(*context[0],active));events.append('probe')
+                if mode=='exception':raise RuntimeError('lost STOP')
+                return {'source_stopped_before_disconnect':mode=='ok'}
+            if mode=='ok':
+                _,result=MODULE.finish_source_diagnostic(active,clients,context,verify=verify,probe=probe)
+                self.assertEqual(result,{'done':True});self.assertEqual(events,['verify','probe','verify','finish'])
+                self.assertEqual(clients,[])
+            else:
+                with self.assertRaises(RuntimeError):
+                    MODULE.finish_source_diagnostic(active,clients,context,verify=verify,probe=probe)
+                self.assertNotIn('finish',events);self.assertEqual(clients,[active])
+
     def test_join_requires_explicit_single_client_and_preserves_other_modes(self):
         self.assertEqual(MODULE.witness_mode(SimpleNamespace()), (False, None))
         self.assertEqual(MODULE.witness_mode(SimpleNamespace(registry_witness='verify')), (False, 'verify'))

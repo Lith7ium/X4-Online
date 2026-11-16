@@ -133,6 +133,47 @@ def witness_mode(args):
     return join, phase
 
 
+def diagnostic_source_index(args, witness_join):
+    """An explicit single index is only valid in the private witness join."""
+    index=getattr(args,'diagnostic_source_index',None)
+    if index is not None and (witness_join is not True or type(index) is not int or not 1<=index<=200000):
+        raise ValueError('diagnostic source index requires private witness join')
+    return index
+
+
+def finish_source_diagnostic(active, active_clients, guard_context, *, verify, probe):
+    """Fence a retained client until the source probe has cooperatively stopped."""
+    if active_clients or len(guard_context)!=1 or not callable(verify) or not callable(probe):
+        raise ValueError('single source diagnostic context required')
+    active_clients.append(active)
+    verify()
+    observation=probe(*guard_context[0],active)
+    if (type(observation) is not dict or observation.get('source_stopped_before_disconnect') is not True):
+        raise RuntimeError('source stop not confirmed before client finish')
+    verify()
+    active_clients.remove(active)
+    return observation,active.finish()
+
+
+def redact_recovery_config(text):
+    redacted,count=re.subn(r'authority_control_lease="[0-9a-f]{32}"',
+        'authority_control_lease="redacted"',text)
+    if count!=1:raise ValueError('invalid lease')
+    for name in ('lease','attempt','generation','nonce','saved_nonce'):
+        key='authority_motion_'+name+'='
+        if key in redacted:
+            redacted,count=re.subn(key+r'"[0-9a-f]{32}"',key+'"redacted"',redacted)
+            if count!=1:raise ValueError('invalid source secret')
+    return redacted
+
+
+def redact_stopped_server_config(config, remaining):
+    """Never change a protected probe while an owned X4 may still use it."""
+    if not config.is_file():return
+    if remaining!=[]:raise RuntimeError('owned X4 stop unconfirmed; server config retained')
+    config.write_text(redact_recovery_config(config.read_text(encoding='ascii')),encoding='ascii')
+
+
 def verify_witness_source(store, checkpoint, guard, source_scripts):
     """Fence the pinned source and the witness scripts at every owner guard."""
     if guard is None:
@@ -369,7 +410,7 @@ def run(args):
     result = {'supervisor_version':1, 'success':False, 'scope':'isolated recovered Linux X4, loopback only; not gameplay or Internet',
               'windows_tested':False, 'internet_tested':False, 'exact_loaded_file_proven':False,
               'engine_operations':operations}
-    processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=clock_sock=None
+    processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=clock_sock=source_sock=None
     endpoint=out/'endpoint.json'; deadline=time.monotonic()+args.timeout
     watch=target=checkpoint=expected=None
     witness_pending=None
@@ -377,6 +418,7 @@ def run(args):
     active_clients = []
     try:
         witness_join, witness_phase = witness_mode(args)
+        source_index=diagnostic_source_index(args,witness_join)
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage)
@@ -428,6 +470,21 @@ def run(args):
             verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
             witness_nonce=secrets.token_hex(16)
             protected.extend(witness_check.install(case,witness_nonce,registry_expected[1],registry_expected[2],witness_phase,allow_resume=witness_join))
+        source_settings=None
+        if source_index is not None:
+            if source_index>registry_expected[2]:raise ValueError('diagnostic index exceeds confirmed registry')
+            import authority_recovered_source_motion_install
+            source_sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+            source_sock.bind(('127.0.0.1',0))
+            reserved={lease,epoch,registry_expected[1],registry_nonce,witness_nonce}
+            def fresh():
+                value=secrets.token_hex(16)
+                while value in reserved or value[:16] in {v[:16] for v in reserved}:
+                    value=secrets.token_hex(16)
+                reserved.add(value);return value
+            source_settings={'port':source_sock.getsockname()[1],'lease':fresh(),'attempt':fresh(),
+                'generation':fresh(),'nonce':fresh(),'saved_nonce':fresh(),'timeout':120}
+            protected.extend(authority_recovered_source_motion_install.install(case,profile,registry_expected,source_settings))
         clock = None
         if getattr(args, 'diagnostic_overlap', False):
             import authority_overlap_clock
@@ -609,9 +666,22 @@ def run(args):
             def verify_diagnostic():
                 cancel_diagnostic()
                 verify()
+                if source_index is not None:
+                    for active in tuple(active_clients):
+                        if active.participant.check_active(server_checked=True) is not True:
+                            raise RuntimeError('diagnostic client unavailable')
+                        verify()
                 cancel_diagnostic()
+            def base_diagnostic():
+                cancel_diagnostic();check();cancel_diagnostic()
+            guard_context=[]
+            def guard_ready(guard, saved, pump):
+                if guard_context or guard.status!=registry_expected:
+                    raise ValueError('confirmed diagnostic registry changed')
+                guard_context.append((guard,saved,pump))
+            if source_index is not None:overlap_guard[0]=verify_diagnostic
             for index in range(count):
-                diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory)
+                diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory,keep_worker=(source_index is not None))
                 diagnostics.append(diagnostic)
                 diagnostic_out = out if count == 1 else out/('diagnostic-%02d' % (index+1))
                 if count != 1: diagnostic_out.mkdir(mode=0o700)
@@ -621,7 +691,20 @@ def run(args):
                     checkpoint=checkpoint, recovery_target=target, server_expected=expected,
                     recovery_watch=watch, listener=listener, host=host, service=service, world=world,
                     session=session, control=control, check_server=verify_diagnostic, server_out=out,
-                    expected_baseline=baseline, cancel_check=cancel_diagnostic)
+                    expected_baseline=baseline, cancel_check=cancel_diagnostic,
+                    check_base=base_diagnostic if source_index is not None else None,
+                    check_server_base=verify if source_index is not None else None,
+                    witness_guard_ready=guard_ready if source_index is not None else None)
+                if source_index is not None:
+                    import authority_recovered_source_probe
+                    def run_source(guard,saved,pump,active):
+                        source_context=dict(source_settings,epoch=guard.status[1],baseline=guard.status[2])
+                        return authority_recovered_source_probe.run(sock=source_sock,
+                            settings=source_context,index=source_index,baseline=saved,guard=guard,pump=pump,
+                            active=active,host=host,world=world,identity=identity,verify=verify_diagnostic,
+                            verify_process=check)
+                    result['source_diagnostic'],diagnostic_result=finish_source_diagnostic(
+                        diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source)
                 if count != 1:
                     baseline = diagnostic_client.settle_departure(host, world, control, diagnostic.server_tcp, deadline, verify_diagnostic,
                         diagnostic_result['client_ticket'], diagnostic_result['client_loaded_marker'])
@@ -687,6 +770,9 @@ def run(args):
         if clock_sock is not None:
             try: clock_sock.close()
             except BaseException as error: errors.append('clock socket cleanup: '+type(error).__name__)
+        if source_sock is not None:
+            try: source_sock.close()
+            except BaseException as error: errors.append('source socket cleanup: '+type(error).__name__)
         helpers_stopped = cleanup_diagnostics(diagnostics, errors)
         remaining = stop_owned_processes(processes, helpers_stopped, errors)
         result['owned_processes_remaining']=remaining
@@ -722,12 +808,7 @@ def run(args):
                 except BaseException as error: errors.append('diagnostic lease cleanup: '+type(error).__name__)
         config=out/'case/extensions/x4_lan_lab/ui/config.lua'
         try:
-            if config.is_file():
-                text=config.read_text(encoding='ascii')
-                redacted,count=re.subn(r'authority_control_lease="[0-9a-f]{32}"',
-                    'authority_control_lease="redacted"',text)
-                if count != 1: raise ValueError('invalid lease')
-                config.write_text(redacted,encoding='ascii')
+            redact_stopped_server_config(config,remaining)
         except BaseException as error: errors.append('lease cleanup: '+type(error).__name__)
         if witness_pending is not None:
             try: confirm_witness_after_cleanup(store,witness_pending,result,remaining,errors)
@@ -752,6 +833,7 @@ def main():
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')
     parser.add_argument('--registry-witness',choices=('create','verify'),help='isolated paused diagnostic; never admit clients')
     parser.add_argument('--registry-witness-join',action='store_true',help='private one-client witness join experiment; not identity proof')
+    parser.add_argument('--diagnostic-source-index',type=int,help='private saved-registry index to sample on the server only')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

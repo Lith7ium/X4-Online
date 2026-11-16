@@ -1,6 +1,7 @@
 """Offline ownership and evidence checks; no X4 process is started."""
 from pathlib import Path
 import hashlib
+import json
 import tempfile
 import socket
 import sys
@@ -17,6 +18,100 @@ import authority_recovered_loopback_server as supervisor
 
 
 class ServerClientTests(unittest.TestCase):
+    def test_witness_guard_pump_switch_fences_tcp_lease_and_never_pumps_after_switch(self):
+        participant=SimpleNamespace(pump_loading=Mock())
+        owner=subject.WitnessGuardPump(participant,time.monotonic()+5)
+        owner();participant.pump_loading.assert_called_once()
+        lease=object();control=SimpleNamespace(_reader_lease=lease)
+        host=SimpleNamespace(_control=control,_busy=True)
+        active=Mock(return_value=True);owner.activate(host=host,guard=active)
+        owner();active.assert_called_once();participant.pump_loading.assert_called_once()
+        with self.assertRaises(RuntimeError):owner.activate(host=host,guard=active)
+        self.assertEqual(owner.phase,'failed')
+        owner=subject.WitnessGuardPump(participant,time.monotonic()+5)
+        def change():control._reader_lease=object();return True
+        owner.activate(host=host,guard=change)
+        with self.assertRaises(RuntimeError):owner()
+        self.assertEqual(owner.phase,'failed')
+
+    def test_witness_guard_pump_reentry_is_permanently_fatal(self):
+        participant=SimpleNamespace(pump_loading=Mock())
+        owner=subject.WitnessGuardPump(participant,time.monotonic()+5)
+        def reenter():
+            try:owner()
+            except RuntimeError:pass
+            return True
+        host=SimpleNamespace(_control=SimpleNamespace(_reader_lease=None,_reader_free=Mock()),_busy=False)
+        owner.activate(host=host,guard=reenter)
+        with self.assertRaises(RuntimeError):owner()
+        self.assertEqual(owner.phase,'failed');participant.pump_loading.assert_not_called()
+
+    def test_witness_guard_blocks_even_transient_tcp_poll_when_reader_was_free(self):
+        from authority.experimental_tcp_control import ExperimentalTCPControl
+        control=object.__new__(ExperimentalTCPControl)
+        control._thread=threading.get_ident();control._failed=False;control._closed=False
+        control._reader_lease=None;control._latest_motion=None;control._peers={}
+        host=SimpleNamespace(_control=control,_busy=False)
+        owner=subject.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()),time.monotonic()+5)
+        def illegally_poll():control.poll(0);return True
+        owner.activate(host=host,guard=illegally_poll)
+        with self.assertRaisesRegex(RuntimeError,'leased'):owner()
+        self.assertEqual(owner.phase,'failed');self.assertIsNone(control._reader_lease);self.assertFalse(host._busy)
+
+    def test_witness_guard_refuses_control_owner_replacement(self):
+        control=SimpleNamespace(_reader_lease=None,_reader_free=Mock())
+        host=SimpleNamespace(_control=control,_busy=False)
+        owner=subject.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()),time.monotonic()+5)
+        def replace():host._control=object();return True
+        owner.activate(host=host,guard=replace)
+        with self.assertRaisesRegex(RuntimeError,'TCP ownership'):owner()
+        self.assertIsNone(control._reader_lease);self.assertFalse(host._busy)
+
+    def test_witness_guard_prepared_during_retained_admission_and_registered_for_cleanup(self):
+        participant=SimpleNamespace(keep_worker=True,pump_loading=Mock(),helpers=[])
+        world,checkpoint=self.make_world();check=Mock()
+        guard=SimpleNamespace(check=Mock(return_value=True),status=('ready','a'*32,2,'b'*64),_cleanup=Mock())
+        def make_guard(store,baseline,**kwargs):
+            self.assertIs(store,world._store);self.assertIs(baseline,checkpoint)
+            kwargs['pump']();self.assertIs(kwargs['registry'],participant.helpers)
+            return guard
+        with patch('authority_witness_guard_client.WitnessGuardClient',side_effect=make_guard):
+            actual,pump=subject.prepare_witness_guard(participant,world,checkpoint,time.monotonic()+5,check)
+        self.assertIs(actual,guard);self.assertEqual(pump.phase,'admission')
+        self.assertEqual(participant.guard_resources,[guard]);guard.check.assert_called_once()
+        participant.pump_loading.assert_called_once();self.assertEqual(check.call_count,2)
+        participant.keep_worker=False
+        with self.assertRaises(ValueError):subject.prepare_witness_guard(participant,world,checkpoint,time.monotonic()+5,check)
+
+    def test_guard_initialization_pumps_actual_tcp_keepalive(self):
+        import authority_witness_guard_client as client
+        import test_authority_experimental_tcp_participants as fixture
+        from authority.experimental_tcp_control import offer_request
+        case=fixture.ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation');case.setUp()
+        guard=None
+        try:
+            case.control._keepalive_enabled=True
+            conn=case.connect();case.host.tick();conn.sendall(offer_request());case.host.tick(.1);case.host.tick(.1)
+            conn.recv(8192)
+            peer=next(iter(case.control._peers.values()));self.assertEqual(peer['stage'],'offered')
+            conn.sendall(json.dumps({'version':1,'kind':'keepalive','attempt_id':peer['attempt_id'],'sequence':1}).encode()+b'\n')
+            participant=SimpleNamespace(keep_worker=True,pump_loading=lambda:case.control.poll(0),helpers=[])
+            checkpoint=SimpleNamespace(checkpoint_id='checkpoint-'+('a'*32),path=Path('/tmp/not-read'),
+                                       sha256='b'*64,size=1,marker='c'*32)
+            script=Path(case.temp.name)/'guard.py'
+            script.write_text('''import json,socket,sys,time
+s=socket.socket(fileno=int(sys.argv[1]));f=s.makefile('rb');c=json.loads(f.readline());time.sleep(.15)
+s.sendall((json.dumps(dict(token=c['token'],seq=0,event='READY',status=['ready','a'*32,2,'b'*64]))+'\\n').encode())
+r=json.loads(f.readline());s.sendall((json.dumps(dict(token=c['token'],seq=r['seq'],event='CHECKED'))+'\\n').encode());time.sleep(10)
+''')
+            with patch.object(client,'READER',script):
+                guard,_=subject.prepare_witness_guard(participant,case.world,checkpoint,time.monotonic()+4,lambda:None)
+            self.assertEqual(peer['keepalive_sequence'],1)
+            conn.settimeout(1);self.assertEqual(json.loads(conn.recv(8192))['kind'],'alive')
+        finally:
+            if guard:guard._cleanup()
+            case.doCleanups()
+
     def test_witness_join_explicitly_enables_registry_observation(self):
         self.assertFalse(subject.client_registry_enabled(SimpleNamespace()))
         self.assertTrue(subject.client_registry_enabled(SimpleNamespace(registry_witness_join=True)))
