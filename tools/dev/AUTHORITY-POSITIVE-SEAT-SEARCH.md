@@ -37,3 +37,26 @@ does not authorize saving or integration with the disabled fixture save bridge.
 This module has no real X4, Windows, Internet or gameplay evidence. Synthetic
 Lua and fake-FFI tests include an actor ID above 2^53 but do not establish
 native ID, getter or event-serialization behavior.
+
+## Private native harness
+
+`authority_positive_seat_live.py` is a separate opt-in single-X4 supervisor using
+the pinned two-sector checkpoint and the existing load/marker/slot-2/pause guard.
+It installs only the search cue, its local module and owner in the private
+protected overlay. The entire staged private save directory is mounted read-only;
+the search has no ship-creation or save action. After the original load owner
+has reached `done`, that same owner ticks the search; no second `onUpdate` is
+installed. The private owner and probe use separate deadlines: the inner search
+has at most ten seconds, and its timeout can be reported as inconclusive before
+the outer deadline. The inherited sector-read guard also applies its original
+30-second limit. No automatic request retries are made.
+
+The final output distinguishes `outcome=candidate` from
+`outcome=inconclusive`. In either case `success=true` means only that the
+bounded diagnostic and final process/log/source checks completed; it does not
+mean that an occupied physical seat was proven or that a seat is free. A fault,
+late or duplicate callback, source change or unconfirmed cleanup makes the run
+unsuccessful and suppresses the diagnostic outcome. Process and file checks
+remain point-in-time observations, not atomic lifetime guarantees. The owner
+uses no cross-process actor IDs, and its candidate reference is not retained for
+subsequent operations. Neither outcome authorizes saving or gameplay claims.
