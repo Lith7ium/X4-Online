@@ -154,46 +154,59 @@ class ExperimentalTCPParticipantClient:
         # The callback must bind the portable identity to the local X4 actor;
         # this adapter itself cannot establish a game binding.
         from .experimental_tcp_motion import motion_value, motion_digest
-        fields={'version','kind','connection_handle','session_epoch','incarnation','request_id','sample'}
-        if (self._apply_motion is None or set(command)!=fields or type(command.get('version')) is not int or
-            command['version']!=1 or type(command.get('connection_handle')) is not int or
-            command['connection_handle']!=self._handle or command.get('session_epoch')!=self._epoch or
-            type(command.get('incarnation')) is not str or not re.fullmatch(r'[0-9a-f]{32}',command['incarnation']) or
-            self._motion_incarnation is not None and self._motion_incarnation!=command['incarnation'] or
-            self._job_incarnation is not None and self._job_incarnation!=command['incarnation'] or
-            self._authority_grant is not None and self._authority_grant['incarnation']!=command['incarnation']):
+        required_fields = {'version', 'kind', 'connection_handle', 'session_epoch',
+                           'incarnation', 'request_id', 'sample'}
+        if (self._apply_motion is None or set(command) != required_fields or
+                type(command.get('version')) is not int or command['version'] != 1 or
+                type(command.get('connection_handle')) is not int or
+                command['connection_handle'] != self._handle or command.get('session_epoch') != self._epoch or
+                type(command.get('incarnation')) is not str or
+                not re.fullmatch(r'[0-9a-f]{32}', command['incarnation']) or
+                self._motion_incarnation is not None and self._motion_incarnation != command['incarnation'] or
+                self._job_incarnation is not None and self._job_incarnation != command['incarnation'] or
+                self._authority_grant is not None and self._authority_grant['incarnation'] != command['incarnation']):
             raise ValueError('invalid motion command')
-        despawn=command['kind']=='motion_despawn'
-        sample=motion_value(command['sample'],despawn=despawn)
-        if type(command['request_id']) is not int or command['request_id']!=sample['sequence']:
+
+        is_despawn = command['kind'] == 'motion_despawn'
+        sample = motion_value(command['sample'], despawn=is_despawn)
+        if type(command['request_id']) is not int or command['request_id'] != sample['sequence']:
             raise ValueError('motion request identity mismatch')
-        key=(sample['epoch'],sample['generation'],sample['index'])
-        prior=self._motion_tracks.get(key)
-        if prior is None:
-            if despawn or len(self._motion_tracks)>=100000:raise ValueError('unknown motion lifetime')
-            current=self._motion_current.get((sample['epoch'],sample['index']))
-            if current is not None and not self._motion_tracks[current]['closed']:
+        track_key = (sample['epoch'], sample['generation'], sample['index'])
+        prior_track = self._motion_tracks.get(track_key)
+        if prior_track is None:
+            if is_despawn or len(self._motion_tracks) >= 100000:
+                raise ValueError('unknown motion lifetime')
+            current_track = self._motion_current.get((sample['epoch'], sample['index']))
+            if current_track is not None and not self._motion_tracks[current_track]['closed']:
                 raise ValueError('previous motion lifetime active')
-        elif prior['closed'] or sample['sequence']<=prior['sequence']:
+        elif prior_track['closed'] or sample['sequence'] <= prior_track['sequence']:
             raise ValueError('stale motion lifetime')
-        if not despawn and prior:
-            if sample['source_time']<=prior['time']:raise ValueError('non-monotone motion time')
-            if sample['sector_macro']!=prior['frame'] and sample['velocity'] is not None:
+        if not is_despawn and prior_track:
+            if sample['source_time'] <= prior_track['time']:
+                raise ValueError('non-monotone motion time')
+            if sample['sector_macro'] != prior_track['frame'] and sample['velocity'] is not None:
                 raise ValueError('frame transition requires unknown velocity')
-        self._quiet();self._motion_incarnation=command['incarnation']
-        digest=motion_digest(sample,despawn=despawn);candidate=copy.deepcopy(sample)
-        confirmed=self._apply_motion(candidate,despawn)
-        self._within();self._quiet()
-        if motion_digest(candidate,despawn=despawn)!=digest:raise ValueError('motion callback mutated sample')
-        if confirmed is not True:raise RuntimeError('motion sample not accepted')
-        self._motion_preflight=None
-        self._motion_tracks[key]={'sequence':sample['sequence'],'closed':despawn,
-            'time':None if despawn else sample['source_time'],'frame':None if despawn else sample['sector_macro'],
-            'digest':None if despawn else digest}
-        self._motion_current[(sample['epoch'],sample['index'])]=key
-        reply={k:command[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
-        reply.update(kind='motion_receipt',status='accepted',sample_sha256=digest)
-        self._out=json.dumps(reply,sort_keys=True,separators=(',', ':')).encode()+b'\n'
+
+        self._quiet()
+        self._motion_incarnation = command['incarnation']
+        sample_digest = motion_digest(sample, despawn=is_despawn)
+        callback_sample = copy.deepcopy(sample)
+        callback_confirmed = self._apply_motion(callback_sample, is_despawn)
+        self._within()
+        self._quiet()
+        if motion_digest(callback_sample, despawn=is_despawn) != sample_digest:
+            raise ValueError('motion callback mutated sample')
+        if callback_confirmed is not True:
+            raise RuntimeError('motion sample not accepted')
+        self._motion_preflight = None
+        self._motion_tracks[track_key] = {'sequence': sample['sequence'], 'closed': is_despawn,
+            'time': None if is_despawn else sample['source_time'],
+            'frame': None if is_despawn else sample['sector_macro'],
+            'digest': None if is_despawn else sample_digest}
+        self._motion_current[(sample['epoch'], sample['index'])] = track_key
+        receipt = {k: command[k] for k in ('version', 'connection_handle', 'session_epoch', 'incarnation', 'request_id')}
+        receipt.update(kind='motion_receipt', status='accepted', sample_sha256=sample_digest)
+        self._out = json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode() + b'\n'
 
     def _motion_apply(self,command):
         from .experimental_tcp_motion import motion_value, motion_digest
