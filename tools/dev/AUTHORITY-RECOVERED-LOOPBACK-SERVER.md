@@ -607,6 +607,15 @@ fully confirmed samples, but did not record enough detail to establish whether
 the source produced a sample, TCP delivery started, or a particular deadline
 expired. No owned X4 processes remained according to the result.
 
+The seventh attempt, `.local/authority-motion-client-once-07`, retained the
+same guards and added finer progress counters. Its first pull staged one locally
+prevalidated source sample, but did not complete or record a confirmed client
+receipt. The operation failed with `saved baseline guard failed:
+operation_deadline` after the pull spent 304.25 s under its 300 s deadline.
+The zero confirmed-receipt count does not exclude a message having reached the
+client before a later failure. The supervisor reported no owned X4 processes
+remaining. This result does not demonstrate visible motion or gameplay.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
