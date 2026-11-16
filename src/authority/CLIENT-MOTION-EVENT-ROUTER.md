@@ -57,5 +57,12 @@ state, stale and unknown callbacks, STOP fences and reentrancy with simulated
 owners and callbacks. `tests/authority_client_motion_router_x4.lua` composes
 the router with actual local Lua motion owners and saved/replica binders, using
 fake X4 ABI and simulated MD, and rotates the local owner and nonce after STOP.
+The separate `tools/dev/authority_recovered_client_motion_install.py` prepares
+an additive, read-only, one-shot diagnostic overlay and secret redaction. Its
+Lua and installer tests use a simulated X4 environment. The supervisor still
+must install and protect that overlay, hand off the separate UDP FD exclusively,
+monitor errors through pause and cleanup, and fence STOP before allowing pause.
+The one-shot lease cannot resume after a subsequent join pause.
+
 No X4 process, real MD serialization, FD handoff, Windows, internet, visible
-motion or gameplay is covered.
+motion or gameplay is covered by these router and installer tests.
