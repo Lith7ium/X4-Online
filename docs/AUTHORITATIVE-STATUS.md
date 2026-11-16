@@ -78,6 +78,9 @@ Native Linux evidence so far:
   teleport and reported two guarded matching local player-control readbacks
   while paused. This is a single local case, not demonstrated flight, a free
   seat, cross-client synchronization, Windows/Internet or gameplay.
+* A default-off, read-only player-flight observer has synthetic and schema
+  coverage, but has not yet been integrated into or run in a native X4 flight
+  test. Its samples do not establish input or the cause of movement.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
   accepted a trusted client load claim over TCP, and confirmed resume and pause
   through TCP participant control. A second join was simulated. Another run
@@ -128,6 +131,7 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [player-seat experiment](../tools/dev/AUTHORITY-PLAYER-SEAT-EXPERIMENT.md),
 [positive-seat search](../tools/dev/AUTHORITY-POSITIVE-SEAT-SEARCH.md),
 [local player-control probe](../tools/dev/AUTHORITY-PLAYER-CONTROL-ONCE.md),
+[player-flight observer preparation](../tools/dev/AUTHORITY-PLAYER-FLIGHT-OBSERVER.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-sector local creation](../tools/dev/AUTHORITY-SECTOR-CREATE-PREPARATION.md),
