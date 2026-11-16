@@ -220,4 +220,84 @@ do
  assert(c:resolve(2)); c:on_event('Actor', 'local-ship') -- could be stale
  assert(c:state() == 'idle' and #done == 2 and done[2][2] == 'local-ship')
 end
+
+-- Optional correlated responses retain exact 64-bit actor IDs as text and
+-- must reject an old response even when its type matches a later request.
+do
+ local nonce=string.rep('b',32)
+ local actor='local-actor'; local actor_id='18446744073709551615'; local actor_hex='0xffffffffffffffff'
+ local c,sent,done=fixture({correlation_nonce=nonce,
+  valid=function(v) return v==actor end,
+  key=function(v) if v==actor or v=='md-actor' then return actor_id end end,
+  to_md_actor=function(v,k) assert(v==actor and k==actor_id);return 'md-actor' end,
+  from_md_actor=function(s) assert(s==actor_hex);return actor end})
+ assert(c:initialize());assert(sent[1].params.request_id==nonce..':1')
+ assert(c:on_event('Correlated',nonce..':1|Initialized|'..string.rep('a',32)))
+ assert(c:status());assert(sent[2].params.request_id==nonce..':2')
+ assert(c:on_event('Correlated',nonce..':2|Epoch|'..string.rep('a',32)))
+ assert(c:on_event('Correlated',nonce..':2|Count|4'))
+ assert(done[2][2].count==4)
+ assert(c:enroll(actor));assert(c:on_event('Correlated',nonce..':3|Enrolled|5'))
+ assert(done[3][2]==5)
+ assert(c:resolve(5));assert(c:on_event('Correlated',nonce..':4|Actor|'..actor_hex))
+ assert(done[4][2]==actor)
+ assert(c:resolve(6))
+ assert(not c:on_event('Correlated',nonce..':4|Actor|'..actor_hex))
+ expect_failed(c);assert(#done==4)
+end
+-- Uncorrelated replies cannot complete a correlated request, and a malformed
+-- numeric representation must not be silently rounded to a Lua number.
+do
+ local c,_,done=fixture({correlation_nonce=string.rep('b',32),from_md_actor=function() end})
+ assert(c:enroll('local-ship'));assert(not c:on_event('Enrolled',1));expect_failed(c);assert(#done==0)
+end
+do
+ local n=string.rep('c',32)
+ local c,_,done=fixture({correlation_nonce=n,from_md_actor=function() end})
+ assert(c:enroll('local-ship'))
+ assert(not c:on_event('Correlated',n..':1|Enrolled|9007199254740992'));expect_failed(c);assert(#done==0)
+end
+
+-- Correlation must precede actor conversion; stale replies cannot even invoke
+-- a caller's converter, and mismatched conversion keys cannot be accepted.
+do
+ local n=string.rep('d',32);local conversions=0
+ local c,_,done=fixture({correlation_nonce=n,from_md_actor=function() conversions=conversions+1;return 'local-ship' end})
+ assert(c:resolve(1))
+ assert(not c:on_event('Correlated',n..':2|Actor|0x7b'))
+ expect_failed(c);assert(conversions==0 and #done==0)
+end
+do
+ local n=string.rep('e',32)
+ local c,_,done=fixture({correlation_nonce=n,from_md_actor=function() return 'local-ship' end})
+ assert(c:resolve(1))
+ assert(not c:on_event('Correlated',n..':1|Actor|0x7b'))
+ expect_failed(c);assert(#done==0)
+end
+-- Hex parsing is bounded to the uint64 domain, rejects zero and accepts both
+-- cases and leading zeroes without precision loss.
+for _,pair in ipairs({{'0x1','1'}, {'0X0000200000000001','35184372088833'},
+                      {'0x20000000000001','9007199254740993'},
+                      {'0xFFFFFFFFFFFFFFFF','18446744073709551615'}}) do
+ local n=string.rep('f',32);local actor='local-actor'
+ local c,_,done=fixture({correlation_nonce=n,from_md_actor=function() return actor end,
+  valid=function(v) return v==actor end,
+  key=function(v) if v==actor or v=='md-actor' then return pair[2] end end,
+  to_md_actor=function() return 'md-actor' end})
+ assert(c:resolve(1));assert(c:on_event('Correlated',n..':1|Actor|'..pair[1]))
+ assert(#done==1 and done[1][2]==actor)
+end
+for _,bad in ipairs({'0x0','0x0000','0x10000000000000000','123','0x','0xg'}) do
+ local n=string.rep('f',32);local conversions=0
+ local c,_,done=fixture({correlation_nonce=n,from_md_actor=function() conversions=conversions+1 end})
+ assert(c:resolve(1));assert(not c:on_event('Correlated',n..':1|Actor|'..bad))
+ expect_failed(c);assert(#done==0 and conversions==0)
+end
+-- A correctly correlated wrong-kind event must not invoke actor conversion.
+do
+ local n=string.rep('f',32);local conversions=0
+ local c,_,done=fixture({correlation_nonce=n,from_md_actor=function() conversions=conversions+1 end})
+ assert(c:status());assert(not c:on_event('Correlated',n..':1|Actor|0x1'))
+ expect_failed(c);assert(conversions==0 and #done==0)
+end
 print('synthetic ship registry client contract passed')

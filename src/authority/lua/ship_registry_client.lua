@@ -1,10 +1,8 @@
 -- Opt-in local adapter for the experimental X4AuthorityShipRegistry MD cue.
 -- No game calls, callbacks, retries, networking or installation on import.
 --
--- IMPORTANT: MD replies have no request ID. One outstanding request prevents
--- ordinary overlap, but a delayed duplicate reply of the same kind can be
--- mistaken for a subsequent request's reply. This adapter cannot reliably
--- correlate all replies and is not a production correlation protocol.
+-- Legacy mode has uncorrelated replies. Correlated mode is opt-in and still
+-- requires native validation and a fresh caller-supplied nonce per adapter.
 local M = {}
 local SCREEN = 'X4AuthorityShipRegistry'
 local MAX = 9007199254740991
@@ -17,6 +15,25 @@ local function finite(n)
 end
 local function key_ok(v)
  return type(v)=='string' and #v>0 and #v<=256
+end
+-- Convert the observed MD hexadecimal representation to a decimal key using
+-- digit arithmetic only; never round an actor ID through a Lua number.
+local function decimal_actor(hex)
+ if type(hex)~='string' or not hex:match('^0[xX][0-9a-fA-F]+$') or #hex>18 then return nil end
+ local decimal='0'
+ for i=3,#hex do
+  local digit=tonumber(hex:sub(i,i),16)
+  local carry=digit;local out={}
+  for j=#decimal,1,-1 do
+   local n=(decimal:byte(j)-48)*16+carry
+   out[#out+1]=string.char(48+n%10);carry=math.floor(n/10)
+  end
+  while carry>0 do out[#out+1]=string.char(48+carry%10);carry=math.floor(carry/10) end
+  decimal=table.concat(out):reverse():gsub('^0+','')
+  if decimal=='' then decimal='0' end
+ end
+ if decimal=='0' then return nil end
+ return decimal
 end
 
 -- issue(screen, control, args), key(actor), to_md_actor(actor, key),
@@ -33,6 +50,13 @@ function M.new(o)
  for _,name in ipairs({'issue','key','to_md_actor','valid','clock','complete'}) do
   assert(type(o[name])=='function', name..' required')
  end
+ local correlated=o.correlation_nonce~=nil
+ if correlated then
+  assert(type(o.correlation_nonce)=='string' and #o.correlation_nonce==32 and
+   o.correlation_nonce:match('^[0-9a-f]+$'), 'invalid correlation nonce')
+  assert(type(o.from_md_actor)=='function', 'from_md_actor required')
+ end
+ local next_request,pending_request=1,nil
  local state,pending,deadline,last_clock,seen_epoch='idle',nil,nil,nil,false
  local issuing=false
  local generation={}
@@ -42,7 +66,7 @@ function M.new(o)
  local function stop(reason)
   if state~='closed' then state='failed' end
   generation={}
-  pending,deadline,pending_actor,pending_key=nil,nil,nil,nil
+  pending,deadline,pending_actor,pending_key,pending_request=nil,nil,nil,nil,nil
   return false,reason
  end
  -- An injected function may re-enter any public method. Check both state and
@@ -88,6 +112,12 @@ function M.new(o)
   if state~='idle' then return stop('not_idle') end
   local ok,t=check_deadline();if not ok then return false,t end
   if state~='idle' then return stop('state_changed_before_dispatch') end
+  if correlated then
+   if next_request>MAX then return stop('request_ids_exhausted') end
+   pending_request=o.correlation_nonce..':'..string.format('%.0f',next_request)
+   next_request=next_request+1
+   args.request_id=pending_request
+  end
   pending,deadline,state=op,t+o.timeout,'pending'
   generation={}
   if not finite(deadline) then return stop('invalid_deadline') end
@@ -111,7 +141,7 @@ function M.new(o)
   if not ok or result~=true or state~='delivering' then return stop('completion_failed') end
   within,reason=check_deadline();if not within then return false,reason end
   if state~='delivering' or pending~=op then return stop('state_changed_after_completion') end
-  pending,deadline,pending_actor,pending_key=nil,nil,nil,nil
+  pending,deadline,pending_actor,pending_key,pending_request=nil,nil,nil,nil,nil
   state='idle';generation={};return true
  end
  function api:initialize() return begin('Initialize',{epoch=o.epoch}) end
@@ -132,6 +162,24 @@ function M.new(o)
   if state~='pending' then return stop('unexpected_event') end
   if issuing then return stop('event_during_dispatch') end
   local ok,reason=check_deadline();if not ok then return false,reason end
+  if correlated then
+   if name~='Correlated' or type(value)~='string' or #value>512 then return stop('uncorrelated_event') end
+   local request,kind,payload=value:match('^([0-9a-f]+:%d+)|([A-Za-z]+)|([^|]*)$')
+   if request~=pending_request then return stop('stale_or_invalid_request') end
+   name,value=kind,payload
+   if kind=='Count' or kind=='Enrolled' then
+    if not payload:match('^%d+$') or (#payload>1 and payload:sub(1,1)=='0') then return stop('invalid_integer') end
+    value=tonumber(payload)
+    if not integer(value,0) or string.format('%.0f',value)~=payload then return stop('invalid_integer') end
+   elseif kind=='Actor' then
+    if pending~='Resolve' then return stop('unexpected_event') end
+    local expected=decimal_actor(payload)
+    if not expected then return stop('invalid_actor') end
+    local good,actor=invoke(o.from_md_actor,payload)
+    if not good or actor_key(actor)~=expected then return stop('invalid_actor') end
+    value=actor
+   end
+  end
   if name=='Refused' or name=='Unavailable' or name=='Faulted' or name=='Uninitialized' then
    return stop('registry_'..name)
   elseif pending=='Initialize' and name=='Initialized' and value==o.epoch then
@@ -157,7 +205,7 @@ function M.new(o)
   return true
  end
  function api:close()
-  state='closed';generation={};pending,deadline,pending_actor,pending_key=nil,nil,nil,nil
+  state='closed';generation={};pending,deadline,pending_actor,pending_key,pending_request=nil,nil,nil,nil,nil
   return true
  end
  function api:state() return state end

@@ -48,12 +48,35 @@ adapter returns false and faults, but cannot undo effects already performed by
 that callback. Actor conversion before a request is dispatched is outside the
 request deadline and likewise cannot be preempted.
 
-**Correlation limit:** the existing MD responses do not include a request ID.
+**Legacy correlation limit:** without the optional correlation mode, MD responses do not include a request ID.
 An unexpected event while idle, a late event after timeout, and wrong response
 types are rejected. However, a delayed duplicate of the expected event from an
 earlier request is indistinguishable from the response to a new request of the
 same type. Serialization and a new adapter do not remove that ambiguity. The
-caller must not use this adapter as a reliably correlated production protocol;
-that requires an independently validated correlation or fencing mechanism.
+caller must not use legacy mode as a reliably correlated production protocol.
+
+For an isolated experiment, specify `correlation_nonce` and `from_md_actor` in
+the constructor. The nonce must be a fresh 32-character lowercase hexadecimal
+value for every adapter instance, including across game/process reloads; its
+uniqueness and event fencing are the caller's responsibility. The adapter
+adds this nonce and a monotonically increasing local request number to each
+MD request, and accepts only the matching `Correlated` response event. A stale
+or malformed response faults the adapter; it is not retried. The caller must
+register and route the full `X4AuthorityShipRegistry.Correlated` event before
+dispatch and exclusively own registry requests and events. Legacy responses
+and their original payloads remain in place when no request ID is supplied.
+
+In this mode the MD actor is expected in hexadecimal text (`0x` plus one to
+sixteen hexadecimal digits). `from_md_actor(text)` must convert it directly to
+an exact local actor without passing through a Lua number, and `key(actor)`
+must return its canonical decimal ID. The adapter independently converts the
+hexadecimal text using digit arithmetic and checks this key before the existing
+local actor checks. A previous separate native experiment observed a matching
+hexadecimal reference for one local ship; this new path has not been run in X4. Counts and indices must be
+exact safe Lua integers. Both MD formatting and callback behaviour need native
+X4 validation; schema and synthetic tests alone do not establish that these
+events are emitted or that actor text can be converted in X4. A unique request
+ID does not authenticate or fence arbitrary senders, undo MD side effects,
+establish global identity, or make this a production protocol.
 None of the API establishes cross-instance binding, creation/destruction
 coverage, multiplayer admission, or gameplay.
