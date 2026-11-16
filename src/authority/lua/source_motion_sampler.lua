@@ -155,10 +155,16 @@ function M.new_x4(c)
  local frozen={};for k,v in pairs(c)do frozen[k]=v end;c=frozen
  assert(type(c.descriptor)=='table' and type(c.descriptor.new_x4)=='function')
  assert(type(c.resolve)=='table' and type(c.resolve.actor_u64)=='function' and c.resolve==X4LAN_RESOLVE_STRING)
- assert(type(c.expected_save_path)=='string' and type(c.guard)=='function' and type(c.binding_guard)=='function'
+ assert(type(c.expected_save_path)=='string' and type(c.guard)=='function' and type(c.binding_guard)=='function' and type(c.fault)=='function'
   and type(GetCurRealTime)=='function' and type(GetComponentData)=='function' and type(ConvertStringToLuaID)=='function'
   and type(ConvertIDTo64Bit)=='function')
  local opts={};for k,v in pairs(c)do opts[k]=v end
+ assert(c.diagnostics==nil or type(c.diagnostics)=='boolean')
+ local binding_stage='none';local report_fault=c.fault
+ opts.fault=function(reason)
+  if c.diagnostics and binding_stage~='none' then return report_fault(reason..'_'..binding_stage) end
+  return report_fault(reason)
+ end
  local resolve_actor,new_descriptor=c.resolve.actor_u64,c.descriptor.new_x4
  local component_data,to_lua_id,to64,external_binding=GetComponentData,ConvertStringToLuaID,ConvertIDTo64Bit,c.binding_guard
  opts.clock=GetCurRealTime
@@ -168,15 +174,22 @@ function M.new_x4(c)
  end
  opts.binding_guard=function(row,actor)
   local function free()
+   binding_stage='actor_key'
    local key=opts.actor_key(actor);if not key then return false end
    local original=resolve_actor(actor);if not original then return false end
+   binding_stage='id_convert'
    local id=to_lua_id(key);if not id then return false end
+   binding_stage='id_roundtrip'
    local from_id=resolve_actor(id);if not from_id or from_id~=original then return false end
    local roundtrip=resolve_actor(to64(id));if not roundtrip or roundtrip~=original then return false end
+   binding_stage='dock_values'
    local docked,docking,stored=component_data(id,'isdocked','isdocking','isinternallystored')
    return docked==false and docking==false and stored==false
   end
-  return free() and external_binding(row,actor)==true and free()
+  if not free() then return false end
+  binding_stage='external_binding'
+  if external_binding(row,actor)~=true or not free() then return false end
+  binding_stage='none';return true
  end
  opts.reader_factory=function(row,actor,request)
   return new_descriptor({enabled=true,epoch=c.epoch,request_id=request,timeout=c.timeout,

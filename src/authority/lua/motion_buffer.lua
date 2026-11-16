@@ -8,14 +8,14 @@ local function finite(n)
  return type(n)=='number' and n==n and n~=math.huge and n~=-math.huge
 end
 local function frame(v)
- return type(v)=='string' and #v>0 and #v<=64 and v:match('^[A-Za-z0-9_.%-]+$')~=nil
+ return type(v)=='string' and #v>0 and #v<=128 and v:match('^[A-Za-z0-9_.%-]+$')~=nil
 end
 local function angle(a)
  return (a+PI)%(2*PI)-PI
 end
-local function vector(v, israte)
- if type(v)~='table' or #v~=6 then return false end
- for i=1,6 do
+local function vector(v, israte, dimensions)
+ if type(v)~='table' or #v~=dimensions then return false end
+ for i=1,dimensions do
   local limit=i<=3 and (israte and 100000 or 50000000) or 2*PI
   if not finite(v[i]) or math.abs(v[i])>limit then return false end
  end
@@ -23,7 +23,7 @@ local function vector(v, israte)
 end
 local function copy(v)
  if not v then return nil end
- return {v[1],v[2],v[3],v[4],v[5],v[6]}
+ local out={};for i=1,#v do out[i]=v[i] end;return out
 end
 local function speed(v)
  if not v then return 0 end
@@ -32,35 +32,40 @@ end
 local function timestamp(t)
  return finite(t) and t>=0 and t<=1e12
 end
-local function valid_sample(s)
+local function valid_sample(s,dimensions)
  return type(s)=='table' and frame(s.frame) and type(s.sequence)=='number' and
   s.sequence%1==0 and s.sequence>=1 and s.sequence<=MAX_SEQUENCE and
-  timestamp(s.source_time) and vector(s.pose,false) and (s.rate==nil or vector(s.rate,true))
+  timestamp(s.source_time) and vector(s.pose,false,dimensions) and (s.rate==nil or vector(s.rate,true,dimensions))
 end
 -- A wrapped-Euler derivative is useful for extrapolation, but is not an engine
 -- native angular-velocity vector. No derivative is returned across frames,
 -- missing samples, zero/negative time, excessive gaps or out-of-bounds values.
 function M.estimate(previous, sample, max_gap)
- if not valid_sample(previous) or not valid_sample(sample) or previous.frame~=sample.frame or
+ local dimensions=type(sample)=='table' and type(sample.pose)=='table' and #sample.pose or 0
+ if (dimensions~=3 and dimensions~=6) or not valid_sample(previous,dimensions) or not valid_sample(sample,dimensions) or previous.frame~=sample.frame or
     not finite(max_gap) or max_gap<=0 or max_gap>60 then return nil end
  local dt=sample.source_time-previous.source_time
  if dt<=.001 or dt>max_gap or sample.sequence<=previous.sequence then return nil end
  local rate={}
- for i=1,6 do
+ for i=1,dimensions do
   local delta=sample.pose[i]-previous.pose[i]
   rate[i]=(i>3 and angle(delta) or delta)/dt
  end
- if not vector(rate,true) then return nil end
+ if not vector(rate,true,dimensions) then return nil end
  return rate
 end
 function M.new(options)
  options=options or {}
  assert(type(options)=='table', 'options must be a table')
- local known={delay=true,horizon=true,stale=true,teleport_distance=true,clock_leak=true,slew=true}
+ local known={delay=true,horizon=true,stale=true,teleport_distance=true,clock_leak=true,slew=true,dimensions=true,hold_only=true}
  for k in pairs(options) do assert(known[k], 'unknown motion option') end
  local cfg={delay=options.delay or .15,horizon=options.horizon or .35,
   stale=options.stale or .75,teleport_distance=options.teleport_distance or 10000,
   clock_leak=options.clock_leak or .002,slew=options.slew or .1}
+ local dimensions=options.dimensions or 6
+ assert(dimensions==3 or dimensions==6,'invalid motion dimensions')
+ assert(options.hold_only==nil or type(options.hold_only)=='boolean','invalid hold mode')
+ local hold_only=options.hold_only==true
  for k,v in pairs(cfg) do
   assert(finite(v) and v>=0, 'invalid motion option: '..k)
  end
@@ -70,7 +75,7 @@ function M.new(options)
  local lag, lag_at, last_render = nil, nil, nil
  local track={}
  function track:push(s,arrival)
-  if not valid_sample(s) or not timestamp(arrival) then return false,'invalid' end
+  if not valid_sample(s,dimensions) or not timestamp(arrival) then return false,'invalid' end
   if s.sequence<=last_sequence or (last_source and s.source_time<=last_source) or
      (last_arrival and arrival<last_arrival) or (last_render and arrival<last_render) then return false,'stale' end
   local last=samples[#samples]
@@ -87,10 +92,12 @@ function M.new(options)
    if distance>allowed then reason='teleport' end
   end
   if reason~='append' then samples={} end
-  if offset and last_arrival and arrival>last_arrival then
-   offset=offset+cfg.clock_leak*(arrival-last_arrival)
+  if not hold_only then
+   if offset and last_arrival and arrival>last_arrival then
+    offset=offset+cfg.clock_leak*(arrival-last_arrival)
+   end
+   offset=math.min(offset or math.huge,arrival-s.source_time)
   end
-  offset=math.min(offset or math.huge,arrival-s.source_time)
   local rate=copy(s.rate)
   if reason~='append' then rate=nil end
   samples[#samples+1]={frame=s.frame,sequence=s.sequence,source_time=s.source_time,
@@ -104,6 +111,10 @@ function M.new(options)
      (last_arrival and now<last_arrival) then return nil,'invalid-clock' end
   if #samples==0 then return nil,'empty' end
   last_render=now
+  if hold_only then
+   local last=samples[#samples]
+   return {frame=last.frame,source_sequence=last.sequence,pose=copy(last.pose),phase='held-clock-unverified'}
+  end
   local wanted=offset+cfg.delay
   -- d(source render time)/d(observer time). A snap or repeated clock value
   -- has no established derivative. A moving lag changes the displayed rate.
@@ -131,7 +142,7 @@ function M.new(options)
    local a,b=samples[index-1],samples[index]
    if target<=b.source_time then
     local t=(target-a.source_time)/(b.source_time-a.source_time)
-    for i=1,6 do
+    for i=1,dimensions do
      local delta=b.pose[i]-a.pose[i]
      out.pose[i]=i>3 and angle(a.pose[i]+angle(delta)*t) or a.pose[i]+delta*t
     end
@@ -151,11 +162,11 @@ function M.new(options)
   end
   local dt=math.min(cfg.horizon,math.max(0,target-last.source_time))
   if last.rate then
-   for i=1,6 do
+   for i=1,dimensions do
     local value=last.pose[i]+last.rate[i]*dt
     out.pose[i]=i>3 and angle(value) or value
    end
-   if not vector(out.pose,false) then return nil,'out-of-bounds' end
+   if not vector(out.pose,false,dimensions) then return nil,'out-of-bounds' end
    out.phase=target-last.source_time<cfg.horizon and 'extrapolated' or 'frozen'
    if out.phase=='frozen' and clock_factor then out.linear_velocity={0,0,0}
    elseif clock_factor then

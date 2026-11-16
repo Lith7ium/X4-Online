@@ -18,7 +18,7 @@ class SourceSingle(unittest.TestCase):
                 subprocess.run(['luajit','tests/authority_source_multi_job_owner.lua',scenario],cwd=ROOT,
                                check=True,capture_output=True,text=True,timeout=5)
     def test_overflow_and_changed_actor_fail_without_next_ack(self):
-        for scenario in ('overflow','actor','known'):
+        for scenario in ('overflow','actor','known','diagnostic'):
             with self.subTest(scenario=scenario):
                 subprocess.run(['luajit','tests/authority_source_multi_job_owner.lua',scenario],cwd=ROOT,
                                check=True,capture_output=True,text=True,timeout=5)

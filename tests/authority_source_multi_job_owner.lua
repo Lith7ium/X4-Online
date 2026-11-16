@@ -44,7 +44,7 @@ local function host_factory(report,source_acked,fail,finish)
 end
 local descriptor_cb
 local app=assert(owner_module.new({enabled=true,lease=lease,attempt=attempt,epoch=epoch,generation=gen,
- descriptor_request=nonce,sequence=1,index=3,max_events=not continuous and 2 or nil,continuous=continuous,timeout=35,clock=function()return now end,guard=function()return true end,
+ descriptor_request=nonce,sequence=1,index=3,max_events=not continuous and 2 or nil,continuous=continuous,diagnostics=scenario=='diagnostic',timeout=35,clock=function()return now end,guard=function()return true end,
  net=net,ipc=ipc,gate=gate,host_factory=host_factory,register_descriptor=function(fn)descriptor_cb=fn;return true end,
  on_confirmed=function(row,actor)
   assert(acked==row.sequence and actor==row.sequence+41 and out[#out]:find('|REARMED|',1,true))
@@ -77,6 +77,11 @@ for n=1,event_count do
  descriptor_cb(nil,'ok');assert(app:state()=='delivering')
  local id=epoch..'|'..gen..'|'..n..'|'..(n+2)
  assert(out[#out]:find('|CANDIDATE|'..id..'|',1,true))
+ if scenario=='diagnostic' then
+  incoming[#incoming+1]='foreign';now=now+.11
+  assert(not app:tick() and app:state()=='failed' and fault=='tick_ipc_packet_foreign_packet' and acked==0)
+  print('correlated IPC fault diagnosed without acknowledgment');return
+ end
  incoming[#incoming+1]='P|'..lease..'|'..attempt..'|BIND|'..id..'|2|peer_1|'..inc1..'|peer_2|'..inc2
  tick();assert(acked==n-1)
  incoming[#incoming+1]='P|'..lease..'|'..attempt..'|RECEIPT|'..id..'|peer_1|'..inc1

@@ -51,3 +51,20 @@ conversion='rounded_id';local before=dock_reads;local bad=new_high()
 assert(not bad:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},high) and dock_reads==before)
 conversion='high_exact';local good=new_high()
 assert(good:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},high) and dock_reads>before)
+
+-- Opt-in fault stages identify a failed conversion or docking read without
+-- emitting actor IDs or raw property values; the failure still fences sampling.
+local function diagnostic()
+ local reasons={}
+ local z=assert(sampler.new_x4({enabled=true,diagnostics=true,epoch=epoch,generation=generation,nonce=nonce,max_tracks=10,scan_budget=2,
+  interval=.1,timeout=5,min_dt=.02,max_dt=1,descriptor=descriptor,resolve=X4LAN_RESOLVE_STRING,
+  expected_save_path='/private/45841/save',guard=function()return true end,binding_guard=function()return true end,
+  fault=function(v)reasons[#reasons+1]=v end}))
+ return z,reasons
+end
+conversion='wrong_id';local invalid,why=diagnostic()
+assert(not invalid:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},41))
+assert(why[1]=='register_id_roundtrip')
+conversion='good';docked=true;local unavailable,why2=diagnostic()
+assert(not unavailable:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},41))
+assert(why2[1]=='register_dock_values')

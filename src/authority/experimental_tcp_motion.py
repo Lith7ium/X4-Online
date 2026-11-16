@@ -62,10 +62,16 @@ class ExperimentalTCPMotion:
             raise ValueError('invalid enabled motion owner')
         delivery._host._check()
         if getattr(delivery, '_motion_owner', None) is not None:raise ValueError('motion owner already bound')
-        delivery._motion_owner=self;self._delivery=delivery;self._tracks={};self._current={}
+        delivery._motion_owner=self;self._delivery=delivery;self._tracks={};self._current={};self._source_owner=None;self._source_lease=None
         self._min_interval=float(min_interval);self._max_tracks=max_tracks;self._failed=False
 
-    def track(self, epoch, generation, index):
+    def _reserved(self,owner):
+        if self._source_owner is not None and (owner is None or owner is not self._source_lease):
+            self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
+            raise RuntimeError('motion delivery is reserved by its source bridge')
+
+    def track(self, epoch, generation, index, *, _source=None):
+        self._reserved(_source)
         self._delivery._host._check()
         if self._failed or self._delivery._failed:raise RuntimeError('motion owner unavailable')
         try:probe=motion_value({'version':1,'epoch':epoch,'generation':generation,'index':index,'sequence':1},despawn=True)
@@ -83,9 +89,11 @@ class ExperimentalTCPMotion:
         self._tracks[key]={'sequence':0,'time':None,'sent':None,'frame':None,'closed':False}
         self._current[(epoch,index)]=key
 
-    def send(self, raw, *, despawn=False):
+    def send(self, raw, *, despawn=False, guard=None, _source=None):
+        self._reserved(_source)
         d=self._delivery;host=d._host;host._check()
         if self._failed or d._failed:raise RuntimeError('motion owner unavailable')
+        if guard is not None and not callable(guard):raise ValueError('invalid motion operation guard')
         try:value=motion_value(raw,despawn=despawn)
         except (TypeError,ValueError):
             self._failed=True;d._failed=True;host._failed=True
@@ -115,8 +123,15 @@ class ExperimentalTCPMotion:
         host._busy=True;d._active=True
         try:
             deadline=time.monotonic()+d._timeout
+            def check_guard():
+                if guard is not None and guard() is not True:raise RuntimeError('motion operation guard failed')
+                if (time.monotonic()>=deadline or self._failed or d._failed or host._failed or
+                    host._busy is not True or d._active is not True or host._control._reader_lease is not lease):
+                    raise RuntimeError('motion operation state changed')
+            check_guard()
             ExperimentalTCPParticipants._quiet(d,peers,deadline)
             for h in handles:
+                check_guard()
                 incarnation=d._incarnations[h]
                 req={'version':1,'kind':'motion_despawn' if despawn else 'motion_snapshot',
                      'connection_handle':h,'session_epoch':host._world.session.world_epoch,
@@ -126,10 +141,12 @@ class ExperimentalTCPMotion:
                 data=json.dumps(req,sort_keys=True,separators=(',', ':'),allow_nan=False).encode('ascii')+b'\n'
                 if len(data)>MAX_MESSAGE+1:raise ValueError('motion frame too large')
                 conn,peer=peers[h];others=[p[0] for n,p in peers.items() if n!=h]
-                ExperimentalTCPParticipants._exchange(d,conn,peer,others,data,expected,deadline)
+                ExperimentalTCPParticipants._exchange(d,conn,peer,others,data,expected,deadline,check=check_guard if guard else None)
+                check_guard()
                 current,current_peers=d._peers()
                 if current!=handles or any(current_peers[k]!=peers[k] for k in handles):raise RuntimeError('motion membership changed')
                 ExperimentalTCPParticipants._quiet(d,peers,deadline)
+            check_guard()
             state['sequence']=value['sequence'];state['sent']=time.monotonic();state['closed']=despawn
             if not despawn:state['time']=value['source_time'];state['frame']=value['sector_macro']
             return True

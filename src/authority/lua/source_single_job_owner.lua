@@ -20,6 +20,7 @@ function M.new(o)
  assert(type(c.timeout)=='number' and c.timeout==c.timeout and c.timeout>0 and c.timeout<=120)
  for _,k in ipairs({'clock','guard','host_factory','descriptor_factory','register_descriptor','fault'})do assert(type(c[k])=='function',k..' required')end
  assert(c.on_confirmed==nil or type(c.on_confirmed)=='function')
+ assert(c.diagnostics==nil or type(c.diagnostics)=='boolean')
  assert(type(c.ipc)=='table' and type(c.ipc.new)=='function' and type(c.gate)=='table' and type(c.gate.new)=='function')
  assert((type(c.net)=='table' or type(c.net)=='userdata') and type(c.net.send)=='function' and type(c.net.receive)=='function')
  local state,busy='new',false;local failed=false;local last,deadline,row,actor,desc,acknowledged,source_confirmed
@@ -104,7 +105,7 @@ function M.new(o)
  end
  function api:tick()
   if busy or failed or state=='new' or state=='done' then return fail('tick_state')end
-  busy=true
+  busy=true;local detail='guard'
   local ok=pcall(function()
    assert(check())
    if state=='binding' then
@@ -139,14 +140,27 @@ function M.new(o)
     assert(host:tick() and desc:tick() and c.net:receive()==nil)
    elseif state=='delivering' then
     if acknowledged then
+     detail='host_ack'
      assert(host:state()=='waiting');assert(row and ipc:source_acked(c.epoch,row.sequence,row.index));acknowledged=false;source_confirmed=true
     elseif not source_confirmed then
+     detail='host_tick'
      assert(host:tick())
     end
-    if ipc:state()~='idle' then assert(ipc:tick())end
+    detail='ipc_tick'
+    if ipc:state()~='idle' then
+     local accepted,reason=ipc:tick()
+     if c.diagnostics and not accepted and type(reason)=='string' and #reason<=40 and reason:match('^[a-z0-9_]+$') then detail='ipc_tick_'..reason end
+     assert(accepted)
+    end
+    detail='ipc_packet'
     local p=c.net:receive()
-    if p~=nil then assert(ipc:packet(p))end
+    if p~=nil then
+     local accepted,reason=ipc:packet(p)
+     if c.diagnostics and not accepted and type(reason)=='string' and #reason<=40 and reason:match('^[a-z0-9_]+$') then detail='ipc_packet_'..reason end
+     assert(accepted)
+    end
     if ipc:state()=='idle' then
+     detail='confirmed'
      assert(source_confirmed and row)
      if c.on_confirmed then
       local frozen={epoch=row.epoch,index=row.index,sequence=row.sequence,classification=row.classification}
@@ -162,9 +176,9 @@ function M.new(o)
    elseif state=='finishing' then
     assert(send(identity('S','FINISHED')..'|'..string.format('%.0f',completed)));state='done';deadline=nil
    else error('invalid phase')end
-   assert(not failed and (state=='done' or check()))
+   detail='final_guard';assert(not failed and (state=='done' or check()))
   end)
-  busy=false;if not ok then return fail('tick')end;return true
+  busy=false;if not ok then return fail(c.diagnostics and ('tick_'..detail) or 'tick')end;return true
  end
  function api:expected_descriptor()return state=='reading' and descriptor_request or nil end
  function api:state()return state end

@@ -28,7 +28,7 @@ class MotionTCP(unittest.TestCase):
         self.stop.set()
         for thread in self.threads:thread.join(2)
         self.assertFalse(any(t.is_alive() for t in self.threads));self.assertEqual(self.errors,[])
-    def client(self,conn,handle,*,failure=False,mutate=False):
+    def client(self,conn,handle,*,failure=False,mutate=False,delay=0):
         def run():
             try:
                 conn.settimeout(3);frame=b''
@@ -39,6 +39,7 @@ class MotionTCP(unittest.TestCase):
                 assert json.loads(frame)['kind']=='accepted'
                 def accept(value,despawn):
                     self.received.append((handle,dict(value),despawn))
+                    if delay:time.sleep(delay)
                     if mutate:value['index']+=1
                     return not failure
                 app=ExperimentalTCPParticipantClient(conn,Controller(),enabled=True,epoch='a'*32,handle=handle,
@@ -102,5 +103,10 @@ class MotionTCP(unittest.TestCase):
         self.setup_pair(min_interval=10);self.assertTrue(self.motion.send(self.sample()))
         with self.assertRaises(ValueError):self.motion.send(self.sample(2,t=2))
         self.assertEqual(len(self.received),2);self.assertFalse(self.case.host._failed)
+    def test_process_guard_is_checked_while_waiting_for_readback(self):
+        self.setup_pair(delay=.4);started=time.monotonic()
+        with self.assertRaises(RuntimeError):
+            self.motion.send(self.sample(),guard=lambda:time.monotonic()-started<.12)
+        self.assertLess(time.monotonic()-started,.35);self.assertTrue(self.case.host._failed)
 
 if __name__=='__main__':unittest.main()

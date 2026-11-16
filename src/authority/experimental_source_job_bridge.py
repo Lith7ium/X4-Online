@@ -45,7 +45,7 @@ class ExperimentalSourceJobBridge:
             sock.setblocking(False);_SOCKET_OWNERS[sock]=True
         self._delivery=delivery;self._sock=sock;self._lease=lease;self._attempt=attempt
         self._epoch=epoch;self._generation=generation;self._guard=guard;self._timeout=float(timeout)
-        self._state='idle';self._owner=threading.get_ident();self._last=0;self._last_members=None
+        self._state='idle';self._owner=threading.get_ident();self._last=0;self._last_members=None;self._scheduler_owner=None;self._scheduler_lease=None
 
     @property
     def state(self):return self._state
@@ -103,7 +103,10 @@ class ExperimentalSourceJobBridge:
         if readable or bad:raise RuntimeError('unexpected queued source packet')
         self._check(deadline)
 
-    def run_one(self, *, allow_finished=False, wait_without_deadline=False):
+    def run_one(self, *, allow_finished=False, wait_without_deadline=False, _scheduler=None):
+        if self._scheduler_owner is not None and (_scheduler is None or _scheduler is not self._scheduler_lease):
+            self._state='failed';self._delivery._failed=True;self._delivery._host._failed=True
+            raise RuntimeError('source job bridge is reserved by its scheduler')
         if (type(allow_finished) is not bool or type(wait_without_deadline) is not bool or
             wait_without_deadline and not allow_finished):
             raise ValueError('invalid completion or idle option')
@@ -173,7 +176,10 @@ class ExperimentalSourceJobBridge:
             except OSError:pass
             raise
 
-    def close(self):
+    def close(self, *, _scheduler=None):
+        if self._scheduler_owner is not None and (_scheduler is None or _scheduler is not self._scheduler_lease):
+            self._state='failed';self._delivery._failed=True;self._delivery._host._failed=True
+            raise RuntimeError('source job bridge is reserved by its scheduler')
         if threading.get_ident()!=self._owner or self._state not in ('idle','finished'):raise RuntimeError('cannot close active source bridge')
         self._state='closed'
         with _SOCKET_LOCK:_SOCKET_OWNERS.pop(self._sock,None)

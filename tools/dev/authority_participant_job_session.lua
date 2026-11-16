@@ -3,6 +3,7 @@ local cfg=X4LAN_CONFIG
 if not cfg or cfg.authority_participant_job_session~=true then return end
 local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);double GetCurrentGameTime(void);]]
 local failed=false;local participant,participant_net,job,job_net_owner,engine,next_hello=nil,nil,nil,nil,nil,0
+local netlib,motion=nil,nil
 local function fail(reason)
  if not failed then
   failed=true
@@ -16,7 +17,7 @@ function X4LAN_PARTICIPANT_JOB_TICK()
   assert(ffi.C.IsPlayerValid())
   if not participant then
    engine=assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.new({enabled=true,test_profile='45841'}))
-   local lib=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
+   local lib=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))();netlib=lib
    participant_net=lib.open('127.0.0.1',cfg.authority_participant_port)
    local job_net=lib.open('127.0.0.1',cfg.authority_job_client_port)
    participant=assert(X4LAN_AUTHORITY_CONTROL_STATE.new({enabled=true,owner='isolated-client',
@@ -69,7 +70,31 @@ function X4LAN_PARTICIPANT_JOB_TICK()
     end}))
    assert(job:start())
   end
-  if job then assert(job:tick()) end
+  if job then
+   assert(job:tick())
+   if cfg.authority_motion_client_enabled==true and not motion and job:state()=='ready' then
+    local motion_net=netlib.open('127.0.0.1',cfg.authority_motion_client_port)
+    motion=assert(X4LAN_MOTION_CLIENT_OWNER.new_x4({enabled=true,net=motion_net,
+     lease=cfg.authority_motion_client_lease,attempt=cfg.authority_motion_client_attempt,
+     epoch=cfg.authority_motion_client_epoch,generation=cfg.authority_motion_client_generation,
+     nonce=cfg.authority_motion_client_nonce,timeout=cfg.authority_motion_client_timeout,
+     max_age=cfg.authority_motion_client_max_age,max_tracks=cfg.authority_motion_client_max_tracks,
+     expected_save_path=cfg.authority_load_save_path,resolve=X4LAN_RESOLVE_STRING,
+     binding=X4LAN_REPLICA_MOTION_BINDING,buffer=X4LAN_MOTION_BUFFER,guard=function()return not failed and job:state()=='ready' end,fault=fail,
+     audit=function(index,sequence,sector,source_time)
+      if type(index)~='number' or type(sequence)~='number' or type(sector)~='string' or not sector:match('^[A-Za-z0-9_]+$') or
+         type(source_time)~='number' or source_time~=source_time then return false end
+      DebugError('[X4LAN] AUTH_PARTICIPANT_MOTION BUFFERED '..string.format('%.0f',index)..' '..
+       string.format('%.0f',sequence)..' '..sector..' '..string.format('%.17g',source_time))
+      return true
+     end}))
+    assert(motion:start())
+   end
+   if motion then
+    if job:state()=='ready' then assert(motion:tick())
+    elseif motion:state()=='pending' then error('concurrent job and motion') end
+   end
+  end
  end)
  if not ok then fail() end
 end

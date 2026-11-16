@@ -16,6 +16,19 @@ class MotionTests(unittest.TestCase):
                                 capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_three_dimensional_unrelated_clocks_hold_without_prediction(self):
+        self.lua(r'''
+local m=M.new({dimensions=3,hold_only=true})
+local p={1,2,3};local v={10,0,-5}
+assert(m:push({frame=string.rep('a',128),sequence=1,source_time=1000,pose=p,rate=v},4))
+p[1]=900;v[1]=900
+local r=m:render(5);assert(r.phase=='held-clock-unverified' and r.pose[1]==1 and #r.pose==3 and r.linear_velocity==nil)
+assert(m:push({frame='other',sequence=2,source_time=2000,pose={8,9,10}},6))
+r=m:render(100000);assert(r.phase=='held-clock-unverified' and r.pose[1]==8 and r.linear_velocity==nil)
+assert(not m:push({frame='other',sequence=2,source_time=2001,pose={8,9,10}},100001))
+local legacy=M.new();assert(not legacy:push({frame='A',sequence=1,source_time=1,pose={1,2,3}},2))
+''')
+
     def test_irregular_samples_interpolate_then_extrapolate_then_freeze(self):
         self.lua(r'''
 local m=M.new({delay=.15,horizon=.35,clock_leak=0})

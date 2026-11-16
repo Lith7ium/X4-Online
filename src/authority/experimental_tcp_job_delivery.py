@@ -108,6 +108,7 @@ class ExperimentalTCPJobDelivery:
         owner; accepted queueing is not a network or client receipt.
         """
         try:
+            if self._active:raise RuntimeError('cannot enqueue during active delivery')
             members=self.membership();event=job_event(raw_event)
             if type(peer) is not dict or peer not in members:
                 raise ValueError('foreign gate peer')

@@ -214,6 +214,13 @@ by code and result, without a packet trace. Admission and client seed remain
 synthetic; birth, full coverage and cross-process frame identity are unproven.
 [Detailed evidence and limits](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#continuous-window-diagnostic).
 
+A subsequent isolated source-to-client motion-buffer diagnostic failed. The
+client logged a local creation of index 10055, while the source logged a
+generic error during delivery. No client motion-buffer marker was recorded;
+the in-flight job/motion outcome and exact fault remain unknown. Owned cleanup
+was reported confirmed. Diagnostic codes added afterward are offline-tested
+and do not establish the cause of that run. [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

@@ -25,7 +25,9 @@ not-docked/not-docking/not-stored state before and after local reads. A new
 probe is required for every observation; stale input or sequence, a failed or
 late response, lost actor, changed local actor/sector/zone, pause or failed
 context fences the instance. The caller must fence delayed old events across
-process, session and load changes and generate a fresh nonce. The arrival time
+process, session and load changes and generate a cryptographically fresh full nonce for each owner/process/load
+incarnation. Request IDs include the entire nonce, local registry index and
+per-track counter; the module cannot prove freshness across processes. The arrival time
 is a caller assertion; it does not establish source sample age, clock
 synchronization or network latency.
 

@@ -50,10 +50,24 @@ function GetComponentData()return false,false,false end
 local clock=1
 function GetCurRealTime()return clock end
 function DebugError(v)logs[#logs+1]=v end
+if arg[1]=='foreign_reason' then
+ local create=motion_ipc.new
+ motion_ipc.new=function(c)c.fault('deadbeef12345678');return create(c)end
+end
 dofile('tools/dev/authority_source_single_job_session.lua')
 local function tick()X4LAN_SOURCE_SINGLE_JOB_TICK();assert(not (logs[#logs] or ''):match('ERROR'))end
+if arg[1]=='foreign_reason' then
+ X4LAN_SOURCE_SINGLE_JOB_TICK()
+ assert(logs[#logs]=='[X4LAN] AUTH_SOURCE_SINGLE ERROR motion_ipc unknown initial')
+ return
+end
 tick();assert(jo[1]=='S|'..lease..'|'..attempt..'|HELLO|'..epoch..'|'..gen)
 assert(mo[1]=='S|'..ml..'|'..ma..'|HELLO|'..epoch..'|'..gen)
+if arg[1]=='diagnostic' then
+ mi[1]='foreign';X4LAN_SOURCE_SINGLE_JOB_TICK()
+ assert(logs[#logs]=='[X4LAN] AUTH_SOURCE_SINGLE ERROR motion_ipc packet motion_tick')
+ return
+end
 ji[1]='P|'..lease..'|'..attempt..'|BOUND|'..epoch..'|'..gen
 mi[1]='P|'..ml..'|'..ma..'|BOUND|'..epoch..'|'..gen;tick();tick()
 assert(jo[#jo]=='S|'..lease..'|'..attempt..'|ATTACHED|'..epoch..'|'..gen)

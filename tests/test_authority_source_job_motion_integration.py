@@ -10,5 +10,6 @@ class Integrated(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    lib=Path(d)/'fake.so'
    subprocess.run(['cc','-shared','-fPIC','-O2',str(ROOT/'tests/fixtures/multi_create_running_owner_abi.c'),'-o',str(lib)],check=True,capture_output=True)
-   subprocess.run(['luajit','tests/authority_source_job_motion_integration.lua'],cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(lib)),check=True,capture_output=True,text=True,timeout=5)
+   for scenario in ('normal','diagnostic','foreign_reason'):
+    subprocess.run(['luajit','tests/authority_source_job_motion_integration.lua',scenario],cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(lib)),check=True,capture_output=True,text=True,timeout=5)
 if __name__=='__main__':unittest.main()

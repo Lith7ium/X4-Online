@@ -83,16 +83,19 @@ class ExperimentalTCPParticipants:
         finally:
             self._busy = False
 
-    def _exchange(self, conn, peer, others, raw, expected, deadline):
+    def _exchange(self, conn, peer, others, raw, expected, deadline, check=None):
         control = self._host._control
         waiting = [conn, *others]
         sent = 0; data = b''
         while True:
+            if check is not None:check()
             if control._peers.get(conn) is not peer:
                 raise RuntimeError('participant connection changed')
             remaining = deadline - time.monotonic()
             if remaining <= 0: raise TimeoutError('participant operation indeterminate')
-            readable, writable, exceptional = select.select(waiting, [conn] if sent < len(raw) else [], waiting, remaining)
+            readable, writable, exceptional = select.select(waiting, [conn] if sent < len(raw) else [], waiting,
+                                                              min(remaining,.1) if check is not None else remaining)
+            if check is not None:check()
             if time.monotonic() >= deadline:
                 raise TimeoutError('participant operation indeterminate')
             if exceptional or any(s in readable for s in others):

@@ -51,7 +51,7 @@ function M.new(o)
   if not check() then return false end
   if arrival>last or last-arrival>c.max_age or request_seq>=MAX then return fail('stale_or_capacity') end
   request_seq=request_seq+1
-  pending={id=c.nonce..'-'..string.format('%.0f',request_seq),sequence=sequence,arrival=arrival}
+  pending={id=c.nonce..'-'..string.format('%.0f',c.index)..'-'..string.format('%.0f',request_seq),sequence=sequence,arrival=arrival}
   deadline=last+c.timeout;if not finite(deadline) then return fail('deadline') end
   phase='pending'
   local ok,sent=call(c.issue,'X4AuthorityReplicaMotionBind','Bind',
@@ -62,7 +62,7 @@ function M.new(o)
  function api:event(value)
   if phase~='pending' then return fail('unexpected_event') end
   if not check() or type(value)~='string' or #value>256 then return fail('response') end
-  local id,kind,rest=value:match('^([0-9a-f]+%-%d+)|([A-Za-z]+)|(.*)$')
+  local id,kind,rest=value:match('^([0-9a-f]+%-%d+%-%d+)|([A-Za-z]+)|(.*)$')
   if id~=pending.id then return fail('correlation') end
   if kind=='Unavailable' and rest=='' then return fail('unavailable') end
   local idx,actor,sector=rest:match('^([1-9]%d*)|(0[xX][0-9a-fA-F]+)|(0[xX][0-9a-fA-F]+)$')

@@ -5,7 +5,31 @@ local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(vo
 local C=ffi.C
 local failed=false;local resume_used=false;local source,control,control_net,next_hello,previous=nil,nil,nil,0,nil
 local motion,sampler,source_descriptor;local pending_confirmed,confirmed={},{}
-local function fail()if not failed then failed=true;DebugError('[X4LAN] AUTH_SOURCE_SINGLE ERROR')end end
+local stage='initial'
+local components={job=true,motion_ipc=true,sampler=true,router=true,session=true}
+local stages={initial=true,control_update=true,job_tick=true,motion_tick=true,sampler_register=true,
+ motion_request=true,sampler_tick=true,motion_empty=true}
+local reasons={unknown=true,assertion=true,event=true,start=true,start_state=true,tick=true,tick_state=true,
+ descriptor=true,unexpected_descriptor=true,unexpected_source_ack=true,unexpected_source_entry=true,
+ unexpected_window_done=true,packet=true,complete=true,register=true,sample=true,close=true}
+for _,v in ipairs({'guard','host_ack','host_tick','ipc_tick','ipc_packet','confirmed','final_guard'})do reasons['tick_'..v]=true end
+for _,kind in ipairs({'ipc_tick','ipc_packet'})do
+ for _,v in ipairs({'candidate_send','deadline_or_guard','foreign_packet','foreign_receipt','gate_ack','gate_begin',
+  'gate_create','gate_release','gate_source_ack','gate_state','gate_tick','invalid_candidate','invalid_members',
+  'invalid_packet','invalid_source_ack','partial_send','ready_send','rearm_send','source_ack_send',
+  'unexpected_candidate','unexpected_packet','unexpected_tick'})do reasons['tick_'..kind..'_'..v]=true end
+end
+for _,kind in ipairs({'register','tick','sample'})do
+ for _,v in ipairs({'actor_key','id_convert','id_roundtrip','dock_values','external_binding'})do reasons[kind..'_'..v]=true end
+end
+local function allowed(set,value)return type(value)=='string' and set[value] and value or 'unknown' end
+local function fail(component,reason)
+ if not failed then
+  failed=true
+  DebugError('[X4LAN] AUTH_SOURCE_SINGLE ERROR '..allowed(components,component)..' '..allowed(reasons,reason)..' '..allowed(stages,stage))
+ end
+end
+local function fault(component)return function(reason)fail(component,reason)end end
 local function mark(state)
  local g=tonumber(C.GetCurrentGameTime());assert(g and g==g and g>=0 and g<math.huge)
  DebugError('[X4LAN] AUTH_SOURCE_SINGLE STATE '..state..' '..string.format('%.17g',g))
@@ -35,21 +59,22 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
     host=X4LAN_AUTHORITY_JOB_REGISTRY_HOST,probe=X4LAN_AUTHORITY_JOB_REGISTRY_PROBE,
     descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,resolve=X4LAN_RESOLVE_STRING,
     ipc=X4LAN_AUTHORITY_SOURCE_JOB_IPC,gate=X4LAN_AUTHORITY_JOB_DELIVERY,
-    external_guard=function()return not failed end,fault=fail}
+    external_guard=function()return not failed end,fault=fault('job'),diagnostics=cfg.authority_source_motion_enabled==true}
    if cfg.authority_source_motion_enabled==true then
     local motion_net=assert(lib.open('127.0.0.1',cfg.authority_source_motion_port))
     motion=assert(X4LAN_AUTHORITY_SOURCE_MOTION_IPC.new({enabled=true,lease=cfg.authority_source_motion_lease,
      attempt=cfg.authority_source_motion_attempt,epoch=cfg.authority_source_epoch,generation=cfg.authority_source_generation,
-     timeout=cfg.authority_source_host_timeout,clock=GetCurRealTime,guard=function()return not failed end,net=motion_net,fault=fail}))
+     timeout=cfg.authority_source_host_timeout,clock=GetCurRealTime,guard=function()return not failed end,net=motion_net,fault=fault('motion_ipc')}))
     sampler=assert(X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER.new_x4({enabled=true,epoch=cfg.authority_source_epoch,
      generation=cfg.authority_source_generation,nonce=cfg.authority_source_motion_nonce,max_tracks=100000,scan_budget=64,
      interval=.1,timeout=cfg.authority_source_host_timeout,min_dt=.02,max_dt=1,
+     diagnostics=true,
      descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,resolve=X4LAN_RESOLVE_STRING,
      expected_save_path=cfg.authority_load_save_path,guard=function()return not failed and not C.IsGamePaused() end,
      binding_guard=function(row,actor)
       local known=confirmed[row.index]
       return known~=nil and known.sequence==row.sequence and known.actor==actor
-     end,fault=fail}))
+     end,fault=fault('sampler')}))
     owner_cfg.on_confirmed=function(row,actor)
      if failed or #pending_confirmed>=1024 or confirmed[row.index] then return false end
      confirmed[row.index]={sequence=row.sequence,actor=actor}
@@ -70,7 +95,7 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
        assert(not failed and source:state()~='failed')
       else error('unexpected descriptor response')end
      end)
-     if not ok then fail()end
+     if not ok then fail('router','event')end
     end)~=false)
     assert(motion:start())
    end
@@ -90,21 +115,22 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
    resume_used=true
    assert(control:submit('isolated-source',epoch,tonumber(id),op))
   end
-  assert(control:on_update())
-  if source:state()~='done' then assert(source:tick()) end
+  stage='control_update';assert(control:on_update())
+  if source:state()~='done' then stage='job_tick';assert(source:tick()) end
   if motion then
-   assert(motion:tick())
+   stage='motion_tick';assert(motion:tick())
    if sampler:state()=='ready' and #pending_confirmed>0 and not C.IsGamePaused() then
-    local item=table.remove(pending_confirmed,1);assert(sampler:register(item.row,item.actor))
+    stage='sampler_register';local item=table.remove(pending_confirmed,1);assert(sampler:register(item.row,item.actor))
    end
    if motion:requested() then
+    stage='motion_request'
     assert(not C.IsGamePaused())
-    assert(sampler:tick())
-    if sampler:state()=='ready' then assert(motion:complete(nil)) end
+    stage='sampler_tick';assert(sampler:tick())
+    if sampler:state()=='ready' then stage='motion_empty';assert(motion:complete(nil)) end
    end
   end
   local current=source:state()
   if current~=previous then previous=current;mark(current) end
  end)
- if not ok then fail() end
+ if not ok then fail('session','assertion') end
 end

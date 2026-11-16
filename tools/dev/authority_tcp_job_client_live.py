@@ -102,14 +102,16 @@ class SyntheticEngine:
     def save(self): self.path.write_bytes(gzip.compress(_XML.encode()));return self.path
 
 
-def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_guard=None,expected_jobs=1):
+def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_guard=None,expected_jobs=1,motion_udp=None):
     if expected_jobs is not None and (type(expected_jobs) is not int or not 1<=expected_jobs<=8):
         raise ValueError('invalid bounded job count')
     if delivery_action is not None and not callable(delivery_action):raise ValueError('invalid delivery action')
     if extra_guard is not None and not callable(extra_guard):raise ValueError('invalid extra guard')
     job_epoch=event['epoch'] if event is not None else c['job_epoch']
     validate_udp(participant_udp);validate_udp(job_udp)
-    if participant_udp.getsockname()==job_udp.getsockname(): raise ValueError('distinct UDP sockets required')
+    sockets=[participant_udp,job_udp]
+    if motion_udp is not None:validate_udp(motion_udp);sockets.append(motion_udp)
+    if len({s.getsockname() for s in sockets})!=len(sockets): raise ValueError('distinct UDP sockets required')
     if control.family!=socket.AF_UNIX or control.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM:
         raise ValueError('private control stream required')
     deadline=c['deadline']; process=c['client_process'];failure=[];stop=threading.Event();thread=None
@@ -158,7 +160,7 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
             if ack!={'version':1,'kind':'accepted','attempt_id':bound.offer.attempt_id}:
                 raise RuntimeError('synthetic admission not accepted')
             def participant():
-                bridge=None;adapter=None
+                bridge=None;adapter=None;motion_bridge=None
                 try:
                     ctl=LocalParticipantControl.__new__(LocalParticipantControl)
                     ctl.sock=participant_udp;ctl.lease=c['participant_lease'];ctl.peer=participant_peer
@@ -173,11 +175,19 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                     bridge=ExperimentalParticipantJobIPC(job_udp,enabled=True,lease=c['lease'],attempt=c['attempt'],
                         epoch=job_epoch,generation=c['generation'],guard=guard,
                         validate_peer=lambda p:peer_guard(p,job_udp),timeout=min(20,deadline-time.monotonic()-2))
+                    if motion_udp is not None:
+                        from authority.experimental_participant_motion_ipc import ExperimentalParticipantMotionIPC
+                        motion_bridge=ExperimentalParticipantMotionIPC(motion_udp,enabled=True,
+                            lease=c['client_motion_lease'],attempt=c['client_motion_attempt'],epoch=job_epoch,
+                            generation=c['generation'],guard=guard,validate_peer=lambda p:peer_guard(p,motion_udp),
+                            timeout=min(20,deadline-time.monotonic()-5))
                     adapter=ExperimentalTCPParticipantClient(client,GuardedControl(),enabled=True,epoch=c['epoch'],handle=handle,
-                                                              timeout=min(25,deadline-time.monotonic()-1),apply_job=bridge)
+                                                              timeout=min(25,deadline-time.monotonic()-1),apply_job=bridge,
+                                                              apply_motion=motion_bridge)
                     # Resume is the first command. READY arrives only after X4 resumed.
                     while not adapter.poll(.1): guard()
                     bridge.wait_ready()
+                    if motion_bridge is not None:motion_bridge.wait_ready()
                     if expected_jobs is None:
                         while not stop.is_set():adapter.poll(.1);guard()
                     else:
@@ -188,10 +198,13 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                 finally:
                     if adapter is not None:
                         try:adapter.close()
-                        except BaseException:pass
+                        except BaseException as error:failure.append(error)
                     if bridge is not None:
                         try:bridge.close()
-                        except BaseException:pass
+                        except BaseException as error:failure.append(error)
+                    if motion_bridge is not None:
+                        try:motion_bridge.close()
+                        except BaseException as error:failure.append(error)
             thread=threading.Thread(target=participant,daemon=True);thread.start()
             guard();host.tick(.1);guard()
             if world.session.state!='running' or failure: raise RuntimeError('participant resume failed')
