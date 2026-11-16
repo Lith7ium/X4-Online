@@ -256,6 +256,19 @@ no ship pose or velocity was applied. Admission/checkpoint proof and client
 seed remain synthetic; the samples do not prove cross-process frame identity,
 visible movement or Internet gameplay. [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md#fifth-attempt-two-source-samples).
 
+The current motion diagnostic is not a full-fleet synchronization design. Its
+pair runner configures at most 1,024 client tracks, and its source bridge pulls
+one sample at a time with a default global minimum interval of 1/60 real second.
+At that default, one sample for each of the 10,052 positioned census entries
+would take at least about 168 seconds even without processing or network delay.
+This is a calculated lower bound for that diagnostic configuration, not a
+throughput measurement or a claim about what the eventual implementation can do.
+An experimental, separate [saved-baseline binder](../src/authority/SAVED_BASELINE_MOTION_BINDING.md)
+now offers a read-only local path for selected existing registry indices. It has
+offline fake-X4 coverage only, relies on a caller-supplied baseline guard, and
+does not establish loaded-checkpoint or cross-process identity. XML schema
+validation and a native X4 run remain outstanding.
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

@@ -17,7 +17,7 @@ local function decimal(hex)
  end
  return s~='0' and s or nil
 end
-function M.new(o)
+local function new_binding(o,screen)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  local c={};for k,v in pairs(o)do c[k]=v end
  assert(token(c.epoch) and token(c.generation) and token(c.nonce) and integer(c.index) and name(c.sector_macro))
@@ -54,7 +54,7 @@ function M.new(o)
   pending={id=c.nonce..'-'..string.format('%.0f',c.index)..'-'..string.format('%.0f',request_seq),sequence=sequence,arrival=arrival}
   deadline=last+c.timeout;if not finite(deadline) then return fail('deadline') end
   phase='pending'
-  local ok,sent=call(c.issue,'X4AuthorityReplicaMotionBind','Bind',
+  local ok,sent=call(c.issue,screen,'Bind',
    {request_id=pending.id,epoch=c.epoch,index=c.index,sector_macro=c.sector_macro})
   if not ok or sent~=true or not check() then return fail('dispatch') end
   return true
@@ -86,10 +86,11 @@ function M.new(o)
  function api:close()phase='closed';pending=nil;deadline=nil;return true end
  return api
 end
+function M.new(o)return new_binding(o,'X4AuthorityReplicaMotionBind')end
 
 -- Real local X4 FFI binding. The caller owns the one UI event router/onUpdate
 -- and routes X4AuthorityReplicaMotionBind.Result to api:event; no wire IDs here.
-function M.new_x4(o)
+local function new_x4(o,screen,baseline)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(type(o.expected_save_path)=='string' and type(o.guard)=='function' and type(o.complete)=='function')
  assert(type(o.resolve)=='table' and o.resolve==X4LAN_RESOLVE_STRING and type(o.resolve.parse_hex)=='function' and type(o.resolve.actor_u64)=='function')
@@ -132,8 +133,23 @@ function M.new_x4(o)
   return ak,sk,true,zk
  end
  c.clock=clock;c.guard=guard;c.inspect=inspect
- c.issue=function(screen,op,args)return issue(screen,op,args)~=false end
- return M.new(c)
+ c.issue=function(target,op,args)
+  if baseline then args.baseline=baseline end
+  return issue(target,op,args)~=false
+ end
+ return new_binding(c,screen)
+end
+function M.new_x4(o)return new_x4(o,'X4AuthorityReplicaMotionBind')end
+-- Separate read-only MD screen; callers must independently fence the saved
+-- checkpoint and load incarnation. This does not confer a Create receipt.
+function M.new_saved_baseline_x4(o)
+ if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
+ assert(integer(o.baseline) and integer(o.index) and o.index<=o.baseline)
+ assert(type(o.guard)=='function' and type(o.saved_baseline_guard)=='function')
+ local c={};for k,v in pairs(o)do c[k]=v end
+ local guard,baseline_guard,epoch,baseline=c.guard,c.saved_baseline_guard,c.epoch,c.baseline
+ c.guard=function()return guard()==true and baseline_guard(epoch,baseline)==true and guard()==true end
+ return new_x4(c,'X4AuthoritySavedBaselineMotionBind',baseline)
 end
 X4LAN_REPLICA_MOTION_BINDING=M
 return M
