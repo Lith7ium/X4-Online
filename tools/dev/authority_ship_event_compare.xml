@@ -18,7 +18,8 @@
     <do_else><raise_lua_event name="'X4AuthorityShipEventCompare.Faulted'" param="'registry_unavailable'"/></do_else>
    </actions>
   </cue>
-  <cue name="God" instantiate="true"><conditions><event_god_created_ship/></conditions><actions><run_actions ref="Capture"><param name="Actor" value="event.param"/><param name="Kind" value="'god'"/></run_actions></actions></cue>
+  <!-- Galaxy-scoped GoD subscription is a candidate, not proven universe-wide. -->
+  <cue name="God" instantiate="true"><conditions><event_god_created_ship space="player.galaxy"/></conditions><actions><run_actions ref="Capture"><param name="Actor" value="event.param"/><param name="Kind" value="'god'"/></run_actions></actions></cue>
   <cue name="PlayerBuilt" instantiate="true"><conditions><event_player_built_ship/></conditions><actions><run_actions ref="Capture"><param name="Actor" value="event.param"/><param name="Kind" value="'player_build'"/></run_actions></actions></cue>
   <cue name="JobActivated" instantiate="true"><conditions><event_job_ship_activated/></conditions><actions><run_actions ref="Capture"><param name="Actor" value="event.param"/><param name="Kind" value="'activation'"/></run_actions></actions></cue>
   <cue name="GalaxyEntered" instantiate="true"><conditions><event_object_entered space="player.galaxy"/></conditions><actions>

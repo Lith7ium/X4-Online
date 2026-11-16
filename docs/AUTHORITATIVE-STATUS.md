@@ -26,6 +26,15 @@ Native Linux evidence so far:
   activations with new registry indices before pausing again. First registry
   allocation does not prove ship construction or delivery, and this is not
   complete event coverage or replication.
+* A separate read-only comparison observer first failed while loading because
+  X4 required an explicit GoD-event `space` despite the XSD allowing omission.
+  One follow-up with a galaxy-scope candidate reported 21 job activations,
+  each without a registry binding, and no rows from the other three sources
+  during the observed window. A raw numeric comparison against the saved
+  universe found 14 actor numbers absent and seven matching non-ship component
+  IDs; runtime-to-save identity mapping is unproven. Neither the missing
+  binding nor the numeric comparison establishes birth or prior absence. See
+  [the comparison record](../tools/dev/AUTHORITY-SHIP-EVENT-COMPARE.md).
 * A separate isolated run attached to that registry and sampled a non-atomic
   macro, owner, sector macro and position for its first newly registered job
   actor. No client received or recreated the ship.

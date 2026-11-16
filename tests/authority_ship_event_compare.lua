@@ -38,7 +38,7 @@ local unsafe,putunsafe,_,unsafe_fault=fixture(true);putunsafe(1,'god',0,'0x20000
 local revoked,put_revoked,revoked_rows,revoked_fault=fixture(false,true)
 put_revoked(1,'god',0,'0x20000000000001');assert(revoked:state()=='failed' and revoked_fault() and #revoked_rows==0)
 local foreign,_,_,why,emit,_,cmd=fixture();assert(foreign:tick());emit('Result',cmd[#cmd].args.request_id..'|item|2|god|0|0x20000000000001');assert(foreign:state()=='failed' and why())
-local stale,_,_,why2,ev,_,cmd2=fixture();assert(stale:tick());local old=cmd2[#cmd2].args.request_id;ev('Result',old..'|empty');assert(stale:tick());ev('Result',old..'|empty');assert(stale:state()=='failed' and why2())
+local stale,_,_,why2,ev,_,cmd2=fixture();assert(stale:tick());local old=cmd2[#cmd2].args.request_id;ev('Result',old..'|empty');local state,count=stale:state();assert(state=='idle' and count==1);assert(stale:tick());ev('Result',old..'|empty');assert(stale:state()=='failed' and why2())
 local expired,_,_,reason,_,clock=fixture();assert(expired:tick());clock(7);expired:tick();assert(expired:state()=='failed' and reason())
 local overflow,_,_,why3,ev3,_,commands=fixture();assert(overflow:tick());ev3('Faulted','capture_or_overflow');assert(overflow:state()=='failed' and why3() and commands[#commands].op=='Front')
 assert(module.new({enabled=false})==nil)

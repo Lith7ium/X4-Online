@@ -16,6 +16,7 @@ class Compare(unittest.TestCase):
   r=ET.parse(ROOT/'tools/dev/authority_ship_event_compare.xml').getroot()
   self.assertEqual(r.get('name'),'X4AuthorityShipEventCompare')
   self.assertEqual([len(r.findall('.//'+x)) for x in ('event_god_created_ship','event_player_built_ship','event_job_ship_activated','event_object_entered')],[1,1,1,1])
+  god=r.find('.//event_god_created_ship');self.assertEqual(god.get('space'),'player.galaxy')
   enter=r.find('.//event_object_entered');self.assertEqual(enter.get('space'),'player.galaxy')
   self.assertFalse(r.findall('.//create_ship'))
   text=ET.tostring(r,encoding='unicode')

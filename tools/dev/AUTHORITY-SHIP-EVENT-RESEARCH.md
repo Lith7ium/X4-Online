@@ -77,8 +77,9 @@ provenance until examined; deduplication may only follow validated local
 identity and cannot silently discard a possible distinct event. A ship may be
 unavailable or non-operational when sampled, and `player.galaxy` needs a valid
 player context; those conditions must remain failures or explicitly recorded
-inconclusive observations, not negative proof of creation. No such observer is
-implemented or natively validated here. A future native test needs a separate
+inconclusive observations, not negative proof of creation. A bounded observer
+was subsequently implemented; its first native attempt failed before event
+observation, as documented in `AUTHORITY-SHIP-EVENT-COMPARE.md`. A future native test needs a separate
 agreed plan with a controlled creation path, comparison against independent
 evidence, owned process cleanup and explicit expectations for duplicate,
 missing, late and overflow events.

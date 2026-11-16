@@ -16,7 +16,7 @@ function M.new(o)
  assert(finite(o.timeout) and o.timeout>0 and o.timeout<=300)
  local epoch,generation,capacity,timeout=o.epoch,o.generation,o.capacity,o.timeout
  local cb={};for _,k in ipairs({'register','issue','clock','guard','actor_key','report','fault'})do assert(type(o[k])=='function');cb[k]=o[k] end
- local state,busy='new',false;local last,deadline,sequence,request,request_no=nil,nil,1,nil,0
+ local state,busy='new',false;local last,deadline,sequence,request,request_no,empty_count=nil,nil,1,nil,0,0
  local api={}
  local function fail(reason)
   if state~='failed' then state='failed';pcall(cb.fault,reason) end
@@ -53,7 +53,9 @@ function M.new(o)
    if state=='initializing' and name=='Initialized' and value==generation then state='idle';deadline=nil;return true end
    assert(name=='Result' and type(value)=='string' and #value<=256,'unexpected_event')
    local p=split(value);assert(p[1]==request,'request_mismatch')
-   if state=='front' and #p==2 and p[2]=='empty' then state='idle';deadline=nil;return true end
+   if state=='front' and #p==2 and p[2]=='empty' then
+    assert(empty_count<MAX,'empty_capacity');empty_count=empty_count+1;state='idle';deadline=nil;return true
+   end
    if state=='front' and #p==6 and p[2]=='item' then
     local seq,idx=decimal(p[3],1),decimal(p[5],0)
     assert(seq==sequence and idx and (p[4]=='god' or p[4]=='player_build' or p[4]=='activation' or p[4]=='galaxy_enter'),'invalid_row')
@@ -88,7 +90,8 @@ function M.new(o)
   if state=='idle' then ok=issue('Front','front') else ok=check() end
   busy=false;if not ok then return fail('tick_guard') end;return true
  end
- function api:state()return state end
+ -- Second result counts correlated empty replies; it is not a continuous-queue guarantee.
+ function api:state()return state,empty_count end
  return api
 end
 -- The MD hexadecimal text must exactly round-trip through native conversions.
