@@ -5,6 +5,9 @@ all checkpoint writers, protect the X4 session, and clean the helper before
 releasing its global process lock. The existing full guard validates on startup.
 The owner must exclusively own the IPC/pidfd descriptor numbers: checking an
 FD identity and closing it cannot be made atomic against concurrent dup2/close.
+Callers that must fence constructor failures must supply `cleanup_registry`;
+without it a failed constructor does not return its owner for later cleanup.
+Construction and helper cleanup require the main thread.
 """
 import json
 import math
@@ -13,6 +16,7 @@ from pathlib import Path
 import re
 import secrets
 import select
+import signal
 import socket
 import sys
 import threading
@@ -57,23 +61,34 @@ class GuardClientTiming:
 
 
 class WitnessGuardClient:
-    def __init__(self, store, checkpoint, *, deadline, registry, pump, timeout=120):
-        if (type(deadline) not in (int,float) or not math.isfinite(deadline) or
+    """Main-thread owner of the helper and its exclusively held IPC endpoints."""
+    def __init__(self, store, checkpoint, *, deadline, registry, pump, timeout=120, cleanup_registry=None):
+        if (threading.current_thread() is not threading.main_thread() or
+            type(deadline) not in (int,float) or not math.isfinite(deadline) or
             not time.monotonic()<deadline<=time.monotonic()+86400 or
             type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=120 or
-            type(registry) is not list or not callable(pump)):
+            type(registry) is not list or not callable(pump) or
+            (cleanup_registry is not None and type(cleanup_registry) is not list)):
             raise ValueError('bounded guard context required')
         self.deadline=float(deadline);self.timeout=float(timeout);self.pump=pump
         self.owner=threading.get_ident();self.seq=0;self.state='initializing';self.token=secrets.token_hex(16)
         self.timing=None
         self.sock=None;self._owned_sock=None;self.helper=None;self._owned_helper=None
-        parent,child=socket.socketpair()
+        self.fd=self.identity=self._child_fd=self._child_identity=None
+        self._owned_child=None;self._socket_cleanup_error=None
+        if cleanup_registry is not None:
+            # Register before acquiring descriptors, even if initialization fails.
+            cleanup_registry.append(self)
         try:
-            self.sock=self._owned_sock=parent;parent.setblocking(False)
-            self.fd=parent.fileno();st=os.fstat(self.fd);self.identity=(st.st_dev,st.st_ino)
+            self._open_owned_socketpair()
+            parent,child=self._owned_sock,self._owned_child
+            parent.setblocking(False)
             self.helper=OwnedHelper([sys.executable,str(READER),str(child.fileno())],registry=registry,pass_fds=(child.fileno(),))
             self._owned_helper=self.helper;self._proc=self.helper.proc;self._pidfd=self.helper.pidfd
-            child.close();self.helper.release()
+            self._close_ipc_socket('_owned_child',self._child_fd,self._child_identity)
+            if self._socket_cleanup_error is not None:
+                raise RuntimeError('guard IPC cleanup unconfirmed') from self._socket_cleanup_error
+            self.helper.release()
             config={'mode':'witness_guard','store':str(store.directory),'token':self.token,'deadline':self.deadline}
             config.update({key:str(getattr(checkpoint,key)) if key=='path' else getattr(checkpoint,key)
                            for key in ('checkpoint_id','path','sha256','size','marker')})
@@ -88,9 +103,29 @@ class WitnessGuardClient:
                 type(answer['status'][3]) is not str or not re.fullmatch(r'[0-9a-f]{64}',answer['status'][3])):
                 raise ValueError('invalid guard READY')
             self.status=tuple(answer['status']);self._quiet();self.state='ready'
-        except BaseException:
-            self.state='failed';self._cleanup();raise
-        finally:child.close()
+        except BaseException as error:
+            self.state='failed'
+            try: self._cleanup()
+            except BaseException as cleanup_error:
+                error.add_note('guard initialization cleanup failed: '+type(cleanup_error).__name__)
+            raise
+
+    def _open_owned_socketpair(self):
+        """Register both IPC endpoints before delivering cancellation signals."""
+        deferred=[None];previous={}
+        def remember(number, _frame):
+            deferred[0]=deferred[0] or number
+        try:
+            for number in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):
+                previous[number]=signal.signal(number,remember)
+            parent,child=socket.socketpair()
+            self.sock=self._owned_sock=parent;self._owned_child=child
+            self.fd=parent.fileno();st=os.fstat(self.fd);self.identity=(st.st_dev,st.st_ino)
+            self._child_fd=child.fileno();st=os.fstat(self._child_fd);self._child_identity=(st.st_dev,st.st_ino)
+        finally:
+            for number,handler in previous.items():signal.signal(number,handler)
+        if deferred[0] is not None:
+            raise InterruptedError('signal '+str(deferred[0]))
 
     def _check(self):
         if (threading.get_ident()!=self.owner or self.state not in ('initializing','ready','checking','stopping') or
@@ -205,28 +240,56 @@ class WitnessGuardClient:
             ready,_,bad=select.select([self.sock],[],[self.sock],0)
             if bad or not ready or self.sock.recv(1)!=b'':raise RuntimeError('guard trailing response')
             self.state='stopped';self._cleanup();return True
-        except BaseException:
-            self.state='failed';self._cleanup();raise
+        except BaseException as error:
+            self.state='failed'
+            try: self._cleanup()
+            except BaseException as cleanup_error:
+                error.add_note('guard request cleanup failed: '+type(cleanup_error).__name__)
+            raise
 
     def check(self):return self._request('CHECK')
     def stop(self):return self._request('STOP')
 
-    def _cleanup(self):
-        failure=None
+    def _close_ipc_socket(self, attribute, descriptor, identity):
+        """Close a pinned IPC endpoint or permanently record uncertainty."""
+        owned=getattr(self,attribute)
+        if owned is None:return
         try:
-            if self._owned_sock is not None:
-                owned=self._owned_sock
-                try:
-                    st=os.fstat(owned.fileno())
-                    if owned.fileno()!=self.fd or (st.st_dev,st.st_ino)!=self.identity:
-                        raise RuntimeError('guard IPC replaced; cleanup unconfirmed')
-                    owned.close()
-                except BaseException as error:
-                    # Detach the numeric descriptor so object finalization does
-                    # not close a potentially foreign replacement.
-                    if owned.fileno()>=0:owned.detach()
-                    failure=error
-                self._owned_sock=None;self.sock=None
-        finally:
+            if descriptor is None or identity is None or owned.fileno()!=descriptor:
+                raise RuntimeError('guard IPC descriptor unavailable or replaced')
+            st=os.fstat(descriptor)
+            if (st.st_dev,st.st_ino)!=identity:
+                raise RuntimeError('guard IPC replaced; cleanup unconfirmed')
+            owned.close()
+        except BaseException as error:
+            if self._socket_cleanup_error is None:
+                self._socket_cleanup_error=error
+            else:
+                self._socket_cleanup_error.add_note('another guard IPC cleanup failed: '+type(error).__name__)
+            try:
+                # Do not let finalization close a potentially foreign FD.
+                if owned.fileno()>=0:owned.detach()
+            except BaseException as detach_error:
+                self._socket_cleanup_error.add_note('guard IPC detach failed: '+type(detach_error).__name__)
+                if not hasattr(self,'_untrusted_sockets'):self._untrusted_sockets=[]
+                self._untrusted_sockets.append(owned)
+        setattr(self,attribute,None)
+        if attribute=='_owned_sock':self.sock=None
+
+    def _cleanup(self):
+        # A failed IPC close remains uncertain across subsequent calls. Helper
+        # stop is still attempted every time, including after either IPC fault.
+        self._close_ipc_socket('_owned_child',self._child_fd,self._child_identity)
+        self._close_ipc_socket('_owned_sock',self.fd,self.identity)
+        helper_error=None
+        try:
             if self._owned_helper is not None:self._owned_helper.stop()
-        if failure is not None:raise RuntimeError('guard IPC cleanup unconfirmed') from failure
+        except BaseException as error:
+            helper_error=error
+        if self._socket_cleanup_error is not None:
+            failure=RuntimeError('guard IPC cleanup unconfirmed')
+            if helper_error is not None:
+                failure.add_note('guard helper cleanup also failed: '+type(helper_error).__name__)
+            raise failure from self._socket_cleanup_error
+        if helper_error is not None:
+            raise helper_error

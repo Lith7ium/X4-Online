@@ -74,6 +74,8 @@ class ServerClientTests(unittest.TestCase):
         def make_guard(store,baseline,**kwargs):
             self.assertIs(store,world._store);self.assertIs(baseline,checkpoint)
             kwargs['pump']();self.assertIs(kwargs['registry'],participant.helpers)
+            self.assertIs(kwargs['cleanup_registry'], participant.guard_resources)
+            kwargs['cleanup_registry'].append(guard)
             return guard
         with patch('authority_witness_guard_client.WitnessGuardClient',side_effect=make_guard):
             actual,pump=subject.prepare_witness_guard(participant,world,checkpoint,time.monotonic()+5,check)

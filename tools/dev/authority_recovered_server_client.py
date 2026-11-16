@@ -311,10 +311,9 @@ def prepare_witness_guard(participant, world, baseline, deadline, check):
     import authority_witness_guard_client
     check()
     pump=WitnessGuardPump(participant,deadline)
-    guard=authority_witness_guard_client.WitnessGuardClient(world._store,baseline,deadline=deadline,
-        registry=participant.helpers,pump=pump)
     if not hasattr(participant,'guard_resources'):participant.guard_resources=[]
-    participant.guard_resources.append(guard)
+    guard=authority_witness_guard_client.WitnessGuardClient(world._store,baseline,deadline=deadline,
+        registry=participant.helpers,pump=pump,cleanup_registry=participant.guard_resources)
     if guard.check() is not True:raise RuntimeError('checkpoint guard unavailable')
     check()
     return guard,pump
