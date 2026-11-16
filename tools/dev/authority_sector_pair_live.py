@@ -92,7 +92,7 @@ def file_identity(path):
     return st.st_dev,st.st_ino,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns
 
 
-def run(args):
+def run(args, participant=None):
     if sys.platform!='linux' or os.geteuid()==0: raise ValueError('unprivileged Linux required')
     out=base.snapshot.output_path(args.out);store=base.base.local_directory(args.store);src=store.parent
     if out.resolve().is_relative_to(src) or src.is_relative_to(out.resolve()):raise ValueError('output and source must be separate')
@@ -118,6 +118,9 @@ def run(args):
     result={'success':False,'scope':'two isolated Linux X4 processes; archived baseline readiness only',
             'experiment_network_requested':False,'create_requested':False,'checkpoint_requested':False,
             'exact_loaded_file_proven':False,'continuous_pause_proven':False,'multiplayer_proven':False}
+    if participant is not None:
+        result.update(scope='two isolated Linux X4 processes; experimental participant',
+                      experiment_network_requested=True,create_requested=True)
     roles={};processes=[];handlers={};lock_fd=lock_stat=None;cancellation=[None]
     def remember(number,frame):cancellation[0]=cancellation[0] or number
     def check_cancel():
@@ -125,6 +128,7 @@ def run(args):
     try:
         for number in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):handlers[number]=signal.signal(number,remember)
         for role in ('server','client'):
+            check_cancel()
             roleout=out/role;roleout.mkdir(mode=0o700)
             case,profile,binds,lock=base.snapshot.prepare_case(roleout,game,home)
             base.check_origin_scripts(store,profile)
@@ -133,6 +137,11 @@ def run(args):
             ticket=dict(world_epoch=secrets.token_hex(16),connection_handle=1,baseline_id=1,load_generation=1,
                 checkpoint_id=cp.checkpoint_id,sha256=cp.sha256,attempt_id=secrets.token_hex(16),slot='save_009')
             nonce=secrets.token_hex(16);protected=install(case,profile,ticket,role,nonce,macros,args.timeout)
+            if participant is not None:
+                extra=participant.install(case,profile,ticket,role,nonce,macros,args.timeout)
+                if type(extra) is not list:raise ValueError('invalid participant protected files')
+                protected+=extra
+                check_cancel()
             fingerprints={p:base.stable_read(p,1<<20,collect=False)[:2] for p in protected}
             target_digest=base.stable_read(target,origin['size'],collect=False)[:2]
             if target_digest[1]!=origin['sha256']:raise ValueError('staged save digest mismatch')
@@ -190,39 +199,89 @@ def run(args):
                 for role,e in roles.items():
                     if base.load.game_identity(e['proc'],e['started'],game)!=e['identity']:
                         raise RuntimeError(role+' X4 changed after readiness')
+                def check_context():
+                    check_cancel()
+                    if time.monotonic()>=deadline or base.live.steam_identity(home,user.pw_uid)!=steam:
+                        raise RuntimeError('deadline or Steam identity changed')
+                    for current,e in roles.items():
+                        if base.load.game_identity(e['proc'],e['started'],game)!=e['identity']:
+                            raise RuntimeError(current+' X4 identity changed')
+                        if file_identity(e['target'])!=e['target_id'] or any(
+                            base.stable_read(p,1<<20,collect=False)[:2]!=v for p,v in e['protected'].items()):
+                            raise ValueError(current+' protected input changed')
+                        captured=base.read_live_log(e['profile']/'engine-output.log',e['log_snapshot'])
+                        if captured is None:raise RuntimeError(current+' log observation unavailable')
+                        raw,e['log_snapshot']=captured
+                        if validate(raw,e['ticket'],current,e['nonce'],partial=True) is None:
+                            raise RuntimeError(current+' readiness lost')
+                        if participant.check_live_log(current,raw) is not True:
+                            raise RuntimeError(current+' participant log fault')
+                    check_cancel()
+                    if time.monotonic()>=deadline:raise TimeoutError('pair deadline')
+                    for current,e in roles.items():
+                        if base.load.game_identity(e['proc'],e['started'],game)!=e['identity']:
+                            raise RuntimeError(current+' X4 identity changed after context check')
+                    check_cancel()
+                    if time.monotonic()>=deadline:raise TimeoutError('pair deadline')
+                    return True
+                if participant is not None:
+                    check_context()
+                    details=participant.on_ready({'check':check_context,'deadline':deadline,'roles':roles,'macros':macros})
+                    if type(details) is not dict:raise RuntimeError('participant completion unconfirmed')
+                    check_context()
+                    result['participant']=details
                 result.update(success=True,profiles={r:e['observation'] for r,e in roles.items()});break
             time.sleep(.2)
     except BaseException as error:
         result.update(success=False,error=str(error) or type(error).__name__)
     finally:
-        errors=[];remaining=[];stop_confirmed=True
+        errors=[];remaining=[];stop_confirmed=True;remaining_known=True
         for number in handlers:
             try:signal.signal(number,signal.SIG_IGN)
             except BaseException as error:errors.append('cannot fence signals: '+type(error).__name__);stop_confirmed=False
         if cancellation[0] is not None:result.update(success=False,error='signal '+str(cancellation[0]))
-        for proc,started in reversed(processes):
+        helper_confirmed=stop_confirmed if participant is not None else True
+        if participant is not None:
+            try:
+                if participant.cleanup_before_owned_processes() is not True:raise RuntimeError('participant cleanup unconfirmed')
+            except BaseException as error:
+                helper_confirmed=False;stop_confirmed=False;errors.append('participant cleanup: '+type(error).__name__)
+        for proc,started in (reversed(processes) if helper_confirmed else ()):
             try:
                 if started is None:
                     if proc.poll() is None:proc.terminate();proc.wait(timeout=15)
                     errors.append('owned launcher identity unavailable')
+                    remaining_known=False
+                    if participant is not None:stop_confirmed=False
                 else:
                     livepids=base.snapshot.stop_owned(proc,started)
                     if not isinstance(livepids,list) or any(type(x) is not int or x<=0 for x in livepids):raise RuntimeError('invalid cleanup result')
                     remaining.extend(livepids)
                     if livepids:stop_confirmed=False;errors.append('owned processes remain')
-            except BaseException as error:stop_confirmed=False;errors.append('owned cleanup: '+type(error).__name__)
-        result['owned_processes_remaining']=remaining;result['owned_cleanup_confirmed']=stop_confirmed
+            except BaseException as error:stop_confirmed=False;remaining_known=False;errors.append('owned cleanup: '+type(error).__name__)
+        result['owned_processes_remaining']=remaining if helper_confirmed and remaining_known else None
+        result['owned_cleanup_confirmed']=stop_confirmed
+        if errors:result.update(success=False,cleanup_errors=errors)
         if result['success']:
             try:
+                final_logs={}
                 for role,e in roles.items():
                     file_id,_,raw=base.stable_read(e['profile']/'engine-output.log',32<<20,collect=True)
                     base.log_continuity(file_id,raw,e['log_snapshot'])
                     validate(raw,e['ticket'],role,e['nonce'])
+                    final_logs[role]=raw
                     if (base.stable_read(e['target'],origin['size'],collect=False)[:2]!=e['target_digest'] or
                         any(base.stable_read(p,1<<20,collect=False)[:2]!=v for p,v in e['protected'].items())):
                         raise ValueError(role+' final input changed')
                 if base.archive._path_fingerprints(store)!=before:raise ValueError('source archive changed')
+                if participant is not None and participant.verify_final(final_logs) is not True:
+                    raise ValueError('participant final evidence unconfirmed')
             except BaseException as error:result.update(success=False,error='final evidence: '+(str(error) or type(error).__name__))
+        if participant is not None:
+            try:
+                if participant.cleanup_after_owned_processes() is not True:raise RuntimeError('participant final cleanup unconfirmed')
+            except BaseException as error:
+                errors.append('participant final cleanup: '+type(error).__name__)
         if lock_stat is not None:
             if stop_confirmed:
                 try:base.live.release_lock_target(base.snapshot.LOCK_TARGET,lock_fd,lock_stat)

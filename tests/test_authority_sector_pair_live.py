@@ -96,21 +96,54 @@ class PairTests(unittest.TestCase):
     return proc,7
    set_(pair.owned,'spawn_owned_gated',spawn)
    set_(pair.base.load,'game_identity',lambda proc,*_:(proc.pid,7,1,2))
-   def stop(proc,_):return [proc.pid] if mode=='survivor' and proc.pid==100 else []
+   def stop(proc,_):
+    if mode=='stop_exception' and proc.pid==100:raise RuntimeError('unknown stop')
+    return [proc.pid] if mode=='survivor' and proc.pid==100 else []
    stopping=set_(pair.base.snapshot,'stop_owned',Mock(side_effect=stop))
-   result=pair.run(args)
-   self.assertEqual(len(procs),2);self.assertEqual(stopping.call_count,2)
+   participant=None
+   if mode.startswith('participant_'):
+    participant=Mock()
+    participant.install.return_value=[]
+    if mode=='participant_install_signal':
+     def interrupted_install(*_):
+      handlers[pair.signal.SIGTERM](pair.signal.SIGTERM,None)
+      return []
+     participant.install.side_effect=interrupted_install
+    participant.check_live_log.return_value=True
+    def on_ready(context):
+     self.assertEqual(set(context['roles']),{'server','client'})
+     self.assertTrue(context['check']())
+     return {'complete':True}
+    participant.on_ready.side_effect=on_ready
+    participant.cleanup_before_owned_processes.return_value=mode!='participant_cleanup_failure'
+    participant.cleanup_after_owned_processes.return_value=True
+    participant.verify_final.return_value=mode!='participant_final_failure'
+   result=pair.run(args,participant)
+   self.assertEqual(len(procs),0 if mode=='participant_install_signal' else 2)
+   self.assertEqual(stopping.call_count,0 if mode in ('participant_cleanup_failure','participant_install_signal') else 2)
    self.assertTrue((out/'result.json').is_file())
-   if mode=='ok':
+   if mode in ('ok','participant_ok'):
     self.assertTrue(result['success']);self.assertTrue(result['owned_cleanup_confirmed']);release.assert_called_once()
-    self.assertFalse(result['experiment_network_requested']);self.assertFalse(result['create_requested'])
+    self.assertEqual(result['experiment_network_requested'],participant is not None)
+    self.assertEqual(result['create_requested'],participant is not None)
    else:
     self.assertFalse(result['success'])
-    if mode=='survivor':release.assert_not_called();self.assertIn('lock retained: stop unconfirmed',result['cleanup_errors'])
+    if mode in ('survivor','participant_cleanup_failure','stop_exception'):
+     release.assert_not_called();self.assertIn('lock retained: stop unconfirmed',result['cleanup_errors'])
+     if mode in ('participant_cleanup_failure','stop_exception'):self.assertIsNone(result['owned_processes_remaining'])
+    elif mode=='participant_install_signal':release.assert_not_called();os.close(lockfd)
     else:release.assert_called_once()
+   if participant is not None:
+    self.assertEqual(participant.install.call_count,1 if mode=='participant_install_signal' else 2)
+    self.assertEqual(participant.on_ready.call_count,0 if mode=='participant_install_signal' else 1)
+    participant.cleanup_before_owned_processes.assert_called_once()
+    self.assertEqual(participant.verify_final.call_count,0 if mode in ('participant_cleanup_failure','participant_install_signal') else 1)
    return result
  def test_cleanup_and_signal_fencing(self):
-  for mode in ('ok','signal_second','survivor','late_log','source_changed','growing_log'):
+  for mode in ('ok','signal_second','survivor','stop_exception','late_log','source_changed','growing_log'):
+   with self.subTest(mode=mode):self.simulate(mode)
+ def test_optional_participant_lifecycle(self):
+  for mode in ('participant_ok','participant_cleanup_failure','participant_final_failure','participant_install_signal'):
    with self.subTest(mode=mode):self.simulate(mode)
 
 if __name__=='__main__':unittest.main()
