@@ -58,6 +58,13 @@ Native Linux evidence so far:
   processes before the TCP ACK. This does not prove ship birth, replica creation
   or a shared coordinate frame; log and coordinator evidence have different
   limits detailed in the diagnostic.
+* A further isolated two-X4 Linux localhost run reported one newly registered
+  job activation at index 10055, transferred its descriptor and completed a
+  guarded approximate client creation and replay before the coordinator's TCP
+  ACK. The local logs and coordinator result provide different parts of the
+  evidence; there is no packet trace. The replica uses an artificial seed and
+  approximate loadout. This is one paused fixture, not continuous ship-state
+  synchronization, proven shared frames, Windows/Internet or gameplay.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
   accepted a trusted client load claim over TCP, and confirmed resume and pause
   through TCP participant control. A second join was simulated. Another run
@@ -100,6 +107,7 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [saved-registry job attach](../tools/dev/AUTHORITY-JOB-ATTACH.md),
 [local job descriptor](../tools/dev/AUTHORITY-JOB-DESCRIPTOR-PROBE.md),
 [two-X4 census descriptor](../tools/dev/AUTHORITY-CENSUS-PAIR-READ.md),
+[two-X4 census replica](../tools/dev/AUTHORITY-CENSUS-REPLICA-PAIR.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-sector local creation](../tools/dev/AUTHORITY-SECTOR-CREATE-PREPARATION.md),

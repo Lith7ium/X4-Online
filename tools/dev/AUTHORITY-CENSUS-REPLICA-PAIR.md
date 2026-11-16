@@ -50,3 +50,35 @@ helper. They do not prove native MD/FFI semantics or actual multiplayer. Normal
 profiles and saves must never be used. Before a native run independently review
 the complete overlay, UDP/ACK order, process and cleanup fences; no existing
 successful test results should be overwritten.
+
+## Recorded native run
+
+`.local/authority-census-replica-01` completed successfully in two isolated
+Linux X4 processes. Both logs contain the requested `save_009` load, the same
+saved marker, a pause observation and `READY`. The source log then reports
+`DESCRIPTOR` and `WITNESS_OK`; the client log reports `WITNESS_READY`,
+`REPLICA DONE`, and `WITNESS_OK` in that order. These log labels do not contain
+the descriptor or an independent packet trace. The coordinator result reports
+one job activation allocated index 10055, sequence 1, the saved witness at
+index 1318, and TCP ACK after the guarded replica callback. The inspected code
+requires the source and client local witness checks and the client's
+Create/Inspect/Replay/Inspect and local FFI checks before that ACK. Thus the
+cross-process order and descriptor values are coordinator/result evidence,
+corroborated by the separate process logs; they are not a packet capture.
+
+The reported descriptor was `ship_gen_m_tugboat_01_a_macro`, faction
+`pioneers`, sector `cluster_115_sector001_macro`, at approximately
+`(-132217.1875, 6004.3818359375, 169081.203125)` in the sampled local sector
+frame. Seed 7183 and the loadout were artificial. A new registry entry following
+job activation does not establish that the original ship was newly built.
+
+The pinned source save and both staged saves independently hash to
+`64a233ac6a85194b8276212709e78a6c48bbcc0f73c19842622aa098f1408cb8`;
+the witness JSON hashes to
+`006b07a39be4cff6a3fac7555b26d40ffe834594304c231dd659b23bfdc85349`.
+The client replica scripts in the saved overlay match the reviewed inputs and
+the installer's expected module export transformation. The runner reports
+confirmed owned cleanup and no remaining owned processes. Its sampled
+protection checks do not independently prove which exact bytes X4 consumed or
+continuous pause, nor do they establish shared coordinate frames, full state
+replication, Windows/Internet behavior or gameplay.
