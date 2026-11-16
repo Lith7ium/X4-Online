@@ -556,6 +556,17 @@ This option is off by default and is not a multiplayer gameplay path. Its
 component tests use simulated X4 behavior; a native result must be recorded
 separately.
 
+The optional `--diagnostic-guard-timing` flag is available only with a source
+diagnostic. Once its witness guard is ready, the result records local elapsed
+wall time and call counts in `witness_guard_client_timing`: `pump`, `send`, and
+`response_wait`. Send time includes any pump time inside the send, so these
+measurements overlap and must not be added together. Response wait measures
+only the existing `select` call while reading a response; it includes
+scheduling and I/O delays. These observations do not identify helper hash
+time, a particular file operation, or the helper's internal guard duration.
+Measurement itself has a small cost. The option changes no wire protocol,
+guard, or timeout and is not evidence of a native run.
+
 Two isolated Linux runs attempted this delivery experiment on 2026-11-16.
 `.local/authority-motion-client-once-01` stopped before launching client X4:
 the motion installer rejected ticket identifiers encoded with Lua decimal

@@ -36,6 +36,17 @@ class GuardHelper(unittest.TestCase):
         self.assertTrue(g.check());self.assertTrue(g.check());self.assertTrue(g.stop())
         self.assertEqual(g.state,'stopped');self.assertEqual(g.helper.proc.returncode,0)
         self.assertIsNone(g.helper.pidfd);self.assertGreater(self.pumps,0)
+    def test_opt_in_timing_preserves_real_helper_check_and_stop(self):
+        g=self.start();self.addCleanup(g._cleanup)
+        timing=g.enable_timing()
+        self.assertTrue(g.check());self.assertTrue(g.stop())
+        values=timing.snapshot()
+        self.assertEqual(set(values),{'pump','send','response_wait'})
+        self.assertGreater(values['pump']['calls'],0)
+        self.assertEqual(values['send']['calls'],2)
+        self.assertGreater(values['response_wait']['calls'],0)
+        self.assertTrue(all(row['seconds']>=0 for row in values.values()))
+        self.assertEqual(g.state,'stopped');self.assertIsNone(g.helper.pidfd)
     def test_pointer_mutation_faults_and_reaps(self):
         g=self.start();self.addCleanup(g._cleanup)
         p=self.store.directory/'CURRENT';p.write_bytes(p.read_bytes()+b' ')
@@ -74,6 +85,17 @@ time.sleep(10)
             g=self.start();self.addCleanup(g._cleanup)
             with self.assertRaises(ValueError):g.check()
         self.assertEqual(g.state,'failed');self.assertIsNone(g.helper.pidfd)
+    def test_timing_survives_guard_failure_and_reap(self):
+        g=self.start();self.addCleanup(g._cleanup)
+        timing=g.enable_timing()
+        pointer=self.store.directory/'CURRENT'
+        pointer.write_bytes(pointer.read_bytes()+b' ')
+        with self.assertRaises((RuntimeError,ValueError,TimeoutError)):
+            g.check()
+        self.assertEqual(g.state,'failed');self.assertIsNone(g.helper.pidfd)
+        self.assertIsNotNone(g.helper.proc.poll())
+        self.assertGreater(timing.snapshot()['pump']['calls'],0)
+        self.assertEqual(timing.snapshot()['send']['calls'],1)
     def test_pump_reentry_cannot_restore_failed_state(self):
         g=self.start();self.addCleanup(g._cleanup);attempted=[]
         def reenter():

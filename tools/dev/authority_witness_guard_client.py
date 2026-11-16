@@ -24,6 +24,38 @@ from authority_tcp_native_worker import parse_json, send_frame
 READER=Path(__file__).resolve().with_name('authority_recovered_registry_reader.py')
 
 
+class GuardClientTiming:
+    """Optional local wall times; response waits do not identify helper work.
+
+    Send time includes any nested pump time. Response wait is time in select,
+    not the helper's hash time; scheduler and I/O waits are included.
+    """
+    def __init__(self, clock=None):
+        self.clock = time.perf_counter if clock is None else clock
+        self.values = {name: {'calls': 0, 'seconds': 0.0} for name in ('pump', 'send', 'response_wait')}
+
+    def start(self):
+        try:
+            value = self.clock()
+            return value if type(value) in (int, float) and math.isfinite(value) else None
+        except Exception:
+            return None
+
+    def finish(self, name, started):
+        try:
+            finished = self.clock()
+            if (started is not None and type(finished) in (int, float) and
+                    math.isfinite(finished) and finished >= started):
+                row = self.values[name]
+                row['calls'] += 1
+                row['seconds'] += finished - started
+        except Exception:
+            pass  # Diagnostic accounting must not replace an operation error.
+
+    def snapshot(self):
+        return {name: dict(value) for name, value in self.values.items()}
+
+
 class WitnessGuardClient:
     def __init__(self, store, checkpoint, *, deadline, registry, pump, timeout=120):
         if (type(deadline) not in (int,float) or not math.isfinite(deadline) or
@@ -33,6 +65,7 @@ class WitnessGuardClient:
             raise ValueError('bounded guard context required')
         self.deadline=float(deadline);self.timeout=float(timeout);self.pump=pump
         self.owner=threading.get_ident();self.seq=0;self.state='initializing';self.token=secrets.token_hex(16)
+        self.timing=None
         self.sock=None;self._owned_sock=None;self.helper=None;self._owned_helper=None
         parent,child=socket.socketpair()
         try:
@@ -71,7 +104,7 @@ class WitnessGuardClient:
         if (pidfd_st.st_dev,pidfd_st.st_ino)!=self._owned_helper._pidfd_identity:
             raise RuntimeError('guard pidfd identity changed')
         state=self.state
-        self.pump()
+        self._pump()
         if (self.state!=state or self.helper is not self._owned_helper or self.helper.proc is not self._proc or
                 self.helper.pidfd!=self._pidfd or self._proc.poll() is not None or self.sock is None or self.sock is not self._owned_sock or
                 self.sock.fileno()!=self.fd or time.monotonic()>=self.deadline):
@@ -85,7 +118,28 @@ class WitnessGuardClient:
     def _send(self,value,deadline):
         payload=json.dumps(value,separators=(',',':'),allow_nan=False).encode('ascii')
         if len(payload)>4096:raise ValueError('guard request too large')
-        send_frame(self.sock,payload,deadline,self._check)
+        timing=self.timing
+        started=timing.start() if timing is not None else None
+        try:
+            send_frame(self.sock,payload,deadline,self._check)
+        finally:
+            if timing is not None:timing.finish('send',started)
+
+    def enable_timing(self, timing=None):
+        """Start local accounting between operations; does not time the helper."""
+        if (threading.get_ident()!=self.owner or self.state!='ready' or self.timing is not None or
+                (timing is not None and type(timing) is not GuardClientTiming)):
+            raise ValueError('timing requires an idle owned guard')
+        self.timing = GuardClientTiming() if timing is None else timing
+        return self.timing
+
+    def _pump(self):
+        timing=self.timing
+        started=timing.start() if timing is not None else None
+        try:
+            return self.pump()
+        finally:
+            if timing is not None:timing.finish('pump',started)
 
     def _read(self,deadline):
         # Only one reply is legal per request. Read in bounded chunks so a
@@ -95,7 +149,12 @@ class WitnessGuardClient:
             self._check()
             left=deadline-time.monotonic()
             if left<=0:raise TimeoutError('guard response timed out')
-            ready,_,bad=select.select([self.sock],[],[self.sock],min(left,.25))
+            timing=self.timing
+            started=timing.start() if timing is not None else None
+            try:
+                ready,_,bad=select.select([self.sock],[],[self.sock],min(left,.25))
+            finally:
+                if timing is not None:timing.finish('response_wait',started)
             if bad:raise RuntimeError('guard socket exception')
             if not ready:continue
             self._check()
@@ -135,7 +194,7 @@ class WitnessGuardClient:
             self._quiet();self.sock.shutdown(socket.SHUT_WR)
             while self.helper.proc.poll() is None:
                 if time.monotonic()>=deadline:raise TimeoutError('guard STOP exit deadline')
-                self.pump()
+                self._pump()
                 if (self.state!='stopping' or self.helper is not self._owned_helper or self.helper.proc is not self._proc or
                     self.helper.pidfd!=self._pidfd or self.sock is None or self.sock is not self._owned_sock or self.sock.fileno()!=self.fd):
                     raise RuntimeError('guard STOP context changed')

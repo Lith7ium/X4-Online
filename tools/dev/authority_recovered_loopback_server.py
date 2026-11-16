@@ -158,6 +158,13 @@ def diagnostic_client_motion(args, source_enabled):
     return enabled
 
 
+def diagnostic_guard_timing(args, source_enabled):
+    enabled = getattr(args, 'diagnostic_guard_timing', False)
+    if type(enabled) is not bool or (enabled and source_enabled is not True):
+        raise ValueError('guard timing requires a private source diagnostic')
+    return enabled
+
+
 def finish_source_diagnostic(active, active_clients, guard_context, *, verify, probe,
                              verify_after=None, require_client_receipts=False):
     """Fence a retained client until the source probe has cooperatively stopped."""
@@ -469,12 +476,14 @@ def run(args):
     witness_pending=None
     diagnostics = []
     active_clients = []
+    guard_context = []
     try:
         witness_join, witness_phase = witness_mode(args)
         source_index=diagnostic_source_index(args,witness_join)
         source_candidates=diagnostic_source_candidates(args,witness_join,source_index)
         source_enabled=source_index is not None or source_candidates is not None
         client_motion=diagnostic_client_motion(args,source_enabled)
+        guard_timing=diagnostic_guard_timing(args,source_enabled)
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage)
@@ -733,11 +742,11 @@ def run(args):
                 cancel_diagnostic()
             def base_diagnostic():
                 cancel_diagnostic();check();cancel_diagnostic()
-            guard_context=[]
             def guard_ready(guard, saved, pump):
                 if guard_context or guard.status!=registry_expected:
                     raise ValueError('confirmed diagnostic registry changed')
                 guard_context.append((guard,saved,pump))
+                if guard_timing: guard.enable_timing()
             if source_enabled:overlap_guard[0]=verify_diagnostic
             for index in range(count):
                 diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory,keep_worker=source_enabled)
@@ -888,6 +897,8 @@ def run(args):
             except BaseException as error:
                 result.update(success=False,error='witness checkpoint not safely confirmed: '+str(error))
         if errors: result.update(success=False,cleanup_errors=errors)
+        if guard_context and getattr(guard_context[0][0], 'timing', None) is not None:
+            result['witness_guard_client_timing'] = guard_context[0][0].timing.snapshot()
         try: (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
         finally:
             for number,handler in handlers.items():
@@ -910,6 +921,7 @@ def main():
     source_options.add_argument('--diagnostic-source-index',type=int,help='private saved-registry index to sample')
     source_options.add_argument('--diagnostic-source-candidates',type=int,nargs='+',help='bounded explicit indices to inspect for a private source sample')
     parser.add_argument('--diagnostic-client-motion',action='store_true',help='also require two confirmed motion receipts by one private Linux client')
+    parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')
