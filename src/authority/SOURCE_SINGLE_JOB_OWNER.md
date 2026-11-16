@@ -59,3 +59,30 @@ new optional callback guard. These are offline tests; no native X4 source,
 client delivery, Windows, Internet or gameplay is established by them. An
 installer, process supervisor and full end-to-end native connection remain
 separate work; this module must not be reported as a complete multiplayer path.
+
+### Private source session for the pending TCP experiment
+
+`tools/dev/authority_source_single_job_install.py` stages a separate, explicitly
+opted-in source extension in a private profile. Its session runs from the
+existing checkpoint-load owner's single `onUpdate`; it opens distinct local UDP
+sockets for source control and source-job IPC. A control resume is accepted
+only once and only after the source owner has handled the correlated `GO`.
+The supervisor must authenticate both sockets against the owned X4 process,
+check the job peer again while the bridge is in use, and request resume only
+after receiving `GO_READY`. A transition state printed by this owner is a
+sample, not a complete record: states can change between updates.
+
+The registry is attached to the staged save using the historical script bytes;
+its in-memory enrollment is part of this isolated test. The intended candidate
+is one selected new registry entry resulting from a job activation. Such an
+activation does not establish that a ship was born. The dynamic descriptor is
+not an atomic snapshot and its sector identity has not been proved across
+processes. An existing entry, an unexpected queue head, a missing client-sector
+witness, a timeout, or a failed guard cannot be counted as successful delivery.
+
+`tests.test_authority_source_single_job_install` exercises installer isolation,
+the control ordering, and the actual session with the actual source owner, IPC
+and gate; the latter test still simulates the host, MD, descriptor, transport
+and X4 ABI. These tests do not demonstrate a real source-to-client transfer.
+The planned diagnostic retains synthetic session/checkpoint admission and an
+explicit client creation seed; it is not a Windows, Internet or gameplay test.
