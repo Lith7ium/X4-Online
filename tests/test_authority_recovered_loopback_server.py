@@ -17,6 +17,7 @@ SPEC = importlib.util.spec_from_file_location('authority_recovered_loopback_serv
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 from authority.checkpoints import CheckpointStore
+import authority.checkpoints as checkpoints
 from authority.experimental_local_host import ExperimentalLocalHost
 from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
 from authority.recovery import stage_confirmed_recovery
@@ -151,6 +152,22 @@ class PreviousSourceTests(unittest.TestCase):
         save=self.root/'different.gz'; save.write_bytes(gzip.compress(XML.encode()))
         self.store.publish(save,marker=MARKER)
         with self.assertRaises(ValueError): MODULE.verify_previous_source(self.store,self.checkpoint,self.profile)
+    def test_failed_confirm_after_pointer_replace_cannot_be_recovery_source(self):
+        save=self.root/'candidate.gz';save.write_bytes(gzip.compress(XML.encode()))
+        candidate=self.store.publish(save,marker=MARKER)
+        with patch.object(checkpoints,'_sync_dir',side_effect=OSError('simulated sync failure')):
+            with self.assertRaises(OSError):
+                MODULE.confirm_witness_after_cleanup(self.store,candidate,{'success':True},[],[])
+        # Replacement occurred before the simulated failure, so the pointer
+        # alone must never authorize this source.
+        self.assertEqual(self.store.latest_marked_confirmed(),candidate)
+        self.result.update(final_checkpoint_id=candidate.checkpoint_id,final_checkpoint_sha256=candidate.sha256)
+        self.write_result()
+        self.assertTrue(MODULE.verify_previous_source(self.store,candidate,self.profile))
+        self.result['success']=False;self.write_result()
+        with self.assertRaises(ValueError):MODULE.verify_previous_source(self.store,candidate,self.profile)
+        (self.origin/'result.json').unlink()
+        with self.assertRaises(OSError):MODULE.verify_previous_source(self.store,candidate,self.profile)
 
 
 class RecoveryLogTests(unittest.TestCase):
@@ -173,6 +190,22 @@ class RecoveryLogTests(unittest.TestCase):
 
 
 class IntegratedLoopTest(unittest.TestCase):
+    def test_witness_confirmation_requires_final_evidence_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/'store').mkdir();store=CheckpointStore(root/'store')
+            source=root/'save.xml.gz';source.write_bytes(gzip.compress(XML.encode()))
+            candidate=store.publish(source,marker=MARKER)
+            for result,remaining,errors in (({'success':False},[],[]),
+                                            ({'success':True},None,[]),
+                                            ({'success':True},[123],[]),
+                                            ({'success':True},[],['cleanup failed'])):
+                with self.subTest(result=result,remaining=remaining,errors=errors):
+                    with self.assertRaises(ValueError):
+                        MODULE.confirm_witness_after_cleanup(store,candidate,result,remaining,errors)
+                    self.assertFalse((root/'store/CONFIRMED').exists())
+            MODULE.confirm_witness_after_cleanup(store,candidate,{'success':True},[],[])
+            self.assertEqual(store.latest_marked_confirmed(),candidate)
+
     def test_two_joins_and_last_disconnect_saves_with_real_coordinator(self):
         # Real control sockets/coordinator and save store, fake X4 and client claims.
         with tempfile.TemporaryDirectory() as temp:

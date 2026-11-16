@@ -37,6 +37,18 @@ This is consistent with save-ID renumbering but does not prove object identity.
 The raw component-ID fingerprint is therefore not stable across these saves;
 the guard remains fail-closed. [Details](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#initialized-registry-recovery-failed-before-client-start).
 
+A later private two-process Linux diagnostic built a second, reverse-indexed
+witness table for the same 10,082 registry entries and checked it again after
+recovery. Both X4 logs recorded their phase-completion receipts; the supervisor
+reports both saved table relationships and markers verified, without admitting
+a client. Raw mapping fingerprints differed at every saved generation. Two
+earlier attempts failed, first on an unsupported saved number type and then on
+an event-handler error whose exact cause was not recorded. The witness and
+registry share X4's serializer, so their agreement does not independently
+prove historical ship identity. Exact X4 file consumption, universe coverage,
+client synchronization, gameplay, Windows and Internet remain unproven. The
+normal fingerprint guard is unchanged. [Witness run details](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#private-saved-registry-witness-diagnostic).
+
 Earlier, one recovered Linux X4 server served two real local Linux X4
 clients in sequence. Each client log records a load request, marker and pause;
 retained client save copies hash to their respective checkpoint files. The

@@ -63,7 +63,7 @@ def read_evidence(path, limit=65536):
         if fd >= 0: os.close(fd)
 
 
-def verify_previous_source(store, checkpoint, profile, *, registry_status=False):
+def verify_previous_source(store, checkpoint, profile, *, registry_status=False, witness_source=False):
     """Accept only a compatible, cleanly ended local supervisor generation.
 
     This is local provenance, not authentication or a concurrent-writer fence.
@@ -91,7 +91,13 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False)
     case = origin/'case'; md = case/'extensions/x4_lan_lab/md'
     names={p.name for p in md.iterdir()}
     base_names={'authority_checkpoint_marker.xml','authority_identity_fixture.xml'}
-    if md.is_symlink() or names not in ((base_names,base_names|{'authority_ship_registry.xml'}) if registry_status else (base_names,)):
+    valid_names = (base_names,base_names|{'authority_ship_registry.xml'}) if registry_status else (base_names,)
+    if witness_source:
+        valid_names = (base_names|{'authority_ship_registry.xml','authority_registry_witness.xml'},)
+        if (result.get('witness_diagnostic',{}).get('phase') != 'create' or
+                read_evidence(md/'authority_registry_witness.xml') != read_evidence(ROOT/'tools/dev/authority_registry_witness.xml')):
+            raise ValueError('saved witness script provenance unavailable')
+    if md.is_symlink() or names not in valid_names:
         raise ValueError('source saved-state scripts differ')
     if 'authority_ship_registry.xml' in names and read_evidence(md/'authority_ship_registry.xml') != read_evidence(ROOT/'tools/dev/authority_ship_registry.xml'):
         raise ValueError('source registry script differs')
@@ -107,6 +113,10 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False)
     return fixture
 
 
+class _WitnessFinished(Exception):
+    """Private, no-listener diagnostic completed its isolated checkpoint."""
+
+
 def verify_final_recovery(watch):
     """Drain the owned, closed game's log; reject duplicates or partial lines."""
     while True:
@@ -114,6 +124,23 @@ def verify_final_recovery(watch):
         if watch.poll(): break
         if watch.offset == offset: raise ValueError('incomplete recovery log')
     if watch.stage != 3: raise ValueError('recovery evidence incomplete')
+
+
+def verify_final_witness(path, nonce, epoch, count, phase):
+    """Re-read the closed X4 log, so late duplicate receipts fail closed."""
+    import authority_recovery_registry_witness as witness
+    return witness.matches_log(path, nonce, epoch, count, phase)
+
+
+def confirm_witness_after_cleanup(store, checkpoint, result, remaining, errors):
+    """Confirm only after the owned process and all final evidence pass.
+
+    CheckpointStore.confirm can fail after its pointer replacement. A failed
+    result must therefore never be treated as an eligible recovery source.
+    """
+    if result.get('success') is not True or remaining != [] or errors:
+        raise ValueError('witness cleanup or final evidence incomplete')
+    store.confirm(checkpoint)
 
 
 def settle_shutdown(control, world, store, check):
@@ -313,16 +340,23 @@ def run(args):
     processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=clock_sock=None
     endpoint=out/'endpoint.json'; deadline=time.monotonic()+args.timeout
     watch=target=checkpoint=expected=None
+    witness_pending=None
     diagnostics = []
     active_clients = []
     try:
+        witness_phase = getattr(args,'registry_witness',None)
+        if witness_phase not in (None,'create','verify'):
+            raise ValueError('invalid witness phase')
+        if witness_phase and (getattr(args,'registry_enroll',False) or getattr(args,'diagnostic_client',False) or
+                getattr(args,'diagnostic_overlap',False) or getattr(args,'diagnostic_clients',None) is not None):
+            raise ValueError('witness diagnostic cannot admit clients')
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage)
         if source_store.directory == source.DEFAULT_STORE.resolve():
             fixture = source.verify(source_store.directory, checkpoint, profile)
         else:
-            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=(getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False)))
+            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=(getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or bool(witness_phase)), witness_source=(witness_phase=='verify'))
         target = profile/'save/save_008.xml.gz'
         if any(target.parent.iterdir()): raise ValueError('new profile save directory not empty')
         os.link(staged, target, follow_symlinks=False); target.chmod(0o400)
@@ -333,7 +367,7 @@ def run(args):
         protected = bridge.install_probe(case, profile, sock.getsockname()[1], lease, epoch)
         registry_check = None
         enrollment = None
-        if getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False):
+        if getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or witness_phase:
             import authority_recovery_registry_status as registry_check
             registry_expected=registry_check.saved_status(checkpoint)
             if registry_expected[0]=='ready':
@@ -346,6 +380,19 @@ def run(args):
                 enrollment={'epoch':secrets.token_hex(16),'nonce':secrets.token_hex(16),
                     'limit':200000,'save_path':str(profile/'save')}
             protected.extend(registry_check.install(case,registry_nonce,registry_expected,enroll=enrollment))
+        witness_check = None
+        if witness_phase:
+            if registry_expected[0]!='ready':raise ValueError('witness requires a populated registry')
+            import authority_recovery_registry_witness as witness_check
+            import authority_registry_witness_save_evidence as witness_save
+            if witness_phase=='verify':
+                witness_save.verify(checkpoint,registry_expected[1],registry_expected[2])
+            source_scripts=[source_store.directory.parent/'case/extensions/x4_lan_lab/md/authority_ship_registry.xml']
+            if witness_phase=='verify':
+                source_scripts.append(source_store.directory.parent/'case/extensions/x4_lan_lab/md/authority_registry_witness.xml')
+            witness_source_scripts={p:read_evidence(p) for p in source_scripts}
+            witness_nonce=secrets.token_hex(16)
+            protected.extend(witness_check.install(case,witness_nonce,registry_expected[1],registry_expected[2],witness_phase))
         clock = None
         if getattr(args, 'diagnostic_overlap', False):
             import authority_overlap_clock
@@ -368,11 +415,13 @@ def run(args):
         proc, started = owned.spawn_owned_gated(command, out/'process.log', processes)
         identity = None
         watch = recovery.RecoveryWatch(profile/'engine-output.log', checkpoint.marker)
+        witness_errors = witness_check.ErrorWatch(profile/'engine-output.log') if witness_check else None
         serving = [False]; recovered = [False]
         def check():
             nonlocal identity
             if stop[0] and not serving[0]: raise InterruptedError('startup cancelled')
             if proc.poll() is not None: raise RuntimeError('owned launcher exited')
+            if witness_errors is not None: witness_errors.poll()
             actual = owned.client.game_identity(proc, started, game)
             if actual is not None:
                 if identity is not None and actual != identity: raise RuntimeError('owned X4 changed')
@@ -388,10 +437,16 @@ def run(args):
             if identity is None: raise RuntimeError('recovery receipt without owned X4')
             if live.sha(target) != checkpoint.sha256 or any(live.sha(p) != h for p,h in expected.items()):
                 raise ValueError('recovery save or protected configuration changed')
+            if witness_check and (source_store.latest_marked_confirmed()!=checkpoint or
+                    live.sha(checkpoint.path)!=checkpoint.sha256 or
+                    any(read_evidence(p)!=data for p,data in witness_source_scripts.items())):
+                raise ValueError('witness diagnostic source changed')
             check()
         peer = bridge.activate(sock, watch, lease, epoch, deadline, check, verify)
         if registry_check is not None:
             registry_check.matches_log(profile/'engine-output.log',registry_nonce,'startup',registry_expected)
+            if witness_check:
+                witness_check.matches_log(profile/'engine-output.log',witness_nonce,registry_expected[1],registry_expected[2],witness_phase)
             if enrollment is not None:
                 count=registry_check.enrollment_receipt(profile/'engine-output.log',enrollment['nonce'],enrollment['epoch'],enrollment['limit'])
                 registry_expected=('bootstrap',enrollment['epoch'],count)
@@ -405,7 +460,11 @@ def run(args):
             if registry_check is not None:
                 saved=store_arg.get(checkpoint_id)
                 actual=registry_check.saved_status(saved)
-                registry_check.checkpoint_status(registry_expected,actual)
+                if witness_check:
+                    if actual[:3]!=registry_expected[:3]:raise ValueError('witness registry epoch or count changed')
+                    witness_save.verify(saved,actual[1],actual[2])
+                else:
+                    registry_check.checkpoint_status(registry_expected,actual)
                 registry_check.matches_log(profile/'engine-output.log',registry_nonce,saved.marker,actual)
                 registry_expected=actual
                 if enrollment is not None:
@@ -420,6 +479,22 @@ def run(args):
                 'count':registry_expected[2] if len(registry_expected)>2 else None,
                 'mapping_sha256':registry_expected[3] if len(registry_expected)>3 else None,
                 'coverage_proven':False,'native_load_bytes_proven':False}
+        if witness_check:
+            # A private checkpoint solely to supply the second diagnostic process.
+            # No TCP listener, client admission, or normal world session exists here.
+            check()
+            adapter.pause()
+            saved_source=adapter.save()
+            saved=store.publish(saved_source,marker=adapter.pending_marker)
+            adapter.checkpoint_published(saved)
+            verify()
+            witness_pending=saved
+            result.update(success=True,final_world_state='paused',final_checkpoint_id=saved.checkpoint_id,
+                final_checkpoint_sha256=saved.sha256,
+                witness_diagnostic={'phase':witness_phase,'epoch':registry_expected[1],
+                    'count':registry_expected[2],'no_client_admission':True,
+                    'historical_identity_proven':False,'exact_loaded_file_proven':False})
+            raise _WitnessFinished()
         service = owned.start_owned_file_service(secrets.token_hex(16), services)
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
         session = TrustedMarkerLoadSession(world, enabled=True)
@@ -540,6 +615,8 @@ def run(args):
         result.update(success=True, final_world_state=world.session.state,
                       final_checkpoint_id=None if saved is None else saved.checkpoint_id,
                       final_checkpoint_sha256=None if saved is None else saved.sha256)
+    except _WitnessFinished:
+        pass
     except (Exception, KeyboardInterrupt) as error:
         result['error'] = str(error) or type(error).__name__
     finally:
@@ -571,9 +648,16 @@ def run(args):
         if result['success'] and remaining == []:
             try:
                 verify_final_recovery(watch)
+                if witness_check:
+                    verify_final_witness(profile/'engine-output.log',witness_nonce,
+                                         registry_expected[1],registry_expected[2],witness_phase)
                 if (live.sha(target) != checkpoint.sha256 or
                         any(live.sha(path) != digest for path,digest in expected.items())):
                     raise ValueError('final protected recovery inputs changed')
+                if witness_check and (source_store.latest_marked_confirmed()!=checkpoint or
+                        live.sha(checkpoint.path)!=checkpoint.sha256 or
+                        any(read_evidence(p)!=data for p,data in witness_source_scripts.items())):
+                    raise ValueError('final witness source changed')
             except BaseException as error:
                 result.update(success=False, error='final recovery evidence invalid: '+str(error))
         if lockbox:
@@ -601,6 +685,10 @@ def run(args):
                 if count != 1: raise ValueError('invalid lease')
                 config.write_text(redacted,encoding='ascii')
         except BaseException as error: errors.append('lease cleanup: '+type(error).__name__)
+        if witness_pending is not None:
+            try: confirm_witness_after_cleanup(store,witness_pending,result,remaining,errors)
+            except BaseException as error:
+                result.update(success=False,error='witness checkpoint not safely confirmed: '+str(error))
         if errors: result.update(success=False,cleanup_errors=errors)
         try: (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
         finally:
@@ -618,6 +706,7 @@ def main():
     parser.add_argument('--seed',type=int,default=276944566)
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')
+    parser.add_argument('--registry-witness',choices=('create','verify'),help='isolated paused diagnostic; never admit clients')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

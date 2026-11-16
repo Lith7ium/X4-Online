@@ -404,3 +404,62 @@ stable across these two saves. The unchanged guard rejects the mismatch; the
 candidate is not promoted or made a source. This result does not demonstrate
 client registry loading, cross-process ship identity, gameplay, Windows or
 Internet connectivity.
+
+## Private saved-registry witness diagnostic
+
+The optional `--registry-witness create` and `--registry-witness verify`
+phases are isolated diagnostics: each starts one owned Linux X4 process on a
+private recovery copy, requires pause, and saves a private marked checkpoint.
+They do not start a client or publish a client endpoint. Create builds separate
+forward and reverse witness tables using slots in reverse registry-index order;
+verify loads the create checkpoint in a second X4 process and checks each
+registry entry against the saved witness and reverse references. The Lua owner
+requires correlated replies and logs a single completed-phase receipt; the log
+is not an independent capture of every reply. Saved checkpoint verification
+checks the registry and witness tables, references and marker in the saved
+bytes. The diagnostic may tolerate changed raw saved component IDs; the
+ordinary registry recovery guard and its fail-closed fingerprint comparison
+are unchanged. A witness checkpoint is accepted as a subsequent diagnostic
+source only with the expected script provenance and successful cleaned-up
+supervisor result. Diagnostic confirmation happens after owned X4 termination
+and final checks; a confirmation error after pointer replacement or a later
+result-write failure can still leave a visible pointer, which alone is not an
+eligible source.
+
+On 2026-11-16 the first attempt,
+`.local/authority-registry-witness-once-01`, logged a sealed create receipt
+for 10,082 entries, then rejected its save because the original parser expected
+integer counters and slots where X4 wrote canonical `largefloat` values. The
+candidate stayed unconfirmed. A later read-only check with the corrected
+parser verified its marker and the saved table relationships; that does not
+retroactively confirm the failed attempt or prove a reload.
+
+The second attempt, `.local/authority-registry-witness-once-02`, encountered
+an event-handler assertion followed by a bridge error before a create receipt.
+The event payload and exact failing predicate were not recorded, so its root
+cause remains unknown. The owned orchestrator was stopped with SIGTERM; its
+result reports `success=false`, confirmed cleanup and no remaining owned X4
+processes. The diagnostic now logs bounded failure categories and its owner
+polls for known error tags during guarded waits. A blocking adapter operation
+can delay detection until it returns or times out.
+
+The third attempt, `.local/authority-registry-witness-once-03`, completed both
+phases on the pinned 10,082-entry source. The create X4 log records its source
+marker, pause, registry status and a sealed create receipt; the second X4 log
+records the create checkpoint's marker, pause, registry status and a sealed
+verify receipt. The orchestrator reports both saved structures and markers
+verified, no client admission, and clean owned-process shutdown. The create
+checkpoint `checkpoint-f3bfb3fc65ad4a93b199230755601f62` has SHA-256
+`2b07a55d0d5fda0ef08de8a6b9a562100d745ae39076d1a7092f5e3c150f5994`;
+the verify checkpoint `checkpoint-c9b65412fec543ae92115a643fdfd626` has SHA-256
+`867406a63b4fdc73ffe208ba4d8aee37bb9d737213c51928187b667c6e917e0b`.
+The raw registry mapping fingerprints differed across source, create and
+verify: `6f5cadcc614831d49c143d020d1673f25cbd96a25c04dd5ded5c68d61b6040c7`,
+`4498b099b8741fccbe1f189cbcb7e8da5a7b08de48d7d57e0caf95baa692e72a`, and
+`2dcae0710b427e40832a5428f5f857a8fa79e42f059b77d817d85f32fb4a06dd`.
+This demonstrates the observed diagnostic checks and saved relationships,
+not which exact file bytes X4 consumed. The registry and witness tables share
+X4's serializer and originate from the same objects, so a consistent joint
+remapping would also pass: the test does not independently prove historical
+object identity, complete universe coverage, or cross-client synchronization.
+No client was admitted, and gameplay, Windows and Internet were not tested.
