@@ -9,12 +9,10 @@ import select
 import socket
 import threading
 import time
-import weakref
 
 _TOKEN=re.compile(r'[0-9a-f]{32}\Z')
 _MAX=768
-_OWNED=weakref.WeakKeyDictionary()
-_LOCK=threading.Lock()
+from .experimental_source_job_bridge import _SOCKET_OWNERS as _OWNED, _SOCKET_LOCK as _LOCK
 
 
 class ExperimentalSourceJobBinding:

@@ -109,3 +109,18 @@ the bridge's guard throughout use. After its deliberate resume, that guard
 must check the expected running context rather than continue requiring pause.
 The existing binding tests cover sampled handshake checks, not later bridge
 lifetime checks.
+
+After socket handoff, the Linux helper `authorize_source` sends one
+`P|lease|attempt|GO|epoch|generation` and waits for the matching
+`S|lease|attempt|GO_READY|epoch|generation` while repeatedly checking the
+owned process and UDP flow. Only after that confirmation may the supervisor
+request resume. Neither helper resumes X4 or decides when admitted clients are
+ready. A changed peer, process, guard, timeout or unexpected datagram closes the
+socket and requires external fencing. The supervisor must then pass the same
+connected socket to the source bridge and keep checking its process/peer guard.
+
+Binding, GO authorization and `ExperimentalSourceJobBridge` reserve the same
+Python socket object exclusively in turn. Reentrant GO or a second GO for that
+socket is refused; a reentrant attempt during GO also fences that attempt.
+Reservations do not detect duplicated file descriptors or direct raw socket
+reads retained outside these components. The supervisor must prohibit both.
