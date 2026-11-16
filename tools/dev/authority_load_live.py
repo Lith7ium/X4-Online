@@ -330,6 +330,123 @@ def readonly_save_command(case, game, binds, lock, display, auth, username, seed
     return command
 
 
+def create_owned_lock(uid, gid, lockbox):
+    """Register a new lock before delivering a deferred cancellation signal."""
+    deferred = [None]
+    previous = {}
+
+    def remember(number, _frame):
+        deferred[0] = deferred[0] or number
+
+    try:
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous[number] = signal.signal(number, remember)
+        lock_fd, lock_stat = live.create_lock_target(snapshot.LOCK_TARGET, uid, gid)
+        lockbox.append((lock_fd, lock_stat))
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+    if deferred[0] is not None:
+        raise InterruptedError('signal ' + str(deferred[0]))
+
+
+def spawn_owned_gated(command, log_path, processes):
+    """Capture the child and its start identity before releasing the launcher.
+
+    This must run in the main thread. A signal in the small interval between
+    the final check and the gate write can still permit a brief launch; the
+    deferred signal then aborts the run and invokes owned-process cleanup.
+    """
+    deferred = [None]
+    previous = {}
+    read_fd = write_fd = None
+    def remember(number, _frame):
+        deferred[0] = deferred[0] or number
+    try:
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous[number] = signal.signal(number, remember)
+        read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+        with log_path.open('wb') as log:
+            proc = subprocess.Popen([sys.executable, str(REPO/'tools/dev/authority_exec_gate.py'),
+                                     str(read_fd), *command], stdin=subprocess.DEVNULL,
+                                    stdout=log, stderr=subprocess.STDOUT,
+                                    start_new_session=True, pass_fds=(read_fd,))
+            processes.append([proc, None])
+        os.close(read_fd); read_fd = None
+        started = live.start_ticks(proc.pid)
+        if type(started) is not int or started < 0:
+            raise RuntimeError('owned launcher start identity unavailable')
+        processes[-1][1] = started
+        if proc.poll() is not None or live.start_ticks(proc.pid) != started:
+            raise RuntimeError('owned launch gate changed')
+        if deferred[0] is not None:
+            raise InterruptedError('signal ' + str(deferred[0]))
+        if os.write(write_fd, b'G') != 1:
+            raise RuntimeError('launch gate refused')
+        os.close(write_fd); write_fd = None
+        if deferred[0] is not None:
+            raise InterruptedError('signal ' + str(deferred[0]))
+    finally:
+        for fd in (read_fd, write_fd):
+            if fd is not None:
+                try: os.close(fd)
+                except OSError: pass
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+    # A signal may have arrived after the last gate check while handlers were
+    # still deferred; inspect it after the original handlers are restored.
+    if deferred[0] is not None:
+        raise InterruptedError('signal ' + str(deferred[0]))
+    return proc, started
+
+
+def stop_owned_processes(processes, result, errors):
+    """Stop every registered process group, recording uncertain ownership."""
+    stopped = True
+    known = True
+    remaining = []
+    for process, started in reversed(processes):
+        try:
+            if started is None:
+                # The exec gate is closed before a start identity is recorded.
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=15)
+                stopped = False
+                known = False
+                errors.append('owned launcher start identity unavailable')
+            else:
+                members = snapshot.stop_owned(process, started)
+                if not isinstance(members, list) or any(type(pid) is not int or pid <= 0 for pid in members):
+                    raise RuntimeError('invalid owned cleanup result')
+                remaining.extend(members)
+                if members:
+                    stopped = False
+                    errors.append('owned processes remain')
+        except BaseException as error:
+            stopped = False
+            known = False
+            errors.append('process cleanup failed: ' + type(error).__name__)
+    result['owned_processes_remaining'] = remaining if known else None
+    result['owned_cleanup_confirmed'] = stopped
+    return stopped
+
+
+def finish_owned_lock(lock_fd, lock_stat, processes_stopped, errors):
+    """Keep the lock path when any owned process group is unconfirmed."""
+    if processes_stopped:
+        try:
+            live.release_lock_target(snapshot.LOCK_TARGET, lock_fd, lock_stat)
+        except BaseException as error:
+            errors.append('lock cleanup failed: ' + type(error).__name__)
+    else:
+        errors.append('lock retained: owned process stop unconfirmed')
+        try:
+            os.close(lock_fd)
+        except BaseException as error:
+            errors.append('lock descriptor close failed: ' + type(error).__name__)
+
+
 def run(args):
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('run as the unprivileged Linux Steam desktop user')
@@ -355,55 +472,47 @@ def run(args):
     out.mkdir(mode=0o700, parents=True, exist_ok=False);out.chmod(0o700)
     result = {'success': False, 'scope': 'single isolated Linux X4 checkpoint load; no multiplayer',
               'steam_before': steam, 'read_only_staged_save': True}
-    proc = started = lock_fd = lock_stat = None
+    processes = []
+    lockbox = []
     handlers = {}
     try:
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         checkpoint, target = stage_checkpoint(store, args.checkpoint_id, profile)
         saved_time = verify_origin(store_dir, checkpoint, profile)
         install_probe(case, profile)
-        lock_fd, lock_stat = live.create_lock_target(snapshot.LOCK_TARGET, user.pw_uid, user.pw_gid)
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             handlers[number] = signal.signal(number, snapshot.cancel_capture)
+        create_owned_lock(user.pw_uid, user.pw_gid, lockbox)
         if live.sha(target) != checkpoint.sha256:
             raise ValueError('staged checkpoint changed before launch')
-        with (out/'process.log').open('wb') as log:
-            command = readonly_save_command(case, game, binds, lock, args.display, auth, user.pw_name, args.seed, target)
-            proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            started = live.start_ticks(proc.pid)
-            deadline = time.monotonic() + args.timeout
-            watch = LoadWatch(profile/'engine-output.log')
-            while True:
-                if time.monotonic() >= deadline: raise TimeoutError('load experiment timed out')
-                if proc.poll() is not None: raise RuntimeError('owned X4 exited before load confirmation')
-                if live.steam_identity(home, user.pw_uid) != steam: raise RuntimeError('Steam identity changed')
-                caught_up = watch.poll()
-                if caught_up and watch.stage == 4:
-                    if live.sha(target) != checkpoint.sha256:
-                        raise ValueError('staged checkpoint changed during load')
-                    result.update(saved_game_time=str(saved_time), ready_game_time=watch.ready_time,
-                                  advanced_game_time=watch.advanced_time)
-                    verify_loaded_time(saved_time, watch.ready_time)
-                    result.update(success=True, checkpoint_id=checkpoint.checkpoint_id, sha256=checkpoint.sha256,
-                                  size=checkpoint.size, load_requested=True, game_ready=True,
-                                  clock_not_before_saved=True)
-                    break
-                time.sleep(.1)
+        command = readonly_save_command(case, game, binds, lock, args.display, auth, user.pw_name, args.seed, target)
+        proc, started = spawn_owned_gated(command, out/'process.log', processes)
+        deadline = time.monotonic() + args.timeout
+        watch = LoadWatch(profile/'engine-output.log')
+        while True:
+            if time.monotonic() >= deadline: raise TimeoutError('load experiment timed out')
+            if proc.poll() is not None: raise RuntimeError('owned X4 exited before load confirmation')
+            if live.steam_identity(home, user.pw_uid) != steam: raise RuntimeError('Steam identity changed')
+            caught_up = watch.poll()
+            if caught_up and watch.stage == 4:
+                if live.sha(target) != checkpoint.sha256:
+                    raise ValueError('staged checkpoint changed during load')
+                result.update(saved_game_time=str(saved_time), ready_game_time=watch.ready_time,
+                              advanced_game_time=watch.advanced_time)
+                verify_loaded_time(saved_time, watch.ready_time)
+                result.update(success=True, checkpoint_id=checkpoint.checkpoint_id, sha256=checkpoint.sha256,
+                              size=checkpoint.size, load_requested=True, game_ready=True,
+                              clock_not_before_saved=True)
+                break
+            time.sleep(.1)
     except (Exception, KeyboardInterrupt) as error:
         result['error'] = str(error)
     finally:
-        if proc is not None and started is None and proc.poll() is None:
-            try:
-                proc.terminate();proc.wait(timeout=15)
-            except (OSError, subprocess.TimeoutExpired):
-                result.update(success=False, cleanup_error='unidentified owned launcher cleanup failed')
-        if started is not None:
-            try:
-                remaining = snapshot.stop_owned(proc, started)
-                result['owned_processes_remaining'] = remaining
-                if remaining: result.update(success=False, cleanup_error='owned process group remains')
-            except (OSError, subprocess.TimeoutExpired):
-                result.update(success=False, cleanup_error='owned process cleanup failed')
+        cleanup_errors = []
+        for number in handlers:
+            try: signal.signal(number, signal.SIG_IGN)
+            except BaseException as error: cleanup_errors.append('cleanup signal fence failed: ' + type(error).__name__)
+        processes_stopped = stop_owned_processes(processes, result, cleanup_errors)
         if result['success']:
             try:
                 while True:
@@ -411,15 +520,21 @@ def run(args):
                     if watch.poll(): break
                     if watch.offset == previous: raise ValueError('incomplete final log line')
                 if watch.stage != 4: raise ValueError('incomplete final load receipt')
-            except (OSError, ValueError):
-                result.update(success=False, error='final load receipt invalid')
-        if lock_stat is not None:
-            try: live.release_lock_target(snapshot.LOCK_TARGET, lock_fd, lock_stat)
-            except (OSError, RuntimeError): result.update(success=False, cleanup_error='lock cleanup failed')
-        for number, handler in handlers.items(): signal.signal(number, handler)
-        try: result['steam_after'] = live.steam_identity(home, user.pw_uid)
-        except (OSError, ValueError, RuntimeError): result['steam_after'] = None
-        if result['steam_after'] != steam: result.update(success=False, error='Steam identity changed')
+            except BaseException as error:
+                result.update(success=False, error='final load receipt invalid: ' + type(error).__name__)
+        if lockbox:
+            finish_owned_lock(*lockbox[0], processes_stopped, cleanup_errors)
+        for number, handler in handlers.items():
+            try: signal.signal(number, handler)
+            except BaseException as error: cleanup_errors.append('signal restore failed: ' + type(error).__name__)
+        try:
+            result['steam_after'] = live.steam_identity(home, user.pw_uid)
+            if result['steam_after'] != steam: cleanup_errors.append('Steam identity changed')
+        except BaseException as error:
+            result['steam_after'] = None
+            cleanup_errors.append('Steam identity unavailable: ' + type(error).__name__)
+        if cleanup_errors:
+            result.update(success=False, cleanup_error='; '.join(cleanup_errors))
         (out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
     return result
 
