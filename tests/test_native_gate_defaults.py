@@ -311,6 +311,17 @@ class TableTests(unittest.TestCase):
             self.assertIn(key, defaults.TABLE['session'])
             self.assertNotIn(key, defaults.ON_KEYS)
 
+    def test_continuous_fixture_position_writes_are_excluded_and_default_off(self):
+        key = 'native_gate_authority_continuous'
+        values, rep = defaults.apply(defaults.parse(SESSION))
+        self.assertIn(key, defaults.EXCLUDED_KEYS)
+        self.assertNotIn(key, defaults.DIAGNOSTIC_KEYS)
+        self.assertNotIn(key, values)
+        self.assertNotIn(key, rep['applied'])
+        self.assertIsNone(lua_session().globals().X4LAN_CONFIG[key])
+        explicit = lua_session(',native_gate_authority_continuous=true')
+        self.assertIs(explicit.globals().X4LAN_CONFIG[key], True)
+
     def test_diagnostics_stay_off(self):
         for key in ('native_gate_frame_timing', 'native_gate_probe_profile', 'native_gate_sample_profile', 'native_gate_world_hash_watch',
                     'native_gate_bullet_diag', 'native_gate_view_points_mask', 'native_gate_hybrid', 'native_gate_physics_trace', 'native_gate_pilot_capture'):

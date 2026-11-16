@@ -175,7 +175,8 @@ class LocalStopTests(unittest.TestCase):
                      'local_stop': stop, 'local_stop_channels': channels,
                      'procs': processes, 'starts': {p.pid: live.start_ticks(p.pid) for p in processes},
                      'stop_owned_process': fallback, 'subprocess': subprocess, 'owned_game_launches': owned_launches or {},
-                     'stop_owned_game_descendants': live.stop_owned_game_descendants}
+                     'stop_owned_game_descendants': live.stop_owned_game_descendants,
+                     'wire_private_configs': [], 'cleanup_private_config': live.cleanup_private_config}
         exec(compile(ast.Module(body=prefix, type_ignores=[]), '<actual run cleanup>', 'exec'), namespace)
 
     def test_actual_runner_preserves_descendant_refusal_evidence(self):
