@@ -272,30 +272,44 @@ function M.new_x4(cfg)
  local path=C.GetSaveFolderPath()
  assert(path~=nil and path~=ffi.NULL and ffi.string(path):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path)
  local opts={};for k,v in pairs(cfg) do opts[k]=v end
- opts.register=RegisterEvent;opts.trigger=AddUITriggeredEvent
- opts.convert64=ConvertIDTo64Bit;opts.to_lua_id=ConvertStringToLuaID;opts.clock=GetCurRealTime
- opts.can_observe=function()
-  local current=C.GetSaveFolderPath()
-  return current~=nil and current~=ffi.NULL and ffi.string(current):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path
-   and C.IsPlayerValid() and not C.IsGamePaused()
+ assert(cfg.context_guard==nil or type(cfg.context_guard)=='function')
+ assert(cfg.raw_actor_guard==nil or type(cfg.raw_actor_guard)=='function')
+ local context_guard,context_fault,raw_actor_guard=cfg.context_guard,cfg.fault,cfg.raw_actor_guard
+ local function context_ok()
+  if not context_guard then return true end
+  local ok,result=pcall(context_guard);return ok and result==true
  end
- if cfg.can_hold_delivery then
+ if context_guard then
+  opts.register=function(name,callback)
+   return RegisterEvent(name,function(...)
+    if not context_ok() then pcall(context_fault,'context_guard');return end
+    callback(...)
+   end)
+  end
+ else opts.register=RegisterEvent end
+ opts.trigger=AddUITriggeredEvent
+ opts.convert64=ConvertIDTo64Bit;opts.to_lua_id=ConvertStringToLuaID;opts.clock=GetCurRealTime
+ local expected_path=cfg.expected_save_path
+ local hold_guard=cfg.can_hold_delivery
+ local function environment(paused)
+  local current=C.GetSaveFolderPath()
+  return current~=nil and current~=ffi.NULL and ffi.string(current):gsub('\\','/'):gsub('/+$','')==expected_path
+   and C.IsPlayerValid() and C.IsGamePaused()==paused
+ end
+ opts.can_observe=function()return environment(false) and context_ok() and environment(false)end
+ if hold_guard then
   opts.can_hold_delivery=function()
-   local current=C.GetSaveFolderPath()
-   return current~=nil and current~=ffi.NULL and ffi.string(current):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path
-    and C.IsPlayerValid() and C.IsGamePaused() and cfg.can_hold_delivery()==true
+   return environment(true) and context_ok() and hold_guard()==true and environment(true)
   end
  end
  if opts.attach_saved_registry then
-  opts.can_attach=function()
-   local current=C.GetSaveFolderPath()
-   return current~=nil and current~=ffi.NULL and ffi.string(current):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path
-    and C.IsPlayerValid() and C.IsGamePaused()
-  end
+  opts.can_attach=function()return environment(true) and context_ok() and environment(true)end
  end
  opts.valid=function(actor)
+  if not context_ok() then return false end
+  if raw_actor_guard and raw_actor_guard(actor)~=true then return false end
   local id=ffi.new('UniverseID',ConvertIDTo64Bit(actor))
-  return C.IsPlayerValid() and C.IsValidComponent(id) and C.IsComponentOperational(id) and C.IsComponentClass(id,'ship')
+  return C.IsPlayerValid() and C.IsValidComponent(id) and C.IsComponentOperational(id) and C.IsComponentClass(id,'ship') and context_ok()
  end
  return M.new(opts)
 end
