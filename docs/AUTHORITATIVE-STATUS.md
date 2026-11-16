@@ -246,6 +246,16 @@ client seed were synthetic; cross-process frame identity, continuous movement,
 gameplay, Windows and Internet operation remain unproven.
 [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md#fourth-attempt-one-read-only-sample).
 
+A fifth isolated Linux/Linux diagnostic reported two consecutive position
+samples for the same confirmed registry index in one sector. Their positions
+differed; the first velocity was unknown and the second was derived from the
+position difference per source game second. Two corresponding client
+`BUFFERED` markers were logged, with TCP receipts supported by the worker code
+and saved result rather than a packet trace. The client uses a hold-only buffer:
+no ship pose or velocity was applied. Admission/checkpoint proof and client
+seed remain synthetic; the samples do not prove cross-process frame identity,
+visible movement or Internet gameplay. [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md#fifth-attempt-two-source-samples).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

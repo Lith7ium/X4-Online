@@ -19,6 +19,7 @@ from authority_source_job_bind import bind_source, authorize_source
 from authority_motion_ipc_supervisor import bind_source_motion
 from authority.experimental_job_motion_scheduler import ExperimentalJobMotionScheduler
 from authority.experimental_tcp_motion import ExperimentalTCPMotion
+from authority.experimental_motion_pair_evidence import validate_pair
 from authority.local_participant_control import LocalParticipantControl
 
 _EXTRA=('client_motion_lease','client_motion_attempt','source_motion_lease','source_motion_attempt')
@@ -29,13 +30,15 @@ def config(raw):
     if type(all_values) is not dict or any(k not in all_values for k in _EXTRA):raise ValueError('missing motion context')
     extras={k:all_values[k] for k in _EXTRA}
     if any(type(v) is not str or not _TOKEN.fullmatch(v) for v in extras.values()):raise ValueError('invalid motion context')
-    rest={k:v for k,v in all_values.items() if k not in _EXTRA}
+    count=all_values.get('motion_count',1)
+    if type(count) is not int or count not in (1,2):raise ValueError('invalid bounded motion count')
+    rest={k:v for k,v in all_values.items() if k not in _EXTRA and k!='motion_count'}
     if 'continuous' in rest or 'max_events' in rest:raise ValueError('single job diagnostic required')
     c=base.config(json.dumps(rest,separators=(',',':'),allow_nan=False).encode())
     names=('epoch','lease','attempt','generation','participant_lease','job_epoch','source_lease','source_attempt','source_control_lease')
     values=[c[k] for k in names]+list(extras.values())
     if len(set(values))!=len(values):raise ValueError('motion tokens overlap session context')
-    c.update(extras);return c
+    c.update(extras);c['motion_count']=count;return c
 
 
 def run(client_control,client_job,client_motion,source_control,source_job,source_motion,private,c):
@@ -74,9 +77,20 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
             epoch=c['job_epoch'],generation=c['generation'],guard=guard,timeout=min(90,c['deadline']-time.monotonic()-1),
             expected_index=c['index'],sectors=c['sectors'])
         motion=ExperimentalTCPMotion(delivery,enabled=True)
+        event=None;samples=[]
+        def validate_sample(value):
+            if event is None or value['index']!=event['index'] or value['sequence']!=len(samples)+1:
+                return False
+            if value['epoch']!=c['job_epoch'] or value['generation']!=c['generation'] or value['sector_macro']!=event['descriptor']['sector_macro']:
+                return False
+            if not samples:return value['velocity'] is None
+            if c['motion_count']!=2 or len(samples)!=1:return False
+            validate_pair([samples[0],value],epoch=c['job_epoch'],generation=c['generation'],index=event['index'],
+                          sector=event['descriptor']['sector_macro'])
+            return True
         source=bind_source_motion(source_motion,motion,process=identity,lease=c['source_motion_lease'],
             attempt=c['source_motion_attempt'],epoch=c['job_epoch'],generation=c['generation'],guard=guard,
-            timeout=min(35,c['deadline']-time.monotonic()-1))
+            timeout=min(35,c['deadline']-time.monotonic()-1),validate_sample=validate_sample)
         motion_peer=source_motion.getpeername();guard()
         scheduler=ExperimentalJobMotionScheduler(job,source,enabled=True)
         ctl=LocalParticipantControl.__new__(LocalParticipantControl)
@@ -85,8 +99,7 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
         ctl.timeout=min(20,c['deadline']-time.monotonic()-35)
         if ctl.timeout<=0:raise TimeoutError('source resume budget expired')
         guard();ctl.resume((1,));guard()
-        event=None;sample=None
-        while sample is None:
+        while len(samples)<c['motion_count']:
             guard();kind,value=scheduler.step();guard()
             if kind=='job_snapshot_finished':raise RuntimeError('source ended before motion sample')
             if kind=='job':
@@ -94,15 +107,22 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
                 if value['index']!=c['index'] or value['sequence']!=1:raise RuntimeError('unexpected source job')
                 event=value
             elif value is not None:
-                if event is None or value['index']!=event['index']:raise RuntimeError('motion without completed job')
-                sample=value
-        return {'event':'result','ok':True,'tcp_admitted':True,'tcp_job_receipt':True,'source_md_ack_observed':True,
+                if event is None or value['index']!=event['index'] or value['sequence']!=len(samples)+1:
+                    raise RuntimeError('motion without completed job or out of sequence')
+                samples.append(value)
+        if c['motion_count']==2:
+            samples=validate_pair(samples,epoch=c['job_epoch'],generation=c['generation'],index=event['index'],
+                                  sector=event['descriptor']['sector_macro'])
+        result={'event':'result','ok':True,'tcp_admitted':True,'tcp_job_receipt':True,'source_md_ack_observed':True,
                 'client_md_ffi_asserted_by_owner':True,'synthetic_server_checkpoint_and_admission':True,
                 'source_activation_is_birth':False,'descriptor_atomic':False,'frame_identity_proven':False,
                 'event_sequence':event['sequence'],'index':event['index'],
                 'sector_macro':event['descriptor']['sector_macro'],'macro':event['descriptor']['macro'],
-                'faction':event['descriptor']['faction'],'motion_sample':sample,'motion_client_bound_buffered':True,
+                'faction':event['descriptor']['faction'],'motion_client_bound_buffered':True,
                 'motion_velocity_source':'position_difference_per_source_game_second','motion_frame_identity_proven':False}
+        if c['motion_count']==1:result['motion_sample']=samples[0]
+        else:result['motion_samples']=samples
+        return result
     try:
         return client_worker.run(client_control,client_job,private,c,None,delivery_action=action,
                                  extra_guard=source_guard,expected_jobs=None,motion_udp=client_motion)

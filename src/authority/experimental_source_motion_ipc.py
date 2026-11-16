@@ -4,6 +4,7 @@ The caller binds/validates the source socket using its PID/inode guard before
 construction, confirms registry lifetimes separately, and owns all processes,
 profile locks and failure fencing. This bridge does not start X4 or a listener.
 """
+import copy
 import math
 import re
 import select
@@ -11,7 +12,7 @@ import socket
 import threading
 import time
 from .experimental_source_job_bridge import _SOCKET_OWNERS, _SOCKET_LOCK
-from .experimental_tcp_motion import ExperimentalTCPMotion, motion_value
+from .experimental_tcp_motion import ExperimentalTCPMotion, motion_value, motion_digest
 
 _TOKEN=re.compile(r'[0-9a-f]{32}\Z')
 _NUMBER=re.compile(r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z')
@@ -20,13 +21,14 @@ _MAX=9007199254740991
 
 class ExperimentalSourceMotionIPC:
     """One request at a time; no next pull until TCP recipients confirm."""
-    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30):
+    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None):
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
             type(motion) is not ExperimentalTCPMotion or
             any(type(x) is not str or not _TOKEN.fullmatch(x) for x in (lease,attempt,epoch,generation)) or
             len({lease,attempt,epoch,generation})!=4 or not callable(guard) or not callable(validate_peer) or
+            (validate_sample is not None and not callable(validate_sample)) or
             type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=300 or
             timeout<=motion._delivery._timeout):
             raise ValueError('invalid source motion IPC')
@@ -38,7 +40,7 @@ class ExperimentalSourceMotionIPC:
             sock.setblocking(False);_SOCKET_OWNERS[sock]=True
         self._sock=sock;self._peer=peer;self._local=sock.getsockname();self._motion=motion
         self._lease=lease;self._attempt=attempt;self._epoch=epoch;self._generation=generation
-        self._guard=guard;self._validate=validate_peer;self._timeout=float(timeout)
+        self._guard=guard;self._validate=validate_peer;self._validate_sample=validate_sample;self._timeout=float(timeout)
         self._state='ready';self._owner=threading.get_ident();self._next=0;self._indices=set();self._scheduler_owner=None;self._scheduler_lease=None
         self._last_pull=None
         motion._source_owner=self
@@ -130,6 +132,12 @@ class ExperimentalSourceMotionIPC:
             value=motion_value({'version':1,'epoch':self._epoch,'generation':self._generation,
                 'index':int(index),'sequence':int(sequence),'sector_macro':parts[9],
                 'source_time':t,'x':x,'y':y,'z':z,'velocity':v})
+            if self._validate_sample is not None:
+                candidate=copy.deepcopy(value);self._check(deadline,'pulling')
+                accepted=self._validate_sample(candidate)
+                self._check(deadline,'pulling')
+                if accepted is not True or motion_digest(candidate)!=motion_digest(value):
+                    raise ValueError('source motion pre-send validation failed')
             self._quiet(deadline,'pulling')
             if self._motion_call(self._motion.send,value,guard=lambda:self._check(deadline,'pulling') or True) is not True:
                 raise RuntimeError('motion TCP not confirmed')

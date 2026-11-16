@@ -22,6 +22,7 @@ import authority_census_replica_live as lifecycle
 import authority_source_single_job_install as source_install
 import authority_participant_motion_install as client_install
 from authority.experimental_tcp_motion import motion_value
+from authority.experimental_motion_pair_evidence import validate_pair
 from authority_helper_lifecycle import OwnedHelper
 from authority_tcp_native_worker import parse_json
 
@@ -63,8 +64,10 @@ class MotionCoordinator(pair.Coordinator):
                      else ROOT/'tools/dev'/name for name in source_install.MD)
         return tuple(sorted(paths))
 
-    def __init__(self,candidates,*,defer_source_ack=False):
+    def __init__(self,candidates,*,defer_source_ack=False,motion_count=1):
+        if type(motion_count) is not int or motion_count not in (1,2):raise ValueError('invalid bounded motion count')
         super().__init__(candidates,defer_source_ack=defer_source_ack)
+        self.motion_count=motion_count
         # Probe all saved candidates but do not require the diagnostic fallback
         # itself to happen: this test targets one motion binding.
         self.witnesses={name:tuple(items) for name,items in candidates.items()
@@ -133,6 +136,7 @@ class MotionCoordinator(pair.Coordinator):
              'index':archive.COUNT+1,'sectors':sorted(self.witnesses),
              'client_motion_lease':c['motion_lease'],'client_motion_attempt':c['motion_attempt'],
              'source_motion_lease':s['motion_lease'],'source_motion_attempt':s['motion_attempt']}
+        if self.motion_count==2:cfg['motion_count']=2
         payload=json.dumps(cfg,separators=(',',':'),allow_nan=False).encode('ascii')+b'\n'
         if len(payload)>16384:raise ValueError('private worker configuration too large')
         self.private.settimeout(min(2,deadline-time.monotonic()));self.private.sendall(payload);guard()
@@ -144,18 +148,24 @@ class MotionCoordinator(pair.Coordinator):
         guard();self.result=result
         self.output_details=dict(tcp_ack_after_client_replica=True,ship_creation_requested=True,artificial_seed=7183,
             source_queue_acked=True,source_activation_is_birth=False,descriptor_atomic=False,frame_identity_proven=False,
-            synthetic_tcp_checkpoint_and_admission=True,motion_sample=result['motion_sample'],
+            synthetic_tcp_checkpoint_and_admission=True,
             motion_client_bound_buffered=True,motion_pose_applied=False)
+        key='motion_sample' if self.motion_count==1 else 'motion_samples'
+        self.output_details[key]=result[key]
         return self.output_details
 
     def _validate_motion_result(self,result):
-        extra={'motion_sample','motion_client_bound_buffered','motion_velocity_source','motion_frame_identity_proven'}
+        key='motion_sample' if self.motion_count==1 else 'motion_samples'
+        extra={key,'motion_client_bound_buffered','motion_velocity_source','motion_frame_identity_proven'}
         if type(result) is not dict or not extra<=set(result):raise ValueError('missing motion result')
         self._validate_result({k:v for k,v in result.items() if k not in extra})
         if result['motion_client_bound_buffered'] is not True or result['motion_frame_identity_proven'] is not False or result['motion_velocity_source']!='position_difference_per_source_game_second':raise ValueError('invalid motion evidence')
-        sample=motion_value(result['motion_sample'])
-        if sample['epoch']!=archive.REGISTRY_EPOCH or sample['generation']!=self.generation or sample['index']!=result['index'] or sample['sequence']!=1 or sample['sector_macro']!=result['sector_macro']:
-            raise ValueError('motion identity differs from confirmed job')
+        if self.motion_count==2:
+            validate_pair(result[key],epoch=archive.REGISTRY_EPOCH,generation=self.generation,index=result['index'],sector=result['sector_macro'])
+        else:
+            sample=motion_value(result[key])
+            if sample['epoch']!=archive.REGISTRY_EPOCH or sample['generation']!=self.generation or sample['index']!=result['index'] or sample['sequence']!=1 or sample['sector_macro']!=result['sector_macro'] or sample['velocity'] is not None:
+                raise ValueError('motion identity or initial velocity differs from confirmed job')
 
     def verify_final(self,logs):
         super().verify_final(logs)
@@ -170,8 +180,8 @@ class MotionCoordinator(pair.Coordinator):
                 except ValueError:raise ValueError('invalid client motion source time') from None
                 if not math.isfinite(value):raise ValueError('invalid client motion source time')
                 rows.append((int(match[1]),int(match[2]),match[3],value))
-        sample=self.result['motion_sample']
-        if rows!=[(sample['index'],sample['sequence'],sample['sector_macro'],sample['source_time'])]:
+        samples=[self.result['motion_sample']] if self.motion_count==1 else self.result['motion_samples']
+        if rows!=[(sample['index'],sample['sequence'],sample['sector_macro'],sample['source_time']) for sample in samples]:
             raise ValueError('client buffer log differs from motion result')
         return True
 
@@ -186,7 +196,7 @@ def run(args):
     args.defer_source_ack=True;args.two_clients=False;active=[None]
     original=(lifecycle.coordinator.CensusCoordinator,lifecycle.installer.install,lifecycle.owned.spawn_owned_gated,lifecycle.load_observation)
     def make(candidates,*,defer_source_ack=False):
-        active[0]=MotionCoordinator(candidates,defer_source_ack=defer_source_ack);return active[0]
+        active[0]=MotionCoordinator(candidates,defer_source_ack=defer_source_ack,motion_count=getattr(args,'motion_count',1));return active[0]
     def install(case,profile,ticket,config,nonce,timeout,window):return active[0].install(case,profile,ticket,config,nonce,timeout,window)
     def spawn(command,log,processes):
         result=original[2](command,log,processes);role=Path(log).parent.name
@@ -199,7 +209,7 @@ def run(args):
         lifecycle.coordinator.CensusCoordinator=make;lifecycle.installer.install=install
         lifecycle.owned.spawn_owned_gated=spawn;lifecycle.load_observation=load
         result=lifecycle.run(args)
-        result.update(scope='two isolated Linux X4; source job and one read-only motion sample to client hold buffer',
+        result.update(scope='two isolated Linux X4; source job and read-only motion samples to client hold buffer',
                       source_activation_is_birth=False,descriptor_atomic=False,frame_identity_proven=False,
                       motion_pose_applied=False,multiplayer_proven=False)
         (Path(args.out)/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
@@ -214,6 +224,7 @@ def main():
     p.add_argument('--store',type=Path,default=archive.DEFAULT_STORE);p.add_argument('--display',required=True)
     p.add_argument('--timeout',type=float,default=600);p.add_argument('--window',type=float,default=60)
     p.add_argument('--seed',type=int,default=276944566)
+    p.add_argument('--motion-count',type=int,choices=(1,2),default=1,help='bounded read-only samples for one confirmed source actor')
     try:result=run(p.parse_args())
     except (OSError,ValueError,RuntimeError) as e:p.exit(1,'REFUSED: '+str(e)+'\n')
     print(json.dumps(result,indent=2));return 0 if result['success'] else 1

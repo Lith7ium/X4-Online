@@ -37,6 +37,21 @@ class MotionPair(unittest.TestCase):
   for change in ({'motion_client_bound_buffered':False},{'motion_frame_identity_proven':True},
                  {'motion_sample':{**result['motion_sample'],'index':10056}},{'extra':True}):
    with self.assertRaises(ValueError):self.c._validate_motion_result({**result,**change})
+ def test_two_samples_require_two_correlated_buffer_markers(self):
+  self.c.motion_count=2;result=self.result();first=result.pop('motion_sample')
+  second={**first,'sequence':2,'source_time':102.625,'x':2,'velocity':{'x':2,'y':0,'z':0}}
+  result['motion_samples']=[first,second];self.c._validate_motion_result(result)
+  self.c.result=result;self.c.tickets['client']={}
+  source=b'[X4LAN] AUTH_SOURCE_SINGLE STATE binding 10\n[X4LAN] AUTH_SOURCE_SINGLE STATE observing 10\n[X4LAN] AUTH_SOURCE_SINGLE STATE done 11\n'
+  first_log=b'[X4LAN] AUTH_PARTICIPANT_MOTION BUFFERED 10055 1 sector_a 102.125\n'
+  second_log=b'[X4LAN] AUTH_PARTICIPANT_MOTION BUFFERED 10055 2 sector_a 102.625\n'
+  with patch.object(self.c,'check_sources',return_value=True),patch.object(m.pair.client_evidence,'observe',return_value={'local_job_applied':True}):
+   self.assertTrue(self.c.verify_final({'server':source,'client':first_log+second_log}))
+   for bad in (first_log,second_log+first_log,first_log+second_log.replace(b'102.625',b'102.626')):
+    with self.assertRaises(ValueError):self.c.verify_final({'server':source,'client':bad})
+  for bad in ({**second,'index':10056},{**second,'source_time':102.125},
+              {**second,'velocity':{'x':3,'y':0,'z':0}}):
+   with self.assertRaises(ValueError):self.c._validate_motion_result({**result,'motion_samples':[first,bad]})
  def test_installs_distinct_endpoints_and_saved_witnesses(self):
   ticket={'world_epoch':self.c.attempt}
   with patch.object(self.c,'check_sources',return_value=True),patch.object(m.source_install,'install',return_value=[]) as source,patch.object(m.client_install,'install',return_value=[]) as client:

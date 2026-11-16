@@ -36,6 +36,19 @@ do
  sample('sector_b',103.5,20);assert(out[5].velocity.x==0)
  assert(x:close())
 end
+-- A zero displacement is a measured zero vector only with two distinct,
+-- sufficiently close source-game timestamps in the same local sector.
+do
+ local x,add,sample,out=rig();assert(add(1))
+ sample('sector_a',100,10);assert(out[1].velocity==nil)
+ sample('sector_a',100,10);assert(#out==1)
+ sample('sector_a',100.01,10);assert(#out==2 and out[2].velocity==nil)
+ sample('sector_a',100.5,10)
+ local v=out[3].velocity
+ assert(out[3].sequence==3 and v and v.x==0 and v.y==0 and v.z==0)
+ sample('sector_a',102,10);assert(out[4].velocity==nil)
+ assert(x:close())
+end
 -- Identical source time is suppressed; an actual sector-frame change resets
 -- the rate even when it was first observed at the suppressed timestamp.
 do

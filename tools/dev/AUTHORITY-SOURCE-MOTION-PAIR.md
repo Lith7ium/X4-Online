@@ -87,6 +87,51 @@ sample does not establish common sector frames, measured or derived velocity,
 continuous movement, a pose or velocity write, a visual flight result, full
 universe coverage, gameplay, Windows or Internet operation.
 
+## Fifth attempt: two source samples
+
+On 2026-11-16, `.local/authority-source-motion-pair-05` reported
+`success=true` and confirmed cleanup with no owned processes remaining. The
+source X4 log recorded `binding → attaching → await_go → observing → reading →
+delivering → done`. The separate client log recorded witness 1318 accepted,
+`LOCAL_APPLIED 10055`, and two `BUFFERED` markers for index 10055 in
+`cluster_115_sector001_macro`: sequence 1 at source time
+13.394301519000008 and sequence 2 at 13.570402863000011.
+
+The saved result reports the following positions for those two samples:
+
+| Sequence | Source game time | Position `(x, y, z)` | Velocity |
+| --- | --- | --- | --- |
+| 1 | 13.394301519000008 | `(-132216.46875, 6004.3916015625, 169078.03125)` | `null` (unknown) |
+| 2 | 13.57040286300001 | `(-132215.296875, 6004.4482421875, 169072.640625)` | `(6.65454887158602, 0.32163652879332433, -30.610924809295692)` |
+
+The second vector is calculated from the two local position readings per
+**source game second**, not read as native X4 velocity or calibrated against
+wall time. The source sampler's code requires the retained actor/registry
+binding and local sector reference to remain valid and derives the rate only
+for the same local frame and an allowed finite time interval. It does not make
+the position and time reads atomic or establish a common frame with the client.
+
+Each `BUFFERED` marker is emitted after the client's local MD/FFI binding and
+hold-only buffer push, but before its reply. The worker/runner code requires a
+TCP receipt for each sample and validates the second rate against the first
+sample before transmission. The saved success result supports those code paths;
+no packet capture or separate raw worker JSON was retained. The markers and
+saved sample values are different kinds of evidence. Source and client game
+clocks are independent. Both load requests, expected markers and pauses were
+logged; exact file consumption by X4 is not independently established.
+Both staged save hashes matched the reported checkpoint digest. The sampled
+source sampler/session/owner and client owner/binding/session scripts matched
+the reviewed sources; the client buffer had its expected global export. This
+was not a complete overlay audit, and no raw PID/inode record was retained.
+
+The observation concerns one registered actor, one local Linux client and one
+sector. Admission/checkpoint proof and client creation seed are synthetic; the
+replica loadout is approximate. The client buffer stores the samples in
+hold-only mode; neither pose nor velocity was applied to the ship. A job
+activation does not prove a birth. This is not evidence of visible flight,
+combat, trading, independent sectors, complete world coverage, Windows or
+Internet multiplayer.
+
 `authority_source_motion_pair_live.py` is a default-off, single-event diagnostic
 using the existing private two-X4 lifecycle. It stages the pinned census save
 and its historical registry fixture into separate isolated source and client
@@ -104,6 +149,19 @@ The first velocity is unknown, not a fabricated zero. The diagnostic has no
 pose/velocity writer and does not prove visual movement, native velocity,
 atomic sampling, cross-process sector frame equality, persistence, gameplay,
 Windows, Internet transport or complete universe coverage.
+
+The opt-in `--motion-count 2` variant waits for two independently receipted
+samples of the same confirmed source registry entry and checks both correlated
+client buffer markers. Sequence and source game time must increase; the first
+velocity must be unknown. Before transmitting the second sample, its sector,
+identity and any available rate are checked against the first position and the
+source-game-time difference. A valid zero vector or an unknown second velocity
+is allowed; a nonzero movement is not required. The source sampler checks its
+retained local actor and sector reference for each read. These checks do not
+prove actor lifetime across arbitrary reuse, atomic reads, an equivalent client
+frame, source-to-client clock synchronization, motion application or smooth
+flight. This mode is bounded test instrumentation, not a limit on the number of
+events in the intended implementation.
 
 The runner inherits the pinned executable/save, load-marker, private profile,
 owned-process cleanup and exclusive-lock fences of the existing pair runner.

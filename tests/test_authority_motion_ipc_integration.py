@@ -35,7 +35,7 @@ class Integration(unittest.TestCase):
         self.assertFalse(any(t.is_alive() for t in self.threads));self.assertEqual(self.errors,[])
     def start(self,fn):
         t=threading.Thread(target=fn);self.threads.append(t);t.start()
-    def test_real_tcp_and_udp_wait_for_correlated_readback(self):
+    def run_bridge(self,validate_sample=None):
         tcp=self.case.connect();self.case.offer_and_claim(tcp)
         client_udp,x4_udp=udp(),udp();self.addCleanup(client_udp.close);self.addCleanup(x4_udp.close)
         src_udp,x4_src=udp(),udp();self.addCleanup(src_udp.close);self.addCleanup(x4_src.close)
@@ -86,11 +86,20 @@ class Integration(unittest.TestCase):
         delivery=ExperimentalTCPJobDelivery(self.case.host,enabled=True,timeout=2)
         motion=ExperimentalTCPMotion(delivery,enabled=True)
         source=ExperimentalSourceMotionIPC(src_udp,motion,enabled=True,lease='3'*32,attempt='4'*32,
-                 epoch=E,generation=G,guard=lambda:True,validate_peer=lambda p:p==x4_src.getsockname(),timeout=3)
+                 epoch=E,generation=G,guard=lambda:True,validate_peer=lambda p:p==x4_src.getsockname(),timeout=3,
+                 validate_sample=validate_sample)
         source.bind_confirmed(10055)
+        if validate_sample is not None:
+            with self.assertRaises(ValueError):source.pull()
+            self.assertEqual(self.bound,[]);return
         before=time.monotonic();result=source.pull();after=time.monotonic()
         self.assertGreaterEqual(after-before,.04);self.assertEqual(len(self.bound),1)
         self.assertEqual((result['index'],result['sequence'],result['velocity']),(10055,1,None))
         self.assertIsNone(source.pull());source.close()
+
+    def test_real_tcp_and_udp_wait_for_correlated_readback(self):self.run_bridge()
+    def test_mutated_validator_copy_fails_before_tcp(self):
+        def mutate(value):value['x']=int(value['x']);return True
+        self.run_bridge(mutate)
 
 if __name__=='__main__':unittest.main()

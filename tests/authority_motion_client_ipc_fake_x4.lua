@@ -10,8 +10,10 @@ local buffer={new=function(opts)
  assert(opts.dimensions==3 and opts.hold_only==true)
  local track=actual_buffer.new(opts)
  return {push=function(_,sample,arrival)
-  assert(sample.pose[1]==1 and sample.pose[2]==2 and sample.pose[3]==3 and sample.source_time>=0)
-  if os.getenv('TEST_EXPECT_RATE')=='1' then assert(sample.rate and sample.rate[1]==4 and sample.rate[2]==5 and sample.rate[3]==6)
+  local two=os.getenv('TEST_TWO_SAMPLES')=='1'
+  assert(sample.pose[1]==(two and sample.sequence==2 and 2 or 1) and sample.pose[2]==2 and sample.pose[3]==3 and sample.source_time>=0)
+  if two and sample.sequence==2 then assert(sample.rate and sample.rate[1]==2 and sample.rate[2]==0 and sample.rate[3]==0)
+  elseif os.getenv('TEST_EXPECT_RATE')=='1' then assert(sample.rate and sample.rate[1]==4 and sample.rate[2]==5 and sample.rate[3]==6)
   else assert(sample.rate==nil) end
   return track:push(sample,arrival)
  end}
