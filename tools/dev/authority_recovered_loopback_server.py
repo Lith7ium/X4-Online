@@ -206,6 +206,21 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
 
 
 
+
+def verify_diagnostic_context(*, verify_server, active_clients, check_process, check_cancel):
+    """Hash server and clients before and after each participant check.
+
+    Each client's active check owns only its own protected inputs. Callbacks
+    must raise on failure; this function never retries or resumes an operation.
+    """
+    check_cancel()
+    verify_server()
+    for active in tuple(active_clients):
+        active.participant.check_active(server_checked=True)
+        verify_server()
+    check_process()
+    check_cancel()
+
 def validate_overlap_identities(first, second):
     """Correlate the three independently tracked Linux X4 process identities."""
     identities = []
@@ -354,10 +369,10 @@ def run(args):
                                          check=verify_process, validate_answer=validate_answer)
             def _quiet(self, peers, deadline):
                 verify_process(); result = super()._quiet(peers, deadline); verify_process(); return result
+        overlap_guard = [None]
         def verify_process():
-            check()
-            for active in tuple(active_clients): active.participant.check_active()
-            check()
+            if overlap_guard[0] is None: return check()
+            return overlap_guard[0]()
         world._participants = GuardedParticipants(host, enabled=True, timeout=120)
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
@@ -383,15 +398,19 @@ def run(args):
             raise ValueError('choose one diagnostic mode')
         if overlap:
             import authority_recovered_server_client as diagnostic_client
-            def cancel_overlap():
+            def cancelled():
                 if stop[0]: raise InterruptedError('diagnostic cancelled')
-                verify_process()
             def base_overlap():
-                if stop[0]: raise InterruptedError('diagnostic cancelled')
-                verify()
-                if stop[0]: raise InterruptedError('diagnostic cancelled')
+                # Each retained client's own context checks its X4 and files;
+                # the outer aggregate separately verifies the server once.
+                cancelled(); check(); cancelled()
+            def server_overlap():
+                cancelled(); verify(); cancelled()
             def verify_overlap():
-                cancel_overlap(); verify(); cancel_overlap()
+                verify_diagnostic_context(verify_server=verify, active_clients=active_clients,
+                    check_process=check, check_cancel=cancelled)
+            def cancel_overlap(): verify_overlap()
+            overlap_guard[0] = verify_overlap
             def start_overlap(index):
                 diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory, keep_worker=True)
                 diagnostics.append(diagnostic)
@@ -402,9 +421,11 @@ def run(args):
                     checkpoint=checkpoint, recovery_target=target, server_expected=expected,
                     recovery_watch=watch, listener=listener, host=host, service=service, world=world,
                     session=session, control=control, check_server=verify_overlap, check_base=base_overlap,
+                    check_server_base=server_overlap,
                     server_out=out, cancel_check=cancel_overlap)
             result.update(run_overlapping_diagnostics(start=start_overlap, active_clients=active_clients,
                 world=world, host=host, control=control, deadline=deadline, verify=verify_overlap))
+            overlap_guard[0] = None
         if getattr(args, 'diagnostic_client', False) or diagnostic_count == 2:
             # Opt-in local test clients, all resources still registered to
             # this supervisor and protected by its single global lock.

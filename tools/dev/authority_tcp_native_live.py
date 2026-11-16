@@ -124,11 +124,12 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         self.client_tcp = self.server_tcp = self.ipc = self.second = None
         self.control = self.host = self.participants = None
 
-    def check_active(self):
-        """Check a retained worker and its guarded X4 context, or fail closed."""
+    def check_active(self, *, server_checked=False):
+        """Check a retained client; server_checked requires an enclosing server guard."""
+        if type(server_checked) is not bool: raise ValueError('invalid enclosing server check')
         if self._active_check is None:
             raise RuntimeError('no retained active worker')
-        return self._active_check()
+        return self._active_check(server_checked=server_checked)
 
     def join(self, world):
         marked.remaining(self.run_deadline)
@@ -207,18 +208,25 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
 
     def on_ready(self, *, world, handle, ticket, target, server_identity, server_proc, server_started,
                  client_identity, client_proc, client_started, game, out, deadline, result, check_protected,
-                 active_check_protected=None):
+                 active_check_protected=None, active_server_check=None):
         deadline = min(deadline, self.run_deadline)
         profile = Path('case/home/.config/EgoSoft/X4/45841/engine-output.log')
         server_log, client_log = out/'server'/profile, out/'client'/profile
         if active_check_protected is None: active_check_protected = check_protected
         if not callable(active_check_protected): raise ValueError('invalid active context guard')
-        def guard_for(check):
+        if active_server_check is not None and not callable(active_server_check):
+            raise ValueError('invalid active server guard')
+        def guard_identity():
             if (time.monotonic() >= deadline or
                     marked.base.client.game_identity(server_proc, server_started, game) != server_identity or
-                    marked.base.client.game_identity(client_proc, client_started, game) != client_identity or
-                    check() is not True):
-                raise RuntimeError('deadline, protected files or owned X4 changed')
+                    marked.base.client.game_identity(client_proc, client_started, game) != client_identity):
+                raise RuntimeError('deadline or owned X4 changed')
+            return True
+        def guard_for(check):
+            guard_identity()
+            if check() is not True:
+                raise RuntimeError('protected files or owned X4 changed')
+            guard_identity()
             return True
         def guard(): return guard_for(check_protected)
         def active_context(): return guard_for(active_check_protected)
@@ -294,7 +302,8 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                 if self.first_resume_only:
                     result.update(simulated_second_join=False, pending_operation=None)
                     if self.keep_worker:
-                        def active_check():
+                        def active_check(*, server_checked=False):
+                            if not server_checked and active_server_check is not None: active_server_check()
                             active_context()
                             if helper.proc.poll() is not None:
                                 raise RuntimeError('active participant worker exited')
@@ -306,6 +315,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                             if readable or exceptional:
                                 raise RuntimeError('active participant worker IPC changed')
                             active_context()
+                            if not server_checked and active_server_check is not None: active_server_check()
                             return True
                         active_check()
                         self._active_check = active_check

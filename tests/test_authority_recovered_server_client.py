@@ -1,5 +1,7 @@
 """Offline ownership and evidence checks; no X4 process is started."""
 from pathlib import Path
+import hashlib
+import tempfile
 import socket
 import sys
 import threading
@@ -185,6 +187,60 @@ class ServerClientTests(unittest.TestCase):
         self.assertIn(('finish','b',()),events)
         self.assertEqual(active,[])
         eof.assert_called_once(); settle.assert_called_once()
+
+    def test_overlap_guard_hashes_each_save_across_boundaries_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths=[Path(tmp)/name for name in ('server','client-1','client-2')]
+            for path in paths: path.write_bytes(path.name.encode())
+            expected={path:hashlib.sha256(path.read_bytes()).digest() for path in paths}
+            calls=[]; events=[]
+            def check_file(path):
+                calls.append(path)
+                if hashlib.sha256(path.read_bytes()).digest() != expected[path]:
+                    raise ValueError('protected save changed')
+            def check_client(path, *, server_checked):
+                self.assertTrue(server_checked)
+                check_file(path); check_file(path)
+            active=[SimpleNamespace(participant=SimpleNamespace(
+                        check_active=lambda *, server_checked, path=path:check_client(path,server_checked=server_checked)))
+                    for path in paths[1:]]
+            def guard():
+                supervisor.verify_diagnostic_context(verify_server=lambda:check_file(paths[0]),
+                    active_clients=active,check_process=lambda:events.append('process'),
+                    check_cancel=lambda:events.append('cancel'))
+            guard()
+            self.assertEqual(calls,[paths[0],paths[1],paths[1],paths[0],paths[2],paths[2],paths[0]])
+            self.assertEqual(events,['cancel','process','cancel'])
+            paths[1].write_bytes(b'changed')
+            operation=Mock()
+            with self.assertRaisesRegex(ValueError,'protected save changed'):
+                guard(); operation()
+            operation.assert_not_called()
+            active[0].participant.check_active=Mock(side_effect=RuntimeError('worker exited'))
+            with self.assertRaisesRegex(RuntimeError,'worker exited'):
+                guard(); operation()
+            operation.assert_not_called()
+
+    def test_overlap_failure_leaves_all_started_clients_for_fencing(self):
+        active=[]; owners=[Mock(),Mock()]
+        first=SimpleNamespace(participant=owners[0],finish=Mock())
+        second=SimpleNamespace(participant=owners[1],finish=Mock())
+        started=[first,second]
+        def start(index): return started[index]
+        checks=0
+        def verify():
+            nonlocal checks
+            checks+=1
+            if checks==2: raise RuntimeError('protected context changed')
+        world=SimpleNamespace(session=SimpleNamespace(state='running',players=((1,'a'),(2,'b')),
+                                                     ready_players=((1,'a'),(2,'b'))))
+        with self.assertRaisesRegex(RuntimeError,'protected context changed'):
+            supervisor.run_overlapping_diagnostics(start=start,active_clients=active,world=world,
+                host=Mock(),control=Mock(),deadline=time.monotonic()+2,verify=verify)
+        self.assertEqual(active,[first,second])
+        first.finish.assert_not_called(); second.finish.assert_not_called()
+        self.assertTrue(supervisor.cleanup_diagnostics(owners,[]))
+        owners[0].cleanup_diagnostic.assert_called_once(); owners[1].cleanup_diagnostic.assert_called_once()
 
     def test_overlap_requires_three_distinct_correlated_x4_processes(self):
         first={'server_x4_pid':10,'server_x4_start_ticks':11,

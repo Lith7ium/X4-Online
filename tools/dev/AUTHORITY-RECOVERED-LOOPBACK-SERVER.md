@@ -212,6 +212,12 @@ but this was not a profiler-based attribution or a measurement of its effect
 on wall-clock time. This run does not demonstrate two players' controls,
 gameplay, universe consistency, Windows or Internet operation.
 
+A later guard change reduces nested duplicate server-file hashes in the overlap
+path. Focused offline tests check the retained file, process, worker and peer
+checks and failure handling; the timing of every individual hash is not
+identical to the recorded run. The change has not been measured in a native
+X4 run, so its effect on native runtime is unknown.
+
 ## Internal diagnostic procedure
 
 The following procedure

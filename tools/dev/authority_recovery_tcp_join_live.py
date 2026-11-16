@@ -137,6 +137,16 @@ class RecoveredParticipant(tcp.TCPMarkedParticipant):
         return ticket, target
 
     def on_ready(self, **kwargs):
+        # The overlapping recovered-server supervisor already checks the same
+        # server inputs in its aggregate before this client's protected files.
+        # Keep the historical independently guarded path as the default.
+        aggregate = kwargs.pop('aggregate_guard_includes_server', False)
+        if type(aggregate) is not bool:
+            raise ValueError('invalid aggregate guard option')
+        if aggregate:
+            if not self.keep_worker or kwargs.get('active_check_protected') is None:
+                raise ValueError('aggregate guard requires retained client context')
+            return super().on_ready(**kwargs)
         client_guard = kwargs['check_protected']
         def combined():
             if client_guard() is not True: return False

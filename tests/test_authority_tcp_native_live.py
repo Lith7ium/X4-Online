@@ -166,15 +166,28 @@ class HookIntegrationTest(unittest.TestCase):
                         thread=threading.Thread(target=fake_client); thread.start()
                         fakes.append((udp,stop,thread,commands))
                         result={}; original_accept=session.accept
+                        active_guard=Mock(return_value=True); server_guard=Mock(return_value=True)
                         try:
                             with patch.object(participant,'verify_logs'), patch.object(participant,'check_server_files',return_value=True):
                                 participant.on_ready(world=world,handle=handle,ticket=ticket,target=target,
                                     server_identity=identity,server_proc=object(),server_started=identity[1],
                                     client_identity=identity,client_proc=object(),client_started=identity[1],
                                     game=root/'game',out=out,deadline=deadline,result=result,check_protected=check_previous,
-                                    active_check_protected=lambda:True)
+                                    active_check_protected=active_guard, aggregate_guard_includes_server=True,
+                                    active_server_check=server_guard)
                         finally: session.accept=original_accept
-                        self.assertTrue(result['helper_active']); self.assertTrue(participant.check_active())
+                        self.assertTrue(result['helper_active'])
+                        previous_checks=active_guard.call_count; previous_server=server_guard.call_count
+                        self.assertTrue(participant.check_active())
+                        self.assertEqual(active_guard.call_count, previous_checks+2)
+                        self.assertEqual(server_guard.call_count, previous_server+2)
+                        previous_server=server_guard.call_count
+                        self.assertTrue(participant.check_active(server_checked=True))
+                        self.assertEqual(server_guard.call_count, previous_server)
+                        server_guard.side_effect=ValueError('server save changed')
+                        with self.assertRaisesRegex(ValueError,'server save changed'):
+                            participant.check_active()
+                        server_guard.side_effect=None
                         results.append(result)
                     self.assertEqual(world.session.state,'running')
                     self.assertEqual(len(world.session.ready_players),2)

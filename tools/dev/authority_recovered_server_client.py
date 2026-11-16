@@ -160,7 +160,7 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             processes, server_proc, server_started, server_identity, checkpoint,
             recovery_target, server_expected, recovery_watch, listener, host, service,
             world, session, control, check_server, server_out=None, expected_baseline=None, cancel_check=None,
-            check_base=None):
+            check_base=None, check_server_base=None):
     """Load one genuine local client, confirm admission/resume and disconnect.
 
     Must run on the server's owner/main thread; it registers its X4 in the
@@ -170,8 +170,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     base = recovery.base
     if cancel_check is not None and not callable(cancel_check):
         raise ValueError('invalid diagnostic cancellation check')
-    if participant.keep_worker and not callable(check_base):
-        raise ValueError('retained client requires an independent base guard')
+    if participant.keep_worker and (not callable(check_base) or not callable(check_server_base)):
+        raise ValueError('retained client requires independent process and server guards')
     participant.cancel_check = cancel_check
     deadline = participant.run_deadline
     participant.checkpoint = checkpoint
@@ -244,7 +244,9 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                     server_identity=server_identity, server_proc=server_proc, server_started=server_started,
                     client_identity=client_identity, client_proc=proc, client_started=started,
                     game=game, out=out, deadline=deadline, result=result, check_protected=check_protected,
-                    active_check_protected=active_protected if participant.keep_worker else None)
+                    active_check_protected=active_protected if participant.keep_worker else None,
+                    aggregate_guard_includes_server=participant.keep_worker,
+                    active_server_check=check_server_base if participant.keep_worker else None)
             finally:
                 # TCPMarkedParticipant temporarily wraps accept with a guard for
                 # this particular client. Never leak that guard to later joins.
