@@ -69,10 +69,14 @@ def install(case,profile,status,settings):
         type(status[2]) is not int or not 1<=status[2]<=200000 or
         type(status[3]) is not str or not re.fullmatch(r'[0-9a-f]{64}',status[3])):
         raise ValueError('observed saved registry required')
-    fields={'port','lease','attempt','generation','nonce','router_generation','timeout','index'}
-    if type(settings) is not dict or set(settings)!=fields:raise ValueError('invalid client motion settings')
+    fields={'port','lease','attempt','generation','nonce','router_generation','timeout'}
+    if type(settings) is not dict or set(settings) not in (fields|{'index'},fields|{'indices'}):
+        raise ValueError('invalid client motion settings')
+    indices=[settings['index']] if 'index' in settings else settings['indices']
+    if (type(indices) is not list or not 1<=len(indices)<=32 or
+        any(type(n) is not int or not 1<=n<=status[2] for n in indices) or len(set(indices))!=len(indices)):
+        raise ValueError('invalid client motion indices')
     if (type(settings['port']) is not int or not 1<=settings['port']<=65535 or
-        type(settings['index']) is not int or not 1<=settings['index']<=status[2] or
         type(settings['timeout']) not in (int,float) or not math.isfinite(settings['timeout']) or
         not 0<settings['timeout']<=30):raise ValueError('invalid client motion bounds')
     tokens=[settings[k] for k in SECRET_FIELDS]
@@ -126,7 +130,9 @@ def install(case,profile,status,settings):
         with target.open('xb') as out:out.write((ROOT/'tools/dev'/name).read_bytes())
     manifest.write_text(mf.replace(manifest_hook,''.join('    <file name="ui/'+name+'" />\n' for _,name in MODULES)+manifest_hook),encoding='utf-8')
     config_add=',authority_client_motion_enabled=true,authority_client_motion_epoch="'+status[1]+'",authority_client_motion_baseline='+str(status[2])
-    config_add+=',authority_client_motion_port='+str(settings['port'])+',authority_client_motion_index='+str(settings['index'])
+    config_add+=',authority_client_motion_port='+str(settings['port'])
+    if 'index' in settings:config_add+=',authority_client_motion_index='+str(settings['index'])
+    else:config_add+=',authority_client_motion_indices={'+','.join(map(str,indices))+'}'
     config_add+=',authority_client_motion_timeout='+format(settings['timeout'],'.17g')
     for name in SECRET_FIELDS:config_add+=',authority_client_motion_'+name+'="'+settings[name]+'"'
     config.write_text(cfg[:-2]+config_add+'}\n',encoding='ascii');config.chmod(0o600)
@@ -135,6 +141,7 @@ def install(case,profile,status,settings):
   if not client_motion and X4LAN_RECOVERED_CLIENT_LOAD_READY() and not ffi.C.IsGamePaused() then
    client_motion=assert(X4LAN_RECOVERED_CLIENT_MOTION.new_x4({enabled=true,port=cfg.authority_client_motion_port,
     epoch=cfg.authority_client_motion_epoch,baseline=cfg.authority_client_motion_baseline,index=cfg.authority_client_motion_index,
+    indices=cfg.authority_client_motion_indices,
     lease=cfg.authority_client_motion_lease,attempt=cfg.authority_client_motion_attempt,generation=cfg.authority_client_motion_generation,
     nonce=cfg.authority_client_motion_nonce,router_generation=cfg.authority_client_motion_router_generation,
     timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))

@@ -41,7 +41,21 @@ function M.new_x4(c)
  local function integer(v)return type(v)=='number' and v==v and v%1==0 end
  assert(type(c.expected_save_path)=='string' and c.expected_save_path:sub(1,1)=='/' and c.expected_save_path:sub(-11)=='/45841/save' and
   integer(c.port) and c.port>=1 and c.port<=65535 and integer(c.baseline) and c.baseline>=1 and c.baseline<=200000 and
-  integer(c.index) and c.index>=1 and c.index<=c.baseline and type(c.timeout)=='number' and c.timeout==c.timeout and c.timeout>0 and c.timeout<=30)
+  type(c.timeout)=='number' and c.timeout==c.timeout and c.timeout>0 and c.timeout<=30)
+ local allowed={};local locked
+ if c.indices==nil then
+  assert(integer(c.index) and c.index>=1 and c.index<=c.baseline)
+  locked=string.format('%.0f',c.index);allowed[locked]=true
+ else
+  assert(c.index==nil and type(c.indices)=='table' and getmetatable(c.indices)==nil and #c.indices>=1 and #c.indices<=32)
+  local count=0
+  for k in pairs(c.indices)do assert(integer(k) and k>=1 and k<=#c.indices);count=count+1 end
+  assert(count==#c.indices)
+  for i=1,count do
+   local n=c.indices[i];assert(integer(n) and n>=1 and n<=c.baseline)
+   local key=string.format('%.0f',n);assert(not allowed[key]);allowed[key]=true
+  end
+ end
  local seen={}
  for _,key in ipairs({'lease','attempt','epoch','generation','nonce','router_generation'})do
   local v=c[key];assert(token(v) and not seen[v]);seen[v]=true
@@ -55,8 +69,8 @@ function M.new_x4(c)
   return p~=nil and p~=ffi.NULL and ffi.string(p):gsub('\\','/'):gsub('/+$','')==c.expected_save_path and
    C.IsPlayerValid() and type(X4LAN_RECOVERED_CLIENT_LOAD_READY)=='function' and X4LAN_RECOVERED_CLIENT_LOAD_READY()==true
  end
- -- Only one preselected saved ship is in scope. Do not allow a packet to
- -- select the MultiCreate path or a different baseline entry.
+ -- At most one permitted saved ship is in scope. With a candidate list the
+ -- first correlated BIND seals the index; an invalid attempt faults the owner.
  local checked_net={send=function(_,value)return net:send(value)end,receive=function()
   local pending=net:pending();assert(type(pending)=='boolean')
   -- Do not consume an arrival racing with a negative readability check:
@@ -66,9 +80,12 @@ function M.new_x4(c)
   assert(value~=nil)
   assert(type(value)=='string' and #value<=768)
   local fields={};for item in (value..'|'):gmatch('(.-)|')do fields[#fields+1]=item end
-  assert(fields[1]=='M' and fields[2]==c.lease and fields[3]==c.attempt and
-   ((fields[4]=='BIND' and #fields==18 and fields[8]==string.format('%.0f',c.index)) or
-    (fields[4]=='STOP' and #fields==7)))
+  assert(fields[1]=='M' and fields[2]==c.lease and fields[3]==c.attempt)
+  if fields[4]=='BIND' then
+   assert(#fields==18 and token(fields[5]) and fields[6]==c.epoch and fields[7]==c.generation and allowed[fields[8]])
+   if locked==nil then locked=fields[8]end
+   assert(fields[8]==locked)
+  else assert(fields[4]=='STOP' and #fields==7)end
   return value
  end}
  return M.new({enabled=true,epoch=c.epoch,nonce=c.nonce,router_generation=c.router_generation,

@@ -22,6 +22,14 @@ X4LAN_RESOLVE_STRING=dofile('tools/dev/authority_registry_resolve_string.lua')
 X4LAN_REPLICA_MOTION_BINDING=dofile('src/authority/lua/replica_motion_binding.lua')
 X4LAN_SAVED_BASELINE_MOTION_BINDING=dofile('src/authority/lua/saved_baseline_motion_binding.lua')
 X4LAN_MOTION_BUFFER=dofile('src/authority/lua/motion_buffer.lua')
+local buffered={};local new_buffer=X4LAN_MOTION_BUFFER.new
+X4LAN_MOTION_BUFFER.new=function(options)
+ local track=new_buffer(options);local push=track.push
+ function track:push(sample,arrival)
+  local ok=push(self,sample,arrival);if ok then buffered[#buffered+1]=sample end;return ok
+ end
+ return track
+end
 X4LAN_CLIENT_MOTION_EVENT_ROUTER=dofile('src/authority/lua/client_motion_event_router.lua')
 X4LAN_MOTION_CLIENT_OWNER=dofile('src/authority/lua/motion_client_owner.lua')
 local module=dofile('tools/dev/authority_recovered_client_motion.lua')
@@ -30,14 +38,30 @@ assert(module.new_x4({})==nil)
 local incomplete={enabled=true,port=2345,lease=l,epoch=e,generation=g,nonce=n,router_generation=rg,
  baseline=100,index=42,timeout=2,expected_save_path='/private/45841/save'}
 assert(not pcall(module.new_x4,incomplete))
-local owner=assert(module.new_x4({enabled=true,port=2345,lease=l,attempt=a,epoch=e,generation=g,nonce=n,router_generation=rg,
- baseline=100,index=42,timeout=2,expected_save_path='/private/45841/save'}))
-local idx=arg[1]=='wrong_index' and 43 or 42
+local list_mode=arg[1]:find('list_',1,true)==1
+local options={enabled=true,port=2345,lease=l,attempt=a,epoch=e,generation=g,nonce=n,router_generation=rg,
+ baseline=100,timeout=2,expected_save_path='/private/45841/save'}
+if list_mode then options.indices={42,43} else options.index=42 end
+local owner=assert(module.new_x4(options))
+if list_mode then options.indices[1]=44 end -- list is copied at construction
+local idx=(arg[1]=='wrong_index' or arg[1]=='list_second') and 43 or (arg[1]=='list_unknown' and 44 or 42)
 input[1]=table.concat({'M',l,a,'BIND',('f'):rep(32),e,g,tostring(idx),'1','sector_a',('9'):rep(64),'10','1','2','3','-','-','-'},'|')
-if idx==43 then assert(not owner:tick() and owner:state()=='failed' and logs[#logs]:find('ERROR',1,true));return end
+if arg[1]=='wrong_index' or idx==44 then assert(not owner:tick() and owner:state()=='failed' and logs[#logs]:find('ERROR',1,true));return end
 assert(owner:tick());local first=requests[#requests];assert(first.screen=='X4AuthoritySavedBaselineMotionBind')
-handlers['X4AuthoritySavedBaselineMotionBind.Result'](nil,first.args.request_id..'|Bound|42|0x29|0x2b')
+handlers['X4AuthoritySavedBaselineMotionBind.Result'](nil,first.args.request_id..'|Bound|'..idx..'|0x29|0x2b')
 assert(owner:state()=='ready' and out[#out]:find('|BOUND|',1,true))
+if arg[1]=='list_switch' or arg[1]=='list_second' then
+ local other=idx==42 and '43' or '42'
+ input[1]=table.concat({'M',l,a,'BIND',('7'):rep(32),e,g,other,'2','sector_a',('9'):rep(64),'11','1','2','3','1','0','0'},'|')
+ assert(not owner:tick() and owner:state()=='failed');return
+end
+if arg[1]=='list_good' then
+ input[1]=table.concat({'M',l,a,'BIND',('7'):rep(32),e,g,'42','2','sector_a',('9'):rep(64),'11','1','2','3','1','0','0'},'|')
+ assert(owner:tick());local second=requests[#requests]
+ handlers['X4AuthoritySavedBaselineMotionBind.Result'](nil,second.args.request_id..'|Bound|42|0x29|0x2b')
+ assert(owner:state()=='ready' and out[#out]:find('|BOUND|',1,true))
+ assert(#buffered==2 and buffered[1].rate==nil and buffered[2].rate[1]==1 and buffered[2].rate[2]==0 and buffered[2].rate[3]==0)
+end
 input[1]=table.concat({'M',l,a,'STOP',('8'):rep(32),e,g},'|')
 local mode=arg[1]
 local bad=mode:find('empty',1,true) and '' or ('x'):rep(769)

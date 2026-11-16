@@ -64,6 +64,18 @@ class Install(unittest.TestCase):
  def test_redaction_rejects_replaced_config(self):
   result=self.install();config=self.ui/'config.lua';replacement=self.ui/'replacement';replacement.write_bytes(config.read_bytes());os.replace(replacement,config)
   with self.assertRaises(ValueError):result.redact()
+ def test_bounded_candidate_list_install_and_refusal(self):
+  del self.settings['index'];self.settings['indices']=[42,43]
+  cfg=self.ui/'config.lua';before=cfg.read_bytes()
+  for invalid in ([],[42,42],[0],[101],list(range(1,34)),[True],(42,43)):
+   with self.subTest(invalid=invalid):
+    self.settings['indices']=invalid
+    with self.assertRaises(ValueError):self.install()
+    self.assertEqual(cfg.read_bytes(),before)
+  self.settings['indices']=[42,43];result=self.install()
+  self.assertIn('authority_client_motion_indices={42,43}',cfg.read_text())
+  self.assertIn('indices=cfg.authority_client_motion_indices',(self.ui/'authority_two_x4_participant_probe.lua').read_text())
+  result.redact()
  def test_redaction_short_reads_and_changed_file(self):
   result=self.install();config=self.ui/'config.lua';original=config.read_bytes();real_read=os.read
   with mock.patch.object(subject.os,'read',side_effect=lambda fd,n:real_read(fd,min(n,17))):result.redact()
@@ -88,7 +100,7 @@ class Install(unittest.TestCase):
  def test_lua_composition_and_late_event_fence(self):
   with tempfile.TemporaryDirectory() as tmp:
    lib=Path(tmp)/'abi.so';subprocess.run(['cc','-O2','-shared','-fPIC','tests/fixtures/replica_motion_binding_abi.c','-o',str(lib)],cwd=ROOT,check=True,capture_output=True)
-   for mode in ('good','wrong_index','queued_empty','queued_oversize','late_empty','late_oversize','race_empty','race_oversize'):
+   for mode in ('good','wrong_index','queued_empty','queued_oversize','late_empty','late_oversize','race_empty','race_oversize','list_good','list_unknown','list_switch','list_second'):
     subprocess.run(['luajit','tests/authority_recovered_client_motion.lua',mode],cwd=ROOT,check=True,capture_output=True,timeout=5,env=dict(os.environ,LD_PRELOAD=str(lib)))
  @unittest.skipUnless(os.name=='posix' and shutil.which('luajit') and shutil.which('cc'),'LuaJIT and C compiler required')
  def test_player_loss_before_and_after_motion_start(self):

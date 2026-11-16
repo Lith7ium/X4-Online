@@ -63,6 +63,11 @@ Lua and installer tests use a simulated X4 environment. The supervisor still
 must install and protect that overlay, hand off the separate UDP FD exclusively,
 monitor errors through pause and cleanup, and fence STOP before allowing pause.
 The one-shot lease cannot resume after a subsequent join pause.
+The private overlay can instead receive a bounded list of saved indices. It
+latches the first correlated BIND to a member of that list and refuses a later
+index change; the host must still send only the source-selected index. Matching
+indices remain an experimental saved-reference assumption, not evidence of
+cross-process ship identity.
 
 No X4 process, real MD serialization, FD handoff, Windows, internet, visible
 motion or gameplay is covered by these router and installer tests.
