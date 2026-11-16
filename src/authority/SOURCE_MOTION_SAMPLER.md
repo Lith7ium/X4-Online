@@ -1,7 +1,7 @@
 # Experimental source motion sampler
 
 `lua/source_motion_sampler.lua` is a default-off source-side building block,
-not an installed update hook or a production motion transport. The existing X4
+not a production motion transport. The existing X4
 owner must retain exclusive ownership of registry/descriptor requests and of
 its one `onUpdate`; it routes a descriptor event only to the sampler whose
 `expected_request()` matches, and calls `tick()` and `event()` serially. The
@@ -58,3 +58,32 @@ and exercises the actual existing descriptor reader and X4 factory against a
 fake C ABI. No native X4 or network delivery is established by those tests;
 no live NPC pose/velocity write, full baseline/world coverage, Windows or
 Internet gameplay is claimed.
+
+## Opt-in source session
+
+The experimental `authority_source_single_job_session` can enable the sampler
+and `lua/source_motion_ipc.lua` through its private installer. The existing
+single update owner routes both job and motion descriptor responses by their
+distinct request IDs. It retains an actor locally only after the matching job
+has reached the real host's MD acknowledgement and the correlated REARM has
+been accepted. The handoff remains provisional until the owner callback and
+its guards return successfully; any uncertainty fails the session. At most one
+confirmed actor is registered per update and the pending handoff queue is
+bounded. This covers confirmed queue entries only, not the saved baseline.
+
+The separate loopback UDP endpoint uses a fresh lease, attempt and generation.
+Its HELLO/BOUND/ATTACHED handshake precedes strictly consecutive PULL requests;
+each request receives one correlated SAMPLE or NO_SAMPLE. The packet contains
+no actor handle, and unknown velocity is encoded as `-|-|-`. The Python owner
+must independently validate and keep fencing the source process and UDP socket,
+bind each index only after the corresponding job acknowledgement and REARM,
+and wait for TCP delivery before the next pull. A NO_SAMPLE response does not
+prove an empty universe or a complete sampling pass. Owner, transport or
+callback failures fence the experimental session; there is no implicit retry
+of a consumed sample.
+
+`tests.test_authority_source_job_motion_integration` exercises the actual
+session, job owner, gate, sampler and local IPC together against simulated
+host/MD, network and X4 ABI. It establishes routing and confirmation ordering
+offline, not native X4 operation, cross-process frame equality, movement
+application or a complete client/server integration.

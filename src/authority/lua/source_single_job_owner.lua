@@ -19,10 +19,11 @@ function M.new(o)
  if not continuous then assert(c.index<=MAX-max_events+1,'registry index capacity') end
  assert(type(c.timeout)=='number' and c.timeout==c.timeout and c.timeout>0 and c.timeout<=120)
  for _,k in ipairs({'clock','guard','host_factory','descriptor_factory','register_descriptor','fault'})do assert(type(c[k])=='function',k..' required')end
+ assert(c.on_confirmed==nil or type(c.on_confirmed)=='function')
  assert(type(c.ipc)=='table' and type(c.ipc.new)=='function' and type(c.gate)=='table' and type(c.gate.new)=='function')
  assert((type(c.net)=='table' or type(c.net)=='userdata') and type(c.net.send)=='function' and type(c.net.receive)=='function')
  local state,busy='new',false;local failed=false;local last,deadline,row,actor,desc,acknowledged,source_confirmed
- local completed=0
+ local completed=0;local descriptor_request
  local host,ipc;local api={}
  local function fail(reason)
   if not failed then failed=true;state='failed';pcall(c.fault,reason)end
@@ -94,7 +95,7 @@ function M.new(o)
    local sample={};for _,k in ipairs(keys)do sample[k]=d[k]end
    assert(check() and host:state()=='await_delivery' and getmetatable(d)==nil)
    for _,k in ipairs(keys)do assert(d[k]==sample[k])end
-   state='delivering'
+   descriptor_request=nil;state='delivering'
    assert(ipc:candidate({epoch=c.epoch,generation=c.generation,sequence=row.sequence,index=row.index,
     descriptor={macro=sample.macro,faction=sample.owner,sector_macro=sample.sector_macro,x=sample.x,y=sample.y,z=sample.z}}))
    desc=nil
@@ -131,7 +132,7 @@ function M.new(o)
      assert(host:state()=='await_delivery' and row and actor~=nil)
      local request=c.descriptor_request
      if continuous or max_events>1 then request=request:sub(1,24)..string.format('%08x',row.sequence) end
-     desc=assert(c.descriptor_factory(row,actor,request));state='reading';assert(desc:start())
+     descriptor_request=request;desc=assert(c.descriptor_factory(row,actor,request));state='reading';assert(desc:start())
     end
     assert(c.net:receive()==nil)
    elseif state=='reading' then
@@ -146,8 +147,14 @@ function M.new(o)
     local p=c.net:receive()
     if p~=nil then assert(ipc:packet(p))end
     if ipc:state()=='idle' then
-     assert(source_confirmed and row);completed=completed+1
-     row,actor,source_confirmed=nil,nil,nil
+     assert(source_confirmed and row)
+     if c.on_confirmed then
+      local frozen={epoch=row.epoch,index=row.index,sequence=row.sequence,classification=row.classification}
+      local identity=actor;local ok,accepted=pcall(c.on_confirmed,frozen,identity)
+      assert(ok and accepted==true and not failed and state=='delivering' and row.epoch==frozen.epoch and
+       row.index==frozen.index and row.sequence==frozen.sequence and row.classification==frozen.classification and actor==identity and check())
+     end
+     completed=completed+1;row,actor,source_confirmed=nil,nil,nil
      if not continuous and completed==max_events then state='done';deadline=nil else
       assert(completed<QUEUE_MAX and c.index<=MAX-completed,'queue or registry capacity');state='observing'
      end
@@ -159,6 +166,7 @@ function M.new(o)
   end)
   busy=false;if not ok then return fail('tick')end;return true
  end
+ function api:expected_descriptor()return state=='reading' and descriptor_request or nil end
  function api:state()return state end
  return api
 end
@@ -173,6 +181,7 @@ function M.new_x4(c)
  assert(type(c.external_guard)=='function' and type(c.fault)=='function' and type(c.expected_save_path)=='string')
  assert(type(c.resolve)=='table' and c.resolve==X4LAN_RESOLVE_STRING and type(c.resolve.actor_u64)=='function' and type(ConvertIDTo64Bit)=='function')
  assert(type(RegisterEvent)=='function' and type(GetCurRealTime)=='function')
+ assert(c.descriptor_router==nil or type(c.descriptor_router)=='function')
  local fixed={};for k,v in pairs(c)do fixed[k]=v end;c=fixed
  local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);double GetCurrentGameTime(void);const char* GetSaveFolderPath(void);]]
  local C=ffi.C;local last_game,paused_game,owner
@@ -199,6 +208,7 @@ function M.new_x4(c)
  local opts={};for k,v in pairs(c)do opts[k]=v end
  opts.clock=GetCurRealTime;opts.guard=guard
  opts.register_descriptor=function(callback)
+  if c.descriptor_router then return c.descriptor_router(callback) end
   return RegisterEvent('X4AuthorityJobDescriptorProbe.Result',callback)~=false
  end
  opts.host_factory=function(report,acked,fault,window_done)

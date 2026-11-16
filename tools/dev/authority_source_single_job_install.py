@@ -25,7 +25,7 @@ UI=(('tools/dev/authority_checkpoint_marker_probe.lua','authority_checkpoint_mar
 def install(case,profile,ticket,settings):
     required={'control_port','control_lease','job_port','lease','attempt','epoch','generation','descriptor_request',
               'timeout','host_timeout','window','capacity','baseline'}
-    if type(settings) is not dict or set(settings) not in (required,required|{'max_events'},required|{'continuous'}):raise ValueError('invalid source settings')
+    if type(settings) is not dict or not required<=set(settings) or set(settings)-required not in (set(),{'max_events'},{'continuous'},{'motion'},{'max_events','motion'},{'continuous','motion'}):raise ValueError('invalid source settings')
     if 'continuous' in settings and settings['continuous'] is not True:raise ValueError('continuous must be explicitly enabled')
     if 'max_events' in settings and (type(settings['max_events']) is not int or not 2<=settings['max_events']<=8):raise ValueError('invalid bounded source count')
     keys=('control_lease','lease','attempt','epoch','generation','descriptor_request')
@@ -39,10 +39,23 @@ def install(case,profile,ticket,settings):
         if type(settings[k]) not in (int,float) or not math.isfinite(settings[k]):raise ValueError('invalid source timing')
     if not (1<=settings['window']<=90 and 0<settings['host_timeout']<=30 and
             settings['window']+20<=settings['timeout']<=120):raise ValueError('invalid source timing')
+    motion=settings.get('motion')
+    if motion is not None:
+        if type(motion) is not dict or set(motion)!={'port','lease','attempt','nonce'}:
+            raise ValueError('invalid motion settings')
+        if type(motion['port']) is not int or not 1<=motion['port']<=65535 or motion['port'] in (settings['control_port'],settings['job_port']):
+            raise ValueError('invalid motion port')
+        if any(type(motion[k]) is not str or not re.fullmatch(r'[0-9a-f]{32}',motion[k]) for k in ('lease','attempt','nonce')):
+            raise ValueError('invalid motion context')
+        tokens=[settings[k] for k in keys]+[ticket['world_epoch']]+[motion[k] for k in ('lease','attempt','nonce')]
+        if len(set(tokens))!=len(tokens) or motion['nonce'][:16]==settings['descriptor_request'][:16]:
+            raise ValueError('overlapping motion context or descriptor prefixes')
+    modules=UI[:-1]+((('src/authority/lua/source_motion_ipc.lua','source_motion_ipc.lua'),
+                     ('src/authority/lua/source_motion_sampler.lua','source_motion_sampler.lua')) if motion is not None else ())+UI[-1:]
     config=base.load.install_probe(case,profile,ticket)
     lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md';native=lab/'native'
     for name in MD:shutil.copyfile(archive.saved_state_script(name) if name in BASE_MD else ROOT/'tools/dev'/name,md/name)
-    for source,target in UI:shutil.copyfile(ROOT/source,ui/target)
+    for source,target in modules:shutil.copyfile(ROOT/source,ui/target)
     marker=ui/'authority_checkpoint_marker_probe.lua'
     marker.write_text(transfer.once(marker.read_text(),"if phase~='load' or state~='inspect' or type(marker)~='string'",
         "if marker~=cfg.authority_expected_marker or phase~='load' or state~='inspect' or type(marker)~='string'"))
@@ -52,11 +65,13 @@ def install(case,profile,ticket,settings):
         ',authority_source_single_job_session=true'+
         (',authority_source_max_events='+str(settings['max_events']) if 'max_events' in settings else '')+
         (',authority_source_continuous=true' if settings.get('continuous') is True else '')+
+        (',authority_source_motion_enabled=true,authority_source_motion_port='+str(motion['port'])+
+         ''.join(',authority_source_motion_'+k+'='+literal(motion[k]) for k in ('lease','attempt','nonce')) if motion is not None else '')+
         ''.join(',authority_source_'+k+'='+literal(settings[k]) for k in keys)+
         ''.join(',authority_source_'+k+'='+format(settings[k],'.17g') for k in ('control_port','job_port','timeout','host_timeout','window','capacity','baseline'))+'}\n')
     config.write_text(text,encoding='ascii');config.chmod(0o600)
     manifest=lab/'ui.xml';hook='    <file name="ui/authority_download_load_probe.lua" />\n'
-    manifest.write_text(transfer.once(manifest.read_text(),hook,''.join('    <file name="ui/'+target+'" />\n' for _,target in UI)+hook))
+    manifest.write_text(transfer.once(manifest.read_text(),hook,''.join('    <file name="ui/'+target+'" />\n' for _,target in modules)+hook))
     owner=ui/'authority_download_load_probe.lua';text=owner.read_text();hook="local state='initial';local failed=false\n"
     text=transfer.once(text,hook,hook+'local pause_requested=false;local pause_confirmed=false\n')
     hook=" elseif state=='observing' then\n"
@@ -75,5 +90,5 @@ def install(case,profile,ticket,settings):
     native.mkdir(exist_ok=True);lib=native/'x4lan_net.so';transfer.compile_net(compiler,lib)
     if {p.name for p in md.iterdir()}!=set(MD):raise ValueError('unexpected private MD scripts')
     return [config,lab/'ui.xml',lab/'content.xml',profile/'content.xml',profile/'config.xml',lib]+[
-        md/name for name in MD]+[ui/target for _,target in UI]+[
+        md/name for name in MD]+[ui/target for _,target in modules]+[
         ui/name for name in ('sha256.lua','client_load_barrier.lua','x4_client_load_engine.lua','authority_download_load_probe.lua')]

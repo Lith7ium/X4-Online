@@ -31,6 +31,21 @@ class Install(unittest.TestCase):
    self.assertIn(ui/'source_single_job_owner.lua',files);self.assertIn(lab/'native/x4lan_net.so',files)
    self.assertEqual((md/'authority_ship_registry.xml').read_bytes(),m.archive.saved_state_script('authority_ship_registry.xml').read_bytes())
    self.assertEqual({p.name for p in md.iterdir()},set(m.MD))
+ def test_motion_overlay_and_contexts_are_explicit_and_distinct(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   case=Path(tmp)/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
+   ui.mkdir(parents=True);md.mkdir();(profile/'save').mkdir(parents=True)
+   for p in (ui/'native_gate_snapshot.lua',md/'native_gate_battle.xml',ui/'config.lua',ui/'sha256.lua',lab/'content.xml',profile/'content.xml',profile/'config.xml'):p.write_text('test')
+   motion={'port':1236,'lease':'1'*32,'attempt':'2'*32,'nonce':'3'*32}
+   for bad in ({**motion,'port':1235},{**motion,'lease':'a'*32},{**motion,'nonce':'e'*16+'0'*16}):
+    with self.assertRaises(ValueError):m.install(case,profile,self.ticket(),{**self.settings(),'motion':bad})
+   files=m.install(case,profile,self.ticket(),{**self.settings(),'continuous':True,'motion':motion})
+   config=(ui/'config.lua').read_text()
+   self.assertIn('authority_source_motion_enabled=true',config)
+   self.assertIn('authority_source_motion_port=1236',config)
+   self.assertIn(ui/'source_motion_ipc.lua',files);self.assertIn(ui/'source_motion_sampler.lua',files)
+   owner=(ui/'authority_download_load_probe.lua').read_text()
+   self.assertEqual(owner.count("SetScript('onUpdate'"),1)
  def test_source_control_and_job_tick_are_serialized(self):
   with tempfile.TemporaryDirectory() as tmp:
    lib=Path(tmp)/'fake.so'

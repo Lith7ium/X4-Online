@@ -1,9 +1,10 @@
 -- Opt-in one-source diagnostic. The existing load owner alone owns onUpdate.
 local cfg=X4LAN_CONFIG
 if not cfg or cfg.authority_source_single_job_session~=true then return end
-local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);double GetCurrentGameTime(void);]]
+local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);double GetCurrentGameTime(void);]]
 local C=ffi.C
 local failed=false;local resume_used=false;local source,control,control_net,next_hello,previous=nil,nil,nil,0,nil
+local motion,sampler,source_descriptor;local pending_confirmed,confirmed={},{}
 local function fail()if not failed then failed=true;DebugError('[X4LAN] AUTH_SOURCE_SINGLE ERROR')end end
 local function mark(state)
  local g=tonumber(C.GetCurrentGameTime());assert(g and g==g and g>=0 and g<math.huge)
@@ -35,6 +36,44 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
     descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,resolve=X4LAN_RESOLVE_STRING,
     ipc=X4LAN_AUTHORITY_SOURCE_JOB_IPC,gate=X4LAN_AUTHORITY_JOB_DELIVERY,
     external_guard=function()return not failed end,fault=fail}
+   if cfg.authority_source_motion_enabled==true then
+    local motion_net=assert(lib.open('127.0.0.1',cfg.authority_source_motion_port))
+    motion=assert(X4LAN_AUTHORITY_SOURCE_MOTION_IPC.new({enabled=true,lease=cfg.authority_source_motion_lease,
+     attempt=cfg.authority_source_motion_attempt,epoch=cfg.authority_source_epoch,generation=cfg.authority_source_generation,
+     timeout=cfg.authority_source_host_timeout,clock=GetCurRealTime,guard=function()return not failed end,net=motion_net,fault=fail}))
+    sampler=assert(X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER.new_x4({enabled=true,epoch=cfg.authority_source_epoch,
+     generation=cfg.authority_source_generation,nonce=cfg.authority_source_motion_nonce,max_tracks=100000,scan_budget=64,
+     interval=.1,timeout=cfg.authority_source_host_timeout,min_dt=.02,max_dt=1,
+     descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,resolve=X4LAN_RESOLVE_STRING,
+     expected_save_path=cfg.authority_load_save_path,guard=function()return not failed and not C.IsGamePaused() end,
+     binding_guard=function(row,actor)
+      local known=confirmed[row.index]
+      return known~=nil and known.sequence==row.sequence and known.actor==actor
+     end,fault=fail}))
+    owner_cfg.on_confirmed=function(row,actor)
+     if failed or #pending_confirmed>=1024 or confirmed[row.index] then return false end
+     confirmed[row.index]={sequence=row.sequence,actor=actor}
+     pending_confirmed[#pending_confirmed+1]={row=row,actor=actor};return true
+    end
+    owner_cfg.descriptor_router=function(callback)
+     if source_descriptor then return false end;source_descriptor=callback;return true
+    end
+    assert(RegisterEvent('X4AuthorityJobDescriptorProbe.Result',function(_,value)
+     if failed then return end
+     local ok=pcall(function()
+      assert(type(value)=='string');local id=value:match('^([0-9a-f]+)|')
+      if sampler:expected_request()==id and id~=nil then
+       assert(motion:requested());local accepted,snapshot=sampler:event(value);assert(accepted)
+       assert(motion:complete(snapshot))
+      elseif source and source:expected_descriptor()==id and id~=nil then
+       assert(source_descriptor);source_descriptor(nil,value)
+       assert(not failed and source:state()~='failed')
+      else error('unexpected descriptor response')end
+     end)
+     if not ok then fail()end
+    end)~=false)
+    assert(motion:start())
+   end
    source=assert(X4LAN_AUTHORITY_SOURCE_SINGLE_JOB_OWNER.new_x4(owner_cfg))
    assert(source:start());previous=source:state();mark(previous)
   end
@@ -53,6 +92,17 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
   end
   assert(control:on_update())
   if source:state()~='done' then assert(source:tick()) end
+  if motion then
+   assert(motion:tick())
+   if sampler:state()=='ready' and #pending_confirmed>0 and not C.IsGamePaused() then
+    local item=table.remove(pending_confirmed,1);assert(sampler:register(item.row,item.actor))
+   end
+   if motion:requested() then
+    assert(not C.IsGamePaused())
+    assert(sampler:tick())
+    if sampler:state()=='ready' then assert(motion:complete(nil)) end
+   end
+  end
   local current=source:state()
   if current~=previous then previous=current;mark(current) end
  end)

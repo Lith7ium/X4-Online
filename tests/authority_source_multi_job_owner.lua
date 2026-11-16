@@ -10,7 +10,7 @@ local ipc=dofile('src/authority/lua/source_job_ipc.lua')
 local gate=dofile('src/authority/lua/job_delivery.lua')
 local lease,attempt,epoch,gen,nonce=string.rep('a',32),string.rep('b',32),string.rep('c',32),string.rep('d',32),string.rep('e',32)
 local inc1,inc2=string.rep('1',32),string.rep('2',32)
-local callbacks,md,out,incoming,ops,requests={},{},{},{},{},{}
+local callbacks,md,out,incoming,ops,requests,confirmed={},{},{},{},{},{},{}
 local running=false;local initialized=false;local acked=0;local now=1;local fault
 local function emit(name,v)md[#md+1]={name,v}end
 local function pump()while #md>0 do local q=table.remove(md,1);assert(callbacks[q[1]],q[1])(nil,q[2])end end
@@ -46,6 +46,10 @@ local descriptor_cb
 local app=assert(owner_module.new({enabled=true,lease=lease,attempt=attempt,epoch=epoch,generation=gen,
  descriptor_request=nonce,sequence=1,index=3,max_events=not continuous and 2 or nil,continuous=continuous,timeout=35,clock=function()return now end,guard=function()return true end,
  net=net,ipc=ipc,gate=gate,host_factory=host_factory,register_descriptor=function(fn)descriptor_cb=fn;return true end,
+ on_confirmed=function(row,actor)
+  assert(acked==row.sequence and actor==row.sequence+41 and out[#out]:find('|REARMED|',1,true))
+  confirmed[#confirmed+1]=row.index;return true
+ end,
  descriptor_factory=function(r,a,id)
   assert(r.index==r.sequence+2 and a==r.sequence+41);requests[#requests+1]=id
   return {start=function()return true end,tick=function()return true end,response=function()
@@ -91,6 +95,7 @@ for n=1,event_count do
  local oldops=#ops;for _=1,3 do tick()end;assert(#ops==oldops,'next head before REARM')
  incoming[#incoming+1]='P|'..lease..'|'..attempt..'|REARM|'..id;tick()
  assert(out[#out]=='S|'..lease..'|'..attempt..'|REARMED|'..id)
+ assert(#confirmed==n and confirmed[n]==n+2)
  assert(app:state()==((n<event_count or continuous) and 'observing' or 'done'))
 end
 if continuous then
