@@ -18,6 +18,7 @@ import shutil
 import stat
 import tempfile
 import uuid
+import zlib
 from xml.parsers import expat
 
 MAX_COMPRESSED = 512 * 1024 * 1024
@@ -97,7 +98,7 @@ def _validate_save(path):
                         raise CheckpointError('decompressed save exceeds limit')
                     parser.Parse(block, False)
                 parser.Parse(b'', True)
-    except (OSError, EOFError, expat.ExpatError) as exc:
+    except (OSError, EOFError, expat.ExpatError, zlib.error) as exc:
         raise CheckpointError('incomplete or invalid gzip/XML save') from exc
     if root != ['savegame']:
         raise CheckpointError('unexpected save XML root')

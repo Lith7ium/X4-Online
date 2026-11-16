@@ -134,6 +134,21 @@ class CheckpointTests(unittest.TestCase):
         self.assertFalse(list(self.store_dir.glob('.staging-*')))
         self.assertFalse(list(self.store_dir.glob('.current-*')))
 
+    def test_invalid_deflate_preserves_current_and_confirmed_checkpoint(self):
+        self.write_save()
+        previous = self.store.publish(self.source)
+        self.store.confirm(previous)
+        current_pointer = (self.store_dir / 'CURRENT').read_bytes()
+        confirmed_pointer = (self.store_dir / 'CONFIRMED').read_bytes()
+        # Valid gzip header, followed by reserved DEFLATE block type 3.
+        self.source.write_bytes(b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff' + b'\x07' + b'\x00' * 8)
+        with self.assertRaisesRegex(CheckpointError, 'incomplete or invalid gzip/XML save'):
+            self.store.publish(self.source)
+        self.assertEqual((self.store_dir / 'CURRENT').read_bytes(), current_pointer)
+        self.assertEqual((self.store_dir / 'CONFIRMED').read_bytes(), confirmed_pointer)
+        self.assertEqual(self.store.latest(), previous)
+        self.assertEqual(self.store.latest_confirmed(), previous)
+
     def test_tampering_with_content_manifest_or_pointer_fails_closed(self):
         self.write_save()
         checkpoint = self.store.publish(self.source)
