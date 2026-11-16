@@ -1,5 +1,6 @@
 """Real admitted local TCP and UDP with actual Lua gate/IPC and fake X4 MD."""
 from pathlib import Path
+import select
 import socket
 import sys
 import threading
@@ -104,7 +105,8 @@ class SourceBridgeTest(unittest.TestCase):
         self.base.case.offer_and_claim(a);self.base.case.offer_and_claim(b)
         self.base.client(a,1);self.base.client(b,2,fail_apply=mode=='client_fail')
         self.base.case.host.tick(.1)
-        delivery=ExperimentalTCPJobDelivery(self.base.case.host,enabled=True,timeout=1)
+        delivery_options={} if mode=='default_budgets' else {'timeout':.1 if mode=='late_candidate_no_ready' else 1}
+        delivery=ExperimentalTCPJobDelivery(self.base.case.host,enabled=True,**delivery_options)
         server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0))
         source=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);source.bind(('127.0.0.1',0))
         server.connect(source.getsockname());source.connect(server.getsockname())
@@ -118,8 +120,10 @@ class SourceBridgeTest(unittest.TestCase):
                     except RuntimeError:refused.append(True)
                     else:raise AssertionError('reentrant host/control access was allowed')
             return True
+        bridge_options={} if mode=='default_budgets' else {
+            'timeout':.05 if mode=='finished_zero_delayed' else (.3 if mode=='late_candidate_no_ready' else 2)}
         bridge=ExperimentalSourceJobBridge(delivery,server,enabled=True,lease=self.lease,attempt=self.attempt,
-                   epoch=self.epoch,generation=self.generation,guard=supervisor_guard,timeout=.05 if mode=='finished_zero_delayed' else (.3 if mode=='late_candidate_no_ready' else 2))
+                   epoch=self.epoch,generation=self.generation,guard=supervisor_guard,**bridge_options)
         if mode=='double_bind':
             with self.assertRaises(ValueError):ExperimentalSourceJobBridge(delivery,server,enabled=True,lease=self.lease,attempt=self.attempt,
                    epoch=self.epoch,generation=self.generation,guard=lambda:True,timeout=2)
@@ -132,7 +136,7 @@ class SourceBridgeTest(unittest.TestCase):
         if mode in ('finished_zero','finished_zero_delayed'):
             self.assertIsNone(bridge.run_one(allow_finished=True,wait_without_deadline=mode=='finished_zero_delayed'))
             self.assertEqual(self.releases,[]);bridge.close();return
-        if mode in ('ok','double_bind','mutate_guard','mutate_send','guard_reentry','two_events','finished','bad_finished','unexpected_finished','duplicate_finished','finish_control_not_quiet'):
+        if mode in ('ok','default_budgets','double_bind','mutate_guard','mutate_send','guard_reentry','two_events','finished','bad_finished','unexpected_finished','duplicate_finished','finish_control_not_quiet'):
             result=bridge.run_one();self.assertTrue(result['source_ack_observed']);self.assertEqual(len(result['members']),2)
             self.assertEqual(result['event']['descriptor']['x'],1)
             if mode=='guard_reentry':self.assertTrue(refused)
@@ -160,6 +164,66 @@ class SourceBridgeTest(unittest.TestCase):
             if mode in ('no_source_ack','no_rearm','early_candidate'):self.assertEqual(self.releases,[(self.epoch,1,10055)])
 
     def test_two_admitted_clients_and_real_lua_gate(self):self.exercise('ok')
+    def test_default_budgets_deliver_and_ack_two_clients(self):self.exercise('default_budgets')
+
+    def test_impossible_delivery_budget_fences_before_bind(self):
+        delivery=ExperimentalTCPJobDelivery(self.base.case.host,enabled=True,timeout=2)
+        server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        source=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        self.addCleanup(server.close);self.addCleanup(source.close)
+        server.bind(('127.0.0.1',0));source.bind(('127.0.0.1',0))
+        server.connect(source.getsockname());source.connect(server.getsockname())
+        bridge=ExperimentalSourceJobBridge(delivery,server,enabled=True,lease=self.lease,attempt=self.attempt,
+            epoch=self.epoch,generation=self.generation,guard=lambda:True,timeout=2)
+        candidate=['S',self.lease,self.attempt,'CANDIDATE',self.epoch,self.generation,'1','10055',
+                   'ship_test_macro','pioneers','sector_a','1','2','3']
+        source.send('|'.join(candidate).encode('ascii'))
+        with self.assertRaisesRegex(TimeoutError,'delivery budget cannot fit'):
+            bridge.run_one()
+        self.assertEqual(select.select([source],[],[],0)[0],[])
+        self.assertEqual(self.base.applied,[])
+        self.assertEqual(self.releases,[])
+        self.assertEqual(bridge.state,'failed')
+        self.assertTrue(self.base.case.host._failed)
+
+    def reject_budget_change_during_bind(self, changed_owner):
+        first=self.base.case.connect();second=self.base.case.connect()
+        self.base.case.offer_and_claim(first);self.base.case.offer_and_claim(second)
+        self.base.client(first,1);self.base.client(second,2)
+        self.base.case.host.tick(.1)
+        delivery=ExperimentalTCPJobDelivery(self.base.case.host,enabled=True,timeout=2)
+        server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        source=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        self.addCleanup(server.close);self.addCleanup(source.close)
+        server.bind(('127.0.0.1',0));source.bind(('127.0.0.1',0))
+        server.connect(source.getsockname());source.connect(server.getsockname())
+        mutated=[]
+        def guard():
+            if bridge.state=='bind' and not mutated:
+                if changed_owner=='delivery':delivery._timeout=5
+                else:bridge._timeout=1
+                mutated.append(True)
+            return True
+        bridge=ExperimentalSourceJobBridge(delivery,server,enabled=True,lease=self.lease,attempt=self.attempt,
+            epoch=self.epoch,generation=self.generation,guard=guard,timeout=4)
+        candidate=['S',self.lease,self.attempt,'CANDIDATE',self.epoch,self.generation,'1','10055',
+                   'ship_test_macro','pioneers','sector_a','1','2','3']
+        source.send('|'.join(candidate).encode('ascii'))
+        with self.assertRaisesRegex(RuntimeError,'source context or deadline failed'):
+            bridge.run_one()
+        self.assertEqual(mutated,[True])
+        self.assertEqual(select.select([source],[],[],0)[0],[])
+        self.assertEqual(self.base.applied,[])
+        self.assertEqual(self.releases,[])
+        self.assertEqual(bridge.state,'failed')
+        self.assertTrue(self.base.case.host._failed)
+
+    def test_changed_delivery_budget_is_fenced_before_bind(self):
+        self.reject_budget_change_during_bind('delivery')
+
+    def test_changed_source_budget_is_fenced_before_bind(self):
+        self.reject_budget_change_during_bind('source')
+
     def test_foreign_generation_before_send(self):self.exercise('bad_candidate')
     def test_failed_second_client_does_not_release_source(self):self.exercise('client_fail')
     def test_wrong_source_receipt_does_not_release(self):self.exercise('wrong_receipt')

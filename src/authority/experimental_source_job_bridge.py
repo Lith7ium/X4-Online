@@ -30,7 +30,7 @@ class ExperimentalSourceJobBridge:
     membership/liveness is rechecked. Source-gate state and actual MD Acked
     remain separate remote assertions.
     """
-    def __init__(self, delivery, sock, *, enabled=False, lease, attempt, epoch, generation, guard, timeout=30):
+    def __init__(self, delivery, sock, *, enabled=False, lease, attempt, epoch, generation, guard, timeout=60):
         if (enabled is not True or type(delivery) is not ExperimentalTCPJobDelivery or
             type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
@@ -46,12 +46,16 @@ class ExperimentalSourceJobBridge:
         self._delivery=delivery;self._sock=sock;self._lease=lease;self._attempt=attempt
         self._epoch=epoch;self._generation=generation;self._guard=guard;self._timeout=float(timeout)
         self._state='idle';self._owner=threading.get_ident();self._last=0;self._last_members=None;self._scheduler_owner=None;self._scheduler_lease=None
+        self._operation_budgets=None
 
     @property
     def state(self):return self._state
 
     def _check(self, deadline):
-        if threading.get_ident()!=self._owner or self._state in ('failed','closed') or time.monotonic()>=deadline:
+        operation_budgets=self._operation_budgets
+        if (threading.get_ident()!=self._owner or self._state in ('failed','closed') or time.monotonic()>=deadline or
+                (operation_budgets is not None and
+                 (self._timeout,self._delivery._timeout)!=operation_budgets)):
             raise RuntimeError('source bridge unavailable')
         state=self._state
         host=self._delivery._host;host._check();host._control._reader_free()
@@ -66,7 +70,10 @@ class ExperimentalSourceJobBridge:
                 host._failed=True
                 raise RuntimeError('source guard changed exclusive socket ownership')
         if (time.monotonic()>=deadline or valid is not True or
-                self._state!=state or time.monotonic()>=deadline):
+                self._state!=state or time.monotonic()>=deadline or
+                self._operation_budgets is not operation_budgets or
+                (operation_budgets is not None and
+                 (self._timeout,self._delivery._timeout)!=operation_budgets)):
             raise RuntimeError('source context or deadline failed')
 
     def _membership(self, expected, deadline):
@@ -112,6 +119,7 @@ class ExperimentalSourceJobBridge:
             raise ValueError('invalid completion or idle option')
         if threading.get_ident()!=self._owner or self._state!='idle':
             self._state='failed';raise RuntimeError('source bridge reentrant or unavailable')
+        self._operation_budgets=(self._timeout,self._delivery._timeout)
         deadline=float('inf') if wait_without_deadline else time.monotonic()+self._timeout
         self._state='candidate'
         try:
@@ -138,6 +146,10 @@ class ExperimentalSourceJobBridge:
                              'descriptor':{'macro':macro,'faction':faction,'sector_macro':sector,
                                            'x':coords[0],'y':coords[1],'z':coords[2]}})
             if event['sequence']!=self._last+1:raise ValueError('source sequence gap')
+            # No amount of remaining time can accommodate the full delivery
+            # budget if it is at least the entire source operation budget.
+            if self._delivery._timeout>=self._timeout:
+                raise TimeoutError('delivery budget cannot fit source operation')
             members=self._membership(None,deadline)
             if not members or len(members)>16 or any(not _PEER.fullmatch(p['id']) or not _TOKEN.fullmatch(p['incarnation']) for p in members):
                 raise ValueError('invalid participants')

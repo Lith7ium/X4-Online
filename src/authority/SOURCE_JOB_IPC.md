@@ -49,7 +49,11 @@ requires the supervisor to fence the case, not silently discard events.
 
 All operations have bounded deadlines and strict sequencing. A failed source
 packet, unexpected queued UDP datagram, lost client, changed membership, uncertain
-send or missing source acknowledgment fences the bridge and host. Python checks
+send or missing source acknowledgment fences the bridge and host. The default
+source operation budget is 60 seconds and the TCP delivery budget is 30 seconds.
+The TCP budget must be strictly smaller; an impossible configuration is rejected
+before BIND. Remaining time is checked again after READY because candidate
+waiting and the source handshake also consume the source budget. Python checks
 for queued unexpected source packets before and after forwarding receipts;
 these are sampled checks, not atomic against subsequent packets or disconnects.
 Guard callbacks execute under host busy and control reader leases so they cannot
