@@ -36,6 +36,7 @@ elseif mode=='guard' then baseline=false
 elseif mode=='pause' then ffi.C.TestPause()
 elseif mode=='timeout' then now=4
 elseif mode=='unavailable' then reply=id..'|'..epoch..'|1318|unavailable'
+elseif mode=='foreign_unavailable' then reply=string.rep('f',32)..'|'..epoch..'|1318|unavailable'
 elseif mode~='ok' and mode~='reentrant' and mode~='post_dock' and mode~='post_guard' then error('unknown test mode')end
 if mode=='ok' then
  assert(owner:event(reply) and owner:state()=='idle' and #completed==1)
@@ -43,5 +44,8 @@ if mode=='ok' then
  assert(not owner:event(reply) and owner:state()=='failed' and #completed==1)
 else
  assert(not owner:event(reply) and owner:state()=='failed')
+ if mode=='unavailable' then assert(owner:diagnostic()=='md_unavailable')end
+ if mode=='foreign_unavailable' then assert(owner:diagnostic()=='correlation')end
+ if mode=='wrong_actor' or mode=='wrong_sector' or mode=='wrong_macro' or mode=='dock' then assert(owner:diagnostic()=='inspect_before')end
  if mode=='reentrant' or mode=='post_dock' or mode=='post_guard' then assert(#completed==1)else assert(#completed==0)end
 end

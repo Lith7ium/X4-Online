@@ -7,7 +7,7 @@ function M.new(c)
  assert(type(c.bootstrap)=='table' and type(c.bootstrap.state)=='function' and type(c.bootstrap.close)=='function')
  assert(type(c.sampler)=='table' and type(c.sampler.state)=='function' and type(c.sampler.close)=='function')
  for _,k in ipairs({'guard','quiescent','route','fault'})do assert(type(c[k])=='function',k..' required')end
- local state,busy='active',false;local api={}
+ local state,busy='active',false;local event_phase;local api={}
  local function fail(reason)
   if state~='failed' then state='failed';pcall(c.fault,reason)end
   return false
@@ -23,12 +23,22 @@ function M.new(c)
  function api:event(value)
   if busy or state~='active' then return fail('late_or_reentrant_event')end
   busy=true
+  local phase='guard_before'
   local ok=pcall(function()
    assert(guard('active'))
-   assert(c.route(value)==true and state=='active' and guard('active'))
+   phase='route'
+   assert(c.route(value)==true)
+   phase='guard_after'
+   assert(state=='active' and guard('active'))
   end)
-  busy=false;if not ok then return fail('event')end;return true
+  busy=false
+  if not ok then
+   event_phase=phase
+   return fail('event')
+  end
+  return true
  end
+ function api:diagnostic()return state=='failed' and event_phase or nil end
  function api:stop()
   if busy or state~='active' then return fail('stop_state')end
   busy=true;state='stopping'

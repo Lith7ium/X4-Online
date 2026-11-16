@@ -11,7 +11,8 @@ function M.new(o)
  local c={};for k,v in pairs(o)do c[k]=v end
  assert(token(c.epoch) and token(c.nonce) and integer(c.baseline) and finite(c.timeout) and c.timeout>0 and c.timeout<=120)
  for _,k in ipairs({'clock','guard','baseline_guard','issue','parse','inspect','complete'})do assert(type(c[k])=='function',k)end
- local state,busy='idle',false;local last,deadline,pending,count=nil,nil,nil,0;local api={}
+ local state,busy='idle',false;local last,deadline,pending,count=nil,nil,nil,0
+ local diagnostic;local api={}
  local function fail(reason)state='failed';pending=nil;deadline=nil;return false,reason end
  local function check()
   if state=='failed' or state=='closed' then return false end
@@ -39,18 +40,38 @@ function M.new(o)
  end
  function api:event(value)
   if busy or state~='pending' then return fail('event')end
+  local phase='guard'
   busy=true;local ok=pcall(function()
    assert(check() and type(value)=='string' and #value<=768)
+   phase='format'
    local id,epoch,index,status,actor,macro,owner,sector,sector_macro=value:match('^([0-9a-f]+)|([0-9a-f]+)|([0-9]+)|([a-z]+)|(0[xX][0-9a-fA-F]+)|([^|]+)|([^|]+)|(0[xX][0-9a-fA-F]+)|([^|]+)$')
+   phase='correlation'
    assert(id==pending.id and epoch==c.epoch and index==string.format('%.0f',pending.index) and status=='ok')
+   phase='names'
    assert(name(macro) and name(owner) and name(sector_macro))
+   phase='parse_or_guard'
    local a,s=c.parse(actor),c.parse(sector);assert(a~=nil and s~=nil and check())
+   phase='inspect_before'
    assert(c.inspect(a,s,sector_macro)==true and check())
+   phase='complete'
    local i=pending.index;state='delivering';assert(c.complete(i,a,sector_macro)==true)
+   phase='inspect_after'
    assert(state=='delivering' and check() and c.inspect(a,s,sector_macro)==true and check())
    pending=nil;deadline=nil;state='idle'
-  end);busy=false;if not ok then return fail('response')end;return true
+  end);busy=false
+  if not ok then
+   -- The unavailable class is useful only for this exact outstanding request.
+   if phase=='correlation' and type(value)=='string' and pending then
+    local id,epoch,index=value:match('^([0-9a-f]+)|([0-9a-f]+)|([0-9]+)|unavailable$')
+    if id==pending.id and epoch==c.epoch and index==string.format('%.0f',pending.index) then phase='md_unavailable' end
+   end
+   diagnostic=phase
+   return fail('response')
+  end
+  return true
  end
+ -- Fixed phase only: never return the response, IDs, or caught error text.
+ function api:diagnostic()return state=='failed' and diagnostic or nil end
  function api:tick()if busy or not check()then return fail('guard')end;return true end
  function api:expected_request()return state=='pending' and pending.id or nil end
  function api:state()return state end

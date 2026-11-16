@@ -16,9 +16,23 @@ local function rig(options)
  gate=assert(G.new({enabled=true,bootstrap=bootstrap,sampler=sampler,
   guard=function()if options.guard_hook then options.guard_hook()end;return not options.guard_lost end,
   quiescent=function()if options.quiet_hook then options.quiet_hook()end;return not options.not_quiet end,
-  route=function(value)route_calls=route_calls+1;if options.reenter_event then gate:event(value)end;return true end,
+  route=function(value)route_calls=route_calls+1;if options.reenter_event then gate:event(value)end;return not options.route_failed end,
   fault=function(reason)faults[#faults+1]=reason end}))
  return gate,bootstrap,sampler,requests,faults,function()return route_calls end
+end
+-- A fixed diagnostic phase distinguishes guard, route and post-route failure.
+for _,phase in ipairs({'guard_before','route','guard_after'})do
+ local opts={route_failed=phase=='route'}
+ local guards=0
+ opts.guard_hook=function()
+  guards=guards+1
+  if phase=='guard_before' or (phase=='guard_after' and guards==2) then
+   opts.guard_lost=true
+  end
+ end
+ local g,_,_,_,faults=rig(opts)
+ assert(not g:event('private payload') and g:state()=='failed' and faults[1]=='event')
+ assert(g:diagnostic()==phase)
 end
 -- Idle stop really closes both components; event handler stays live and faults late events.
 do

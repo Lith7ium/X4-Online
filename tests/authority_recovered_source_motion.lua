@@ -6,7 +6,7 @@ local I=dofile('src/authority/lua/source_motion_ipc.lua')
 local G=dofile('src/authority/lua/source_motion_shutdown.lua')
 local C=dofile('tools/dev/authority_registry_motion_candidate.lua')
 local lease,attempt,epoch,gen,nonce,saved=string.rep('a',32),string.rep('b',32),string.rep('c',32),string.rep('d',32),string.rep('e',32),string.rep('f',32)
-local function rig(with_selection)
+local function rig(with_selection,bootstrap_mode)
  local now=1;local paused=false;local alive=true;local input,out,events,issued,faults={},{},{},{},{}
  local reports={};local selection,selector_obj
  if with_selection then selection={nonce=string.rep('9',32),candidates={1,2},
@@ -28,7 +28,12 @@ local function rig(with_selection)
   bootstrap_factory=function(o)
    o.timeout=5;o.clock=function()return now end
    o.issue=function(_,_,v)issued[#issued+1]={kind='bootstrap',args=v};return true end
-   o.parse=function(v)return v end;o.inspect=function()return true end;return B.new(o)
+   o.parse=function(v)return v end
+   o.inspect=function()
+    if bootstrap_mode=='inspect_error' then error('private token must not be logged')end
+    return true
+   end
+   return B.new(o)
   end,
   sampler_factory=function(o)
    o.clock=function()return now end;o.max_tracks=1;o.scan_budget=1;o.interval=.1;o.timeout=5;o.min_dt=.02;o.max_dt=2
@@ -47,6 +52,30 @@ local function rig(with_selection)
  return session,input,out,events,issued,faults,function(v)paused=v end,function(v)now=v end,function(v)alive=v end,reports
 end
 local suffix='|'..epoch..'|'..gen
+-- Descriptor failure reports a fixed class only, with no registration ACK.
+for _,kind in ipairs({'unavailable','foreign_unavailable','inspect_error','unknown'})do
+ local app,input,out,events,issued,faults=rig(nil,kind)
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix
+ assert(app:tick())
+ input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|1|1|2'
+ assert(app:tick())
+ local id=issued[1].args.request_id
+ local reply=id..'|'..epoch..'|1|ok|0x1|ship_a|argon|0x2|sector_a'
+ local expected='router_event_bootstrap_inspect_before'
+ if kind=='unavailable' then
+  reply=id..'|'..epoch..'|1|unavailable'
+  expected='router_event_bootstrap_md_unavailable'
+ elseif kind=='foreign_unavailable' then
+  reply=id..'|'..epoch..'|2|unavailable'
+  expected='router_event_bootstrap_correlation'
+ elseif kind=='unknown' then
+  reply=string.rep('9',32)..'|stale'
+  expected='router_event_unknown_request'
+ end
+ events[1](reply)
+ assert(app:state()=='failed' and faults[1]==expected and #faults==1)
+ for _,packet in ipairs(out)do assert(not packet:find('|SAVED_REGISTERED|',1,true))end
+end
 local function request_candidate(app,input)
  input[1]='P|'..lease..'|'..attempt..'|CANDIDATE'..suffix..'|1'
  assert(app:tick());return app:tick()

@@ -18,6 +18,7 @@ function M.new(c)
   assert(type(c[k])=='function',k..' required')
  end
  local failed=false;local busy=false;local staged;local bound={};local bootstrap,sampler,ipc,shutdown,selector
+ local route_failure
  local selection=c.selection;local selected,reported=nil,false;local allowed={}
  if selection~=nil then
   assert(type(selection)=='table' and token(selection.nonce) and type(selection.factory)=='function' and
@@ -60,27 +61,68 @@ function M.new(c)
   guard=active,saved_baseline_limit=c.baseline,saved_baseline_guard=saved_guard,
   binding_guard=function()return false end,fault=function(reason)fail('sampler_'..tostring(reason))end}))
  local function route(value)
-  if failed or type(value)~='string' then return false end
+  route_failure=nil
+  local function reject(reason)
+   route_failure=reason
+   return false
+  end
+  if failed or type(value)~='string' then
+   return reject('route_input')
+  end
   local id=value:match('^([0-9a-f]+)|')
   if id and id==bootstrap:expected_request() then
-   if not ipc:saved_request() or staged then return false end
-   if bootstrap:event(value)~=true or bootstrap:state()~='idle' or not staged then return false end
+   if not ipc:saved_request() or staged then
+    return reject('bootstrap_request')
+   end
+   if bootstrap:event(value)~=true then
+    local detail=type(bootstrap.diagnostic)=='function' and bootstrap:diagnostic() or nil
+    local allowed={guard=true,format=true,correlation=true,names=true,parse_or_guard=true,md_unavailable=true,
+     inspect_before=true,complete=true,inspect_after=true}
+    return reject(allowed[detail] and 'bootstrap_'..detail or 'bootstrap_response')
+   end
+   if bootstrap:state()~='idle' or not staged then
+    return reject('bootstrap_completion')
+   end
    local item=staged;staged=nil
-   if ipc:saved_request()~=item.index or bound[item.index] or not active() then return false end
+   if ipc:saved_request()~=item.index or bound[item.index] or not active() then
+    return reject('bootstrap_binding')
+   end
    bound[item.index]=item.actor
-   if sampler:register({epoch=c.epoch,index=item.index,classification='saved_baseline'},item.actor)~=true then return false end
-   return ipc:saved_registered(item.index)==true
+   if sampler:register({epoch=c.epoch,index=item.index,classification='saved_baseline'},item.actor)~=true then
+    return reject('sampler_register')
+   end
+   if ipc:saved_registered(item.index)~=true then
+    return reject('ipc_saved_registration')
+   end
+   return true
   elseif id and id==sampler:expected_request() then
-   if not ipc:requested() then return false end
+   if not ipc:requested() then
+    return reject('sampler_request')
+   end
    local ok,sample=sampler:event(value)
-   return ok==true and ipc:complete(sample)==true
+   if ok~=true then
+    return reject('sampler_response')
+   end
+   if ipc:complete(sample)~=true then
+    return reject('ipc_sample_completion')
+   end
+   return true
   end
-  return false
+  return reject('unknown_request')
  end
  shutdown=assert(c.shutdown_factory({enabled=true,bootstrap=bootstrap,sampler=sampler,guard=context,
   quiescent=function()return not staged and not bootstrap:expected_request() and not sampler:expected_request() and
    (not selector or selector:state()=='done') end,
-  route=route,fault=function(reason)fail('router_'..tostring(reason))end}))
+  route=route,fault=function(reason)
+   if reason=='event' then
+    local phase=type(shutdown.diagnostic)=='function' and shutdown:diagnostic() or nil
+    local allowed={guard_before=true,route=true,guard_after=true}
+    local detail=(phase=='route' and route_failure) or (allowed[phase] and phase) or 'unknown'
+    fail('router_event_'..detail)
+   else
+    fail('router_'..tostring(reason))
+   end
+  end}))
  ipc=assert(c.ipc_factory({saved_baseline={limit=c.baseline,guard=baseline},
   candidate_enabled=selection~=nil,guard=active,stop=function()return shutdown:stop()end,fault=function(reason)fail('ipc_'..tostring(reason))end}))
  assert(c.register(function(value)
