@@ -3,7 +3,9 @@
 `lua/ship_registry_client.lua` is an opt-in local integration primitive for
 `tools/dev/authority_ship_registry.xml`. It installs nothing, performs no X4
 calls on import, and does not provide networking or sector identity. The MD
-registry itself remains experimental. This adapter has not been tested in X4.
+registry itself remains experimental. The recovery enrollment integration has
+been exercised in an isolated X4 instance; the dispatch contract below remains
+unverified for the native API.
 
 Construct with `new({enabled=true, epoch=..., timeout=..., issue=..., key=...,
 to_md_actor=..., valid=..., clock=..., complete=...})`. The epoch is 32 lowercase
@@ -20,6 +22,18 @@ an actor ID through a rounded Lua number. `issue(screen, control, params)` must
 return exactly true only when dispatch is confirmed; a wrapper must treat a
 nil return from an underlying API as unconfirmed, not as proof of success.
 Event delivery must be asynchronous.
+
+**Known integration contract gap:** `lua/recovery_registry_enroll.lua` supplies
+an X4 wrapper that returns `AddUITriggeredEvent(...) ~= false`. In Lua this
+also converts `nil` to `true`, so the adapter can enter `pending` and report a
+request as dispatched without a confirmed dispatch. Only a matching correlated
+MD response can complete the corresponding operation; with continued ticking
+and no earlier fault, a missing response times out. The native API return value has not been recorded, so the isolated
+X4 enrollment result does not establish whether X4 returned `nil` or `true`.
+One native enrollment observed 10,082 selected candidates, with subsequent
+correlated checks; it does not establish complete coverage of all ships. This
+integration does not currently satisfy the strict dispatch contract above.
+
 The caller provides local actor validity, a stable process-local key and a
 conversion to an MD-compatible actor. Both original and converted actor keys
 must match. A resolved actor is local and must never be used as a wire ID.
@@ -72,11 +86,12 @@ an exact local actor without passing through a Lua number, and `key(actor)`
 must return its canonical decimal ID. The adapter independently converts the
 hexadecimal text using digit arithmetic and checks this key before the existing
 local actor checks. A previous separate native experiment observed a matching
-hexadecimal reference for one local ship; this new path has not been run in X4. Counts and indices must be
-exact safe Lua integers. Both MD formatting and callback behaviour need native
-X4 validation; schema and synthetic tests alone do not establish that these
-events are emitted or that actor text can be converted in X4. A unique request
-ID does not authenticate or fence arbitrary senders, undo MD side effects,
+hexadecimal reference for one local ship. The isolated recovery enrollment
+subsequently exercised correlated operations on selected candidates; it does
+not establish general formatting or callback behaviour across all ships and
+contexts. Counts and indices must be exact safe Lua integers. Schema and
+synthetic tests alone do not establish native event or conversion behaviour.
+A unique request ID does not authenticate or fence arbitrary senders, undo MD side effects,
 establish global identity, or make this a production protocol.
 None of the API establishes cross-instance binding, creation/destruction
 coverage, multiplayer admission, or gameplay.
