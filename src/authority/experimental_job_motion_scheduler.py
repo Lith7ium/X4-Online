@@ -54,6 +54,17 @@ class ExperimentalJobMotionScheduler:
             self._state='ready';return ('motion',sample)
         except BaseException:
             self._fail();raise
+    def register_saved(self,index):
+        """Request one explicitly fenced saved index on the same owner thread."""
+        if self._state!='ready' or threading.get_ident()!=self._owner:
+            self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
+        self._state='working'
+        try:
+            result=self._call(self._motion,self._motion.register_saved,index)
+            if result is not True:raise RuntimeError('saved registration unconfirmed')
+            self._state='ready';return True
+        except BaseException:
+            self._fail();raise
     def close(self):
         if self._state!='ready' or threading.get_ident()!=self._owner:
             self._fail();raise RuntimeError('job/motion scheduler cannot close')

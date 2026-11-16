@@ -18,6 +18,17 @@ unknown. Local actor handles are never transmitted. Unexpected packets, stale
 identity, PID/peer guard loss, timeout or uncertain send permanently fault the
 bridge and the shared TCP host. No UDP retries or fabricated receipts occur.
 
+Separately, `saved_baseline` and `saved_guard(epoch, baseline)` opt in to
+`register_saved(index)`, optionally through the scheduler's exclusive owner.
+It sends a correlated `REGISTER_SAVED` and requires the exact
+`SAVED_REGISTERED` reply before creating the local transport track. Both
+operations share the monotonically increasing PULL request counter. The
+guard is sampled throughout and is an external assertion, not proof of a
+checkpoint, loaded save, actor identity across processes, or interest. A
+failure after request dispatch leaves the X4-side effect uncertain and the
+entire owner must be fenced. There is no retry or job-queue ACK. This path
+alone does not bootstrap the client or establish a running session.
+
 Optionally the session owner supplies `select_recipients(sample, members)`.
 It receives detached copies of the validated sample and currently admitted
 `{'id', 'incarnation'}` members and must return a list or tuple of distinct

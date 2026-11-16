@@ -39,7 +39,8 @@ def bind_participant_motion(sock, *, process, lease, attempt, epoch, generation,
     bridge.wait_ready();return bridge
 
 
-def bind_source_motion(sock, motion, *, process, lease, attempt, epoch, generation, guard, timeout=30, validate_sample=None):
+def bind_source_motion(sock, motion, *, process, lease, attempt, epoch, generation, guard, timeout=30, validate_sample=None,
+                       saved_baseline=None, saved_guard=None):
     """Bind one source X4 peer, then retain PID/inode checks on every pull.
 
     Caller proves the source belongs to its owned session and enforces the
@@ -50,4 +51,5 @@ def bind_source_motion(sock, motion, *, process, lease, attempt, epoch, generati
                       generation=generation,guard=context,timeout=timeout)
     if bound is not sock:raise RuntimeError('source motion socket handoff mismatch')
     return ExperimentalSourceMotionIPC(sock,motion,enabled=True,lease=lease,attempt=attempt,
-                    epoch=epoch,generation=generation,guard=context,validate_peer=peer,timeout=timeout,validate_sample=validate_sample)
+                    epoch=epoch,generation=generation,guard=context,validate_peer=peer,timeout=timeout,validate_sample=validate_sample,
+                    saved_baseline=saved_baseline,saved_guard=saved_guard)

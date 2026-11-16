@@ -13,8 +13,12 @@ function M.new(c)
  assert(c.lease~=c.attempt and c.lease~=c.epoch and c.lease~=c.generation and c.attempt~=c.epoch and c.attempt~=c.generation and c.epoch~=c.generation)
  assert(finite(c.timeout) and c.timeout>0 and c.timeout<=120)
  assert(type(c.clock)=='function' and type(c.guard)=='function' and type(c.fault)=='function')
+ if c.saved_baseline~=nil then
+  assert(type(c.saved_baseline)=='table' and integer(c.saved_baseline.limit) and type(c.saved_baseline.guard)=='function')
+  c.saved_baseline={limit=c.saved_baseline.limit,guard=c.saved_baseline.guard}
+ end
  assert((type(c.net)=='table' or type(c.net)=='userdata') and type(c.net.send)=='function' and type(c.net.receive)=='function')
- local state,busy='new',false;local last,deadline,request,seq=nil,nil,nil,0
+ local state,busy='new',false;local last,deadline,request,seq,saved_index=nil,nil,nil,0,nil
  local api={}
  local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
  local function check()
@@ -23,6 +27,12 @@ function M.new(c)
   if not ok or state~=before or not finite(t) or t<0 or (last and t<last) or (deadline and t>=deadline) then return false end
   last=t;local good,v=pcall(c.guard)
   if not good or v~=true or state~=before then return false end
+  if state=='register_saved' then
+   local ok,allowed=pcall(c.saved_baseline.guard,c.epoch,c.saved_baseline.limit)
+   if not ok or allowed~=true or state~=before then return false end
+   local yes,again=pcall(c.guard)
+   if not yes or again~=true or state~=before then return false end
+  end
   local again,u=pcall(c.clock)
   if not again or state~=before or not finite(u) or u<t or (deadline and u>=deadline)then return false end
   last=u;return true
@@ -52,14 +62,31 @@ function M.new(c)
    if state=='binding' then
     assert(#p==6 and p[4]=='BOUND');state='ready';assert(send(context('ATTACHED')));deadline=nil
    elseif state=='ready' then
-    assert(#p==7 and p[4]=='PULL' and p[7]:match('^[1-9]%d*$') and #p[7]<=16)
+    assert((#p==7 and p[4]=='PULL') or (#p==9 and p[4]=='REGISTER_SAVED' and c.saved_baseline))
+    assert(p[7]:match('^[1-9]%d*$') and #p[7]<=16)
     local n=tonumber(p[7]);assert(integer(n) and string.format('%.0f',n)==p[7] and n==seq+1)
-    request=n;deadline=last+c.timeout;state='requested'
+    request=n;deadline=last+c.timeout
+    if p[4]=='PULL' then state='requested' else
+     assert(p[8]:match('^[1-9]%d*$') and #p[8]<=16 and p[9]==string.format('%.0f',c.saved_baseline.limit))
+     saved_index=tonumber(p[8]);assert(integer(saved_index) and saved_index<=c.saved_baseline.limit and string.format('%.0f',saved_index)==p[8])
+     state='register_saved';assert(check())
+    end
    else error('unexpected packet')end
   end)
   busy=false;if not ok then return fail('packet')end;return true
  end
  function api:requested()return state=='requested' end
+ function api:saved_request()return state=='register_saved' and saved_index or nil end
+ -- The caller must first complete the correlated bootstrap and sampler register.
+ function api:saved_registered(index)
+  if busy or state~='register_saved' or index~=saved_index then return fail('complete')end
+  busy=true;local ok=pcall(function()
+   assert(check());assert(send({'SAVED_REGISTERED',c.epoch,c.generation,string.format('%.0f',request),
+    string.format('%.0f',saved_index),string.format('%.0f',c.saved_baseline.limit)}))
+   seq=request;request=nil;saved_index=nil;deadline=nil;state='ready'
+  end)
+  busy=false;if not ok then return fail('complete')end;return true
+ end
  function api:complete(sample)
   if busy or state~='requested' then return fail('complete')end
   busy=true;local ok=pcall(function()

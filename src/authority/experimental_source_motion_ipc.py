@@ -22,7 +22,7 @@ _MAX=9007199254740991
 
 class ExperimentalSourceMotionIPC:
     """One request at a time; no next pull until TCP recipients confirm."""
-    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None):
+    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None,saved_baseline=None,saved_guard=None):
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
@@ -31,6 +31,8 @@ class ExperimentalSourceMotionIPC:
             len({lease,attempt,epoch,generation})!=4 or not callable(guard) or not callable(validate_peer) or
             (validate_sample is not None and not callable(validate_sample)) or
             (select_recipients is not None and not callable(select_recipients)) or
+            not ((saved_baseline is None and saved_guard is None) or
+                 (type(saved_baseline) is int and 1<=saved_baseline<=_MAX and callable(saved_guard))) or
             type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=300 or
             timeout<=motion._delivery._timeout):
             raise ValueError('invalid source motion IPC')
@@ -45,6 +47,7 @@ class ExperimentalSourceMotionIPC:
         self._guard=guard;self._validate=validate_peer;self._validate_sample=validate_sample;self._select_recipients=select_recipients;self._timeout=float(timeout)
         self._state='ready';self._owner=threading.get_ident();self._next=0;self._indices=set();self._scheduler_owner=None;self._scheduler_lease=None
         self._last_pull=None;self._observed={}
+        self._saved_baseline=saved_baseline;self._saved_guard=saved_guard
         motion._source_owner=self
     @property
     def state(self):return self._state
@@ -53,6 +56,27 @@ class ExperimentalSourceMotionIPC:
         self._motion._delivery._failed=True;self._motion._delivery._host._failed=True
         try:self._sock.close()
         except OSError:pass
+    def _saved_fence(self):
+        """Execute the external baseline assertion under the shared reader lease."""
+        d=self._motion._delivery;host=d._host;control=host._control
+        owned=control._reader_lease is None and host._busy is False and d._active is False
+        if owned:
+            control._reader_free();lease=object();control._reader_lease=lease;host._busy=True;d._active=True
+        else:
+            lease=control._reader_lease
+            if lease is None or host._busy is not True or d._active is not True:
+                raise RuntimeError('saved baseline reader fence unavailable')
+        try:
+            result=self._saved_guard(self._epoch,self._saved_baseline)
+            if control._reader_lease is not lease or host._busy is not True or d._active is not True:
+                raise RuntimeError('saved baseline guard changed reader ownership')
+            return result
+        finally:
+            changed=control._reader_lease is not lease or host._busy is not True or d._active is not True
+            if owned:
+                if control._reader_lease is lease:control._reader_lease=None
+                host._busy=False;d._active=False
+            if changed:raise RuntimeError('saved baseline reader fence changed')
     def _check(self,deadline,phase):
         if (self._state!=phase or self._motion._failed or self._motion._delivery._failed or
             self._motion._delivery._host._failed or threading.get_ident()!=self._owner or time.monotonic()>=deadline):
@@ -66,6 +90,21 @@ class ExperimentalSourceMotionIPC:
         if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
             self._motion._delivery._host._failed or threading.get_ident()!=self._owner or time.monotonic()>=deadline):
             raise RuntimeError('source motion X4 peer ownership changed')
+        if self._saved_guard is not None:
+            good=self._saved_fence()
+            if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
+                self._motion._delivery._host._failed or threading.get_ident()!=self._owner or
+                time.monotonic()>=deadline or self._sock.getsockname()!=self._local or self._sock.getpeername()!=self._peer):
+                raise RuntimeError('saved baseline guard failed')
+            good=self._guard()
+            if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
+                self._motion._delivery._host._failed or time.monotonic()>=deadline):
+                raise RuntimeError('source guard changed during baseline check')
+            good=self._validate(self._peer)
+            if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
+                self._motion._delivery._host._failed or threading.get_ident()!=self._owner or time.monotonic()>=deadline or
+                self._sock.getsockname()!=self._local or self._sock.getpeername()!=self._peer):
+                raise RuntimeError('source peer changed during baseline check')
     def _quiet(self,deadline,phase):
         self._check(deadline,phase);r,_,e=select.select([self._sock],[],[self._sock],0)
         if r or e:raise RuntimeError('unexpected queued source motion packet')
@@ -122,6 +161,36 @@ class ExperimentalSourceMotionIPC:
         self._state='registering';deadline=time.monotonic()+self._timeout
         try:
             self._check(deadline,'registering')
+            self._motion_call(self._motion.track,self._epoch,self._generation,index)
+            self._check(deadline,'registering');self._indices.add(index);self._state='ready';return True
+        except BaseException:self._fail();raise
+    def register_saved(self,index,*,_scheduler=None):
+        """Register a locally resolved saved index, only after correlated X4 confirmation.
+
+        The saved guard is a caller assertion; it does not prove checkpoint bytes
+        or cross-process identity. Failure after dispatch has an unknown X4 effect.
+        """
+        self._reserved(_scheduler)
+        if (self._state!='ready' or threading.get_ident()!=self._owner or self._saved_guard is None or
+            type(index) is not int or not 1<=index<=self._saved_baseline or index in self._indices):
+            self._fail();raise RuntimeError('saved registration unavailable')
+        self._state='registering';deadline=time.monotonic()+self._timeout
+        try:
+            self._quiet(deadline,'registering')
+            if self._next>=_MAX:raise RuntimeError('source motion request capacity')
+            self._next+=1;request=str(self._next)
+            packet='|'.join(['P',self._lease,self._attempt,'REGISTER_SAVED',self._epoch,self._generation,request,str(index),str(self._saved_baseline)]).encode('ascii')
+            if self._sock.send(packet)!=len(packet):raise RuntimeError('saved registration dispatch failed')
+            while True:
+                self._check(deadline,'registering')
+                readable,_,bad=select.select([self._sock],[],[self._sock],min(.1,max(0,deadline-time.monotonic())))
+                self._check(deadline,'registering')
+                if bad:raise RuntimeError('saved registration socket error')
+                if readable:break
+            data=self._sock.recv(_MAX_PACKET+1)
+            expected='|'.join(['S',self._lease,self._attempt,'SAVED_REGISTERED',self._epoch,self._generation,request,str(index),str(self._saved_baseline)]).encode('ascii')
+            if data!=expected:raise ValueError('foreign saved registration response')
+            self._quiet(deadline,'registering')
             self._motion_call(self._motion.track,self._epoch,self._generation,index)
             self._check(deadline,'registering');self._indices.add(index);self._state='ready';return True
         except BaseException:self._fail();raise

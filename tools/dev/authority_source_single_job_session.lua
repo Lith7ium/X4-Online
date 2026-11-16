@@ -48,11 +48,12 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
    if cfg.authority_source_saved_baseline~=nil then
     local s=cfg.authority_source_saved_baseline
     assert(cfg.authority_source_motion_enabled==true and type(s)=='table' and s.enabled==true and
-     type(s.guard)=='function' and type(s.next_index)=='function' and type(s.nonce)=='string' and
+     type(s.guard)=='function' and ((s.via_ipc==true and s.next_index==nil) or
+     (s.via_ipc==nil and type(s.next_index)=='function')) and type(s.nonce)=='string' and
      #s.nonce==32 and s.nonce:match('^[0-9a-f]+$') and
      s.nonce:sub(1,16)~=cfg.authority_source_descriptor_request:sub(1,16) and
      s.nonce:sub(1,16)~=cfg.authority_source_motion_nonce:sub(1,16))
-    saved={guard=s.guard,next_index=s.next_index,nonce=s.nonce,
+    saved={guard=s.guard,next_index=s.next_index,nonce=s.nonce,via_ipc=s.via_ipc==true,
      epoch=cfg.authority_source_epoch,baseline=cfg.authority_source_baseline}
    end
    local engine=assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.new({enabled=true,test_profile='45841'}))
@@ -80,7 +81,10 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
     local motion_net=assert(lib.open('127.0.0.1',cfg.authority_source_motion_port))
     motion=assert(X4LAN_AUTHORITY_SOURCE_MOTION_IPC.new({enabled=true,lease=cfg.authority_source_motion_lease,
      attempt=cfg.authority_source_motion_attempt,epoch=cfg.authority_source_epoch,generation=cfg.authority_source_generation,
-     timeout=cfg.authority_source_host_timeout,clock=GetCurRealTime,guard=function()return not failed end,net=motion_net,fault=fault('motion_ipc')}))
+     timeout=cfg.authority_source_host_timeout,clock=GetCurRealTime,guard=function()return not failed end,net=motion_net,
+     saved_baseline=saved and saved.via_ipc and {limit=saved.baseline,guard=function(epoch,baseline)
+      return not failed and not C.IsGamePaused() and saved.guard(epoch,baseline)==true and not failed and not C.IsGamePaused()
+     end} or nil,fault=fault('motion_ipc')}))
     sampler=assert(X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER.new_x4({enabled=true,epoch=cfg.authority_source_epoch,
      generation=cfg.authority_source_generation,nonce=cfg.authority_source_motion_nonce,max_tracks=100000,scan_budget=64,
      interval=.1,timeout=cfg.authority_source_host_timeout,min_dt=.02,max_dt=1,
@@ -126,6 +130,7 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
       elseif bootstrap and bootstrap:expected_request()==id and id~=nil then
        assert(not staged and bootstrap:event(value)==true and bootstrap:state()=='idle' and not failed)
        local item=assert(staged);staged=nil
+       if saved.via_ipc then assert(motion:saved_request()==item.index)end
        assert(not saved_bindings[item.index] and #pending_confirmed<1024 and
         saved.guard(saved.epoch,saved.baseline)==true and not failed)
        saved_bindings[item.index]={actor=item.actor}
@@ -164,13 +169,17 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
    if bootstrap and not C.IsGamePaused() then
     assert(bootstrap:tick() and not failed)
     if bootstrap:state()=='idle' and #pending_confirmed==0 then
-     local index=saved.next_index()
+     local index=saved.via_ipc and motion:saved_request() or (not saved.via_ipc and saved.next_index() or nil)
      assert(not failed)
      if index~=nil then assert(bootstrap:begin(index) and not failed) end
     end
    end
    if sampler:state()=='ready' and #pending_confirmed>0 and not C.IsGamePaused() then
-    stage='sampler_register';local item=table.remove(pending_confirmed,1);assert(sampler:register(item.row,item.actor))
+    stage='sampler_register';local item=table.remove(pending_confirmed,1);assert(sampler:register(item.row,item.actor) and not failed)
+    if saved and saved.via_ipc and item.row.classification=='saved_baseline' then
+     assert(motion:saved_request()==item.row.index and saved.guard(saved.epoch,saved.baseline)==true and not failed)
+     assert(motion:saved_registered(item.row.index) and not failed)
+    end
    end
    if motion:requested() then
     stage='motion_request'

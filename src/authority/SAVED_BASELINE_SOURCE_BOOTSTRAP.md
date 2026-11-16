@@ -48,3 +48,15 @@ private installer does not configure this route. It does not connect the
 registered index to the TCP tracker or implement player/map interest selection.
 The coupled offline test uses the real session, bootstrap and sampler with a
 fake X4 ABI and simulated MD; no native game behavior is established.
+
+An additional default-off `via_ipc=true` mode lets the existing source-motion
+UDP owner request one specific saved index. In this mode `next_index` is not
+used: the session resolves the correlated request, stages the result, and sends
+`SAVED_REGISTERED` only after the local sampler has accepted it and the guards
+have passed again. The request and reply include the lease, attempt, epoch,
+generation, monotone request number, index and baseline; local actor references
+are never sent. Request loss or uncertain registration is not retried. A send
+and its subsequent guard are not atomic or reversible; a caller must fence the
+whole session on uncertainty. This is local-registration evidence only: the
+external checkpoint/baseline assertion, client binding and current area of
+interest remain separate requirements.
