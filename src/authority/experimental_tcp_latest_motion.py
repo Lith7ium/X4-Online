@@ -18,6 +18,7 @@ class LatestMotionPoll:
         self.timeout = timeout
         self.blocked = False
         self.world_blocked = False
+        self.generation = 0
 
     def busy(self):
         return any(p.get('motion_active') or p.get('motion_pending')
@@ -26,26 +27,39 @@ class LatestMotionPoll:
     def enqueue(self, entries):
         if self.blocked or self.world_blocked:
             raise RuntimeError('motion is fenced for a lifecycle operation')
-        # Preflight the complete set, so capacity failure sends to no peer.
-        for conn, peer, key, data, expected, accepted, discarded in entries:
+        # Validate the whole selection before mutating anything. A full queue
+        # indicates one peer cannot keep up with distinct tracks. Closing only
+        # that socket keeps other peers moving; this is a provisional fail-safe,
+        # not an interest, resynchronization, or reconnection policy.
+        overflow=[]
+        for conn, peer, key, data, expected, accepted, discarded, guard in entries:
             if self.control._peers.get(conn) is not peer or peer['stage'] != 'admitted':
                 raise RuntimeError('motion peer changed')
             pending = peer.setdefault('motion_pending', {})
             if key not in pending and len(pending) >= self.limit:
-                raise BufferError('per-peer motion queue full')
-        for conn, peer, key, data, expected, accepted, discarded in entries:
-            peer['motion_pending'][key] = (data, expected, accepted, discarded)
+                overflow.append(conn)
+        for conn in overflow:self.control._drop(conn)
+        survivors=[]
+        for conn, peer, key, data, expected, accepted, discarded, guard in entries:
+            if conn in overflow:continue
+            peer['motion_pending'][key] = (data, expected, accepted, discarded, guard)
+            survivors.append(conn)
+        return frozenset(survivors)
 
     def barrier(self, *, world=False):
-        if world: self.world_blocked = True
-        else: self.blocked = True
+        if world:
+            if not self.world_blocked:self.generation += 1
+            self.world_blocked = True
+        else:
+            if not self.blocked:self.generation += 1
+            self.blocked = True
         for peer in self.control._peers.values():
             active = peer.get('motion_active')
             if active is not None and active['sent'] == 0:
                 peer['motion_active'] = None
                 active['discarded']()
             pending = peer.get('motion_pending', {})
-            for _, _, _, discarded in pending.values(): discarded()
+            for _, _, _, discarded, _ in pending.values(): discarded()
             pending.clear()
         return not self.busy()
 
@@ -60,13 +74,14 @@ class LatestMotionPoll:
         pending = peer.get('motion_pending', {})
         if pending:
             key = next(iter(pending))
-            data, expected, accepted, discarded = pending.pop(key)
+            data, expected, accepted, discarded, guard = pending.pop(key)
             peer['motion_active'] = {'key': key, 'data': data, 'sent': 0, 'input': b'',
-                                     'expected': expected, 'accepted': accepted, 'discarded': discarded,
+                                     'expected': expected, 'accepted': accepted, 'discarded': discarded, 'guard': guard,
                                      'deadline': time.monotonic() + self.timeout}
 
     def send(self, conn, peer):
         active = peer['motion_active']
+        if active['guard'] is not None: active['guard']()
         try: count = conn.send(active['data'][active['sent']:])
         except BlockingIOError: return
         if count <= 0:
@@ -78,6 +93,7 @@ class LatestMotionPoll:
         active = peer.get('motion_active')
         if active is None or active['sent'] != len(active['data']):
             self.control._drop(conn); return
+        if active['guard'] is not None: active['guard']()
         active['input'] += chunk
         if b'\n' not in active['input']:
             if len(active['input']) > MAX_MESSAGE: self.control._drop(conn)

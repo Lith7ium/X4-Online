@@ -22,13 +22,13 @@ class MotionTCP(unittest.TestCase):
     def setUp(self):
         self.case=fixture.ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
         self.case.setUp();self.addCleanup(self.case.doCleanups)
-        self.stop=threading.Event();self.threads=[];self.errors=[];self.received=[]
+        self.stop=threading.Event();self.threads=[];self.errors=[];self.received=[];self.expected_disconnect=set()
         self.addCleanup(self.finish)
     def finish(self):
         self.stop.set()
         for thread in self.threads:thread.join(2)
         self.assertFalse(any(t.is_alive() for t in self.threads));self.assertEqual(self.errors,[])
-    def client(self,conn,handle,*,failure=False,mutate=False,delay=0):
+    def client(self,conn,handle,*,failure=False,mutate=False,delay=0,despawn_failure=False):
         def run():
             try:
                 conn.settimeout(3);frame=b''
@@ -41,13 +41,13 @@ class MotionTCP(unittest.TestCase):
                     self.received.append((handle,dict(value),despawn))
                     if delay:time.sleep(delay)
                     if mutate:value['index']+=1
-                    return not failure
+                    return not failure and not (despawn and despawn_failure)
                 app=ExperimentalTCPParticipantClient(conn,Controller(),enabled=True,epoch='a'*32,handle=handle,
                                                      timeout=1,apply_motion=accept,apply_job=lambda x:True)
                 while not self.stop.is_set():app.poll(.05)
                 app.close()
             except BaseException as error:
-                if not self.stop.is_set() and not failure and not mutate:self.errors.append(error)
+                if not self.stop.is_set() and handle not in self.expected_disconnect and not failure and not mutate and not despawn_failure:self.errors.append(error)
         thread=threading.Thread(target=run);self.threads.append(thread);thread.start()
     def setup_pair(self,*,max_tracks=100000,min_interval=1/240,**kw):
         a=self.case.connect();b=self.case.connect();self.case.offer_and_claim(a);self.case.offer_and_claim(b)
@@ -68,6 +68,73 @@ class MotionTCP(unittest.TestCase):
         self.assertTrue(self.motion.send(dead,despawn=True));self.assertEqual(len(self.received),4)
         with self.assertRaises(ValueError):self.motion.send(self.sample(3))
         self.assertTrue(self.case.host._failed)
+    def test_despawn_rejects_missing_informed_peer_before_dispatch(self):
+        self.setup_pair();members=self.delivery.membership()
+        self.motion.send(self.sample())
+        dead={k:self.sample()[k] for k in ('version','epoch','generation','index','sequence')};dead['sequence']=2
+        with self.assertRaises(ValueError):self.motion.send(dead,despawn=True,recipients=[members[0]])
+        self.assertEqual([item[0] for item in self.received],[1,2])
+        self.assertFalse(self.motion._tracks[('b'*32,'c'*32,10055)]['closed'])
+
+    def test_despawn_default_only_reaches_peers_that_saw_snapshot(self):
+        self.setup_pair();members=self.delivery.membership()
+        self.motion.send(self.sample(),recipients=[members[0]])
+        dead={k:self.sample()[k] for k in ('version','epoch','generation','index','sequence')};dead['sequence']=2
+        self.assertTrue(self.motion.send(dead,despawn=True))
+        self.assertEqual([(item[0],item[2]) for item in self.received],[(1,False),(1,True)])
+        self.assertTrue(self.motion._tracks[('b'*32,'c'*32,10055)]['closed'])
+
+    def test_despawn_rejects_extra_uninformed_peer_before_dispatch(self):
+        self.setup_pair();members=self.delivery.membership()
+        self.motion.send(self.sample(),recipients=[members[0]])
+        dead={k:self.sample()[k] for k in ('version','epoch','generation','index','sequence')};dead['sequence']=2
+        with self.assertRaises(ValueError):self.motion.send(dead,despawn=True,recipients=members)
+        self.assertEqual([(item[0],item[2]) for item in self.received],[(1,False)])
+        self.assertFalse(self.motion._tracks[('b'*32,'c'*32,10055)]['closed'])
+
+    def test_failed_despawn_receipt_does_not_close_track(self):
+        self.setup_pair(despawn_failure=True);self.motion.send(self.sample())
+        dead={k:self.sample()[k] for k in ('version','epoch','generation','index','sequence')};dead['sequence']=2
+        with self.assertRaises((RuntimeError,ValueError,ConnectionError,OSError)):
+            self.motion.send(dead,despawn=True)
+        self.assertEqual([(item[0],item[2]) for item in self.received],[(1,False),(2,False),(1,True),(2,True)])
+        self.assertFalse(self.motion._tracks[('b'*32,'c'*32,10055)]['closed'])
+        self.assertTrue(self.case.host._failed)
+
+    def test_disconnected_informed_peer_is_not_required_for_despawn(self):
+        self.setup_pair();self.motion.send(self.sample())
+        self.expected_disconnect.add(2)
+        conn=next(conn for conn,peer in self.case.control._peers.items() if peer['handle']==2)
+        self.case.control._drop(conn)
+        dead={k:self.sample()[k] for k in ('version','epoch','generation','index','sequence')};dead['sequence']=2
+        self.assertTrue(self.motion.send(dead,despawn=True))
+        self.assertEqual([(item[0],item[2]) for item in self.received],[(1,False),(2,False),(1,True)])
+        self.assertTrue(self.motion._tracks[('b'*32,'c'*32,10055)]['closed'])
+
+    def test_discarded_unstarted_snapshot_needs_no_despawn_recipient(self):
+        self.setup_pair();self.case.control.enable_latest_motion(enabled=True)
+        self.motion.enqueue_latest(self.sample())
+        self.assertTrue(self.case.control.motion_barrier())
+        dead={k:self.sample()[k] for k in ('version','epoch','generation','index','sequence')};dead['sequence']=2
+        self.assertTrue(self.motion.send(dead,despawn=True))
+        self.assertEqual(self.received,[])
+        self.assertTrue(self.motion._tracks[('b'*32,'c'*32,10055)]['closed'])
+
+    def test_despawn_accepts_explicit_empty_recipients_without_informed_peers(self):
+        self.setup_pair();self.case.control.enable_latest_motion(enabled=True)
+        self.motion.enqueue_latest(self.sample())
+        self.assertTrue(self.case.control.motion_barrier())
+        dead={k:self.sample()[k] for k in ('version','epoch','generation','index','sequence')};dead['sequence']=2
+        self.assertTrue(self.motion.send(dead,despawn=True,recipients=[]))
+        self.assertEqual(self.received,[])
+        self.assertTrue(self.motion._tracks[('b'*32,'c'*32,10055)]['closed'])
+
+    def test_despawn_rejects_explicit_empty_recipients_with_informed_peers(self):
+        self.setup_pair();self.motion.send(self.sample())
+        dead={k:self.sample()[k] for k in ('version','epoch','generation','index','sequence')};dead['sequence']=2
+        with self.assertRaises(ValueError):self.motion.send(dead,despawn=True,recipients=[])
+        self.assertEqual([(item[0],item[2]) for item in self.received],[(1,False),(2,False)])
+        self.assertFalse(self.motion._tracks[('b'*32,'c'*32,10055)]['closed'])
     def test_explicit_subset_then_other_client_and_default_all(self):
         self.setup_pair();members=self.delivery.membership()
         self.assertTrue(self.motion.send(self.sample(),recipients=[members[0]]))

@@ -66,6 +66,7 @@ class ExperimentalTCPControl:
         self._reader_lease = None
         self._job_delivery_owner = None
         self._latest_motion = None
+        self._latest_source = None
 
     def enable_latest_motion(self, *, enabled=False, per_peer_limit=1024, timeout=30):
         """Opt in to pumpable motion on this owner's admitted sockets."""

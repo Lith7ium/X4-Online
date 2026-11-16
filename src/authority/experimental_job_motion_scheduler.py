@@ -19,7 +19,7 @@ class ExperimentalJobMotionScheduler:
             job.state!='idle' or motion.state!='ready' or
             job._scheduler_owner is not None or motion._scheduler_owner is not None):
             raise ValueError('incompatible job/motion owner contexts')
-        self._job=job;self._motion=motion;self._owner=threading.get_ident();self._state='ready';self._finished=False
+        self._job=job;self._motion=motion;self._owner=threading.get_ident();self._state='ready';self._finished=False;self._job_barrier=False
         job._scheduler_owner=self;motion._scheduler_owner=self
     @property
     def state(self):return self._state
@@ -31,31 +31,76 @@ class ExperimentalJobMotionScheduler:
         lease=object();bridge._scheduler_lease=lease
         try:return fn(*args,_scheduler=lease,**kwargs)
         finally:bridge._scheduler_lease=None
+    def _fence_queued_job(self,control):
+        if self._finished:return
+        readable,_,bad=select.select([self._job._sock],[],[self._job._sock],0)
+        if bad:raise RuntimeError('job source socket error')
+        if readable:
+            gate=control._latest_motion
+            if self._job_barrier or not (gate.blocked or gate.world_blocked):
+                self._job_barrier=True;control.motion_barrier()
+
     def step(self):
         if self._state!='ready' or threading.get_ident()!=self._owner:
             self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
         self._state='working'
         try:
+            control=self._motion._motion._delivery._host._control
+            if self._motion._latest:
+                # The existing host remains the sole TCP reader. One bounded
+                # pump per step keeps all peers progressing while X4 replies.
+                self._fence_queued_job(control)
+                self._motion._motion._delivery._host.tick(0)
+                if self._motion.state=='pulling':
+                    done,sample=self._call(self._motion,self._motion.poll_latest)
+                    self._fence_queued_job(control)
+                    self._state='ready'
+                    return ('motion',sample) if done else ('motion_pending',None)
+                world=self._motion._motion._delivery._host._world.session
+                if world.pending is not None or world.state!='running':
+                    self._state='ready';return ('world_pending',None)
             if not self._finished:
                 readable,_,bad=select.select([self._job._sock],[],[self._job._sock],0)
                 if bad:raise RuntimeError('job source socket error')
                 if readable:
+                    if self._motion._latest:
+                        gate=control._latest_motion
+                        if not self._job_barrier and (gate.blocked or gate.world_blocked):
+                            self._state='ready';return ('motion_fenced',None)
+                        self._job_barrier=True
+                        if not control.motion_barrier():
+                            self._state='ready';return ('motion_drain',None)
                     result=self._call(self._job,self._job.run_one,allow_finished=True)
                     if result is None:
-                        self._finished=True;self._state='ready';return ('job_snapshot_finished',None)
+                        self._finished=True
+                        if self._job_barrier:control.release_motion_barrier();self._job_barrier=False
+                        self._state='ready';return ('job_snapshot_finished',None)
                     if type(result) is not dict or result.get('source_ack_observed') is not True:
                         raise RuntimeError('source job not acknowledged')
                     event=job_event(result['event'])
                     if event['epoch']!=self._motion._epoch or event['generation']!=self._motion._generation:
                         raise ValueError('job and motion lineage mismatch')
                     self._call(self._motion,self._motion.bind_confirmed,event['index'])
+                    if self._job_barrier:control.release_motion_barrier();self._job_barrier=False
                     self._state='ready';return ('job',event)
+            if self._motion._latest:
+                if self._job_barrier:
+                    self._state='ready';return ('motion_drain',None)
+                started=self._call(self._motion,self._motion.begin_latest)
+                self._state='ready';return ('motion_pending' if started else 'motion_fenced',None)
             sample=self._call(self._motion,self._motion.pull)
             self._state='ready';return ('motion',sample)
         except BaseException:
             self._fail();raise
+    def _require_latest_barrier(self):
+        if self._motion._latest:
+            control=self._motion._motion._delivery._host._control
+            if not control._latest_motion.blocked or not control._motion_idle():
+                raise RuntimeError('drain explicit motion barrier before synchronous operation')
+
     def register_saved(self,index):
         """Request one explicitly fenced saved index on the same owner thread."""
+        self._require_latest_barrier()
         if self._state!='ready' or threading.get_ident()!=self._owner:
             self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
         self._state='working'
@@ -75,6 +120,7 @@ class ExperimentalJobMotionScheduler:
 
         Point checks cannot exclude a producer event that is not yet queued.
         """
+        if self._motion._latest:raise RuntimeError('use incremental step for latest motion')
         if self._state!='ready' or threading.get_ident()!=self._owner:
             self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
         self._state='working'
@@ -87,6 +133,7 @@ class ExperimentalJobMotionScheduler:
             self._fail();raise
     def preflight(self,sample):
         """Run a read-only preflight without consuming a queued job."""
+        self._require_latest_barrier()
         if self._state!='ready' or threading.get_ident()!=self._owner:
             self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
         self._state='working'
@@ -98,6 +145,7 @@ class ExperimentalJobMotionScheduler:
             self._fail();raise
     def apply_once(self,sample):
         """Apply one already-confirmed sample; failure may follow a side effect."""
+        self._require_latest_barrier()
         if self._state!='ready' or threading.get_ident()!=self._owner:
             self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
         self._state='working'

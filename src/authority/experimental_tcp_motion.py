@@ -128,10 +128,15 @@ class ExperimentalTCPMotion:
             full={(m['id'],m['incarnation']) for m in members}
             if len(full)!=len(handles) or full!={('peer_'+str(h),incarnations[h]) for h in handles}:
                 raise RuntimeError('motion membership changed')
+            # Only peers that confirmed a snapshot know this lifetime. A
+            # despawn must reach every such connected incarnation; sending it
+            # to an uninformed peer is invalid on the participant as well.
+            required=full.intersection(state['peer_samples']) if despawn else None
             if recipients is None:
-                selected=handles
+                selected=(tuple(h for h in handles if ('peer_'+str(h),incarnations[h]) in required)
+                          if despawn else handles)
             else:
-                if type(recipients) not in (tuple,list) or not recipients:
+                if type(recipients) not in (tuple,list) or (not recipients and not despawn):
                     raise ValueError('nonempty explicit motion recipients required')
                 wanted=set()
                 for peer in recipients:
@@ -141,6 +146,8 @@ class ExperimentalTCPMotion:
                     identity=(peer['id'],peer['incarnation'])
                     if identity in wanted or identity not in full:raise ValueError('duplicate or foreign motion recipient')
                     wanted.add(identity)
+                if despawn and wanted != required:
+                    raise ValueError('despawn requires every informed connected recipient')
                 selected=tuple(h for h in handles if ('peer_'+str(h),incarnations[h]) in wanted)
             if not despawn:
                 for h in selected:
@@ -198,7 +205,7 @@ class ExperimentalTCPMotion:
             d._active=False;host._busy=False
             if changed:raise RuntimeError('motion socket lease changed')
 
-    def enqueue_latest(self, raw, *, recipients=None, _source=None):
+    def enqueue_latest(self, raw, *, recipients=None, _source=None, _guard=None):
         """Queue a replaceable position for the existing control poll owner.
 
         Queueing is not receipt, delivery, X4 application, or interest discovery.
@@ -206,6 +213,7 @@ class ExperimentalTCPMotion:
         """
         self._reserved(_source)
         d=self._delivery;host=d._host;host._check();control=host._control
+        if _guard is not None and not callable(_guard):raise ValueError('invalid latest motion guard')
         latest=control._latest_motion
         if latest is None or self._failed or d._failed or d._active or d._test_binding is not None:
             raise RuntimeError('latest motion unavailable')
@@ -262,12 +270,13 @@ class ExperimentalTCPMotion:
                         active is not None and active['key']==key and active['sent']>0):
                     reserved.pop(identity,None)
             request_epoch=request['session_epoch']
-            entries.append((conn,peer,key,data,expected,accepted,discarded))
-        latest.enqueue(entries)
+            entries.append((conn,peer,key,data,expected,accepted,discarded,_guard))
+        survivors=latest.enqueue(entries)
         state['sequence']=value['sequence'];state['time']=value['source_time'];state['frame']=value['sector_macro']
-        for h in selected: reserved[('peer_'+str(h),incarnations[h])]=value['sector_macro']
+        for h in selected:
+            if peers[h][0] in survivors:reserved[('peer_'+str(h),incarnations[h])]=value['sector_macro']
         self._preflight=None
-        return True
+        return bool(survivors)
 
     def apply_once(self,raw,*,guard=None,_source=None):
         """Opt-in one-peer apply/readback after an exactly confirmed motion sample.

@@ -40,16 +40,21 @@ def bind_participant_motion(sock, *, process, lease, attempt, epoch, generation,
 
 
 def bind_source_motion(sock, motion, *, process, lease, attempt, epoch, generation, guard, timeout=30, validate_sample=None,
-                       saved_baseline=None, saved_guard=None):
+                       saved_baseline=None, saved_guard=None, latest=False, select_recipients=None, saved_lifetime_guard=None):
     """Bind one source X4 peer, then retain PID/inode checks on every pull.
 
     Caller proves the source belongs to its owned session and enforces the
     required game state before allowing pulls. Failure requires global fencing.
     """
+    if (type(latest) is not bool or (latest and not callable(select_recipients)) or
+        (saved_lifetime_guard is not None and (not latest or saved_guard is None or not callable(saved_lifetime_guard))) or
+        (latest and saved_guard is not None and not callable(saved_lifetime_guard))):
+        raise ValueError('invalid latest source guard or interest selector')
     context,peer=_guards(sock,process,guard)
     bound=bind_source(sock,process=process,lease=lease,attempt=attempt,epoch=epoch,
                       generation=generation,guard=context,timeout=timeout)
     if bound is not sock:raise RuntimeError('source motion socket handoff mismatch')
     return ExperimentalSourceMotionIPC(sock,motion,enabled=True,lease=lease,attempt=attempt,
                     epoch=epoch,generation=generation,guard=context,validate_peer=peer,timeout=timeout,validate_sample=validate_sample,
-                    saved_baseline=saved_baseline,saved_guard=saved_guard)
+                    saved_baseline=saved_baseline,saved_guard=saved_guard,latest=latest,select_recipients=select_recipients,
+                    saved_lifetime_guard=saved_lifetime_guard)
