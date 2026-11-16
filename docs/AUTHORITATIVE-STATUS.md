@@ -162,6 +162,16 @@ Native Linux evidence so far:
   references were observed on the client. This is a bounded reconnect chain,
   not a real player logout, continued-session or gameplay test.
 
+A bounded two-process Linux diagnostic now joins a real X4 job activation to
+a client-side creation through source IPC, loopback TCP and client UDP. The
+X4 logs record source progress and client application of index 10055; the
+worker/coordinator result and code establish the correlated TCP receipt and
+source acknowledgement, without a packet trace. Admission and checkpoint
+were synthetic and the client creation used an artificial seed. Activation
+does not prove birth, the descriptor is non-atomic, and cross-process frame
+identity is unproven. This single-event result is not gameplay, Windows or
+Internet validation. See [the diagnostic](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

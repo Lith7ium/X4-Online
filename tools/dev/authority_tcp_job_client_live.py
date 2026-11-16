@@ -102,7 +102,10 @@ class SyntheticEngine:
     def save(self): self.path.write_bytes(gzip.compress(_XML.encode()));return self.path
 
 
-def run(participant_udp,job_udp,control,c,event):
+def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_guard=None):
+    if delivery_action is not None and not callable(delivery_action):raise ValueError('invalid delivery action')
+    if extra_guard is not None and not callable(extra_guard):raise ValueError('invalid extra guard')
+    job_epoch=event['epoch'] if event is not None else c['job_epoch']
     validate_udp(participant_udp);validate_udp(job_udp)
     if participant_udp.getsockname()==job_udp.getsockname(): raise ValueError('distinct UDP sockets required')
     if control.family!=socket.AF_UNIX or control.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM:
@@ -111,6 +114,7 @@ def run(participant_udp,job_udp,control,c,event):
     def guard():
         if time.monotonic()>=deadline: raise TimeoutError('worker deadline')
         check_process(process)
+        if extra_guard is not None and extra_guard() is not True:raise RuntimeError('additional process guard failed')
         readable,_,bad=select.select([control],[],[control],0)
         if readable or bad: raise RuntimeError('parent control changed')
         return True
@@ -165,7 +169,7 @@ def run(participant_udp,job_udp,control,c,event):
                             if not peer_guard(participant_peer,participant_udp): raise RuntimeError('control peer changed')
                             return r
                     bridge=ExperimentalParticipantJobIPC(job_udp,enabled=True,lease=c['lease'],attempt=c['attempt'],
-                        epoch=event['epoch'],generation=c['generation'],guard=guard,
+                        epoch=job_epoch,generation=c['generation'],guard=guard,
                         validate_peer=lambda p:peer_guard(p,job_udp),timeout=min(20,deadline-time.monotonic()-2))
                     adapter=ExperimentalTCPParticipantClient(client,GuardedControl(),enabled=True,epoch=c['epoch'],handle=handle,
                                                               timeout=min(25,deadline-time.monotonic()-1),apply_job=bridge)
@@ -192,15 +196,20 @@ def run(participant_udp,job_udp,control,c,event):
                 guard()
                 if peer!=members[0] or received!=event or seen:return False
                 seen.append(peer);return True
-            if delivery.deliver(event,members,ack) is not True or seen!=list(members):
-                raise RuntimeError('TCP job receipt missing')
+            if delivery_action is None:
+                if delivery.deliver(event,members,ack) is not True or seen!=list(members):
+                    raise RuntimeError('TCP job receipt missing')
+                result={'event':'result','ok':True,'tcp_admitted':True,'tcp_job_receipt':True,
+                        'x4_md_ffi_asserted_by_owner':True,'synthetic_server_and_checkpoint':True,
+                        'checkpoint_offered_to_x4':False,'event_sequence':event['sequence'],'index':event['index']}
+            else:
+                result=delivery_action(delivery,members,guard)
+                if type(result) is not dict:raise RuntimeError('invalid source delivery result')
             guard()
             if failure:raise RuntimeError('participant thread failed')
             stop.set();thread.join(3)
             if thread.is_alive() or failure:raise RuntimeError('participant cleanup failed')
-            return {'event':'result','ok':True,'tcp_admitted':True,'tcp_job_receipt':True,
-                    'x4_md_ffi_asserted_by_owner':True,'synthetic_server_and_checkpoint':True,
-                    'checkpoint_offered_to_x4':False,'event_sequence':event['sequence'],'index':event['index']}
+            return result
         finally:
             errors=[];stop.set()
             if client is not None:

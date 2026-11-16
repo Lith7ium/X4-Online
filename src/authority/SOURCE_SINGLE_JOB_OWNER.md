@@ -56,11 +56,11 @@ network and two clients. It checks peer binding, rejection of an existing
 registry entry, no source Ack after only the first client, the separate MD Ack
 and no second head before REARM. Existing host fake-ABI tests also check the
 new optional callback guard. These are offline tests; no native X4 source,
-client delivery, Windows, Internet or gameplay is established by them. An
-installer, process supervisor and full end-to-end native connection remain
-separate work; this module must not be reported as a complete multiplayer path.
+client delivery, Windows, Internet or gameplay is established by them. The bounded source-to-client diagnostic is described in
+[its result record](../../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md); this module
+is not a complete multiplayer path.
 
-### Private source session for the pending TCP experiment
+### Private source session for the TCP diagnostic
 
 `tools/dev/authority_source_single_job_install.py` stages a separate, explicitly
 opted-in source extension in a private profile. Its session runs from the
@@ -84,5 +84,5 @@ witness, a timeout, or a failed guard cannot be counted as successful delivery.
 the control ordering, and the actual session with the actual source owner, IPC
 and gate; the latter test still simulates the host, MD, descriptor, transport
 and X4 ABI. These tests do not demonstrate a real source-to-client transfer.
-The planned diagnostic retains synthetic session/checkpoint admission and an
+The diagnostic retains synthetic session/checkpoint admission and an
 explicit client creation seed; it is not a Windows, Internet or gameplay test.
