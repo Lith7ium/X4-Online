@@ -6,12 +6,15 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tests'), str(ROOT/'tools/dev')]
 from authority.checkpoints import CheckpointStore
 from authority.experimental_local_host import ExperimentalLocalHost
+from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
 from authority.local_control_bridge import LocalControlBridge
 from authority.save_transfer import SaveOffers
@@ -83,6 +86,162 @@ class HostTest(unittest.TestCase):
         with self.assertRaises(TimeoutError): self.host.tick()
         with self.assertRaisesRegex(RuntimeError, 'fence all'): self.host.tick()
         self.assertEqual(self.world.session.state, 'faulted')
+
+    def test_slow_host_save_preserves_only_the_remaining_idle_time(self):
+        clock = [100.0]
+        with patch('time.monotonic', side_effect=lambda: clock[0]):
+            self.host.tick()  # initial pause
+            client = socket.create_connection(self.listener.getsockname(), timeout=1)
+            self.addCleanup(client.close)
+            conn, _ = self.listener.accept(); self.host.adopt(conn)
+            peer = self.control._peers[conn]
+            initial_deadline = peer['deadline']
+            clock[0] += 4
+            original_save = self.engine.save
+            def slow_save():
+                clock[0] += 40
+                return original_save()
+            self.engine.save = slow_save
+            self.host.tick()
+            self.assertEqual(peer['deadline'], initial_deadline + 40)
+            self.assertEqual(peer['host_blocked_grace'], 40)
+            self.assertIn(conn, self.control._peers)
+            clock[0] = peer['deadline']
+            self.control.poll()
+            self.assertNotIn(conn, self.control._peers)
+
+    def test_save_grace_does_not_hide_disconnect(self):
+        clock = [100.0]
+        with patch('time.monotonic', side_effect=lambda: clock[0]):
+            self.host.tick()
+            client = socket.create_connection(self.listener.getsockname(), timeout=1)
+            self.addCleanup(client.close)
+            conn, _ = self.listener.accept(); self.host.adopt(conn)
+            original_save = self.engine.save
+            def slow_save():
+                client.shutdown(socket.SHUT_WR)
+                clock[0] += 40
+                return original_save()
+            self.engine.save = slow_save
+            self.host.tick()
+            self.control.poll(.1)
+            self.assertNotIn(conn, self.control._peers)
+            self.assertEqual(self.world.session.players, ())
+
+    def test_remote_client_is_admitted_after_save_exceeds_idle_timeout(self):
+        # Real loopback control and file sockets, with fake engine/observations.
+        # Keep the accepted control socket open until the owner checks state.
+        self.control._timeout = 1.0
+        self.host.tick()
+        remote = socket.create_connection(self.listener.getsockname(), timeout=2)
+        conn, _ = self.listener.accept(); handle = self.host.adopt(conn)
+        start_client = threading.Event(); done = threading.Event(); release = threading.Event()
+        results = []; errors = []; save_times = []
+        original_save = self.engine.save
+        def slow_save():
+            started = time.monotonic()
+            time.sleep(1.25)
+            value = original_save()
+            save_times.append(time.monotonic() - started)
+            return value
+        self.engine.save = slow_save
+        def run_client():
+            client = None; accepted = None
+            try:
+                client = ExperimentalRemoteLoadClient(remote, enabled=True, file_host='127.0.0.1',
+                    file_port=self.service.port, file_token='a'*32, file_slot=1,
+                    deadline=time.monotonic()+8, io_timeout=3)
+                start_client.set()
+                bound = client.request_offer()
+                path = client.download(Path(self.temp.name)/'client-download')
+                client.verify_staged(path)
+                attempt = bound.offer.attempt_id
+                client.load_requested(attempt)
+                client.loaded_marker(attempt, bound.marker)
+                client.paused(attempt, True)
+                client.claim(attempt)
+                accepted = client.take_connection()
+                results.append((bound, path.read_bytes()))
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                done.set()
+                release.wait(5)
+                if accepted is not None: accepted.close()
+                if client is not None: client.close()
+                else: remote.close()
+        worker = threading.Thread(target=run_client, daemon=True); worker.start()
+        try:
+            self.assertTrue(start_client.wait(2))
+            self.host.tick()  # save blocks the socket pump longer than idle timeout
+            end = time.monotonic() + 6
+            while not done.is_set() and time.monotonic() < end:
+                self.host.tick(.05)
+            self.assertTrue(done.is_set())
+            self.assertFalse(errors, repr(errors))
+            self.assertEqual(len(results), 1)
+            bound, downloaded = results[0]
+            self.assertGreater(save_times[0], self.control._timeout)
+            self.assertEqual(bound.offer.connection_handle, handle)
+            self.assertEqual(downloaded, self.world._baseline[1].path.read_bytes())
+            self.assertEqual(tuple(h for h, _ in self.world.session.ready_players), (handle,))
+            self.assertEqual(self.world.session.state, 'running')
+            self.assertGreater(self.control._peers[conn]['host_blocked_grace'], self.control._timeout)
+        finally:
+            release.set(); worker.join(3)
+        self.assertFalse(worker.is_alive())
+
+    def test_synchronous_action_grace_is_cumulative_and_bounded(self):
+        clock = [100.0]
+        with patch('time.monotonic', side_effect=lambda: clock[0]):
+            self.host.tick()
+            client = socket.create_connection(self.listener.getsockname(), timeout=1)
+            self.addCleanup(client.close)
+            conn, _ = self.listener.accept(); self.host.adopt(conn)
+            peer = self.control._peers[conn]
+            original_deadline = peer['deadline']
+            self.control._account_host_blocked(100, 300)
+            self.control._account_host_blocked(300, 500)
+            self.assertEqual(peer['host_blocked_grace'], 300)
+            self.assertEqual(peer['deadline'], original_deadline + 300)
+            clock[0] = peer['deadline']
+            self.control.poll()
+            self.assertNotIn(conn, self.control._peers)
+
+    def test_peer_expiring_after_poll_before_dispatch_gets_no_grace(self):
+        clock = [100.0]
+        with patch('time.monotonic', side_effect=lambda: clock[0]):
+            self.host.tick()
+            client = socket.create_connection(self.listener.getsockname(), timeout=1)
+            self.addCleanup(client.close)
+            conn, _ = self.listener.accept(); self.host.adopt(conn)
+            peer = self.control._peers[conn]
+            self.control.poll()
+            deadline = peer['deadline']
+            self.control._account_host_blocked(deadline, deadline + 40)
+            self.assertEqual(peer['deadline'], deadline)
+            self.assertEqual(peer['host_blocked_grace'], 0)
+            clock[0] = deadline + 40
+            self.control.poll()
+            self.assertNotIn(conn, self.control._peers)
+
+    def test_failed_save_does_not_credit_a_peer_and_fences_host(self):
+        clock = [100.0]
+        with patch('time.monotonic', side_effect=lambda: clock[0]):
+            self.host.tick()
+            client = socket.create_connection(self.listener.getsockname(), timeout=1)
+            self.addCleanup(client.close)
+            conn, _ = self.listener.accept(); self.host.adopt(conn)
+            peer = self.control._peers[conn]
+            deadline = peer['deadline']
+            def fail_save():
+                clock[0] += 40
+                raise TimeoutError('uncertain save')
+            self.engine.save = fail_save
+            with self.assertRaisesRegex(TimeoutError, 'uncertain save'): self.host.tick()
+            self.assertEqual(peer['deadline'], deadline)
+            self.assertEqual(peer['host_blocked_grace'], 0)
+            with self.assertRaisesRegex(RuntimeError, 'fence all'): self.host.tick()
 
     def test_engine_callback_cannot_reenter_host(self):
         self.engine.pause = lambda: self.host.tick()

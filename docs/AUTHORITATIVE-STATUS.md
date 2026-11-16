@@ -23,12 +23,28 @@ the caller-owned download directory when a late deadline check fails. Offline
 and loopback socket tests cover this behavior, not a Windows or Internet join.
 The experimental remote client now retries the server's explicit `not_ready`
 offer response and waits for that response until the existing overall load
-deadline. A synchronous server pause/save or a long download can still exceed
-the independent server idle timeout; end-to-end joining remains unproven.
+deadline. The local host now compensates the control idle deadline for time
+spent inside synchronous pause/save, capped at 300 seconds total per connection;
+peers already expired at dispatch receive no extension. A failed action fences
+the host without applying grace. EOF and admission are still checked. Longer
+blocked operations, downloads, or client-side loading can still exceed the
+independent server idle timeout;
+end-to-end joining remains unproven. A local-socket test combines a fake save
+longer than the idle timeout with the real remote-load client, real file
+transfer and a trusted synthetic load claim through admission and resume. This
+is fake-engine coverage, not a native or Internet test.
+In a separate local-socket, simulated-download reproduction, the control
+connection expired while the client was blocked on the file operation, which
+then returned a path anyway. A complete keepalive must also cover waiting for
+X4 load events and hash verification; the current single-owner remote client
+is not yet wired to a runnable client. No partial keepalive is implied here.
 The native UDP library's build tool now writes only to an explicitly selected
 new directory. A local Windows crossbuild produced a PE DLL with the Lua entry
 point and Windows monotonic clock imports; loading that DLL in Windows X4 and
-binding it to an authoritative session have not been tested.
+binding it to an authoritative session have not been tested. The opt-in local
+UDP loader chooses the platform-specific filename; its Windows path has only
+simulated coverage and the diagnostic installer remains Linux-specific. See
+[local UDP selection](../tools/dev/AUTHORITY-LOCAL-UDP-MODULE.md).
 For a high-attention area, the user confirmed that if its responsible player
 leaves or disconnects, another player present in that area should take over;
 if none is present, responsibility returns to the server. The handover

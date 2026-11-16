@@ -17,6 +17,9 @@ from .trusted_load_messages import decode_load_claim, encode_bound_offer
 from .trusted_marker_load_session import TrustedMarkerLoadSession
 
 _REQUEST = b'{"version":1,"kind":"offer_request"}\n'
+# A peer may recover at most this much time over its entire connection when
+# the host itself cannot pump sockets during synchronous world actions.
+_MAX_HOST_BLOCKED_GRACE = 300.0
 
 
 def offer_request():
@@ -94,7 +97,8 @@ class ExperimentalTCPControl:
         try:
             handle = self._session.attach(conn)
             self._peers[conn] = {'handle': handle, 'in': b'', 'out': b'', 'stage': 'attached',
-                                 'deadline': time.monotonic() + self._timeout}
+                                 'deadline': time.monotonic() + self._timeout,
+                                 'host_blocked_grace': 0.0}
         except BaseException as error:
             # attach may have succeeded even if control was interrupted
             # before the new connection could be recorded here.
@@ -102,6 +106,27 @@ class ExperimentalTCPControl:
             except BaseException: pass
             self._fatal(error)
         return handle
+
+    def _account_host_blocked(self, started, ended):
+        """Compensate bounded host-owned I/O starvation, never peer activity.
+
+        Called only after a successfully completed synchronous pause or save,
+        immediately following a poll which expired old peers. A peer expiring
+        after that poll but before the operation starts receives no credit.
+        The cumulative allowance is per connection and is not renewed by frames.
+        EOF, unread data, and the usual admission checks still apply.
+        """
+        self._owner()
+        self._reader_free()
+        elapsed = ended - started
+        if not math.isfinite(elapsed) or elapsed < 0:
+            raise RuntimeError('invalid host blocked interval')
+        for peer in self._peers.values():
+            if peer['deadline'] is None or peer['deadline'] <= started:
+                continue
+            credit = min(elapsed, max(0.0, _MAX_HOST_BLOCKED_GRACE - peer['host_blocked_grace']))
+            peer['deadline'] += credit
+            peer['host_blocked_grace'] += credit
 
     def _drop(self, conn):
         try:

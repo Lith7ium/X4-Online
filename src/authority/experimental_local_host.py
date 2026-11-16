@@ -5,6 +5,7 @@ it owns cleanup, serializes all access, and supplies real participant controls
 before using real clients. No X4 process or network listener is started here.
 """
 import socket
+import time
 
 from lockstep.launcher.joinfiles import FileService
 from .experimental_tcp_control import ExperimentalTCPControl
@@ -16,6 +17,10 @@ class ExperimentalLocalHost:
 
     This is an integration seam, not a runnable server. Bridge actions are
     synchronous and may block the owner's network pumping until they finish.
+    Pause/save compensate peer idle deadlines for that blocked time, up to
+    300 seconds in total per connection. This allowance is not a heartbeat or
+    a guarantee of peer liveness and does not cover download or client loading.
+    A failed action receives no compensation and fences the host.
     After an indeterminate exception all components must be fenced/discarded.
     """
     def __init__(self, world, control, service, *, enabled=False):
@@ -75,6 +80,11 @@ class ExperimentalLocalHost:
                 return None
             if pending.operation == 'resume' and not self._control.ready_for_resume():
                 return None
+            if pending.operation in ('pause', 'save'):
+                started = time.monotonic()
+                result = self._world.step()
+                self._control._account_host_blocked(started, time.monotonic())
+                return result
             return self._world.step()
         except BaseException:
             self._failed = True
