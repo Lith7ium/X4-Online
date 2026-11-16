@@ -1,8 +1,45 @@
 # Private display feasibility (investigation only)
 
-There is no runnable private-display experiment in this change. Do not use the
-existing input helper on the strength of the observations below. No display,
-X4 process, or input was started for this investigation.
+Do not use the existing input helper on the strength of the observations
+below. A bounded Xvfb display probe was run without X4, windows or input;
+it is not an integrated display or flight-test supervisor.
+
+## Bounded Fedora Xvfb probe
+
+Fedora 45 `xorg-x11-server-Xvfb` and `xorg-x11-server-common`, both
+`21.1.26-1.fc45.x86_64`, were downloaded from the configured Fedora
+repositories and verified with the installed Fedora 45 signing key before
+private extraction. `rpmkeys --checksig --verbose` reported valid OpenPGP
+signatures and header and payload SHA256 digests. RPM SHA256 values were:
+
+* Xvfb: `8622edecc6ff0084e4f13e631db07cedb9ba902375e2f64f969e7244417a5a34`
+* Common: `1706e06e9594c1f0b3550e64963a85eb9ace5f3279eab482a8373301fba9b7a7`
+
+Both were extracted under `.local/xvfb-fedora-45.AoId7Mk9/root`; this did
+not install packages or map their absolute filesystem paths. All dynamic
+libraries in the extracted Xvfb binary resolved with `ldd`; Xvfb's declared
+common package is not installed in the system RPM database. The native probe
+and its result are `.local/xvfb-probe-01/probe.py` and `result.json`.
+
+The probe started that Xvfb in its own process group with a randomly selected
+display number, a private mode-0700 directory, fresh separate mode-0600
+correct and incorrect cookie files, and `-nolisten tcp`. `xdpyinfo` connected
+with the correct cookie. With a wrong cookie, and separately without
+`XAUTHORITY` under a private `HOME` without a default `.Xauthority`, the
+probe classified both failures as explicit authentication rejection. Probe
+stderr was classified in memory and was not saved separately, so those raw
+messages cannot be independently inspected afterward.
+
+Before and after probes, the matching Unix-path and abstract X11 socket inodes
+were found among file descriptors of the expected Xvfb process. This is a
+sampled ownership check: the parser did not check the listener flag or handle
+multiple entries for the same socket path. TCP absence was not separately
+verified. The owned server exited and was reaped; no process-group members or
+matching socket paths remained. The server log records XKB warnings and an
+AMDGPU initialization warning. This probe demonstrates neither X4 or Vulkan
+operation nor window PID, focus, keymap, input delivery or safe integration of
+the input helper. Signal handling covered normal termination signals, not an
+unrecoverable supervisor kill or machine failure.
 
 The installed `Xwayland -help` lists `-auth file` and `-displayfd fd`.
 The installed `kwin_wayland --help` lists `--virtual`, `--xwayland`, and
@@ -41,5 +78,5 @@ PID property and focus. All probes must be reaped, cleanup failures remain
 unconfirmed, and no normal desktop access, X4, keyboard, or mouse input is
 allowed. The checks are sampled and do not establish adversarial atomicity.
 
-Until a concrete adapter meets those conditions, native readiness and private
-authentication remain unproven; the experiment must fail closed.
+Until a concrete adapter meets those conditions and the ownership gaps above
+are closed, input-helper readiness remains unproven; it must fail closed.
