@@ -10,6 +10,7 @@ import time
 import unittest
 
 from tests import test_authority_experimental_tcp_motion as fixture
+from tests import test_authority_experimental_tcp_participants as participant_fixture
 from authority.experimental_source_motion_ipc import ExperimentalSourceMotionIPC
 from authority.experimental_tcp_job_delivery import ExperimentalTCPJobDelivery
 from authority.experimental_tcp_motion import ExperimentalTCPMotion, motion_digest
@@ -28,20 +29,23 @@ SECTOR_B_TRACK = 10056
 
 class SourceLatestTwoSectors(unittest.TestCase):
     def setUp(self):
-        self.motion_fixture = fixture.MotionTCP('test_invalid_values_and_no_fake_velocity')
-        self.addCleanup(self.cleanup_motion_fixtures)
-        self.motion_fixture.setUp()
-        self.session_fixture = self.motion_fixture.case
+        # Reuse the fixture methods on this running TestCase so their public
+        # addCleanup calls are reported by the normal unittest result.
+        participant_fixture.ParticipantTCPTest.setUp(self)
+        self.stop = threading.Event()
+        self.threads = []
+        self.errors = []
+        self.received = []
+        self.expected_disconnect = set()
         self.release_slow_receipt = threading.Event()
+        first = participant_fixture.ParticipantTCPTest.connect(self)
+        second = participant_fixture.ParticipantTCPTest.connect(self)
+        self.addCleanup(fixture.MotionTCP.finish, self)
         self.addCleanup(self.release_slow_receipt.set)
-        first = self.session_fixture.connect()
-        second = self.session_fixture.connect()
-        self.session_fixture.offer_and_claim(first)
-        self.session_fixture.offer_and_claim(second)
-        self.motion_fixture.client(first, 1)
+        participant_fixture.ParticipantTCPTest.offer_and_claim(self, first)
+        participant_fixture.ParticipantTCPTest.offer_and_claim(self, second)
+        fixture.MotionTCP.client(self, first, 1)
         self.start_slow_participant(second)
-        self.host = self.session_fixture.host
-        self.control = self.session_fixture.control
         self.host.tick(.1)
         self.control.enable_latest_motion(enabled=True, timeout=PEER_TIMEOUT)
         self.delivery = ExperimentalTCPJobDelivery(self.host, enabled=True, timeout=PEER_TIMEOUT)
@@ -74,32 +78,6 @@ class SourceLatestTwoSectors(unittest.TestCase):
         self.bridge.bind_confirmed(SECTOR_A_TRACK)
         self.bridge.bind_confirmed(SECTOR_B_TRACK)
 
-    def cleanup_motion_fixtures(self):
-        # These fixtures are created manually, so unittest has not attached a
-        # result to either TestCase. Share one result for both cleanup stacks:
-        # unittest then records errors and continues the remaining cleanups.
-        result = unittest.TestResult()
-        fixtures = [self.motion_fixture]
-        session_fixture = getattr(self.motion_fixture, 'case', None)
-        if session_fixture is not None:
-            fixtures.append(session_fixture)
-        for nested_fixture in fixtures:
-            nested_fixture._outcome = unittest.case._Outcome(result)
-        try:
-            try:
-                self.motion_fixture.doCleanups()
-            finally:
-                # Also cover a partially failed setup before the outer
-                # fixture registered the inner fixture's cleanup.
-                if session_fixture is not None:
-                    session_fixture.doCleanups()
-        finally:
-            for nested_fixture in fixtures:
-                nested_fixture._outcome = None
-        if not result.wasSuccessful():
-            details = '\n'.join(trace for _, trace in result.failures + result.errors)
-            self.fail('nested fixture cleanup failed:\n' + details)
-
     def start_slow_participant(self, connection):
         """Hold the actual participant callback until the test releases it."""
         def run():
@@ -115,22 +93,22 @@ class SourceLatestTwoSectors(unittest.TestCase):
                     raise RuntimeError('unexpected admission')
 
                 def accept(sample, despawn):
-                    self.motion_fixture.received.append((2, dict(sample), despawn))
+                    self.received.append((2, dict(sample), despawn))
                     return self.release_slow_receipt.wait(PEER_TIMEOUT)
 
                 participant = ExperimentalTCPParticipantClient(
                     connection, fixture.Controller(), enabled=True, epoch='a' * 32,
                     handle=2, timeout=PEER_TIMEOUT, apply_motion=accept, apply_job=lambda _: True,
                 )
-                while not self.motion_fixture.stop.is_set():
+                while not self.stop.is_set():
                     participant.poll(.05)
                 participant.close()
             except BaseException as error:
-                if not self.motion_fixture.stop.is_set() and 2 not in self.motion_fixture.expected_disconnect:
-                    self.motion_fixture.errors.append(error)
+                if not self.stop.is_set() and 2 not in self.expected_disconnect:
+                    self.errors.append(error)
 
         thread = threading.Thread(target=run)
-        self.motion_fixture.threads.append(thread)
+        self.threads.append(thread)
         thread.start()
 
     def wait_for(self, predicate, timeout=TEST_TIMEOUT):
@@ -161,7 +139,7 @@ class SourceLatestTwoSectors(unittest.TestCase):
         original_second = dict(self.recipients['sector_b'])
         slow = self.sample(SECTOR_B_TRACK, 1, 'sector_b', ['-', '-', '-'])
         self.assertIsNone(slow['velocity'])
-        self.wait_for(lambda: any(handle == 2 for handle, _, _ in self.motion_fixture.received))
+        self.wait_for(lambda: any(handle == 2 for handle, _, _ in self.received))
 
         fast = self.sample(SECTOR_A_TRACK, 1, 'sector_a', ['10', '0', '0'])
         self.assertEqual(fast['velocity'], {'x': 10.0, 'y': 0.0, 'z': 0.0})
@@ -175,16 +153,18 @@ class SourceLatestTwoSectors(unittest.TestCase):
         self.assertNotIn(slow_identity, slow_track['peer_samples'])
         self.release_slow_receipt.set()
         self.wait_for(self.control._motion_idle)
-        self.assertEqual([(handle, sample['sector_macro']) for handle, sample, _ in self.motion_fixture.received],
+        self.assertEqual([(handle, sample['sector_macro']) for handle, sample, _ in self.received],
                          [(2, 'sector_b'), (1, 'sector_a')])
 
-        self.motion_fixture.expected_disconnect.add(2)
+        self.expected_disconnect.add(2)
         old_socket = next(conn for conn, peer in self.control._peers.items() if peer['handle'] == 2)
         self.control._drop(old_socket)
-        replacement = self.session_fixture.connect()
+        replacement = participant_fixture.ParticipantTCPTest.connect(self)
+        # Mark teardown before closing this socket; thread joining follows later.
+        self.addCleanup(self.stop.set)
         self.host.tick(.1)
-        self.session_fixture.offer_and_claim(replacement)
-        self.motion_fixture.client(replacement, 3)
+        participant_fixture.ParticipantTCPTest.offer_and_claim(self, replacement)
+        fixture.MotionTCP.client(self, replacement, 3)
         self.host.tick(.1)
         # A subsequent host tick releases the world lifecycle barrier.
         self.host.tick(0)
@@ -192,7 +172,7 @@ class SourceLatestTwoSectors(unittest.TestCase):
         self.assertNotEqual(self.recipients['sector_b']['incarnation'], original_second['incarnation'])
 
         self.sample(SECTOR_B_TRACK, 2, 'sector_b', ['-', '-', '-'])
-        self.wait_for(lambda: any(handle == 3 for handle, _, _ in self.motion_fixture.received))
+        self.wait_for(lambda: any(handle == 3 for handle, _, _ in self.received))
         self.wait_for(self.control._motion_idle)
         self.assertNotIn(slow_identity, slow_track['peer_samples'])
 
@@ -203,7 +183,7 @@ class SourceLatestTwoSectors(unittest.TestCase):
         }
         with self.assertRaises(ValueError):
             self.sample(SECTOR_B_TRACK, 3, 'sector_b', ['-', '-', '-'])
-        self.assertEqual([sample['sequence'] for handle, sample, _ in self.motion_fixture.received if handle == 3], [2])
+        self.assertEqual([sample['sequence'] for handle, sample, _ in self.received if handle == 3], [2])
 
 
 if __name__ == '__main__':
