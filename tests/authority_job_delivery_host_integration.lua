@@ -15,7 +15,7 @@ local function pump()
   local item=table.remove(queue,1);assert(handlers[item[1]],item[1])(nil,item[2])
  end
 end
-gate=assert(delivery.new({enabled=true,generation=generation,timeout=5,clock=function() return now end,
+gate=assert(delivery.new({enabled=true,generation=generation,timeout=3,clock=function() return now end,
  membership=function() return peers end,
  send=function(peer,event) outbox[peer.id]={peer=peer,event=event};return true end,
  release=function(e,s,i) assert(e==epoch and s==1 and i==1);return host:confirm_delivery(e,s,i) end}))
