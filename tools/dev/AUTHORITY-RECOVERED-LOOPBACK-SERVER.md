@@ -653,6 +653,23 @@ times do not measure the helper's internal hash time or prove a general
 performance result. No samples or client receipts were recorded, and the
 supervisor reported no remaining owned X4 processes.
 
+The ninth attempt, `.local/authority-motion-client-once-09`, selected registry
+index 687 from two candidate indices correlated with stored fixture references.
+It completed the source diagnostic: two ordered source samples received
+matching client receipts after client-local binding and buffer insertion, and
+the source and client worker confirmed STOP before departure. Both recorded
+positions were equal; neither sample contained velocity. Their source game
+times were about 230.6 s apart, beyond the configured one-second velocity
+estimation window. The sample-collection phase took 463.04 s of wall time.
+This does not establish visible or smooth movement, the same ship identity
+across X4 processes, or playable synchronization.
+
+The overall attempt failed after the last client left and the server paused and
+saved: saved-registry validation reported `registered components missing`.
+The new save was published as `CURRENT` but not confirmed; `CONFIRMED` remained
+the earlier join baseline. The error alone does not establish which registry
+entries are missing or why. The result reported no owned X4 processes remaining.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
