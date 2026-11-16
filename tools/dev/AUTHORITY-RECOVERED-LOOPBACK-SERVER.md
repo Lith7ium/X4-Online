@@ -590,6 +590,22 @@ which registry-descriptor validation or callback failed. The supervisor
 reported no remaining owned X4 processes. This is not evidence of client
 motion, common ship identity, visible movement or gameplay.
 
+The fifth attempt, `.local/authority-motion-client-once-05`, added fixed
+non-secret diagnostic phases to the same path. The server reported
+`router_event_bootstrap_md_unavailable` during source registration after the
+candidate selection. The MD descriptor reports this status for several
+different failed predicates, so the specific cause is not yet established.
+The result recorded no motion samples or receipts and reported no remaining
+owned X4 processes.
+
+The recovery-client overlay now uses the platform-specific local UDP library
+selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
+PE DLL exporting `luaopen_x4lan_net` (SHA-256
+`00d54b9aa4ad633e4d579bf2405f7c103b2eeed184c94f40685fbf3cca9d6652`).
+Platform selection has only been exercised with simulated Lua platform
+values. Windows save paths and the Windows process lifecycle remain unsupported
+by this recovery diagnostic; the DLL has not been run under Windows or X4.
+
 An isolated offline benchmark used the Source IPC lifecycle over local UDP/TCP
 with a simulated source and client, real pidfd guard transport and the four
 existing `authority-witness-join-once-06` compressed saves (26,183,913 and
