@@ -510,8 +510,20 @@ completed witness was still being ticked with a pause requirement, so its
 error stopped the bridge; cleanup reported no owned processes remaining. The
 private join now stops ticking that one-time witness after `done`, while a
 failed state or unexpected event still faults. Standalone witness diagnostics
-retain their pause checks. Offline tests cover the generated probe; a successful
-native resume and disconnect save remain to be demonstrated.
+retain their pause checks. Offline tests cover the generated probe; that run
+did not demonstrate a successful native resume or disconnect save.
+
+With the join-only resume fix, isolated Linux run
+`.local/authority-witness-join-once-06` completed the private loopback cycle.
+The outer result records an admitted TCP claim, native server and client resume,
+then pause, a fresh marked save, checkpoint confirmation and owned-process
+cleanup. The client observation reported registry epoch
+`4ba7be438ebb04ec5bb85fdb95b5a488` and 10,082 entries. The final confirmed
+checkpoint is `checkpoint-451677124a0b41a8812a6ad894117fa2`, SHA-256
+`065820976ce4fe0863e6e06d499179acf37a2fa45c1b91186535755b39f34312`.
+The result remains scoped to a private single-client Linux experiment: the
+client witness, historical and cross-process ship identity, exact bytes loaded
+by X4, actual gameplay, Windows and Internet are not proven.
 
 The `verify` witness path uses a pinned source guard after its full initial
 validation. Repeated checks hash the compressed source and inspect the
