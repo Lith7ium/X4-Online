@@ -307,3 +307,11 @@ requests. Its helper cleanup uses a verified pidfd and requires exclusive
 ownership of the process's descriptor table. These pieces are not yet wired
 into the recovery supervisor. Their timing and sustained throughput with a
 large native save have not been measured.
+
+`authority_registry_motion_candidate.lua` and its MD counterpart prepare a
+bounded read-only search for a single saved-registry index in the live source.
+They reject player-related ships and require consistent registry, operational,
+sector and docking observations. This is only a point-in-time candidate: it
+does not prove motion, reserve the ship, or replace the source bootstrap's
+checks. The selector is not installed in the supervisor or verified in X4;
+the current diagnostic still requires an explicit index.
