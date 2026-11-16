@@ -78,9 +78,11 @@ Native Linux evidence so far:
   teleport and reported two guarded matching local player-control readbacks
   while paused. This is a single local case, not demonstrated flight, a free
   seat, cross-client synchronization, Windows/Internet or gameplay.
-* A default-off, read-only player-flight observer has synthetic and schema
-  coverage, but has not yet been integrated into or run in a native X4 flight
-  test. Its samples do not establish input or the cause of movement.
+* A separate disposable Linux X4 run confirmed local player-control readbacks,
+  resumed the simulation, and passively sampled the same pose three times over
+  about 0.075 seconds of advancing game time. No input was injected or save
+  requested. This does not prove steering, continuous stillness, multiplayer,
+  Windows or Internet operation.
 * A separate default-off Linux X11 input helper has only synthetic and owned
   helper-process coverage. It has not been integrated with a flight harness or
   tested against an actual X server or X4; key release is not guaranteed under
@@ -136,6 +138,7 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [positive-seat search](../tools/dev/AUTHORITY-POSITIVE-SEAT-SEARCH.md),
 [local player-control probe](../tools/dev/AUTHORITY-PLAYER-CONTROL-ONCE.md),
 [player-flight observer preparation](../tools/dev/AUTHORITY-PLAYER-FLIGHT-OBSERVER.md),
+[passive native flight observation](../tools/dev/AUTHORITY-PLAYER-FLIGHT-LIVE.md),
 [private X11 input helper preparation](../tools/dev/AUTHORITY-X11-PRIVATE-KEY-PULSE.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
