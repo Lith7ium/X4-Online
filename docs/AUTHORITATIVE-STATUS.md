@@ -39,6 +39,12 @@ Native Linux evidence so far:
   argon faction-and-macro count were consistent with one new object per index.
   This is a local fixture, not network delivery or reconciliation; the requested
   coordinates are synthetic and collision-free placement is unproven.
+* Two paused isolated Linux X4 processes completed a single synthetic
+  index-3 ship descriptor transfer over localhost TCP, with guarded local
+  creation, replay and inspection in a sector remote from each player. This
+  is one fixture, not full ship-state synchronization, Windows/Internet or
+  gameplay; the seed is a test input. The detailed record distinguishes the
+  X4 log receipts from the coordinator's ACK and cleanup report.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
   accepted a trusted client load claim over TCP, and confirmed resume and pause
   through TCP participant control. A second join was simulated. Another run
@@ -83,6 +89,7 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-sector local creation](../tools/dev/AUTHORITY-SECTOR-CREATE-PREPARATION.md),
+[two-X4 local ship transfer](../tools/dev/AUTHORITY-SECTOR-PAIR-TRANSFER.md),
 [two-profile fingerprints](../tools/dev/AUTHORITY-SECTOR-FINGERPRINT.md),
 [marked admission](AUTHORITY-TRUSTED-MARKED-LIVE.md),
 [native TCP control](AUTHORITY-TCP-NATIVE-EXPERIMENT.md),

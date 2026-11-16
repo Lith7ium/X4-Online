@@ -37,7 +37,7 @@ result reports `CompilerCleanupUnconfirmed`; compiler descendants may still
 exist, no X4 is started, and the tool does not claim that cleanup succeeded.
 
 Offline tests use fake X4 processes, actual localhost UDP/TCP, and a real gated
-helper. They do not establish any native X4 result. No Windows, public network,
+helper. The bounded native attempt is documented below. No Windows, public network,
 independent-player, simulation-ownership, whole-world, combat, trading,
 persistence or playable multiplayer claim follows from this test. The chosen
 sector frame, actor/sector identity and FFI positions remain limited to the
@@ -45,6 +45,40 @@ saved two-sector fixture. The test seed is a Create input, not an independently
 read seed. The candidate-count check is not proof of global ship coverage or
 collision-free placement.
 
-This harness must receive independent review and its guarded integration must
-be complete before any native run. Failing or missing evidence must abort; do
-not convert a failed test into a retry against a possibly mutated profile.
+The guarded integration received independent review before the bounded native
+run below. Failing or missing evidence must abort; do not convert a failed test
+into a retry against a possibly mutated profile.
+
+## Bounded native Linux/Linux attempt
+
+The disposable `.local/authority-sector-pair-transfer-01` run reports
+`success: true`, a TCP ACK after client inspection, local replay checks, and
+confirmed owned cleanup with no remaining owned processes. The result is the
+harness's report: the TCP bytes, helper exit and intermediate Create/Inspect
+events are not separately recorded in a durable packet trace. The source X4
+log records `READY`, `DESCRIPTOR`, then `FINISHED`; the client log records
+`READY`, `AWAIT`, then `INSPECTED`, with repeated guarded `CHECKED` receipts.
+Both logs first record their load request, marker inspection, slot-2 read,
+pause receipt and local pair readiness. The logs alone do not establish a
+cross-process ordering; that follows from the reviewed coordinator and its
+reported successful completion.
+
+The source, client and pinned archived staged-save files have SHA-256
+`2c6494308424fffe8bd114bd017802e2b6dc1f227a64998aea8a787672846748`.
+Each private overlay's Create driver, FFI adapter, UDP owner, session,
+inspector and engine match their reviewed source or expected module-export
+transformation; the receiver and readiness scripts match their intended
+private guard transformations, and the saved-state scripts match the archive.
+The observed sector fixture is `cluster_33_sector001_macro`, remote from each
+local player by the readiness/inspection guards. The experiment requests one
+artificial index-3 ship per process, repeats the request locally, and checks
+the same local actor, sector, candidate count and position within two metres
+per axis before completion. The source request uses seed 7183; this is a
+synthetic input, not a seed readback. The logs do not record the actual
+transferred coordinates or expose the locally compared actor IDs.
+
+This is one paused Linux localhost fixture, not a Windows or Internet test,
+independent-sector player session, full ship-state replication, resumed NPC
+simulation, combat, trade, boarding or gameplay. The common save hash does not
+prove which bytes X4 actually consumed, and sampled pause/process checks do not
+prove uninterrupted pause. No checkpoint was requested by this run.
