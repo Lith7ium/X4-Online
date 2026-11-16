@@ -3,7 +3,7 @@ local epoch,nonce=string.rep('a',32),string.rep('b',32);local request={}
 local function rig(which)
  local t,g,paused=1,3,true;local app;local issued={};local calls={};local inspections=0
  local o={enabled=true,epoch=epoch,nonce=nonce,timeout=10,
-  guard=function(mode)assert(paused);calls[#calls+1]=mode;return t,g end,
+  guard=function(mode)assert(paused);calls[#calls+1]=mode;return t,(which=='jump' and mode=='post') and g+1 or g end,
   issue=function(s,op,a)issued[#issued+1]={s,op,a};if which=='reentrant' then app:refused() end;return true end,
   validate=function()if which=='slow_validate' then t=11 end;return which~='invalid' end,inspect=function(_,_,flags) inspections=inspections+1;if which=='slow_final' and inspections==3 then t=11 end;if which=='inspect_error' then error('secret') end;return true end}
  app=M.new(o);return app,issued,calls,function(x)t=x end,function(x)paused=x end,function(x)g=x end
@@ -29,3 +29,4 @@ print('player-control state tests passed')
 local slow=ready('slow_final');assert(slow:tick());assert(slow:dispatched(nonce..'|'..epoch));assert(slow:tick());assert(slow:response(row(1,1,1,1,1)));assert(slow:tick());local checked,late=slow:response(row(2,1,1,1,1));assert(checked and late.status=='inconclusive' and not late.local_control_proven)
 local overdue,_,_,advance=rig();assert(overdue:tick());advance(11);assert(not overdue:created(created) and overdue:state()=='failed')
 local sv=rig('slow_validate');assert(sv:tick());local vok,vr=sv:created(created);assert(vok and vr.status=='inconclusive' and not vr.local_control_proven);assert(not sv:created(created))
+local jump,ij=ready('jump');assert(not jump:tick() and jump:state()=='failed');assert(ij[#ij][2]~='Teleport')

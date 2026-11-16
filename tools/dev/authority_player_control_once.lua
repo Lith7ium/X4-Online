@@ -14,7 +14,7 @@ function M.new(o)
   local t,g=o.guard(mode);assert(finite(t) and t>=0 and finite(g) and g>=0 and (not last or t>=last))
   t0=t0 or t;last=t
   if mode=='pre' then pre_game=pre_game or g;assert(pre_game==g)
-  else post_game=post_game or g;assert(post_game==g) end
+  else post_game=post_game or g;assert(post_game==g and pre_game==g) end
   if target then
    assert(o.validate(target,sector,owner)==true)
    local t2,g2=o.guard(mode);assert(finite(t2) and t2>=last and finite(g2) and g2==g)

@@ -35,7 +35,7 @@ No conclusion about seat freedom or ability to fly is drawn.
 
 Before the teleport request, the supplied `pre_guard` must enforce the original
 saved-fixture/player context. Immediately before dispatch the component crosses
-an explicit phase boundary and establishes a new paused game-time baseline;
+an explicit phase boundary and establishes a new paused game-time baseline, which must equal the previously observed paused time;
 `post_guard` must fence the permitted transition from the old player context to
 the target, with no arbitrary third player/ship/sector admitted. Do not assume
 the original NPC remains operational after the attention/sector transition.
@@ -58,3 +58,28 @@ world. The caller must continue watching callbacks through cleanup. The current
 component is not a native harness; it has synthetic and fake-FFI evidence only.
 It cannot establish network propagation, movement/input, two players, Windows,
 Internet, shared economy, combat or a persistent multiplayer session.
+
+## Private native supervisor
+
+`authority_player_control_live.py` is the separate opt-in single-process runner.
+It reuses the guarded marked-load path, pins the source checkpoint, installs the
+one-shot MD and Lua files in the private protected overlay, and mounts the whole
+private save directory read-only. Its existing load callback is the sole update
+owner. The original NPC/sector and player context are checked live through the
+pre-teleport phase; at dispatch the owner crosses an explicit phase boundary.
+The target stays live and in its original sector, the player context may only
+move between the captured old context and the target (with temporarily absent
+controlled/occupied IDs), and after the first positive read the target context
+is locked. A post-transition paused game-time observation must equal the
+pre-transition value; this does not establish continuous pause.
+
+The final result distinguishes `controlled` from `inconclusive`. A completed
+controlled result requires the ordered markers and two MD/UI readbacks after
+the single dispatch, followed by final process, log, protected-file and source
+checks. `success` means only that this bounded diagnostic completed; an
+inconclusive result is not control. A fault, late event or cleanup failure
+suppresses the control claim. For safety the owner requires
+`GetPlayerContainerID()` itself to equal the target after the first positive
+read; a different valid native container representation would cause a
+conservative failure. Whether teleport can finish while paused, the FFI/MD
+property correspondence and real gameplay remain unproven.
