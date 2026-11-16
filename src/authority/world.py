@@ -8,13 +8,13 @@ must not retry until all old operations have actually been fenced or settled.
 
 An engine that requires an explicit confirmation after durable publication may
 provide checkpoint_published(checkpoint). It must return True only after the native
-controller has accepted the confirmation; an error or other result faults the session even
-though the verified checkpoint itself remains in the store.
+controller has accepted the confirmation; an error or other result triggers
+fault handling even though the verified checkpoint itself remains in the store.
 
 After successful adapter confirmation, the coordinator also persists a separate
 CONFIRMED pointer. Adapters without a publication callback assert completion by
-returning from save(). Failure to write the pointer faults the session. A pointer
-can already be visible when a directory fsync reports an error; it does not prove
+returning from save(). Failure to write the pointer triggers fault handling. A
+pointer can already be visible when a directory fsync reports an error; it does not prove
 that the simulation stayed stopped or that later progress was saved.
 
 All access must be serialized by the caller. This module neither starts an
@@ -27,7 +27,7 @@ specified participants actually confirmed the requested state. The caller must
 authenticate and control those clients, bound its operations and fence them on
 failure; a server-side pause cannot stop an indeterminate client operation. If
 client resume fails after the engine started, the coordinator attempts to pause
-the engine and faults even if that attempt succeeds.
+the engine and reports failure even if that attempt succeeds.
 """
 from dataclasses import dataclass
 
@@ -78,8 +78,14 @@ class WorldCoordinator:
     def step(self):
         """Run the currently pending operation, or return None if there is none.
 
-        Save acknowledgement follows successful checkpoint publication. If any
-        operation fails, the session is faulted and the exception is re-raised.
+        Save acknowledgement follows successful checkpoint publication. On an
+        operation error, attempt offer invalidation and session fault marking,
+        then re-raise the original error. If fault marking itself fails, session
+        state is uncertain: the outer owner must fence the host and components.
+        If invalidation fails, clearing local offer records does not prove the
+        file service withdrew those offers; the owner must fence it as well.
+        A failure while recording a successful result can occur after the engine
+        effect; that outcome is uncertain and the owner must fence it, not retry.
         Another pending action may be created; the caller must step it separately.
         """
         request = self.session.pending
@@ -139,12 +145,25 @@ class WorldCoordinator:
                 self._baseline = (request.request_id, checkpoint)
             else:
                 raise ValueError('unknown engine operation')
-        except BaseException:
+        except BaseException as error:
+            def note_failure(step, failure):
+                try:
+                    error.add_note(step + ' also failed: ' + type(failure).__name__)
+                except BaseException:
+                    # A malformed exception must not interrupt failure fencing.
+                    pass
             try:
                 self._offers.invalidate()
+            except BaseException as cleanup_error:
+                note_failure('offer invalidation', cleanup_error)
+            try:
                 self._load_offers.clear()
-            finally:
+            except BaseException as cleanup_error:
+                note_failure('load offer cleanup', cleanup_error)
+            try:
                 self.session.complete(request.world_epoch, request.request_id, False)
+            except BaseException as fault_error:
+                note_failure('session fault marking', fault_error)
             raise
         self.session.complete(request.world_epoch, request.request_id, True)
         return request

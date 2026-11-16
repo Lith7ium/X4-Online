@@ -356,6 +356,105 @@ class HostTest(unittest.TestCase):
             self.assertEqual(peer['host_blocked_grace'], 0)
             with self.assertRaisesRegex(RuntimeError, 'fence all'): self.host.tick()
 
+    def test_pause_failure_preserves_cause_when_offer_invalidation_fails(self):
+        failure = TimeoutError('server pause not confirmed')
+        def fail_pause():
+            raise failure
+        self.engine.pause = fail_pause
+        self.world._load_offers[1] = object()
+        with patch.object(self.world._offers, 'invalidate', side_effect=OSError('withdraw failed')) as invalidate, \
+             patch.object(self.world.session, 'complete', wraps=self.world.session.complete) as complete:
+            with self.assertRaises(TimeoutError) as raised:
+                self.host.tick()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(failure.__notes__, ['offer invalidation also failed: OSError'])
+        invalidate.assert_called_once_with()
+        self.assertEqual(self.world._load_offers, {})
+        complete.assert_called_once_with(self.world.session.world_epoch, 1, False)
+        self.assertEqual(self.world.session.state, 'faulted')
+        with self.assertRaisesRegex(RuntimeError, 'fence all'):
+            self.host.tick()
+
+    def test_pause_interruption_survives_both_cleanup_failures(self):
+        failure = KeyboardInterrupt('server pause interrupted')
+        def fail_pause():
+            raise failure
+        self.engine.pause = fail_pause
+        calls = []
+        def fail_invalidation():
+            calls.append('invalidate')
+            raise OSError('withdraw failed')
+        def fail_fault_marking(*_args):
+            calls.append('fault marking')
+            raise RuntimeError('mark failed')
+        with patch.object(self.world._offers, 'invalidate', side_effect=fail_invalidation), \
+             patch.object(self.world.session, 'complete', side_effect=fail_fault_marking):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                self.host.tick()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(calls, ['invalidate', 'fault marking'])
+        self.assertEqual(failure.__notes__, ['offer invalidation also failed: OSError',
+                                              'session fault marking also failed: RuntimeError'])
+        # Fault marking itself failed; the host fence is the remaining protection.
+        with self.assertRaisesRegex(RuntimeError, 'fence all'):
+            self.host.tick()
+
+    def test_pause_failure_preserves_cause_when_fault_marking_fails(self):
+        failure = TimeoutError('server pause not confirmed')
+        def fail_pause():
+            raise failure
+        self.engine.pause = fail_pause
+        with patch.object(self.world._offers, 'invalidate', wraps=self.world._offers.invalidate) as invalidate, \
+             patch.object(self.world.session, 'complete', side_effect=RuntimeError('mark failed')) as complete:
+            with self.assertRaises(TimeoutError) as raised:
+                self.host.tick()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(failure.__notes__, ['session fault marking also failed: RuntimeError'])
+        invalidate.assert_called_once_with()
+        complete.assert_called_once_with(self.world.session.world_epoch, 1, False)
+        with self.assertRaisesRegex(RuntimeError, 'fence all'):
+            self.host.tick()
+
+    def test_invalid_exception_notes_do_not_prevent_failure_fencing(self):
+        failure = TimeoutError('server pause not confirmed')
+        failure.__notes__ = 'invalid notes container'
+        def fail_pause():
+            raise failure
+        self.engine.pause = fail_pause
+        self.world._load_offers[1] = object()
+        with patch.object(self.world._offers, 'invalidate', side_effect=OSError('withdraw failed')), \
+             patch.object(self.world.session, 'complete', wraps=self.world.session.complete) as complete:
+            with self.assertRaises(TimeoutError) as raised:
+                self.host.tick()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(failure.__notes__, 'invalid notes container')
+        self.assertEqual(self.world._load_offers, {})
+        complete.assert_called_once_with(self.world.session.world_epoch, 1, False)
+        self.assertEqual(self.world.session.state, 'faulted')
+        with self.assertRaisesRegex(RuntimeError, 'fence all'):
+            self.host.tick()
+
+    def test_failed_load_offer_clear_does_not_skip_fault_marking(self):
+        failure = TimeoutError('server pause not confirmed')
+        class BrokenOffers(dict):
+            def clear(self):
+                raise OSError('clear failed')
+        def fail_pause():
+            raise failure
+        self.engine.pause = fail_pause
+        self.world._load_offers = BrokenOffers({1: object()})
+        with patch.object(self.world._offers, 'invalidate', wraps=self.world._offers.invalidate) as invalidate, \
+             patch.object(self.world.session, 'complete', wraps=self.world.session.complete) as complete:
+            with self.assertRaises(TimeoutError) as raised:
+                self.host.tick()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(failure.__notes__, ['load offer cleanup also failed: OSError'])
+        invalidate.assert_called_once_with()
+        complete.assert_called_once_with(self.world.session.world_epoch, 1, False)
+        self.assertEqual(self.world.session.state, 'faulted')
+        with self.assertRaisesRegex(RuntimeError, 'fence all'):
+            self.host.tick()
+
     def test_engine_callback_cannot_reenter_host(self):
         self.engine.pause = lambda: self.host.tick()
         with self.assertRaisesRegex(RuntimeError, 'reentrant'):
