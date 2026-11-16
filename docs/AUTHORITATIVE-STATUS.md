@@ -81,6 +81,10 @@ Native Linux evidence so far:
 * A default-off, read-only player-flight observer has synthetic and schema
   coverage, but has not yet been integrated into or run in a native X4 flight
   test. Its samples do not establish input or the cause of movement.
+* A separate default-off Linux X11 input helper has only synthetic and owned
+  helper-process coverage. It has not been integrated with a flight harness or
+  tested against an actual X server or X4; key release is not guaranteed under
+  simultaneous hard failures, so private display cleanup remains essential.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
   accepted a trusted client load claim over TCP, and confirmed resume and pause
   through TCP participant control. A second join was simulated. Another run
@@ -132,6 +136,7 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [positive-seat search](../tools/dev/AUTHORITY-POSITIVE-SEAT-SEARCH.md),
 [local player-control probe](../tools/dev/AUTHORITY-PLAYER-CONTROL-ONCE.md),
 [player-flight observer preparation](../tools/dev/AUTHORITY-PLAYER-FLIGHT-OBSERVER.md),
+[private X11 input helper preparation](../tools/dev/AUTHORITY-X11-PRIVATE-KEY-PULSE.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-sector local creation](../tools/dev/AUTHORITY-SECTOR-CREATE-PREPARATION.md),
