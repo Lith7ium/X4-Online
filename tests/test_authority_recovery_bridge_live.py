@@ -1,5 +1,7 @@
 """Offline checks for the isolated recovery handoff; no X4 process."""
 import importlib.util
+import os
+from contextlib import ExitStack
 from pathlib import Path
 import shutil
 import socket
@@ -7,8 +9,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
@@ -94,6 +97,70 @@ class RecoveryBridgeTests(unittest.TestCase):
         with patch.object(subject.signal,'signal',return_value='old'), patch.object(subject.live,'create_lock_target',side_effect=OSError('lock')):
             with self.assertRaises(OSError): subject.acquire_lock_with_handlers(handlers,box,123,456)
         self.assertEqual(box,[]);self.assertEqual(len(handlers),3)
+
+    def test_cleanup_retains_config_and_lock_without_confirmed_process_stop(self):
+        for mode in ('no_process','stopped','survives','raises','invalid','unknown_identity'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as d:
+                root=Path(d);out=root/'output';game=root/'game';(game/'extensions').mkdir(parents=True)
+                (game/'X4').touch();auth=root/'auth';auth.touch();source=root/'source';source.write_bytes(b'save')
+                store_dir=root/'source-store/checkpoints';store_dir.mkdir(parents=True);lock=root/'lock'
+                config=out/'case/extensions/x4_lan_lab/ui/config.lua'
+                original='authority_control_lease="'+LEASE+'"\n'
+                checkpoint=SimpleNamespace(marker='c'*32,sha256='expected')
+                args=SimpleNamespace(out=out,store=store_dir,game=game,display=':0',timeout=300,seed=1)
+                user=SimpleNamespace(pw_dir=str(root),pw_uid=1000,pw_gid=1000,pw_name='tester')
+                proc=Mock(pid=123);proc.poll.return_value=None
+                with ExitStack() as stack:
+                    def replace(obj,name,value): return stack.enter_context(patch.object(obj,name,value))
+                    stack.enter_context(patch.dict(os.environ,{'XAUTHORITY':str(auth)}))
+                    replace(subject.os,'geteuid',lambda:1000)
+                    replace(subject.snapshot,'output_path',lambda _:out)
+                    replace(subject.snapshot,'LOCK_TARGET',lock)
+                    replace(subject.load,'local_directory',lambda p:p)
+                    replace(subject,'CheckpointStore',lambda path:SimpleNamespace(directory=Path(path)))
+                    replace(subject.live,'sha',lambda _: 'expected')
+                    replace(subject.live,'EXE_SHA','expected')
+                    replace(subject.live,'x4_executables',lambda:[])
+                    replace(subject.shutil,'which',lambda _: '/bin/bwrap')
+                    replace(subject.pwd,'getpwuid',lambda _:user)
+                    replace(subject.live,'steam_identity',lambda *_:('stable',))
+                    def prepare(*_):
+                        case=out/'case';profile=case/'profile';(profile/'save').mkdir(parents=True)
+                        return case,profile,[],lock
+                    replace(subject.snapshot,'prepare_case',prepare)
+                    replace(subject,'stage_confirmed_recovery',lambda *_:(checkpoint,source))
+                    replace(subject,'verify_selected_source',lambda *_:None)
+                    def install(*_):
+                        config.parent.mkdir(parents=True);config.write_text(original)
+                        return [config]
+                    replace(subject,'install_probe',install)
+                    def acquire(_handlers,lockbox,*_):
+                        fd=os.open(lock,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600)
+                        lockbox.append((fd,os.fstat(fd)))
+                    replace(subject,'acquire_lock_with_handlers',acquire)
+                    def release(path,fd,info):
+                        self.assertEqual((path.stat().st_dev,path.stat().st_ino),(info.st_dev,info.st_ino))
+                        path.unlink();os.close(fd)
+                    release_mock=replace(subject.live,'release_lock_target',Mock(side_effect=release))
+                    replace(subject.load,'readonly_save_command',lambda *_:['bwrap','--die-with-parent'])
+                    def spawn(_command,_log,processes):
+                        if mode!='no_process': processes.append([proc,None if mode=='unknown_identity' else 7])
+                        raise RuntimeError('end diagnostic')
+                    replace(subject.owned,'spawn_owned_gated',spawn)
+                    replace(subject.snapshot,'stop_owned',Mock(side_effect=OSError('stop')) if mode=='raises' else
+                            Mock(return_value=[99] if mode=='survives' else (None if mode=='invalid' else [])))
+                    result=subject.run(args)
+                self.assertFalse(result['success'])
+                if mode in ('no_process','stopped'):
+                    self.assertEqual(result['owned_processes_remaining'],[])
+                    release_mock.assert_called_once();self.assertFalse(lock.exists())
+                    self.assertEqual(config.read_text(),'authority_control_lease="redacted"\n')
+                else:
+                    self.assertEqual(result['owned_processes_remaining'],[99] if mode=='survives' else None)
+                    release_mock.assert_not_called();self.assertTrue(lock.exists())
+                    self.assertEqual(config.read_text(),original)
+                    self.assertIn('lock retained: owned process stop unconfirmed',result['cleanup_errors'])
+                    self.assertIn('lease cleanup: RuntimeError',result['cleanup_errors'])
 
     def test_private_probe_has_explicit_gate_and_no_conflicting_stored_handler(self):
         with tempfile.TemporaryDirectory() as d:

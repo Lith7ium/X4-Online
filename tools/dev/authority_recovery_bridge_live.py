@@ -192,6 +192,45 @@ def acquire_lock_with_handlers(handlers, lockbox, uid, gid):
     if deferred[0] is not None: raise InterruptedError('signal '+str(deferred[0]))
 
 
+def stop_owned_processes(processes, errors):
+    """Return survivor PIDs, or None if any launcher's cleanup is uncertain."""
+    survivors = []
+    cleanup_uncertain = False
+    for process, started in reversed(processes):
+        try:
+            if started is None:
+                cleanup_uncertain = True
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=15)
+                errors.append('launcher identity unavailable')
+                continue
+            remaining = snapshot.stop_owned(process, started)
+            if not isinstance(remaining, list) or any(type(pid) is not int or pid <= 0 for pid in remaining):
+                raise ValueError('invalid owned process cleanup result')
+            survivors.extend(remaining)
+        except BaseException as error:
+            cleanup_uncertain = True
+            errors.append('owned cleanup: '+type(error).__name__)
+    if survivors:
+        errors.append('owned processes remain')
+    return None if cleanup_uncertain else survivors
+
+
+def redact_stopped_config(config, remaining):
+    """Redact an existing private config only after every owned process stopped."""
+    if not config.is_file():
+        return
+    if remaining != []:
+        raise RuntimeError('owned X4 stop unconfirmed; config retained')
+    text = config.read_text(encoding='ascii')
+    redacted, count = re.subn(r'authority_control_lease="[0-9a-f]{32}"',
+                              'authority_control_lease="redacted"', text)
+    if count != 1:
+        raise ValueError('invalid lease')
+    config.write_text(redacted, encoding='ascii')
+
+
 def run(args):
     if sys.platform != 'linux' or os.geteuid() == 0: raise ValueError('unprivileged Linux user required')
     out = snapshot.output_path(args.out)
@@ -296,17 +335,9 @@ def run(args):
         if sock is not None:
             try: sock.close()
             except BaseException as error: errors.append('socket cleanup: '+type(error).__name__)
-        remaining=[]
-        for proc,started in reversed(processes):
-            try:
-                if started is None:
-                    if proc.poll() is None: proc.terminate(); proc.wait(timeout=15)
-                    errors.append('launcher identity unavailable')
-                else: remaining.extend(snapshot.stop_owned(proc,started))
-            except BaseException as error: errors.append('owned cleanup: '+type(error).__name__)
+        remaining=stop_owned_processes(processes,errors)
         result['owned_processes_remaining']=remaining
-        if remaining: errors.append('owned processes remain')
-        if result['success']:
+        if result['success'] and remaining == []:
             try:
                 while True:
                     offset=watch.offset
@@ -319,7 +350,7 @@ def run(args):
                 result.update(success=False,error='final recovery evidence invalid: '+str(error))
         if lockbox:
             lock_fd, lock_stat = lockbox[0]
-            if remaining or any(e.startswith(('owned cleanup:', 'launcher identity unavailable')) for e in errors):
+            if remaining is None or remaining:
                 errors.append('lock retained: owned process stop unconfirmed')
                 try: os.close(lock_fd)
                 except BaseException as error: errors.append('lock descriptor: '+type(error).__name__)
@@ -331,12 +362,7 @@ def run(args):
         except BaseException as error: errors.append('Steam identity unavailable: '+type(error).__name__)
         config=out/'case/extensions/x4_lan_lab/ui/config.lua'
         try:
-            if config.is_file():
-                text=config.read_text(encoding='ascii')
-                redacted,count=re.subn(r'authority_control_lease="[0-9a-f]{32}"',
-                    'authority_control_lease="redacted"',text)
-                if count!=1: raise ValueError('invalid lease')
-                config.write_text(redacted,encoding='ascii')
+            redact_stopped_config(config,remaining)
         except BaseException as error: errors.append('lease cleanup: '+type(error).__name__)
         if errors: result.update(success=False,cleanup_errors=errors)
         try: (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
