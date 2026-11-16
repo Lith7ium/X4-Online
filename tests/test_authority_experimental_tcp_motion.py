@@ -68,6 +68,36 @@ class MotionTCP(unittest.TestCase):
         self.assertTrue(self.motion.send(dead,despawn=True));self.assertEqual(len(self.received),4)
         with self.assertRaises(ValueError):self.motion.send(self.sample(3))
         self.assertTrue(self.case.host._failed)
+    def test_explicit_subset_then_other_client_and_default_all(self):
+        self.setup_pair();members=self.delivery.membership()
+        self.assertTrue(self.motion.send(self.sample(),recipients=[members[0]]))
+        self.assertEqual([item[0] for item in self.received],[1])
+        time.sleep(.01)
+        self.assertTrue(self.motion.send(self.sample(2,t=2),recipients=[members[1]]))
+        self.assertEqual([item[0] for item in self.received],[1,2])
+        time.sleep(.01)
+        self.assertTrue(self.motion.send(self.sample(3,t=3)))
+        self.assertEqual([item[0] for item in self.received],[1,2,1,2])
+        self.assertEqual([item[1]['sequence'] for item in self.received],[1,2,3,3])
+    def invalid_recipients(self,kind):
+        self.setup_pair();members=self.delivery.membership()
+        if kind=='duplicate':selected=[members[0],dict(members[0])]
+        elif kind=='old':selected=[{**members[0],'incarnation':'0'*32}]
+        elif kind=='foreign':selected=[{'id':'peer_999','incarnation':members[0]['incarnation']}]
+        elif kind=='empty':selected=[]
+        else:selected=[{**members[0],'extra':1}]
+        with self.assertRaises(ValueError):self.motion.send(self.sample(),recipients=selected)
+        self.assertEqual(self.received,[]);self.assertTrue(self.case.host._failed)
+    def test_duplicate_recipient_fences(self):self.invalid_recipients('duplicate')
+    def test_old_incarnation_fences(self):self.invalid_recipients('old')
+    def test_foreign_recipient_fences(self):self.invalid_recipients('foreign')
+    def test_empty_recipients_fence(self):self.invalid_recipients('empty')
+    def test_malformed_recipient_fences(self):self.invalid_recipients('malformed')
+    def test_incarnation_change_in_guard_fences_before_send(self):
+        self.setup_pair();members=self.delivery.membership()
+        def changed():self.delivery._incarnations[1]='0'*32;return True
+        with self.assertRaises(RuntimeError):self.motion.send(self.sample(),recipients=[members[0]],guard=changed)
+        self.assertEqual(self.received,[]);self.assertTrue(self.case.host._failed)
     def test_stale_or_wrong_transition_fences_sender(self):
         self.setup_pair();first=self.sample();self.assertTrue(self.motion.send(first))
         with self.assertRaises(ValueError):self.motion.send(self.sample(2,'sector_b',2,{'x':1,'y':0,'z':0}))

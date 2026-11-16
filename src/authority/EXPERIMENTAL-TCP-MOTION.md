@@ -32,6 +32,28 @@ new sequence, bypasses the pose rate limit, and fences this lifetime. It is a
 transport tombstone: no X4 removal is performed or inferred. This path does not
 observe or automatically generate destruction events.
 
+The caller may pass `recipients` to `send` as a nonempty list/tuple of exact
+`{'id': ..., 'incarnation': ...}` pairs from the current admitted membership.
+This is an explicit, per-sample selection; omitting it retains the original
+all-admitted behavior and is not an interest decision. Duplicate, malformed,
+foreign or stale-incarnation selections fault before any send. The full
+admitted socket set remains fenced and quiet-checked while only the selected
+peers receive the sample. Every selected peer must return its correlated
+receipt; a partial success cannot be rolled back. Empty selection is refused.
+This option does not alter the job/create delivery's all-participant ACK rule.
+
+The source bridge does not yet supply a recipient list, and this module does
+not compute sectors viewed in the map or manage subscriptions. First delivery
+may begin at a later increasing sequence, but the owner must establish each
+client's local actor binding. Leaving interest sends no removal, hiding or
+expiry command; an old held sample can remain indefinitely. On re-entry an
+older client frame may differ from the sender's current frame even if the last
+two source samples match. The current local X4 binding faults sector changes;
+there is no general unsubscribe/reset/rejoin or cross-frame reconciliation.
+Callers must fence or separately resolve these cases and cannot infer a safe
+rejoin from a successful targeted send. No choice of recipients proves shared
+checkpoint identity, actor/frame equality or interest correctness.
+
 `ExperimentalTCPParticipantClient` accepts motion only with an explicit
 `apply_motion(sample, despawn)` callback. The callback must verify its actual
 local object binding and return exactly true only once the sample is accepted;

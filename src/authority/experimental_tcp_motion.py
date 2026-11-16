@@ -89,7 +89,7 @@ class ExperimentalTCPMotion:
         self._tracks[key]={'sequence':0,'time':None,'sent':None,'frame':None,'closed':False}
         self._current[(epoch,index)]=key
 
-    def send(self, raw, *, despawn=False, guard=None, _source=None):
+    def send(self, raw, *, despawn=False, guard=None, recipients=None, _source=None):
         self._reserved(_source)
         d=self._delivery;host=d._host;host._check()
         if self._failed or d._failed:raise RuntimeError('motion owner unavailable')
@@ -115,6 +115,27 @@ class ExperimentalTCPMotion:
         try:
             members=d.membership();handles,peers=d._peers()
             if not members:raise RuntimeError('no admitted motion recipients')
+            # Snapshot full membership and exact socket incarnations even when
+            # the caller selects only some participants. All other sockets
+            # remain fenced and must remain quiet throughout the exchange.
+            incarnations=dict(d._incarnations)
+            full={(m['id'],m['incarnation']) for m in members}
+            if len(full)!=len(handles) or full!={('peer_'+str(h),incarnations[h]) for h in handles}:
+                raise RuntimeError('motion membership changed')
+            if recipients is None:
+                selected=handles
+            else:
+                if type(recipients) not in (tuple,list) or not recipients:
+                    raise ValueError('nonempty explicit motion recipients required')
+                wanted=set()
+                for peer in recipients:
+                    if (type(peer) is not dict or set(peer)!={'id','incarnation'} or
+                        type(peer['id']) is not str or type(peer['incarnation']) is not str):
+                        raise ValueError('invalid motion recipient')
+                    identity=(peer['id'],peer['incarnation'])
+                    if identity in wanted or identity not in full:raise ValueError('duplicate or foreign motion recipient')
+                    wanted.add(identity)
+                selected=tuple(h for h in handles if ('peer_'+str(h),incarnations[h]) in wanted)
             host._control._reader_free()
         except BaseException:
             self._failed=True;d._failed=True;host._failed=True
@@ -126,13 +147,14 @@ class ExperimentalTCPMotion:
             def check_guard():
                 if guard is not None and guard() is not True:raise RuntimeError('motion operation guard failed')
                 if (time.monotonic()>=deadline or self._failed or d._failed or host._failed or
-                    host._busy is not True or d._active is not True or host._control._reader_lease is not lease):
+                    host._busy is not True or d._active is not True or host._control._reader_lease is not lease or
+                    d._incarnations!=incarnations):
                     raise RuntimeError('motion operation state changed')
             check_guard()
             ExperimentalTCPParticipants._quiet(d,peers,deadline)
-            for h in handles:
+            for h in selected:
                 check_guard()
-                incarnation=d._incarnations[h]
+                incarnation=incarnations[h]
                 req={'version':1,'kind':'motion_despawn' if despawn else 'motion_snapshot',
                      'connection_handle':h,'session_epoch':host._world.session.world_epoch,
                      'incarnation':incarnation,'request_id':value['sequence'],'sample':value}
@@ -144,7 +166,8 @@ class ExperimentalTCPMotion:
                 ExperimentalTCPParticipants._exchange(d,conn,peer,others,data,expected,deadline,check=check_guard if guard else None)
                 check_guard()
                 current,current_peers=d._peers()
-                if current!=handles or any(current_peers[k]!=peers[k] for k in handles):raise RuntimeError('motion membership changed')
+                if (current!=handles or any(current_peers[k]!=peers[k] for k in handles) or
+                    d._incarnations!=incarnations):raise RuntimeError('motion membership changed')
                 ExperimentalTCPParticipants._quiet(d,peers,deadline)
             check_guard()
             state['sequence']=value['sequence'];state['sent']=time.monotonic();state['closed']=despawn
