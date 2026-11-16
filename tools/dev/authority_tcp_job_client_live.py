@@ -185,7 +185,8 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                     adapter=ExperimentalTCPParticipantClient(client,GuardedControl(),enabled=True,epoch=c['epoch'],handle=handle,
                                                               timeout=min(25,deadline-time.monotonic()-1),apply_job=bridge,
                                                               apply_motion=motion_bridge,
-                                                              apply_motion_once=motion_bridge.apply_once if allow_motion_apply else None)
+                                                              apply_motion_once=motion_bridge.apply_once if allow_motion_apply else None,
+                                                              preflight_motion=motion_bridge.preflight if allow_motion_apply else None)
                     # Resume is the first command. READY arrives only after X4 resumed.
                     while not adapter.poll(.1): guard()
                     bridge.wait_ready()

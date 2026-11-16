@@ -65,14 +65,28 @@ does not independently prove X4 execution, position or velocity application,
 visual smoothness or frame equivalence. The buffer stores 3D samples in
 `hold_only` mode: source game time and client real-time arrival are not assumed
 to run at the same rate, and no interpolation or extrapolation is attempted.
-An independently opt-in `allow_apply=True` enables `apply_once(sample)` on
-this bridge. It accepts only the last successfully BOUND sample, matching its
-epoch, generation, index, sequence and full-sample digest; it sends a fresh
-request and requires the matching APPLIED after the X4 owner reports its later
-local readback. A bridge allows only one attempt, with no automatic retry. A
+An independently opt-in `allow_apply=True` enables `preflight(sample)` and
+`apply_once(sample)` on this bridge. Preflight requests a correlated read-only
+local observation for the last successfully BOUND sample and returns `NEAR`
+or `READY`; NEAR consumes no write attempt. A new BIND invalidates READY, and
+each sample identity can be preflighted only once (bounded at 100,000). APPLY
+requires READY for the same epoch, generation, index, sequence and full-sample
+digest; it sends a fresh request and requires the matching APPLIED after the X4
+owner reports its later local readback. READY is a point-in-time observation,
+not collision clearance or a guarantee that the later guarded write will pass.
+A bridge allows only one write attempt, with no automatic retry. A
 missing or invalid reply permanently fences the bridge: the game-side write
 may already have happened and cannot be rolled back. The result is the local
 owner's assertion, not an independent visual, shared-frame or gameplay proof.
+The isolated saved-setter diagnostic carries this preflight through the same
+exclusive TCP reader and the source scheduler. It requests fresh source samples
+one at a time, observing at most 12 samples in 20 seconds by default; explicit
+limits may be configured up to 16 samples and 30 seconds. NEAR discards the
+sample for write selection. READY authorizes one APPLY for that exact sample;
+FAR, invalid evidence, a deadline or an exhausted budget faults without an
+APPLY. The final evidence correlates each BIND/PREFLIGHT and distinct request
+to the selected sample and the one delayed write/readback. Source and client
+clocks advance independently, so waiting does not guarantee a suitable sample.
 All timeouts must be nested so the X4 IPC deadline is below the enclosing TCP
 operation, and that operation fits in the source bridge deadline. A failed
 callback cannot undo any earlier peer or game-side effect.

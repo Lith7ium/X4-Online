@@ -89,7 +89,7 @@ function X4LAN_PARTICIPANT_JOB_TICK()
      saved_apply={enabled=true,module=X4LAN_SAVED_MOTION_APPLY,log=function(line)
       if type(line)~='string' or #line>512 or not line:match('^[%w%._%+%- ]+$') then return false end
       local kind=line:match('^(%u+[%u_]*) ')
-      if kind~='INTENT' and kind~='WRITE_ENTERED' and kind~='READBACK' then return false end
+      if kind~='INTENT' and kind~='WRITE_ENTERED' and kind~='READBACK' and kind~='PREFLIGHT' then return false end
       DebugError('[X4LAN] AUTH_MOTION_APPLY '..line)
       return true
      end}
@@ -113,7 +113,7 @@ function X4LAN_PARTICIPANT_JOB_TICK()
    end
    if motion then
     if job:state()=='ready' then assert(motion:tick())
-    elseif motion:state()=='pending' or motion:state()=='applying' then error('concurrent job and motion') end
+    elseif motion:state()=='pending' or motion:state()=='applying' or motion:state()=='preflighting' then error('concurrent job and motion') end
    end
   end
  end)

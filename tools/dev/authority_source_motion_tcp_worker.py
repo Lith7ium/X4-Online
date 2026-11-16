@@ -5,6 +5,7 @@ All X4/profile lifecycle, PID identities, socket FDs, cleanup and failure
 fencing belong to the outer supervisor. TCP checkpoint/admission are synthetic.
 """
 import json
+import math
 from pathlib import Path
 import re
 import select
@@ -36,6 +37,11 @@ def config(raw):
     if type(count) is not int or count not in (1,2):raise ValueError('invalid bounded motion count')
     apply_once=all_values.get('apply_once',False)
     if type(apply_once) is not bool or ('apply_once' in all_values and apply_once is not True):raise ValueError('invalid apply opt-in')
+    max_samples=all_values.get('preflight_max_samples',12);max_seconds=all_values.get('preflight_max_seconds',20)
+    if (type(max_samples) is not int or not 1<=max_samples<=16 or type(max_seconds) not in (int,float) or
+        not math.isfinite(max_seconds) or not 1<=max_seconds<=30 or
+        (not apply_once and ('preflight_max_samples' in all_values or 'preflight_max_seconds' in all_values))):
+        raise ValueError('invalid preflight budget')
     saved={k:all_values[k] for k in _SAVED if k in all_values}
     if saved:
         if (set(saved)!=set(_SAVED) or type(saved['saved_baseline']) is not int or
@@ -43,13 +49,14 @@ def config(raw):
             type(saved['saved_sector']) is not str or not base._NAME.fullmatch(saved['saved_sector'])):
             raise ValueError('invalid saved baseline context')
     if apply_once and (not saved or count!=1):raise ValueError('one-shot apply requires one saved sample')
-    rest={k:v for k,v in all_values.items() if k not in _EXTRA and k not in _SAVED and k not in ('motion_count','apply_once')}
+    rest={k:v for k,v in all_values.items() if k not in _EXTRA and k not in _SAVED and k not in ('motion_count','apply_once','preflight_max_samples','preflight_max_seconds')}
     if 'continuous' in rest or 'max_events' in rest:raise ValueError('single job diagnostic required')
     c=base.config(json.dumps(rest,separators=(',',':'),allow_nan=False).encode())
     names=('epoch','lease','attempt','generation','participant_lease','job_epoch','source_lease','source_attempt','source_control_lease')
     values=[c[k] for k in names]+list(extras.values())
     if len(set(values))!=len(values):raise ValueError('motion tokens overlap session context')
     c.update(extras);c.update(saved);c['motion_count']=count;c['apply_once']=apply_once
+    c['preflight_max_samples']=max_samples;c['preflight_max_seconds']=float(max_seconds)
     if saved and saved['saved_sector'] not in c['sectors']:raise ValueError('saved sector is not witnessed')
     return c
 
@@ -90,7 +97,11 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
             epoch=c['job_epoch'],generation=c['generation'],guard=guard,timeout=min(90,c['deadline']-time.monotonic()-1),
             expected_index=c['index'],sectors=c['sectors'])
         motion=ExperimentalTCPMotion(delivery,enabled=True,allow_apply=c['apply_once'])
-        event=None;samples=[];saved='saved_index' in c
+        event=None;samples=[];preflights=[];saved='saved_index' in c;selection_deadline=[None]
+        def bounded_guard():
+            guard()
+            if selection_deadline[0] is not None and time.monotonic()>=selection_deadline[0]:raise TimeoutError('motion preflight budget expired')
+            return True
         def validate_sample(value):
             target=c['saved_index'] if saved else (event['index'] if event is not None else None)
             sector=c['saved_sector'] if saved else (event['descriptor']['sector_macro'] if event is not None else None)
@@ -99,15 +110,23 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
             if value['epoch']!=c['job_epoch'] or value['generation']!=c['generation'] or value['sector_macro']!=sector:
                 return False
             if not samples:return value['velocity'] is None
-            if c['motion_count']!=2 or len(samples)!=1:return False
-            validate_pair([samples[0],value],epoch=c['job_epoch'],generation=c['generation'],index=target,sector=sector)
+            if c['apply_once']:
+                prior=samples[-1];dt=value['source_time']-prior['source_time']
+                if not math.isfinite(dt) or dt<=0:return False
+                if value['velocity'] is not None:
+                    if not .02<=dt<=1:return False
+                    for axis in ('x','y','z'):
+                        if not math.isclose(value['velocity'][axis],(value[axis]-prior[axis])/dt,rel_tol=1e-9,abs_tol=1e-9):return False
+            else:
+                if c['motion_count']!=2 or len(samples)!=1:return False
+                validate_pair([samples[0],value],epoch=c['job_epoch'],generation=c['generation'],index=target,sector=sector)
             return True
         def saved_guard(epoch,baseline):
-            if epoch!=c['job_epoch'] or baseline!=c['saved_baseline'] or guard() is not True:return False
+            if epoch!=c['job_epoch'] or baseline!=c['saved_baseline'] or bounded_guard() is not True:return False
             readable,_,bad=select.select([source_job],[],[source_job],0)
-            return not readable and not bad and guard() is True
+            return not readable and not bad and bounded_guard() is True
         source=bind_source_motion(source_motion,motion,process=identity,lease=c['source_motion_lease'],
-            attempt=c['source_motion_attempt'],epoch=c['job_epoch'],generation=c['generation'],guard=guard,
+            attempt=c['source_motion_attempt'],epoch=c['job_epoch'],generation=c['generation'],guard=bounded_guard,
             timeout=min(35,c['deadline']-time.monotonic()-1),validate_sample=validate_sample,
             saved_baseline=c['saved_baseline'] if saved else None,saved_guard=saved_guard if saved else None)
         motion_peer=source_motion.getpeername();guard()
@@ -120,8 +139,9 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
         guard();ctl.resume((1,));guard()
         if saved:
             guard();scheduler.register_saved(c['saved_index']);guard()
-        while len(samples)<c['motion_count']:
-            guard()
+        if c['apply_once']:selection_deadline[0]=min(c['deadline']-5,time.monotonic()+c['preflight_max_seconds'])
+        while len(samples)<(c['preflight_max_samples'] if c['apply_once'] else c['motion_count']):
+            bounded_guard()
             if saved:kind,value='motion',scheduler.step_motion_only()
             else:kind,value=scheduler.step()
             guard()
@@ -134,9 +154,13 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
                 if (not saved and event is None) or value['index']!=(c['saved_index'] if saved else event['index']) or value['sequence']!=len(samples)+1:
                     raise RuntimeError('motion without completed job or out of sequence')
                 samples.append(value)
+                if c['apply_once']:
+                    status=scheduler.preflight(value);bounded_guard();preflights.append(status)
+                    if status=='ready':break
         if saved:
             if c['apply_once']:
-                guard();scheduler.apply_once(samples[0]);guard()
+                if not preflights or preflights[-1]!='ready':raise TimeoutError('no suitable preflight sample')
+                bounded_guard();scheduler.apply_once(samples[-1]);bounded_guard();selection_deadline[0]=None
             if c['motion_count']==2:
                 samples=validate_pair(samples,epoch=c['job_epoch'],generation=c['generation'],index=c['saved_index'],sector=c['saved_sector'])
             result={'event':'result','ok':True,'tcp_admitted':True,'synthetic_server_checkpoint_and_admission':True,
@@ -144,7 +168,9 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
                     'checkpoint_identity_proven':False,'frame_identity_proven':False,'motion_pose_applied':c['apply_once'],
                     'motion_client_bound_buffered':True,'motion_velocity_source':'position_difference_per_source_game_second',
                     'motion_frame_identity_proven':False}
-            if c['motion_count']==1:result['motion_sample']=samples[0]
+            if c['apply_once']:
+                result['motion_sample']=samples[-1];result['motion_preflight_samples']=samples;result['motion_preflight_statuses']=preflights
+            elif c['motion_count']==1:result['motion_sample']=samples[0]
             else:result['motion_samples']=samples
             return result
         if c['motion_count']==2:

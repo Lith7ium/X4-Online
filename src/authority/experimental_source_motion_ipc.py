@@ -261,6 +261,20 @@ class ExperimentalSourceMotionIPC:
             self._quiet(deadline,'pulling');self._last_pull=time.monotonic();self._state='ready'
             return None if selected==[] else value
         except BaseException:self._fail();raise
+    def preflight(self,sample,*,_scheduler=None):
+        """Check a confirmed saved sample without requesting a local write."""
+        self._reserved(_scheduler)
+        if self._state!='ready' or threading.get_ident()!=self._owner or self._saved_guard is None:
+            self._fail();raise RuntimeError('saved motion preflight unavailable')
+        self._state='preflighting';deadline=time.monotonic()+self._timeout
+        try:
+            value=motion_value(sample)
+            if value['index'] not in self._saved_indices:raise ValueError('unregistered saved actor')
+            self._quiet(deadline,'preflighting')
+            status=self._motion_call(self._motion.preflight,value,guard=lambda:self._check(deadline,'preflighting') or True)
+            if status not in ('near','ready'):raise RuntimeError('motion preflight unconfirmed')
+            self._quiet(deadline,'preflighting');self._state='ready';return status
+        except BaseException:self._fail();raise
     def apply_once(self,sample,*,_scheduler=None):
         """Opt-in local writer request for a previously confirmed saved sample."""
         self._reserved(_scheduler)

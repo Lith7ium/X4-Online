@@ -85,6 +85,17 @@ class ExperimentalJobMotionScheduler:
             self._state='ready';return sample
         except BaseException:
             self._fail();raise
+    def preflight(self,sample):
+        """Run a read-only preflight without consuming a queued job."""
+        if self._state!='ready' or threading.get_ident()!=self._owner:
+            self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
+        self._state='working'
+        try:
+            self._require_quiet_job();result=self._call(self._motion,self._motion.preflight,sample)
+            if result not in ('near','ready'):raise RuntimeError('motion preflight unconfirmed')
+            self._require_quiet_job();self._state='ready';return result
+        except BaseException:
+            self._fail();raise
     def apply_once(self,sample):
         """Apply one already-confirmed sample; failure may follow a side effect."""
         if self._state!='ready' or threading.get_ident()!=self._owner:

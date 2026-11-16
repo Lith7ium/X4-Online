@@ -44,6 +44,7 @@ class ExperimentalParticipantMotionIPC:
         self._owner=threading.get_ident();self._state='new';self._peer=None
         self._prefix=secrets.token_hex(8);self._next=0
         self._allow_apply=allow_apply;self._bound=None;self._apply_attempted=False
+        self._preflight_ready=None;self._preflight_seen=set()
     @property
     def state(self):return self._state
     def _fail(self):
@@ -111,7 +112,42 @@ class ExperimentalParticipantMotionIPC:
             if data!=expected:raise ValueError('motion IPC binding response mismatch')
             self._quiet(deadline,'applying')
             self._bound=(value['epoch'],value['generation'],value['index'],value['sequence'],digest)
+            self._preflight_ready=None
             self._state='ready';return True
+        except BaseException:self._fail();raise
+    def preflight(self,raw):
+        """Inspect the last bound sample without applying it; return NEAR or READY.
+
+        READY is a provisional local observation, not clearance or a guarantee
+        that the later guarded setter will still succeed. No request is retried.
+        """
+        if self._state!='ready' or threading.get_ident()!=self._owner:
+            self._fail();raise RuntimeError('motion IPC reentrant or unavailable')
+        self._state='preflighting';deadline=time.monotonic()+self._timeout
+        try:
+            if not self._allow_apply or self._apply_attempted or self._bound is None:
+                raise RuntimeError('motion preflight unavailable')
+            value=motion_value(raw);digest=motion_digest(value)
+            identity=(value['epoch'],value['generation'],value['index'],value['sequence'],digest)
+            if identity!=self._bound:raise ValueError('motion preflight differs from last bound sample')
+            key=identity[:4]
+            if key in self._preflight_seen or len(self._preflight_seen)>=100000:
+                raise ValueError('replayed or full motion preflight')
+            if self._next>=0xffffffffffffffff:raise RuntimeError('motion request capacity')
+            self._preflight_seen.add(key);self._preflight_ready=None
+            self._next+=1;request=self._prefix+format(self._next,'016x')
+            fields=[request,value['epoch'],value['generation'],str(value['index']),str(value['sequence']),digest]
+            payload='|'.join(['M',self._lease,self._attempt,'PREFLIGHT',*fields]).encode('ascii')
+            self._quiet(deadline,'preflighting')
+            if self._sock.send(payload)!=len(payload):raise RuntimeError('motion preflight send failed')
+            self._check(deadline,'preflighting');data,_=self._recv(deadline,'preflighting')
+            prefix='|'.join(['R',self._lease,self._attempt,'PREFLIGHTED',*fields]).encode('ascii')
+            if data==prefix+b'|NEAR':result='NEAR'
+            elif data==prefix+b'|READY':result='READY'
+            else:raise ValueError('motion preflight response mismatch')
+            self._quiet(deadline,'preflighting')
+            if result=='READY':self._preflight_ready=identity
+            self._state='ready';return result
         except BaseException:self._fail();raise
     def apply_once(self,raw):
         """Ask for one local pose application of the last successfully bound sample.
@@ -128,7 +164,9 @@ class ExperimentalParticipantMotionIPC:
             self._apply_attempted=True
             value=motion_value(raw);digest=motion_digest(value)
             identity=(value['epoch'],value['generation'],value['index'],value['sequence'],digest)
-            if identity!=self._bound:raise ValueError('motion apply differs from last bound sample')
+            if identity!=self._bound or identity!=self._preflight_ready:
+                raise ValueError('motion apply lacks current READY preflight')
+            self._preflight_ready=None
             if self._next>=0xffffffffffffffff:raise RuntimeError('motion request capacity')
             self._next+=1;request=self._prefix+format(self._next,'016x')
             fields=[request,value['epoch'],value['generation'],str(value['index']),str(value['sequence']),digest]

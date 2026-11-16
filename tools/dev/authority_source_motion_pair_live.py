@@ -195,8 +195,14 @@ class MotionCoordinator(pair.Coordinator):
             validate_pair(result[key],epoch=archive.REGISTRY_EPOCH,generation=self.generation,index=result['index'],sector=result['sector_macro'])
         else:
             sample=motion_value(result[key])
-            if sample['epoch']!=archive.REGISTRY_EPOCH or sample['generation']!=self.generation or sample['index']!=result['index'] or sample['sequence']!=1 or sample['sector_macro']!=result['sector_macro'] or sample['velocity'] is not None:
-                raise ValueError('motion identity or initial velocity differs from confirmed job')
+            self.validate_single_sample(sample,result)
+
+    def validate_single_sample(self,sample,result):
+        if sample['epoch']!=archive.REGISTRY_EPOCH or sample['generation']!=self.generation or sample['index']!=result['index'] or sample['sequence']!=1 or sample['sector_macro']!=result['sector_macro'] or sample['velocity'] is not None:
+            raise ValueError('motion identity or initial velocity differs from confirmed job')
+
+    def result_samples(self):
+        return [self.result['motion_sample']] if self.motion_count==1 else self.result['motion_samples']
 
     def verify_final(self,logs):
         if self.saved_index is None:super().verify_final(logs)
@@ -241,7 +247,7 @@ class MotionCoordinator(pair.Coordinator):
                 except ValueError:raise ValueError('invalid client motion source time') from None
                 if not math.isfinite(value):raise ValueError('invalid client motion source time')
                 rows.append((int(match[1]),int(match[2]),match[3],value))
-        samples=[self.result['motion_sample']] if self.motion_count==1 else self.result['motion_samples']
+        samples=self.result_samples()
         if rows!=[(sample['index'],sample['sequence'],sample['sector_macro'],sample['source_time']) for sample in samples]:
             raise ValueError('client buffer log differs from motion result')
         return True

@@ -115,16 +115,17 @@ class ExperimentalTCPParticipants:
                                                 parse_constant=_reject_constant)
                         except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
                             raise ValueError('invalid participant receipt') from error
-                        if (type(answer) is not dict or set(answer) != set(expected) or
+                        choices=expected if type(expected) is tuple else (expected,)
+                        if (not choices or any(type(x) is not dict for x in choices) or type(answer) is not dict or set(answer) != set(choices[0]) or
                                 type(answer.get('version')) is not int or
                                 type(answer.get('request_id')) is not int or
-                                type(answer.get('connection_handle')) is not int or answer != expected):
+                                type(answer.get('connection_handle')) is not int or not any(answer==choice for choice in choices)):
                             raise ValueError('unexpected participant receipt')
                         if time.monotonic() >= deadline:
                             raise TimeoutError('participant receipt arrived after deadline')
                         if select.select(waiting, [], waiting, 0)[::2] != ([], []):
                             raise RuntimeError('unexpected input or disconnect after participant receipt')
-                        return
+                        return answer
                     if len(data) > MAX_MESSAGE: raise ValueError('participant frame too large')
             if conn in writable:
                 try: count = conn.send(raw[sent:])

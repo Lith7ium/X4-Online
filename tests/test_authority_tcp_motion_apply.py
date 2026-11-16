@@ -6,7 +6,7 @@ from authority.experimental_tcp_motion import ExperimentalTCPMotion
 from authority.experimental_tcp_participant_client import ExperimentalTCPParticipantClient
 
 class OneShot(unittest.TestCase):
- def setup_pair(self,*,allow=True,callback=None):
+ def setup_pair(self,*,allow=True,callback=None,preflight='READY'):
   case=fixture.MotionTCP('test_invalid_values_and_no_fake_velocity');case.setUp();self.addCleanup(case.doCleanups)
   peer=case.case.connect();case.case.offer_and_claim(peer);stop=threading.Event();received=[];errors=[]
   def client():
@@ -15,7 +15,8 @@ class OneShot(unittest.TestCase):
     while not raw.endswith(b'\n'):raw+=peer.recv(1)
     assert json.loads(raw)['kind']=='accepted'
     app=ExperimentalTCPParticipantClient(peer,fixture.Controller(),enabled=True,epoch='a'*32,handle=1,timeout=1,
-      apply_motion=lambda sample,despawn:True,apply_motion_once=callback or (lambda sample:received.append(sample) is None))
+      apply_motion=lambda sample,despawn:True,apply_motion_once=callback or (lambda sample:received.append(sample) is None),
+      preflight_motion=lambda sample:preflight)
     while not stop.is_set():app.poll(.05)
     app.close()
    except BaseException as error:
@@ -29,11 +30,11 @@ class OneShot(unittest.TestCase):
   return case,motion,received,errors
  def test_one_confirmed_sample_then_single_apply(self):
   case,motion,received,_=self.setup_pair();sample=fixture.MotionTCP.sample()
-  self.assertTrue(motion.send(sample));self.assertTrue(motion.apply_once(sample));self.assertEqual(received,[sample])
+  self.assertTrue(motion.send(sample));self.assertEqual(motion.preflight(sample),'ready');self.assertTrue(motion.apply_once(sample));self.assertEqual(received,[sample])
   with self.assertRaises(RuntimeError):motion.apply_once(sample)
   self.assertTrue(case.case.host._failed)
  def test_changed_or_unconfirmed_sample_refused_before_apply(self):
-  case,motion,received,_=self.setup_pair();sample=fixture.MotionTCP.sample();self.assertTrue(motion.send(sample))
+  case,motion,received,_=self.setup_pair();sample=fixture.MotionTCP.sample();self.assertTrue(motion.send(sample));self.assertEqual(motion.preflight(sample),'ready')
   with self.assertRaises(ValueError):motion.apply_once({**sample,'x':9})
   self.assertEqual(received,[]);self.assertTrue(case.case.host._failed)
  def test_default_off_and_failed_readback_fence(self):
@@ -41,6 +42,18 @@ class OneShot(unittest.TestCase):
    with self.subTest(allow=allow):
     case,motion,received,_=self.setup_pair(allow=allow,callback=callback);sample=fixture.MotionTCP.sample()
     self.assertTrue(motion.send(sample))
+    if allow:self.assertEqual(motion.preflight(sample),'ready')
     with self.assertRaises((RuntimeError,ConnectionError,OSError,ValueError)):motion.apply_once(sample)
     self.assertTrue(case.case.host._failed)
+ def test_near_never_authorizes_apply(self):
+  case,motion,received,_=self.setup_pair(preflight='NEAR');sample=fixture.MotionTCP.sample()
+  self.assertTrue(motion.send(sample));self.assertEqual(motion.preflight(sample),'near')
+  with self.assertRaises(ValueError):motion.apply_once(sample)
+  self.assertEqual(received,[]);self.assertTrue(case.case.host._failed)
+ def test_new_sample_invalidates_ready_for_previous_sample(self):
+  case,motion,received,_=self.setup_pair();sample=fixture.MotionTCP.sample()
+  self.assertTrue(motion.send(sample));self.assertEqual(motion.preflight(sample),'ready');time.sleep(.02)
+  self.assertTrue(motion.send(fixture.MotionTCP.sample(seq=2,t=2)))
+  with self.assertRaises(ValueError):motion.apply_once(sample)
+  self.assertEqual(received,[]);self.assertTrue(case.case.host._failed)
 if __name__=='__main__':unittest.main()

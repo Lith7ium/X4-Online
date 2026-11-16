@@ -39,7 +39,8 @@ function M.new(o)
   assert(saved and type(apply)=='table' and apply.enabled==true and type(apply.factory)=='function' and type(apply.register)=='function','invalid saved apply')
  end
  local state,busy='new',false;local last,pending,deadline,delivered=nil,nil,nil,nil
- local staged,bound,writer,apply_identity,apply_used=nil,nil,nil,nil,false
+ local staged,bound,writer,operation_identity,apply_used,preflight_ready=nil,nil,nil,nil,false,false
+ local operation_requests,operation_count,preflight_attempted={},0,false
  local tracks,track_count={},0;local api={}
  local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
  local function check()
@@ -116,56 +117,67 @@ function M.new(o)
    if type(buffer)~='table' or type(buffer.push)~='function' or state~='ready' or not check() then return false end
    entry={sector=p[10],binding=binding,buffer=buffer,route=route};tracks[index]=entry
   end
-  staged=nil
+  staged=nil;preflight_ready=false;preflight_attempted=false
   pending={identity={p[5],p[6],p[7],p[8],p[9],p[10],p[11]},index=index,sequence=seq,sector=p[10],binding=entry.binding,
    buffer=entry.buffer,route=entry.route,arrival=arrival,source_time=t,position={x,y,z},rate=rate}
   deadline=last+c.timeout;state='pending'
   local ok,v=pcall(entry.binding.begin,entry.binding,{epoch=c.epoch,generation=c.generation,index=index,sequence=seq,sector_macro=p[10]},arrival)
   return ok and v==true and state=='pending' and check()
  end
- local function accept_apply(raw)
+ local function accept_operation(raw,kind)
   local p=split(raw)
-  if not apply or apply_used or not bound or #p~=10 or p[1]~='M' or p[2]~=c.lease or p[3]~=c.attempt or p[4]~='APPLY' or
+  if not apply or apply_used or not bound or #p~=10 or p[1]~='M' or p[2]~=c.lease or p[3]~=c.attempt or p[4]~=kind or
+   (kind=='APPLY' and not preflight_ready) or (kind=='PREFLIGHT' and preflight_attempted) or
+   operation_count>=100000 or operation_requests[p[5]] or
    not token(p[5],32) or p[6]~=c.epoch or p[7]~=c.generation or p[8]~=bound.index_text or
    p[9]~=bound.sequence_text or p[10]~=bound.digest then return false end
-  apply_used=true;apply_identity={p[5],p[6],p[7],p[8],p[9],p[10]};deadline=last+c.timeout;state='applying'
-  writer=apply.factory({enabled=true,timeout=c.timeout,guard=function()
-   return state=='applying' and check() and state=='applying' and last>=bound.arrival and last-bound.arrival<=c.max_age
+  operation_requests[p[5]]=true;operation_count=operation_count+1
+  if kind=='PREFLIGHT' then preflight_attempted=true end
+  if kind=='APPLY' then apply_used=true;preflight_ready=false end
+  operation_identity={p[5],p[6],p[7],p[8],p[9],p[10]};deadline=last+c.timeout
+  local active=kind=='APPLY' and 'applying' or 'preflighting';state=active
+  writer=apply.factory({enabled=true,readonly=kind=='PREFLIGHT' and true or nil,timeout=c.timeout,guard=function()
+   return state==active and check() and state==active and last>=bound.arrival and last-bound.arrival<=c.max_age
   end,fault=function(reason)
    local allowed={begin_guard=true,dispatch_guard=true,dispatch_issue=true,pre_guard=true,pre_response=true,pre_inspect=true,
-    pre_game=true,pre_distance=true,pre_intent=true,pre_write_marker=true,write=true,post_guard=true,post_response=true,
+    pre_game=true,pre_distance=true,preflight_log=true,pre_intent=true,pre_write_marker=true,write=true,post_guard=true,post_response=true,
     post_inspect=true,post_game=true,post_readback=true,post_log=true,tick_guard=true,post_dispatch=true,identity=true,begin=true,event=true,tick=true}
-   fail('apply_'..(allowed[reason] and reason or 'unknown'))
+   fail((kind=='PREFLIGHT' and 'preflight_' or 'apply_')..(allowed[reason] and reason or 'unknown'))
   end})
-  if state~='applying' or not writer or not check() then return false end
+  if state~=active or not writer or not check() then return false end
   local input={request=p[5],epoch=c.epoch,generation=c.generation,index=bound.index,sequence=bound.sequence,digest=bound.digest,
    sector_macro=bound.sector,actor_key=bound.actor_key,sector_key=bound.sector_key,zone_key=bound.zone_key,
    target={x=bound.position[1],y=bound.position[2],z=bound.position[3]}}
-  return writer:begin(input)==true and state=='applying' and check()
+  return writer:begin(input)==true and state==active and check()
  end
  function api:tick()
-  if busy or (state~='ready' and state~='pending' and state~='applying') then return fail('tick')end
+  if busy or (state~='ready' and state~='pending' and state~='applying' and state~='preflighting') then return fail('tick')end
   busy=true;local ok=pcall(function()
    assert(check())
    if state=='pending' then assert(pending.binding:tick() and check())end
-   if state=='applying' then
-    assert(writer:tick() and state=='applying' and check())
-    if writer:state()=='done' then
-     assert(c.net:receive()==nil and check());assert(send(reply('APPLIED',apply_identity)))
+   if state=='applying' or state=='preflighting' then
+    local active=state;assert(writer:tick() and state==active and check())
+    local result=writer:state()
+    if active=='applying' and result=='done' then
+     assert(c.net:receive()==nil and check());assert(send(reply('APPLIED',operation_identity)))
      state='ready';deadline=nil
+    elseif active=='preflighting' and (result=='near' or result=='ready') then
+     assert(c.net:receive()==nil and check())
+     local identity={};for i,v in ipairs(operation_identity)do identity[i]=v end;identity[#identity+1]=result=='near' and 'NEAR' or 'READY'
+     assert(send(reply('PREFLIGHTED',identity)));preflight_ready=result=='ready';state='ready';deadline=nil
     end
    end
    local packet=c.net:receive()
    if packet~=nil then
     assert(state=='ready' and type(packet)=='string' and #packet<=768)
     local p=split(packet)
-    if p[4]=='APPLY' then assert(accept_apply(packet)) else assert(not apply_used and accept(packet))end
+    if p[4]=='APPLY' or p[4]=='PREFLIGHT' then assert(accept_operation(packet,p[4])) else assert(not apply_used and accept(packet))end
    end
   end);busy=false;if not ok then return fail('tick')end;return true
  end
  function api:apply_event(value)
-  if busy or state~='applying' or not writer then return fail('apply_event')end
-  busy=true;local ok=pcall(function()assert(check() and writer:event(value)==true and state=='applying' and check())end)
+  if busy or (state~='applying' and state~='preflighting') or not writer then return fail('apply_event')end
+  local active=state;busy=true;local ok=pcall(function()assert(check() and writer:event(value)==true and state==active and check())end)
   busy=false;if not ok then return fail('apply_event')end;return true
  end
  function api:event(value,route)

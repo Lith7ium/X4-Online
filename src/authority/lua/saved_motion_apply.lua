@@ -15,6 +15,7 @@ function M.new(o)
  local c={};for k,v in pairs(o)do c[k]=v end
  for _,k in ipairs({'clock','game','guard','issue','inspect','write','log','fault'})do assert(type(c[k])=='function',k)end
  assert(finite(c.timeout) and c.timeout>1 and c.timeout<=30)
+ assert(c.readonly==nil or c.readonly==true)
  local state,busy,used='idle',false,false;local last,deadline,pending,written=nil,nil,nil,false
  local api={}
  local function snapshot()
@@ -70,7 +71,14 @@ function M.new(o)
    stage=state=='pre' and 'pre_game' or 'post_game'
    local good,gt=pcall(c.game);assert(good and finite(gt) and gt>=0 and state==before_state and check())
    if state=='pre' then
-    stage='pre_distance';local d=distance(p,pending.target);assert(finite(d) and d>=5 and d<=50)
+    stage='pre_distance';local d=distance(p,pending.target);assert(finite(d))
+    if c.readonly then
+     local result=d<5 and 'NEAR' or (d<=50 and 'READY' or 'FAR')
+     stage='preflight_log';assert(report(('PREFLIGHT %s %d %d %s %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %s'):format(
+      pending.request,pending.index,pending.sequence,pending.digest,p.x,p.y,p.z,pending.target.x,pending.target.y,pending.target.z,gt,d,result)))
+     stage='pre_distance';assert(result~='FAR');state=result=='NEAR' and 'near' or 'ready';deadline=nil;return
+    end
+    assert(d>=5 and d<=50)
     stage='pre_intent'
     assert(report(('INTENT %s %d %d %s %.17g %.17g %.17g %.17g %.17g %.17g %.17g'):format(
      pending.request,pending.index,pending.sequence,pending.digest,p.x,p.y,p.z,pending.target.x,pending.target.y,pending.target.z,gt)))

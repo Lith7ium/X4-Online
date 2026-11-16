@@ -19,25 +19,42 @@ import authority_census_replica_live as lifecycle
 import authority_census_archive_provenance as archive
 import authority_saved_frame_compare as frame
 import authority_sector_pair_transfer_live as transfer
-from authority.experimental_tcp_motion import motion_digest
+from authority.experimental_tcp_motion import motion_digest, motion_value
 
 APPLY_TAG='[X4LAN] AUTH_MOTION_APPLY '
 
 
-def verify_apply(raw,sample):
+def verify_apply(raw,sample,samples,statuses):
     """Correlate the one before/write/readback series to the sent sample."""
     if type(raw) is not bytes or not raw.endswith(b'\n'):raise ValueError('incomplete setter log')
-    lines=raw.decode('utf-8').splitlines();rows=[];buffered=False
+    lines=raw.decode('utf-8').splitlines();rows=[];preflight=[];buffered=[]
     for line in lines:
-        if '[X4LAN] AUTH_PARTICIPANT_MOTION BUFFERED ' in line:buffered=True
+        if '[X4LAN] AUTH_PARTICIPANT_MOTION BUFFERED ' in line:buffered.append(line)
         if APPLY_TAG in line:
+            parts=line.split(APPLY_TAG,1)[1].strip().split()
             if not buffered:raise ValueError('setter before buffer')
-            rows.append(line.split(APPLY_TAG,1)[1].strip().split())
+            if parts and parts[0]=='PREFLIGHT':
+                if len(buffered)!=len(preflight)+1 or rows:raise ValueError('unexpected preflight ordering')
+                preflight.append(parts)
+            else:rows.append(parts)
+    if len(preflight)!=len(samples) or len(samples)!=len(statuses):raise ValueError('preflight count differs')
+    for item,s,status in zip(preflight,samples,statuses):
+        if (len(item)!=14 or not re.fullmatch(r'[0-9a-f]{32}',item[1]) or
+            item[2:5]!=[str(s['index']),str(s['sequence']),motion_digest(s)] or item[13]!=status.upper()):
+            raise ValueError('preflight identity differs')
+        try:local=list(map(float,item[5:8]));target=list(map(float,item[8:11]));game=float(item[11]);distance=float(item[12])
+        except ValueError:raise ValueError('invalid preflight evidence') from None
+        if (not all(math.isfinite(v) for v in local+target+[game,distance]) or target!=[s[k] for k in ('x','y','z')] or
+            not math.isclose(distance,math.dist(local,target),rel_tol=1e-9,abs_tol=1e-6) or
+            (status=='near' and not 0<=distance<5) or (status=='ready' and not 5<=distance<=50)):
+            raise ValueError('preflight distance differs')
     if len(rows)!=3 or [r[0] for r in rows]!=['INTENT','WRITE_ENTERED','READBACK']:
         raise ValueError('one setter attempt and readback required')
     a,b,c=rows
     if len(a)!=12 or len(b)!=2 or len(c)!=10 or not re.fullmatch(r'[0-9a-f]{32}',a[1]) or b[1]!=a[1] or c[1]!=a[1]:
         raise ValueError('setter operation identity differs')
+    requests=[item[1] for item in preflight]+[a[1]]
+    if len(set(requests))!=len(requests):raise ValueError('preflight or apply request reused')
     digest=motion_digest(sample);identity=[str(sample['index']),str(sample['sequence']),digest]
     if a[2:5]!=identity or c[2:5]!=identity:raise ValueError('setter sample identity differs')
     try:before=list(map(float,a[5:8]));target=list(map(float,a[8:11]));game_before=float(a[11]);after=list(map(float,c[5:8]));game_after=float(c[8]);elapsed=float(c[9])
@@ -58,12 +75,16 @@ class SetterCoordinator(motion.MotionCoordinator):
         return tuple(sorted(set(motion.MotionCoordinator._sources())|{ROOT/'tools/dev'/p for p in (
             'authority_saved_setter_pair_live.py','authority_saved_frame_compare.py','authority_frame_read.lua',
             'authority_frame_read.xml','authority_saved_motion_apply.xml')}|{ROOT/'src/authority/lua/saved_motion_apply.lua'}))
-    def __init__(self,candidates,*,defer_source_ack=False):
+    def __init__(self,candidates,*,defer_source_ack=False,preflight_max_samples=12,preflight_max_seconds=20):
+        if (type(preflight_max_samples) is not int or not 1<=preflight_max_samples<=16 or
+            type(preflight_max_seconds) not in (int,float) or not math.isfinite(preflight_max_seconds) or not 1<=preflight_max_seconds<=30):
+            raise ValueError('invalid preflight budget')
         super().__init__(candidates,defer_source_ack=defer_source_ack,motion_count=1,saved_index=frame.SHIP_INDEX)
+        self.preflight_max_samples=preflight_max_samples;self.preflight_max_seconds=preflight_max_seconds
         if self.saved_sector!=frame.SECTOR:raise ValueError('saved sector differs from frame experiment')
         self.frame_records=None;self.profiles={};self.frame_nonces={};self.frame_snapshots={};self.apply_possible=False
     def motion_settings(self,settings):return dict(settings,saved_apply=True)
-    def worker_config(self,config):return dict(config,apply_once=True)
+    def worker_config(self,config):return dict(config,apply_once=True,preflight_max_samples=self.preflight_max_samples,preflight_max_seconds=self.preflight_max_seconds)
     def install(self,case,profile,ticket,config,nonce,timeout,window):
         files=super().install(case,profile,ticket,config,nonce,timeout,window)
         role=config['role'];self.profiles[role]=profile;fn=self.fresh();self.frame_nonces[role]=fn
@@ -107,7 +128,29 @@ class SetterCoordinator(motion.MotionCoordinator):
         raise TimeoutError('paused frame comparison incomplete')
     def _validate_motion_result(self,result):
         if type(result) is not dict or result.get('motion_pose_applied') is not True:raise ValueError('setter receipt missing')
-        copy=dict(result,motion_pose_applied=False);super()._validate_motion_result(copy)
+        if set(result.get('motion_preflight_statuses',()))-{'near','ready'}:raise ValueError('invalid preflight status')
+        copy=dict(result,motion_pose_applied=False);samples=copy.pop('motion_preflight_samples',None);statuses=copy.pop('motion_preflight_statuses',None)
+        if type(samples) is not list or type(statuses) is not list or not 1<=len(samples)<=self.preflight_max_samples or len(samples)!=len(statuses) or statuses!=['near']*(len(samples)-1)+['ready']:
+            raise ValueError('bounded preflight evidence missing')
+        checked=[motion_value(s) for s in samples]
+        if motion_digest(checked[-1])!=motion_digest(motion_value(result['motion_sample'])):raise ValueError('applied sample is not final preflight')
+        for i,s in enumerate(checked,1):
+            if (s['epoch']!=archive.REGISTRY_EPOCH or s['generation']!=self.generation or s['index']!=self.saved_index or
+                s['sector_macro']!=self.saved_sector or s['sequence']!=i or (i==1 and s['velocity'] is not None)):
+                raise ValueError('preflight sample identity differs')
+            if i>1:
+                previous=checked[i-2];dt=s['source_time']-previous['source_time']
+                if not math.isfinite(dt) or dt<=0:raise ValueError('preflight time did not advance')
+                if s['velocity'] is not None:
+                    if not .02<=dt<=1:raise ValueError('preflight rate interval invalid')
+                    for axis in ('x','y','z'):
+                        if not math.isclose(s['velocity'][axis],(s[axis]-previous[axis])/dt,rel_tol=1e-9,abs_tol=1e-9):
+                            raise ValueError('preflight rate differs')
+        super()._validate_motion_result(copy)
+    def validate_single_sample(self,sample,result):
+        if (sample['epoch']!=archive.REGISTRY_EPOCH or sample['generation']!=self.generation or
+            sample['index']!=self.saved_index or sample['sector_macro']!=self.saved_sector):raise ValueError('saved motion identity differs')
+    def result_samples(self):return self.result['motion_preflight_samples']
     def run(self,context):
         self.await_frame(context);self.apply_possible=True
         # Keep the legacy lifecycle's preliminary read-only flag until the
@@ -119,7 +162,7 @@ class SetterCoordinator(motion.MotionCoordinator):
         super().verify_final(logs)
         rows={role:frame.parse(logs[role],self.frame_nonces[role]) for role in ('server','client')}
         if frame.compare(rows['server'],rows['client'])!=self.frame_records:raise ValueError('frame result changed')
-        report=verify_apply(logs['client'],self.result['motion_sample'])
+        report=verify_apply(logs['client'],self.result['motion_sample'],self.result['motion_preflight_samples'],self.result['motion_preflight_statuses'])
         self.output_details['setter_readback']=report
         self.output_details['motion_pose_applied']=True
         return True
@@ -128,7 +171,8 @@ class SetterCoordinator(motion.MotionCoordinator):
 def run(args):
     args.defer_source_ack=True;args.two_clients=False;active=[None]
     original=(lifecycle.coordinator.CensusCoordinator,lifecycle.installer.install,lifecycle.owned.spawn_owned_gated,lifecycle.load_observation)
-    def make(candidates,*,defer_source_ack=False):active[0]=SetterCoordinator(candidates,defer_source_ack=defer_source_ack);return active[0]
+    def make(candidates,*,defer_source_ack=False):
+        active[0]=SetterCoordinator(candidates,defer_source_ack=defer_source_ack,preflight_max_samples=args.preflight_max_samples,preflight_max_seconds=args.preflight_max_seconds);return active[0]
     def install(case,profile,ticket,config,nonce,timeout,window):return active[0].install(case,profile,ticket,config,nonce,timeout,window)
     def spawn(command,log,processes):
         result=original[2](command,log,processes);role=Path(log).parent.name
@@ -160,6 +204,7 @@ def main():
     p.add_argument('--game',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
     p.add_argument('--store',type=Path,default=archive.DEFAULT_STORE);p.add_argument('--display',required=True)
     p.add_argument('--timeout',type=float,default=300);p.add_argument('--window',type=float,default=60)
+    p.add_argument('--preflight-max-samples',type=int,default=12);p.add_argument('--preflight-max-seconds',type=float,default=20)
     p.add_argument('--seed',type=int,default=276944566)
     try:r=run(p.parse_args())
     except (OSError,ValueError,RuntimeError) as e:p.exit(1,'REFUSED: '+str(e)+'\n')

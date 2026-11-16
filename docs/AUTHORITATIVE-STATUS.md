@@ -283,8 +283,16 @@ reads completed and the client logged `BUFFERED 1318 1`. Its client log then
 reported a generic apply error, with no INTENT, WRITE_ENTERED or READBACK
 marker. The writer code places the markers before the setter; no independent
 FFI trace exists, so the result conservatively leaves its outcome uncertain.
-Fixed failure-stage diagnostics were added afterward, without establishing
-this run's cause. [Details](../tools/dev/AUTHORITY-SAVED-SETTER-PAIR.md).
+Fixed failure-stage diagnostics were added afterward. A second attempt then
+reported `apply_pre_distance`: the installed code rejected a non-finite
+distance or one outside 5–50 m. The actual positions and distance were not
+retained, so the precise alternative is unknown. No INTENT, WRITE_ENTERED or
+READBACK marker was recorded, and the result conservatively leaves setter
+outcome uncertain. A future read-only preflight could wait for fresh genuine
+samples before attempting APPLY. In a third attempt, the read-only preflight
+logged a 98.017920181849689 m difference and `FAR`; no write or readback
+marker appeared, and the result conservatively left setter outcome uncertain.
+The readings were made at different process times. [Details](../tools/dev/AUTHORITY-SAVED-SETTER-PAIR.md).
 
 The current motion diagnostic is not a full-fleet synchronization design. Its
 pair runner configures at most 1,024 client tracks, and its source bridge pulls
