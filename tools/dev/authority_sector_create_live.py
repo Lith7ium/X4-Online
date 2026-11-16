@@ -44,9 +44,6 @@ def install(case,profile,ticket,slot,nonce,macros):
     for src,var in (('authority_sector_create_driver.lua','X4LAN_SECTOR_CREATE_DRIVER'),
                     ('authority_sector_create_owner.lua','X4LAN_SECTOR_CREATE_OWNER')):
         text=(ROOT/'tools/dev'/src).read_text()
-        if src=='authority_sector_create_owner.lua':
-            text=once(text," local function fail() state='failed';return false end",
-                " local function fail() if state~='failed' then DebugError('[X4LAN] AUTH_SECTOR_CREATE ERROR owner') end;state='failed';return false end")
         text=once(text,'return M\n',var+'=M\nreturn M\n')
         (ui/src).write_text(text)
     shutil.copyfile(ROOT/'tools/dev/authority_sector_create_run.lua',ui/'authority_sector_create_run.lua')
@@ -80,29 +77,38 @@ def validate(raw,ticket,slot,macros,partial=False):
     positions=[i for i,line in enumerate(lines) if TAG in line]
     if positions and (len(pauses)!=1 or positions[0]<=pauses[0]): raise ValueError('create before confirmed pause')
     rows=[lines[i].split(TAG,1)[1].strip() for i in positions]
-    if len(rows)>8: raise ValueError('duplicated create receipts')
-    expected=((3,'create'),(3,'replay'),(4,'create'),(4,'replay'),(3,'final'),(4,'final'))
+    ops=('Preflight','Initialize','Create','Inspect','Create','Inspect','Create','Inspect','Create','Inspect','Inspect','Inspect')
+    expected_rows=((3,'create'),(3,'replay'),(4,'create'),(4,'replay'),(3,'final'),(4,'final'))
+    expected=[];index=0
+    for op in ops:
+        expected.extend(('DIAG DISPATCH before '+op,'DIAG DISPATCH after '+op+' accepted'))
+        if op=='Inspect': expected.append(('ROW',index));index+=1
+    expected.extend(('PENDING','DONE'))
+    if len(rows)>len(expected): raise ValueError('duplicated create receipts')
     parsed=[];baseline=None;locations={}
-    for i,row in enumerate(rows[:6]):
-        m=ROW.fullmatch(row)
-        if not m or (int(m[1]),m[2])!=expected[i] or m[3]!=macros[int(m[1])-3]: raise ValueError('invalid create row')
-        coords=[float(m[j]) for j in (5,6,7)];game=float(m[9]);count=int(m[8])
+    for i,row in enumerate(rows):
+        wanted=expected[i]
+        if isinstance(wanted,str):
+            if wanted=='DONE':
+                match=DONE.fullmatch(row)
+                if not match or float(match[1])!=observed['reported_game_time']: raise ValueError('invalid completion')
+            elif row!=wanted: raise ValueError('invalid or reordered dispatch receipt')
+            continue
+        j=wanted[1];m=ROW.fullmatch(row)
+        if not m or (int(m[1]),m[2])!=expected_rows[j] or m[3]!=macros[int(m[1])-3]: raise ValueError('invalid create row')
+        coords=[float(m[k]) for k in (5,6,7)];game=float(m[9]);count=int(m[8])
         if (not all(math.isfinite(x) for x in (*coords,game)) or game!=observed['reported_game_time'] or
             any(abs(a-b)>2 for a,b in zip(coords,(-400,100000,500)))): raise ValueError('invalid create pose or time')
         if baseline is None: baseline=count-1
-        if baseline<0 or count!=baseline+(1 if i<2 else 2): raise ValueError('invalid candidate counts')
+        if baseline<0 or count!=baseline+(1 if j<2 else 2): raise ValueError('invalid candidate counts')
         index=int(m[1]);loc=m[4]
         if index in locations and locations[index]!=loc: raise ValueError('sector relationship changed')
         locations[index]=loc
         parsed.append(dict(index=index,stage=m[2],sector_macro=m[3],location=loc,position=coords,count=count))
-    if len(rows)<8:
-        if len(rows)==7 and rows[6]!='PENDING': raise ValueError('invalid pending receipt')
+    if len(rows)<len(expected):
         if partial:return None
         raise ValueError('incomplete create receipts')
-    if rows[6]!='PENDING': raise ValueError('missing pending fence')
-    match=DONE.fullmatch(rows[7])
-    if not match or float(match[1])!=observed['reported_game_time'] or 'remote' not in locations.values():
-        raise ValueError('invalid completion or missing remote sector')
+    if 'remote' not in locations.values(): raise ValueError('missing remote sector')
     observed.update(created_records=parsed,baseline_candidate_count=baseline,at_least_one_remote_sector=True,
         completion_receipt_preceded_owned_cleanup=True,complete_world_coverage=False,independent_md_reads_proven=False,
         client_identity_proven=False,exact_position_transfer_proven=False,collision_free_proven=False)

@@ -27,23 +27,31 @@ class SectorCreateLiveTests(unittest.TestCase):
    receiver=md/'authority_ship_create_receiver.xml'
    self.assertEqual(receiver.read_bytes(),(ROOT/'tools/dev/authority_sector_create_receiver.xml').read_bytes())
    self.assertIn(receiver,protected);self.assertIn(ui/'authority_sector_create_owner.lua',protected)
-   self.assertIn('AUTH_SECTOR_CREATE ERROR owner',(ui/'authority_sector_create_owner.lua').read_text())
+   self.assertIn("o.diagnostic,'OWNER_FAIL '",(ui/'authority_sector_create_owner.lua').read_text())
+   self.assertIn("log('ERROR '..message)",(ui/'authority_sector_create_run.lua').read_text())
    self.assertNotIn('authority_job_ship_events.xml',{p.name for p in md.iterdir()})
  def test_rows_and_terminal_fence(self):
   old=create._base_check;create._base_check=lambda *a,**kw:{'reported_game_time':3.0}
   try:
-   tag=create.TAG;rows=[]
-   for i,(idx,stage) in enumerate(((3,'create'),(3,'replay'),(4,'create'),(4,'replay'),(3,'final'),(4,'final'))):
-    rows.append(f'{tag}ROW index={idx} stage={stage} macro=sector_{"a" if idx==3 else "b"} location={"remote" if idx==3 else "local"} x=-400 y=100000 z=500 count={11 if i<2 else 12} game=3')
+   tag=create.TAG;rows=[];row_indices=[]
+   stages=iter(((3,'create'),(3,'replay'),(4,'create'),(4,'replay'),(3,'final'),(4,'final')))
+   for op in ('Preflight','Initialize','Create','Inspect','Create','Inspect','Create','Inspect','Create','Inspect','Inspect','Inspect'):
+    rows.extend((tag+'DIAG DISPATCH before '+op,tag+'DIAG DISPATCH after '+op+' accepted'))
+    if op=='Inspect':
+     idx,stage=next(stages);row_indices.append(len(rows));n=len(row_indices)
+     rows.append(f'{tag}ROW index={idx} stage={stage} macro=sector_{"a" if idx==3 else "b"} location={"remote" if idx==3 else "local"} x=-400 y=100000 z=500 count={11 if n<=2 else 12} game=3')
    rows.extend((tag+'PENDING',tag+'DONE game=3'))
    prefix=create.base.load.TAG.decode()+'pause_observed|ticket'
    raw=lambda x:('\n'.join([prefix]+x)+'\n').encode()
    result=create.validate(raw(rows),self.ticket,2,['sector_a','sector_b'])
    self.assertEqual(len(result['created_records']),6);self.assertTrue(result['at_least_one_remote_sector'])
-   for i in range(8):self.assertIsNone(create.validate(raw(rows[:i]),self.ticket,2,['sector_a','sector_b'],partial=True))
-   bad=[rows+[tag+'ERROR owner'],rows+[rows[-1]],rows[:2]+[rows[2].replace('count=12','count=13')]+rows[3:],
-        rows[:4]+[rows[4].replace('location=remote','location=local')]+rows[5:],
-        [row.replace('location=remote','location=local') for row in rows],rows[:6]+[tag+'DONE game=3',rows[6]]]
+   for i in range(len(rows)):self.assertIsNone(create.validate(raw(rows[:i]),self.ticket,2,['sector_a','sector_b'],partial=True))
+   bad=[rows+[tag+'ERROR OWNER_FAIL callback'],rows+[rows[-1]],
+        rows[:row_indices[2]]+[rows[row_indices[2]].replace('count=12','count=13')]+rows[row_indices[2]+1:],
+        rows[:row_indices[4]]+[rows[row_indices[4]].replace('location=remote','location=local')]+rows[row_indices[4]+1:],
+        [row.replace('location=remote','location=local') for row in rows],rows[:-2]+[rows[-1],rows[-2]],
+        rows[:4]+rows[5:],rows[:4]+[rows[5],rows[4]]+rows[6:],
+        rows[:5]+[rows[5].replace('accepted','rejected')]+rows[6:]]
    for value in bad:
     with self.subTest(rows=value):
      with self.assertRaises(ValueError):create.validate(raw(value),self.ticket,2,['sector_a','sector_b'])

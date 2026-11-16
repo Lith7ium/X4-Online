@@ -10,10 +10,17 @@ function M.new(o)
  assert(token(o.epoch) and token(o.nonce) and type(o.macros)=='table' and #o.macros==2 and o.macros[1]~=o.macros[2])
  for _,s in ipairs(o.macros) do assert(type(s)=='string' and #s<=128 and s:match('^[%w_%-%.]+$')) end
  for _,s in ipairs({'issue','clock','guard','count','snapshot','report'}) do assert(type(o[s])=='function',s..' required') end
+ assert(o.diagnostic==nil or type(o.diagnostic)=='function')
  local phase='new';local failed=false;local busy=false;local last,deadline,game0,baseline,step=nil,nil,nil,nil,1
  local saved={};local remote=false
  local sequence={{3,3,'create'},{3,3,'replay'},{4,4,'create'},{4,4,'replay'},{3,4,'final'},{4,4,'final'}}
- local function fail(reason) failed=true;phase='failed';return false,reason end
+ local function fail(reason)
+  if not failed then
+   if o.diagnostic then pcall(o.diagnostic,'DRIVER_FAIL '..phase..' '..reason) end
+   failed=true;phase='failed'
+  end
+  return false,reason
+ end
  local function call(fn,...)
   if busy then return fail('reentrant') end
   busy=true;local ok,a,b=pcall(fn,...);busy=false
@@ -34,8 +41,21 @@ function M.new(o)
  local function issue(screen,op,args,nextphase)
   if not check() then return false end
   phase=nextphase;deadline=last+5
+  if o.diagnostic then
+   local logged=call(o.diagnostic,'DISPATCH before '..op)
+   if not logged or not check() then return false end
+  end
   local ok,sent=call(o.issue,screen,op,args)
-  if not ok or sent~=true then return fail('dispatch') end
+  if not ok then
+   -- The dispatcher may already have sent the event before raising.
+   if o.diagnostic then pcall(o.diagnostic,'DISPATCH after '..op..' exception') end
+   return false
+  end
+  if o.diagnostic then
+   local logged=call(o.diagnostic,'DISPATCH after '..op..' '..(sent==true and 'accepted' or 'rejected'))
+   if not logged then return false end
+  end
+  if sent~=true then return fail('dispatch') end
   -- The call may have sent a mutation before becoming slow or losing pause.
   -- In that case failure is indeterminate and the owner must discard the case.
   return check()

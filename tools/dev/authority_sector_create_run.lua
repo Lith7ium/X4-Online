@@ -2,9 +2,13 @@
 local cfg=X4LAN_CONFIG
 if not cfg or cfg.authority_sector_create_run~=true then return end
 local ffi=require('ffi');local C=ffi.C
-local phase='new';local owner,failed,start,last,game0,quiet=nil,false,nil,nil,nil,nil
+local phase='new';local stage='guard';local owner,failed,start,last,game0,quiet=nil,false,nil,nil,nil,nil
 local function log(s) DebugError('[X4LAN] AUTH_SECTOR_CREATE '..s) end
-local function fail() if not failed then failed=true;phase='failed';log('ERROR state') end end
+local function fail() if not failed then failed=true;phase='failed';log('ERROR RUN_FAIL '..stage) end end
+local function diagnostic(message)
+ assert(type(message)=='string' and message:match('^[A-Z_a-z ]+$'))
+ if message:match('^DISPATCH ') then log('DIAG '..message) else log('ERROR '..message) end
+end
 local function finite(n)return type(n)=='number' and n==n and math.abs(n)<math.huge end
 local function guard()
  local p=C.GetSaveFolderPath()
@@ -26,21 +30,21 @@ end
 function X4LAN_SECTOR_CREATE_RUN_TICK()
  if failed then error('sector create experiment failed') end
  local ok=pcall(function()
-  local t=guard()
+  stage='guard';local t=guard()
   if phase=='new' then
-   phase='running'
+   phase='running';stage='owner_setup'
    owner=assert(X4LAN_SECTOR_CREATE_OWNER.new_x4({enabled=true,exclusive_events=true,
     expected_save_path=cfg.authority_read_save_path,epoch=cfg.authority_sector_epoch,
     nonce=cfg.authority_sector_create_nonce,macros=cfg.authority_sector_create_macros,
-    driver_module=assert(X4LAN_SECTOR_CREATE_DRIVER),report=report}))
-   assert(owner:start())
+    driver_module=assert(X4LAN_SECTOR_CREATE_DRIVER),report=report,diagnostic=diagnostic}))
+   stage='owner_start';assert(owner:start())
   elseif phase=='running' then
-   owner:update();assert(owner:state()~='failed')
+   stage='owner_update';owner:update();assert(owner:state()~='failed')
    if owner:state()=='pending_fence' then quiet=t;phase='settling';log('PENDING') end
   elseif phase=='settling' then
-   owner:update();assert(owner:state()=='pending_fence')
+   stage='settling';owner:update();assert(owner:state()=='pending_fence')
    if t-quiet>=0.5 then log('DONE game='..string.format('%.17g',game0));phase='done' end
-  else assert(phase=='done' and owner:state()=='pending_fence') end
+  else stage='done_check';assert(phase=='done' and owner:state()=='pending_fence') end
  end)
  if not ok then fail();error('sector create experiment failed') end
  return phase=='done'

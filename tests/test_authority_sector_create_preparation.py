@@ -25,7 +25,7 @@ class PreparationTests(unittest.TestCase):
    self.assertIn(value,conditions)
   self.assertFalse(root.findall('.//create_ship'))
  def test_fake_x4_owner_driver_integration(self):
-  for mode in ('ok','mismatch'):
+  for mode in ('ok','mismatch','conversion_failure','before_dispatch_error','slow_before_dispatch','slow_after_dispatch','issue_exception','issue_pause_loss','late_event'):
    with self.subTest(mode=mode):subprocess.run(['luajit','tests/authority_sector_create_integration.lua',mode],cwd=ROOT,check=True,capture_output=True)
  def test_owner_fake_x4(self):
   for mode in ('ok','disabled','late_event','registration','registration_false','registration_callback','bad_path','unpaused','invalid_actor','invalid_candidate','wrong_sector','pause_during_pose','time_during_pose','nan','fleet_changed','fleet_cut','fleet_duplicate','conversion','bad_macro'):

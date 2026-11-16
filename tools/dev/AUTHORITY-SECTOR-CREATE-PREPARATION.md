@@ -72,3 +72,34 @@ exact duplicate avoidance, arbitrary-sector identity, NPC equivalence, real
 network delivery, client reconciliation or playable multiplayer is established.
 Candidate counts observe only the bounded selection, not a complete world.
 The tests are synthetic and XML structural checks; no game was started.
+
+## First native attempt and diagnostic hardening
+
+The isolated `authority-sector-create-01` attempt requested the checkpoint,
+observed its marker, completed the slot-2 read and reported pause. It then
+logged a generic owner error before any create-readback ROW. The result is
+failure, with no owned processes reported remaining. The old log did not
+identify the failing owner/driver/FFI phase or whether a Create request had
+already been dispatched. Do not interpret the absence of ROW as evidence that
+no in-memory ship was created; the disposable case remains indeterminate and
+must not be reused. Its artifacts and failure result are unchanged.
+
+The current probe emits fixed, non-sensitive diagnostic categories for owner,
+driver and FFI phases, including candidate conversion, plus ordered before/after
+dispatch receipts for Preflight, Initialize, Create and Inspect. They contain
+no actor IDs, descriptors, leases or exception text. A `before` receipt means
+only that dispatch was about to be attempted: the deadline and pause are checked
+again before the API call. An `after ... accepted` receipt means the local API
+returned without refusal, not that MD completed or a ship was created. An
+exception or missing after-receipt leaves delivery indeterminate. Diagnostics
+are written inside the existing deadline fencing, and logging failure, late
+callback or slow dispatch still faults the whole disposable case. For a
+successful result the log validator requires the complete ordered before/after
+sequence, the six readbacks, pending fence and final receipt; the post-cleanup
+log check still rejects late faults. Missing logs do not establish that an
+action did not occur.
+
+The diagnostic update is covered by fake-X4 tests for failure before and after
+a Create dispatch, a slow logger on either side, candidate ID conversion,
+pause loss, late callbacks, invalid receipt order and final-log faults. These
+are synthetic checks; no native follow-up is claimed here.
