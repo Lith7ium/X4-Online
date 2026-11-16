@@ -14,9 +14,9 @@ local function rig(role,opt)
   clock=function()return now end,observe=function()return paused,game end,guard=function()return not opt.bad_guard end,
   pause=function()paused=true end,resume=function()paused=false;game=31 end,baseline_request=function(e,n)assert(e==epoch and n==nonce);return true end,log=function(s)logs[#logs+1]=s end,
   host_factory=function(r,f)report,fault=r,f;return host end,
-  descriptor_factory=function(r,a)assert(r.sequence==2 and r.index==10055 and a==actor);return {start=function()return true end,tick=function()return true end,close=function()return true end,
-   response=function(_,v)if v~='ok' then return false end;return true,{epoch=epoch,index=10055,sequence=2,macro='ship_macro',owner='argon',sector_macro='sector_a',x=1,y=2,z=3}end} end,
-  witness_factory=function(index,macro)return {start=function()return true end,tick=function()return true end,close=function()if opt.close_error then error('close') end;return true end,
+  descriptor_factory=function(r,a)assert(r.sequence==2 and r.index==10055 and a==actor);return {start=function()return true end,tick=function()return true end,close=function()if opt.descriptor_close_error then error('close') end;if opt.descriptor_close_reenter then app:fault() end;return true end,
+   response=function(_,v)if opt.descriptor_error then error('response') end;if v~='ok' then return false end;return true,{epoch=epoch,index=10055,sequence=2,macro='ship_macro',owner='argon',sector_macro='sector_a',x=1,y=2,z=3}end} end,
+  witness_factory=function(index,macro)return {start=function()return true end,tick=function()return true end,close=function()if opt.close_error then error('close') end;if opt.close_reenter then app:fault() end;return true end,
    response=function(_,v)if opt.witness_error then error('response') end;if v~='ok' then return false end;return true,{epoch=epoch,index=index,sector_macro=macro,local_witness_match=true}end}end}
  app=assert(M.new(cfg));local cmd=table.concat({'CMD',lease,role,attempt,epoch},'|')
  return app,input,output,logs,cmd,opt,function(v)now=v end,function()if fault then fault() end end
@@ -40,4 +40,6 @@ for _,v in ipairs({string.rep('e',32)..'|'..epoch..'|10054|ok',nonce..'|'..strin
 local duplicate,_,_,dup_log=rig('client');assert(duplicate:tick());assert(duplicate:baseline_event(nonce..'|'..epoch..'|10054|ok'));assert(duplicate:tick());assert(not duplicate:baseline_event(nonce..'|'..epoch..'|10054|ok') and dup_log[#dup_log]=='FAULT')
 local missing,_,missing_out,_,_,_,setclock=rig('client');assert(missing:tick());setclock(101);assert(not missing:tick());assert(#missing_out==1 and missing_out[1]:match('|FAULT$'))
 for _,kind in ipairs({'witness_error','close_error'})do local flags={[kind]=true};local x,xi,xo,xl,xp=rig('client',flags);assert(x:tick());assert(x:baseline_event(nonce..'|'..epoch..'|10054|ok'));assert(x:tick());xi[1]=xp..'|WITNESS|2|41|sector_a';assert(x:tick());assert(not x:witness_event('ok') and x:state()=='failed' and xl[#xl]=='FAULT');for _,label in ipairs(xl)do assert(label~='WITNESS_OK')end end
+local re,rei,_,rel,rep=rig('client',{close_reenter=true});assert(re:tick());assert(re:baseline_event(nonce..'|'..epoch..'|10054|ok'));assert(re:tick());rei[1]=rep..'|WITNESS|2|41|sector_a';assert(re:tick());assert(not re:witness_event('ok') and re:state()=='failed' and rel[#rel]=='FAULT')
+for _,kind in ipairs({'descriptor_error','descriptor_close_error','descriptor_close_reenter'})do local flags={[kind]=true};local x,xi,xo,xl,xp=rig('server',flags);assert(x:tick());xi[1]=xp..'|START';assert(x:tick());assert(x:tick());assert(x:tick());assert(x:tick());assert(x:tick() and x:state()=='descriptor_wait');assert(not x:descriptor_event('ok') and x:state()=='failed' and xl[#xl]=='FAULT');for _,label in ipairs(xl)do assert(label~='DESCRIPTOR')end end
 print('census owner tests passed')

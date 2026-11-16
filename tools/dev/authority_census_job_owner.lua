@@ -81,14 +81,14 @@ function M.new(o)
   local success,ok,r=pcall(desc.response,desc,value)
   if not success or not ok or type(r)~='table' or r.epoch~=o.epoch or r.index~=10055 or r.sequence~=jobseq or not name(r.macro) or not name(r.owner) or not name(r.sector_macro) or not finite(r.x) or not finite(r.y) or not finite(r.z) or math.abs(r.x)>10000000 or math.abs(r.y)>10000000 or math.abs(r.z)>10000000 or not check(true) then return fail() end
   descriptor={macro=r.macro,owner=r.owner,sector_macro=r.sector_macro,x=r.x,y=r.y,z=r.z}
-  local closed,result=pcall(desc.close,desc);if not closed or result~=true then return fail() end
+  local closed,result=pcall(desc.close,desc);if not closed or result~=true or failed or not check(true) then return fail() end
   desc=nil;phase='descriptor_pending';return true
  end
  function api:witness_event(value)
   if busy or failed or phase~='witness_wait' or not witness or not check(true) then return fail() end
   local success,ok,r=pcall(witness.response,witness,value)
   if not success or not ok or type(r)~='table' or r.epoch~=o.epoch or r.index~=windex or r.sector_macro~=wmacro or r.local_witness_match~=true or not check(true) then return fail() end
-  local closed,result=pcall(witness.close,witness);if not closed or result~=true then return fail() end
+  local closed,result=pcall(witness.close,witness);if not closed or result~=true or failed or not check(true) then return fail() end
   witness=nil;phase='witness_pending';return true
  end
  function api:fault()return fail()end
