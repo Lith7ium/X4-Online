@@ -5,6 +5,7 @@ local function run(mode)
  X4LAN_CONFIG={authority_source_single_job_session=true,authority_source_control_port=1234,authority_source_job_port=1235,
   authority_source_control_lease=L,authority_ticket={world_epoch=E},authority_load_save_path='/private/45841/save',
   authority_source_host_timeout=10,authority_source_baseline=10054}
+ if mode=='multi' then X4LAN_CONFIG.authority_source_max_events=2 end
  local ctl={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(q,1)end}
  local job={}
  package.loadlib=function()return function()return {open=function(_,port)return port==1234 and ctl or job end}end end
@@ -22,6 +23,7 @@ local function run(mode)
  function DebugError(s)logs[#logs+1]=s end
  dofile('tools/dev/authority_source_single_job_session.lua');X4LAN_SOURCE_SINGLE_JOB_TICK()
  assert(got.net==job and got.index==10055 and got.sequence==1 and #out==1)
+ assert(got.max_events==(mode=='multi' and 2 or nil))
  q[1]='CMD|'..L..'|'..E..'|1|resume'
  if mode~='early' then state='observing' end
  X4LAN_SOURCE_SINGLE_JOB_TICK()
@@ -30,7 +32,7 @@ local function run(mode)
  q[1]='CMD|'..L..'|'..E..'|2|resume';X4LAN_SOURCE_SINGLE_JOB_TICK()
  assert(logs[#logs]:match('ERROR') and table.concat(order,',')=='control,source,submit,control,source')
 end
-run('early');run('success')
+run('early');run('success');run('multi')
 
 -- Couple the real session, X4 source owner, IPC and delivery gate. The host,
 -- MD descriptor, transport and X4 ABI are simulated; no game is started.

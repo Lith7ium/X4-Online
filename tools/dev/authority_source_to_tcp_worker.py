@@ -30,14 +30,16 @@ def config(raw):
     required={'version','epoch','lease','attempt','generation','participant_lease','client_process','deadline',
               'job_epoch','source_lease','source_attempt','source_control_lease','source_world_epoch',
               'source_process','index','sectors'}
-    if type(c) is not dict or set(c)!=required or type(c['version']) is not int or c['version']!=1:
+    if type(c) is not dict or set(c) not in (required,required|{'max_events'}) or type(c['version']) is not int or c['version']!=1:
         raise ValueError('invalid source worker configuration')
+    if 'max_events' in c and (type(c['max_events']) is not int or not 2<=c['max_events']<=8):
+        raise ValueError('invalid bounded event count')
     names=('epoch','lease','attempt','generation','participant_lease','job_epoch','source_lease',
            'source_attempt','source_control_lease')
     if (any(type(c[k]) is not str or not _TOKEN.fullmatch(c[k]) for k in (*names,'source_world_epoch')) or
         c['source_world_epoch']!=c['epoch'] or len({c[k] for k in names})!=len(names)):
         raise ValueError('invalid or overlapping worker contexts')
-    if (type(c['index']) is not int or not 1<=c['index']<=9007199254740991 or
+    if (type(c['index']) is not int or not 1<=c['index']<=9007199254740991-c.get('max_events',1)+1 or
         type(c['sectors']) is not list or not c['sectors'] or len(c['sectors'])>152 or
         any(type(v) is not str or not _NAME.fullmatch(v) for v in c['sectors']) or
         len(set(c['sectors']))!=len(c['sectors'])):
@@ -57,8 +59,8 @@ class SelectedSourceBridge(ExperimentalSourceJobBridge):
     def _recv(self,deadline):
         row=super()._recv(deadline)
         if row and row[0]=='CANDIDATE':
-            if (len(row)!=11 or row[1]!=self._epoch or row[2]!=self._generation or row[3]!='1' or
-                row[4]!=str(self._expected_index) or row[7] not in self._sectors):
+            if (len(row)!=11 or row[1]!=self._epoch or row[2]!=self._generation or row[3]!=str(self._last+1) or
+                row[4]!=str(self._expected_index+self._last) or row[7] not in self._sectors):
                 raise ValueError('unexpected source queue head or no validated client witness')
         return row
 
@@ -107,17 +109,23 @@ def run(client_control,client_job,source_control,source_job,private,c):
         ctl.timeout=min(20,c['deadline']-time.monotonic()-30)
         if ctl.timeout<=0:raise TimeoutError('insufficient source resume budget')
         guard();ctl.resume((1,));guard()
-        detail=bridge.run_one();guard()
-        if (detail.get('source_ack_observed') is not True or tuple(detail.get('members',()))!=tuple(members) or
-            detail['event']['sequence']!=1 or detail['event']['index']!=c['index']):
-            raise RuntimeError('source job or source Ack differs')
-        event=detail['event']
-        return {'event':'result','ok':True,'tcp_admitted':True,'tcp_job_receipt':True,'source_md_ack_observed':True,
+        events=[]
+        for seq in range(1,c.get('max_events',1)+1):
+            detail=bridge.run_one();guard()
+            if (detail.get('source_ack_observed') is not True or tuple(detail.get('members',()))!=tuple(members) or
+                detail['event']['sequence']!=seq or detail['event']['index']!=c['index']+seq-1):
+                raise RuntimeError('source job or source Ack differs')
+            event=detail['event'];events.append({'event_sequence':event['sequence'],'index':event['index'],
+                'sector_macro':event['descriptor']['sector_macro'],'macro':event['descriptor']['macro'],
+                'faction':event['descriptor']['faction']})
+        result={'event':'result','ok':True,'tcp_admitted':True,'tcp_job_receipt':True,'source_md_ack_observed':True,
                 'client_md_ffi_asserted_by_owner':True,'synthetic_server_checkpoint_and_admission':True,
-                'source_activation_is_birth':False,'descriptor_atomic':False,'frame_identity_proven':False,
-                'event_sequence':event['sequence'],'index':event['index'],'sector_macro':event['descriptor']['sector_macro'],
-                'macro':event['descriptor']['macro'],'faction':event['descriptor']['faction']}
-    return client_worker.run(client_control,client_job,private,c,None,delivery_action=delivery_action,extra_guard=source_guard)
+                'source_activation_is_birth':False,'descriptor_atomic':False,'frame_identity_proven':False}
+        if 'max_events' in c:result['events']=events
+        else:result.update(events[0])
+        return result
+    return client_worker.run(client_control,client_job,private,c,None,delivery_action=delivery_action,
+                             extra_guard=source_guard,expected_jobs=c.get('max_events',1))
 
 
 def main():

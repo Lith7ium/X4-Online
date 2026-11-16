@@ -172,6 +172,15 @@ does not prove birth, the descriptor is non-atomic, and cross-process frame
 identity is unproven. This single-event result is not gameplay, Windows or
 Internet validation. See [the diagnostic](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md).
 
+A second bounded two-process Linux run handled two successive source job
+events, indices 10055 and 10056, through one local TCP client. The X4 client
+logs record both local applications; per-event receipts, source acknowledgements
+and REARM ordering rely on the worker result and code, without a packet trace.
+Both descriptors were from the same sector; synthetic admission and an
+artificial client seed were used. This does not establish birth detection,
+frame equivalence, complete coverage or playable multiplayer. See [the two-event
+record](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#two-consecutive-source-events).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

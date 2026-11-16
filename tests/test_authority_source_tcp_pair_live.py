@@ -60,4 +60,30 @@ class Pair(unittest.TestCase):
    self.assertFalse(result['success']);self.assertFalse(result['source_activation_is_birth'])
    self.assertEqual(orig,(m.lifecycle.coordinator.CensusCoordinator,m.lifecycle.installer.install,m.lifecycle.owned.spawn_owned_gated,m.lifecycle.load_observation))
 
+
+class MultiPair(unittest.TestCase):
+ def test_multi_result_and_logs_fence_gaps_and_missing_witness(self):
+  c=m.Coordinator({'sector_a':(1,)},defer_source_ack=True,max_events=2)
+  self.addCleanup(c.cleanup_after_owned_processes)
+  base=Pair().result();events=[{k:base[k] for k in ('event_sequence','index','sector_macro','macro','faction')}]
+  events.append({**events[0],'event_sequence':2,'index':m.archive.COUNT+2})
+  result={k:v for k,v in base.items() if k not in events[0]};result['events']=events
+  c._validate_result(result);c.result=result;c.tickets['client']={}
+  source=b'[X4LAN] AUTH_SOURCE_SINGLE STATE binding 10\n[X4LAN] AUTH_SOURCE_SINGLE STATE observing 10\n[X4LAN] AUTH_SOURCE_SINGLE STATE delivering 11\n[X4LAN] AUTH_SOURCE_SINGLE STATE observing 11\n[X4LAN] AUTH_SOURCE_SINGLE STATE done 12\n'
+  client=(m.client_evidence.base.load.TAG.decode()+'pause_observed|x\n'+m.client_evidence.TAG+'RUNNING 10\n'+
+          m.client_evidence.TAG+'LOCAL_APPLIED '+str(m.archive.COUNT+1)+' 11\n'+
+          m.client_evidence.TAG+'LOCAL_APPLIED '+str(m.archive.COUNT+2)+' 12\n').encode()
+  with patch.object(m.client_evidence.pair,'load_observation',return_value={'loaded':True}):
+   self.assertTrue(c.verify_final({'server':source,'client':client}))
+   for bad_source in (source.replace(b'STATE observing 11',b'STATE binding 11'),
+                      source.replace(b'STATE observing 11',b'STATE await_go 11'),
+                      source.replace(b'STATE observing 11',b'STATE delivering 11')):
+    with self.assertRaises(ValueError):c.verify_final({'server':bad_source,'client':client})
+   for bad in (client.replace(b'LOCAL_APPLIED 10056',b'LOCAL_APPLIED 10055'),
+               client.replace(b'LOCAL_APPLIED 10056 12',b'LOCAL_APPLIED 10056 9')):
+    with self.assertRaises(ValueError):c.verify_final({'server':source,'client':bad})
+  for bad in ([events[0]], [events[0],{**events[1],'index':events[0]['index']}],
+              [events[0],{**events[1],'sector_macro':'missing'}]):
+   with self.assertRaises(ValueError):c._validate_result({**result,'events':bad})
+
 if __name__=='__main__':unittest.main()

@@ -23,6 +23,7 @@ class Install(unittest.TestCase):
    for p in (ui/'native_gate_snapshot.lua',md/'native_gate_battle.xml',ui/'config.lua',ui/'sha256.lua',lab/'content.xml',profile/'content.xml',profile/'config.xml'):p.write_text('test')
    with self.assertRaises(ValueError):m.install(case,profile,self.ticket(),{**self.settings(),'job_port':1234})
    with self.assertRaises(ValueError):m.install(case,profile,self.ticket(),{**self.settings(),'descriptor_request':'a'*32})
+   with self.assertRaises(ValueError):m.install(case,profile,self.ticket(),{**self.settings(),'max_events':9})
    files=m.install(case,profile,self.ticket(),self.settings())
    owner=(ui/'authority_download_load_probe.lua').read_text()
    self.assertEqual(owner.count("SetScript('onUpdate'"),1);self.assertIn('X4LAN_SOURCE_SINGLE_JOB_TICK()',owner)

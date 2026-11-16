@@ -57,6 +57,9 @@ class SourceBridgeTest(unittest.TestCase):
                      'guard':wrap(guard),'send':wrap(send),'release':wrap(release)}))
                 event={'epoch':self.epoch,'generation':self.generation,'sequence':1,'index':10055,
                        'descriptor':{'macro':'ship_test_macro','faction':'pioneers','sector_macro':'sector_a','x':1,'y':2,'z':3}}
+                if mode=='finished_zero':
+                    sock.send(('S|'+self.lease+'|'+self.attempt+'|FINISHED|'+self.epoch+'|'+self.generation+'|0').encode())
+                    return
                 candidate_ref.append(table(event));assert app['candidate'](app,candidate_ref[0])
                 rearmed=0
                 sock.settimeout(.1)
@@ -79,6 +82,12 @@ class SourceBridgeTest(unittest.TestCase):
                             break
                     if app['state'](app)=='idle':
                         rearmed+=1
+                        if mode in ('finished','bad_finished','unexpected_finished','duplicate_finished','finish_control_not_quiet'):
+                            count='2' if mode=='bad_finished' else '1'
+                            finished=('S|'+self.lease+'|'+self.attempt+'|FINISHED|'+self.epoch+'|'+self.generation+'|'+count).encode()
+                            sock.send(finished)
+                            if mode=='duplicate_finished':sock.send(finished)
+                            break
                         if mode!='two_events' or rearmed==2:break
                         event['sequence']=2;event['index']=10056
                         candidate_ref[:]=[table(event)];assert app['candidate'](app,candidate_ref[0])
@@ -110,7 +119,9 @@ class SourceBridgeTest(unittest.TestCase):
         if mode=='double_bind':
             with self.assertRaises(ValueError):ExperimentalSourceJobBridge(delivery,server,enabled=True,lease=self.lease,attempt=self.attempt,
                    epoch=self.epoch,generation=self.generation,guard=lambda:True,timeout=2)
-        if mode in ('ok','double_bind','mutate_guard','mutate_send','guard_reentry','two_events'):
+        if mode=='finished_zero':
+            self.assertIsNone(bridge.run_one(allow_finished=True));self.assertEqual(self.releases,[]);bridge.close();return
+        if mode in ('ok','double_bind','mutate_guard','mutate_send','guard_reentry','two_events','finished','bad_finished','unexpected_finished','duplicate_finished','finish_control_not_quiet'):
             result=bridge.run_one();self.assertTrue(result['source_ack_observed']);self.assertEqual(len(result['members']),2)
             self.assertEqual(result['event']['descriptor']['x'],1)
             if mode=='guard_reentry':self.assertTrue(refused)
@@ -118,6 +129,18 @@ class SourceBridgeTest(unittest.TestCase):
             if mode=='two_events':
                 result=bridge.run_one();self.assertEqual(result['event']['sequence'],2)
                 self.assertEqual(self.releases,[(self.epoch,1,10055),(self.epoch,2,10056)])
+            if mode=='finished':
+                self.assertIsNone(bridge.run_one(allow_finished=True));self.assertEqual(bridge.state,'finished')
+            elif mode=='finish_control_not_quiet':
+                self.base.case.control.ready_for_resume=lambda:False
+                with self.assertRaises(RuntimeError):bridge.run_one(allow_finished=True)
+                self.assertEqual(bridge.state,'failed');return
+            elif mode=='duplicate_finished':
+                with self.assertRaises(RuntimeError):bridge.run_one(allow_finished=True)
+                self.assertEqual(bridge.state,'failed');return
+            elif mode in ('bad_finished','unexpected_finished'):
+                with self.assertRaises(ValueError):bridge.run_one(allow_finished=mode=='bad_finished')
+                self.assertEqual(bridge.state,'failed');return
             bridge.close()
         else:
             with self.assertRaises((ValueError,RuntimeError,TimeoutError,ConnectionError)):bridge.run_one()
@@ -136,6 +159,12 @@ class SourceBridgeTest(unittest.TestCase):
     def test_queued_duplicate_prevents_source_receipt(self):self.exercise('duplicate_ready')
     def test_guard_cannot_reenter_host_or_control_reader(self):self.exercise('guard_reentry')
     def test_immediate_next_candidate_waits_for_rearm(self):self.exercise('two_events')
+    def test_empty_window_completion_does_not_claim_delivery(self):self.exercise('finished_zero')
+    def test_correlated_finished_after_rearm(self):self.exercise('finished')
+    def test_duplicate_finished_fences_host(self):self.exercise('duplicate_finished')
+    def test_finished_rejects_non_quiet_tcp(self):self.exercise('finish_control_not_quiet')
+    def test_wrong_finished_count_fences_host(self):self.exercise('bad_finished')
+    def test_finished_requires_explicit_opt_in(self):self.exercise('unexpected_finished')
     def test_missing_rearm_receipt_fences_after_ack(self):self.exercise('no_rearm')
     def test_early_candidate_fails_instead_of_being_discarded(self):self.exercise('early_candidate')
 

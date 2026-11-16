@@ -102,7 +102,8 @@ class SyntheticEngine:
     def save(self): self.path.write_bytes(gzip.compress(_XML.encode()));return self.path
 
 
-def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_guard=None):
+def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_guard=None,expected_jobs=1):
+    if type(expected_jobs) is not int or not 1<=expected_jobs<=8:raise ValueError('invalid bounded job count')
     if delivery_action is not None and not callable(delivery_action):raise ValueError('invalid delivery action')
     if extra_guard is not None and not callable(extra_guard):raise ValueError('invalid extra guard')
     job_epoch=event['epoch'] if event is not None else c['job_epoch']
@@ -176,7 +177,8 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                     # Resume is the first command. READY arrives only after X4 resumed.
                     while not adapter.poll(.1): guard()
                     bridge.wait_ready()
-                    while not adapter.poll(.1): guard()
+                    for _ in range(expected_jobs):
+                        while not adapter.poll(.1): guard()
                     while not stop.wait(.05): guard()
                 except BaseException as error:failure.append(error);stop.set()
                 finally:

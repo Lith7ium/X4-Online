@@ -23,16 +23,18 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
      assert(control_net:send('RECEIPT|'..cfg.authority_source_control_lease..'|'..cfg.authority_ticket.world_epoch..'|'..
       string.format('%.0f',row.request_id)..'|'..row.operation..'|'..row.status))
     end))
-   source=assert(X4LAN_AUTHORITY_SOURCE_SINGLE_JOB_OWNER.new_x4({enabled=true,
+   local owner_cfg={enabled=true,
+    sequence=1,index=cfg.authority_source_baseline+1,max_events=cfg.authority_source_max_events,
     lease=cfg.authority_source_lease,attempt=cfg.authority_source_attempt,epoch=cfg.authority_source_epoch,
     generation=cfg.authority_source_generation,descriptor_request=cfg.authority_source_descriptor_request,
-    sequence=1,index=cfg.authority_source_baseline+1,capacity=cfg.authority_source_capacity,
+    capacity=cfg.authority_source_capacity,
     timeout=cfg.authority_source_timeout,host_timeout=cfg.authority_source_host_timeout,window=cfg.authority_source_window,
     expected_save_path=cfg.authority_load_save_path,net=source_net,
     host=X4LAN_AUTHORITY_JOB_REGISTRY_HOST,probe=X4LAN_AUTHORITY_JOB_REGISTRY_PROBE,
     descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,resolve=X4LAN_RESOLVE_STRING,
     ipc=X4LAN_AUTHORITY_SOURCE_JOB_IPC,gate=X4LAN_AUTHORITY_JOB_DELIVERY,
-    external_guard=function()return not failed end,fault=fail}))
+    external_guard=function()return not failed end,fault=fail}
+   source=assert(X4LAN_AUTHORITY_SOURCE_SINGLE_JOB_OWNER.new_x4(owner_cfg))
    assert(source:start());previous=source:state();mark(previous)
   end
   local now=GetCurRealTime()

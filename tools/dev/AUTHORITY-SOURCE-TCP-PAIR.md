@@ -35,3 +35,47 @@ The TCP server-side checkpoint and admission were synthetic: no save was
 transferred to the client as part of TCP admission. This one-event diagnostic
 also establishes neither continuous event delivery nor position/velocity
 synchronization, persistence, combat, trading or boarding.
+
+The private diagnostic runner can also be explicitly configured with
+`--max-events` from 2 through 8. It then requires each consecutive source
+sequence and registry index, a validated saved-sector witness for every
+candidate, a client receipt and source MD acknowledgement for each event, and
+`REARM` before the next. The small count is a resource and runtime bound for
+this private experiment; it is not a target or a general universe limit. The
+reusable bridge continues to process events serially without that count limit.
+The source also has a continuous mode with a point-in-time empty-queue
+observation; the native run below used a fixed event count, not that mode.
+
+
+## Two consecutive source events
+
+The separate opt-in `.local/authority-source-tcp-multi-01` diagnostic reported
+success for two consecutive source job activations on 2026-11-16. It used two
+isolated local Linux X4 processes and **one** local TCP client. The two
+reported descriptors refer to the same sector, `cluster_115_sector001_macro`,
+and the same ship macro `ship_gen_m_tugboat_01_a_macro` and faction `pioneers`.
+The result records sequence/index pairs `(1, 10055)` and `(2, 10056)`.
+
+Both X4 logs show a request to load the staged census checkpoint, the expected
+marker and a pause observation; they do not prove exact file consumption or a
+continuous pause. The source log samples `observing` at game time 3.037, then
+`reading`/`delivering`, a return to `observing`, another
+`reading`/`delivering` and `done` at 13.400771609. These states are samples,
+not a complete event or message trace. The client log separately records
+`RUNNING` at 3.037 followed by `LOCAL_APPLIED 10055` at 13.229446902 and
+`LOCAL_APPLIED 10056` at 13.448099517. Source and client game times are not a
+shared clock and cannot independently establish cross-process ordering.
+
+The supervisor's saved result and the worker/coordinator code support the
+correlated order for each event: source descriptor, client TCP delivery and
+local apply, client receipt, source MD acknowledgement, then REARM before the
+next head. TCP frames, individual acknowledgements and PID/socket inode
+samples were not separately saved as a packet or raw process trace. The result
+reports owned cleanup confirmed with no remaining owned processes.
+
+The TCP server checkpoint and admission were synthetic, and the client used
+artificial seed 7183 with an approximated loadout. A job activation does not
+prove a ship birth; descriptors are not atomic and cross-process frame
+identity is unproven. Two events in the same sector do not demonstrate
+complete universe coverage, continuous replication, Windows/Internet
+connectivity, persistence or gameplay.

@@ -41,8 +41,10 @@ def private_fault(raw):
 
 class Coordinator:
     """Serialize one private pair; all X4 and FD ownership remains external."""
-    def __init__(self,candidates,*,defer_source_ack=False):
+    def __init__(self,candidates,*,defer_source_ack=False,max_events=1):
         if defer_source_ack is not True:raise ValueError('deferred source Ack required')
+        if type(max_events) is not int or not 1<=max_events<=8:raise ValueError('invalid bounded event count')
+        self.max_events=max_events
         self._used={archive.REGISTRY_EPOCH};self.attempt=self.fresh();self.generation=self.fresh()
         self.roles={};self.launches={};self.helpers=[];self.private=None;self.child=None
         self.replica_dispatch_attempted=False;self.tickets={};self.result=None
@@ -95,6 +97,7 @@ class Coordinator:
                 'job_port':r['job'].getsockname()[1],'lease':r['lease'],'attempt':r['attempt'],
                 'epoch':archive.REGISTRY_EPOCH,'generation':self.generation,'descriptor_request':r['nonce'],
                 'timeout':min(120,window+40),'host_timeout':20,'window':window,'capacity':128,'baseline':archive.COUNT}
+            if self.max_events>1:settings['max_events']=self.max_events
             files=source_install.install(case,profile,ticket,settings);self.check_sources();return files
         settings={'participant_port':r['control'].getsockname()[1],'participant_lease':r['control_lease'],
             'job_port':r['job'].getsockname()[1],'lease':r['lease'],'attempt':r['attempt'],
@@ -132,6 +135,7 @@ class Coordinator:
              'job_epoch':archive.REGISTRY_EPOCH,'source_lease':r2['lease'],'source_attempt':r2['attempt'],
              'source_control_lease':r2['control_lease'],'source_world_epoch':self.attempt,'source_process':source,
              'index':archive.COUNT+1,'sectors':sorted(self.witnesses)}
+        if self.max_events>1:cfg['max_events']=self.max_events
         payload=json.dumps(cfg,separators=(',',':'),allow_nan=False).encode('ascii')+b'\n'
         if len(payload)>16384:raise ValueError('private worker configuration too large')
         self.private.settimeout(min(2,deadline-time.monotonic()));self.private.sendall(payload);guard()
@@ -143,24 +147,33 @@ class Coordinator:
         self.private.settimeout(min(1,max(.01,deadline-time.monotonic())))
         if self.private.recv(1)!=b'':raise RuntimeError('extra worker output')
         guard();self.result=result
-        return dict(tcp_ack_after_client_replica=True,ship_creation_requested=True,artificial_seed=7183,
+        details=dict(tcp_ack_after_client_replica=True,ship_creation_requested=True,artificial_seed=7183,
                     source_queue_acked=True,source_activation_is_birth=False,descriptor_atomic=False,
-                    frame_identity_proven=False,synthetic_tcp_checkpoint_and_admission=True,
-                    source_sequence=result['event_sequence'],registry_index=result['index'],
+                    frame_identity_proven=False,synthetic_tcp_checkpoint_and_admission=True)
+        if self.max_events>1:details['events']=result['events']
+        else:details.update(source_sequence=result['event_sequence'],registry_index=result['index'],
                     source_sector=result['sector_macro'],source_macro=result['macro'],source_faction=result['faction'])
+        return details
 
     def _validate_result(self,r):
         fields={'event','ok','tcp_admitted','tcp_job_receipt','source_md_ack_observed','client_md_ffi_asserted_by_owner',
-                'synthetic_server_checkpoint_and_admission','source_activation_is_birth','descriptor_atomic','frame_identity_proven',
-                'event_sequence','index','sector_macro','macro','faction'}
-        if type(r) is not dict or set(r)!=fields:raise ValueError('invalid source worker result')
+                'synthetic_server_checkpoint_and_admission','source_activation_is_birth','descriptor_atomic','frame_identity_proven'}
+        event_fields={'event_sequence','index','sector_macro','macro','faction'}
+        required=fields|({'events'} if self.max_events>1 else event_fields)
+        if type(r) is not dict or set(r)!=required:raise ValueError('invalid source worker result')
         expected={'event':'result','ok':True,'tcp_admitted':True,'tcp_job_receipt':True,'source_md_ack_observed':True,
                   'client_md_ffi_asserted_by_owner':True,'synthetic_server_checkpoint_and_admission':True,
-                  'source_activation_is_birth':False,'descriptor_atomic':False,'frame_identity_proven':False,
-                  'event_sequence':1,'index':archive.COUNT+1}
+                  'source_activation_is_birth':False,'descriptor_atomic':False,'frame_identity_proven':False}
         if any(type(r[k]) is not type(v) or r[k]!=v for k,v in expected.items()):raise ValueError('invalid source worker evidence')
-        if r['sector_macro'] not in self.witnesses or any(type(r[k]) is not str or not _ALLOWED.fullmatch(r[k]) for k in ('macro','faction')):
-            raise ValueError('invalid source event descriptor')
+        events=r['events'] if self.max_events>1 else [{k:r[k] for k in event_fields}]
+        if type(events) is not list or len(events)!=self.max_events:raise ValueError('invalid source event count')
+        for seq,event in enumerate(events,1):
+            if (type(event) is not dict or set(event)!=event_fields or
+                type(event['event_sequence']) is not int or event['event_sequence']!=seq or
+                type(event['index']) is not int or event['index']!=archive.COUNT+seq or
+                type(event['sector_macro']) is not str or event['sector_macro'] not in self.witnesses or
+                any(type(event[k]) is not str or not _ALLOWED.fullmatch(event[k]) for k in ('macro','faction'))):
+                raise ValueError('invalid source event descriptor or order')
 
     def verify_final(self,logs):
         self.check_sources()
@@ -176,11 +189,35 @@ class Coordinator:
                 rows.append((m[1],t))
         order=('binding','attaching','await_go','observing','selected','reading','delivering','done')
         positions=[order.index(s) for s,_ in rows]
-        if (not rows or rows[0][0]!='binding' or rows[-1][0]!='done' or positions!=sorted(set(positions)) or
+        invalid_order=any(
+            later<=earlier and not (self.max_events>1 and earlier==order.index('delivering') and
+                                   order.index('observing')<=later<order.index('delivering'))
+            for earlier,later in zip(positions,positions[1:]))
+        if (not rows or rows[0][0]!='binding' or rows[-1][0]!='done' or invalid_order or
             any(rows[i][1]<rows[i-1][1] for i in range(1,len(rows)))):
             raise ValueError('source state log order or time differs')
-        if client_evidence.observe(logs['client'],self.tickets['client'],sector=self.result['sector_macro']) is None:
-            raise ValueError('client readback evidence absent')
+        if self.max_events==1:
+            if client_evidence.observe(logs['client'],self.tickets['client'],sector=self.result['sector_macro']) is None:
+                raise ValueError('client readback evidence absent')
+        else:
+            if client_evidence.pair.load_observation(logs['client'],self.tickets['client']) is None:
+                raise ValueError('client load evidence absent')
+            lines=logs['client'].decode('utf-8').splitlines()
+            rows=[];pause=False
+            for line in lines:
+                if client_evidence.base.load.TAG.decode()+'pause_observed|' in line:pause=True
+                if client_evidence.TAG in line:
+                    if not pause:raise ValueError('client event before pause evidence')
+                    rows.append(line.split(client_evidence.TAG,1)[1].strip())
+            if len(rows)!=1+self.max_events:raise ValueError('client apply count differs')
+            m=client_evidence.RUNNING.fullmatch(rows[0]);last=float(m[1]) if m else float('nan')
+            if not math.isfinite(last) or last<0:raise ValueError('invalid running evidence')
+            running=last
+            for seq,line in enumerate(rows[1:],1):
+                m=client_evidence.APPLIED.fullmatch(line);t=float(m[2]) if m else float('nan')
+                if not m or int(m[1])!=archive.COUNT+seq or not math.isfinite(t) or t<=running or t<last:
+                    raise ValueError('invalid client apply order')
+                last=t
         return True
 
     def cleanup_before_owned_processes(self):
@@ -203,12 +240,14 @@ class Coordinator:
 
 def run(args):
     if not math.isfinite(args.window) or not 1<=args.window<=80:raise ValueError('invalid source window')
+    count=getattr(args,'max_events',1)
+    if type(count) is not int or not 1<=count<=8:raise ValueError('invalid bounded event count')
     args.defer_source_ack=True;args.two_clients=False
     active=[None]
     original=(lifecycle.coordinator.CensusCoordinator,lifecycle.installer.install,
               lifecycle.owned.spawn_owned_gated,lifecycle.load_observation)
     def make(candidates,*,defer_source_ack=False):
-        active[0]=Coordinator(candidates,defer_source_ack=defer_source_ack);return active[0]
+        active[0]=Coordinator(candidates,defer_source_ack=defer_source_ack,max_events=count);return active[0]
     def install(case,profile,ticket,config,nonce,timeout,window):
         return active[0].install(case,profile,ticket,config,nonce,timeout,window)
     def spawn(command,log,processes):
@@ -240,6 +279,7 @@ def main():
     p.add_argument('--store',type=Path,default=archive.DEFAULT_STORE);p.add_argument('--display',required=True)
     p.add_argument('--timeout',type=float,default=600);p.add_argument('--window',type=float,default=60)
     p.add_argument('--seed',type=int,default=276944566)
+    p.add_argument('--max-events',type=int,default=1,help='opt-in bounded count, maximum 8')
     try:r=run(p.parse_args())
     except (OSError,ValueError,RuntimeError) as e:p.exit(1,'REFUSED: '+str(e)+'\n')
     print(json.dumps(r,indent=2));return 0 if r['success'] else 1
