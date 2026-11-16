@@ -147,6 +147,20 @@ function M.new_x4(c)
  local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);const char* GetSaveFolderPath(void);]]
  local C=ffi.C;local netlib=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
  local net=assert(netlib.open('127.0.0.1',c.port))
+ assert(type(net.pending)=='function')
+ -- receive() returns nil both for an empty queue and after consuming an empty
+ -- or oversized datagram. Check readiness first so malformed packets fault.
+ -- A packet arriving after a negative check stays queued for the next tick.
+ local checked_net={
+  send=function(_,value)return net:send(value)end,
+  pending=function()return net:pending()end,
+  receive=function()
+   local pending=net:pending();assert(type(pending)=='boolean')
+   if not pending then return nil end
+   local value=net:receive();assert(value~=nil)
+   return value
+  end,
+ }
  local function environment()
   local p=C.GetSaveFolderPath()
   return p~=nil and p~=ffi.NULL and ffi.string(p):gsub('\\','/'):gsub('/+$','')==c.expected_save_path and
@@ -178,7 +192,7 @@ function M.new_x4(c)
   end,
   ipc_factory=function(o)
    o.enabled=true;o.lease=c.lease;o.attempt=c.attempt;o.epoch=c.epoch;o.generation=c.generation
-   o.timeout=c.timeout;o.clock=GetCurRealTime;o.net=net
+   o.timeout=c.timeout;o.clock=GetCurRealTime;o.net=checked_net
    return X4LAN_AUTHORITY_SOURCE_MOTION_IPC.new(o)
   end,shutdown_factory=X4LAN_SOURCE_MOTION_SHUTDOWN.new,
   fault=function(reason)DebugError('[X4LAN] AUTH_RECOVERED_SOURCE ERROR '..tostring(reason))end})
