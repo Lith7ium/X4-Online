@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Find saved registry witnesses for one sector in the pinned census save.
+"""Find saved registry witnesses by sector in the pinned census save.
 
 Read-only, offline and save-structural only: no runtime or cross-process handle
 is inferred. The verified archive and two additional digest-checked streams
-are intentionally scoped to one requested sector.
+are bounded and can cover either one or all recorded sectors.
 """
 import argparse
 import json
@@ -30,19 +30,22 @@ _SAVED_SECTORS=152
 
 def _component(value):
     match=_COMPONENT.fullmatch(value or '')
-    if not match or int(match.group(1),16)==0:raise ValueError('invalid saved component reference')
-    return format(int(match.group(1),16),'x')
+    if not match:raise ValueError('invalid saved component reference')
+    digits=match.group(1).lstrip('0')
+    if not digits or len(digits)>16:raise ValueError('invalid saved component reference')
+    return digits
 
 
 def _extract(checkpoint,macro,count,sector_count=_SAVED_SECTORS):
-    """Join one verified forward table with selected saved component ancestry.
+    """Join one verified forward table with saved component ancestry.
 
     Caller must independently verify the checkpoint marker, epoch and complete
     forward/reverse bijection in the same pinned bytes before calling this.
     """
-    if not isinstance(macro,str) or not _MACRO.fullmatch(macro):raise ValueError('invalid requested sector macro')
+    if macro is not None and (not isinstance(macro,str) or not _MACRO.fullmatch(macro)):
+        raise ValueError('invalid requested sector macro')
     if type(count) is not int or count<1 or count>_MAX_SHIPS:raise ValueError('invalid registry count')
-    ancestry=[];seen_macros=set();seen_sectors=set();ships={};forward_ref=None
+    ancestry=[];seen_macros=set();sectors_by_id={};ships={};forward_ref=None
     selected=None;scripts=cues=vars_count=fields=0;active_script=active_cue=False
     def first(path,attrs):
         nonlocal selected,forward_ref,scripts,cues,vars_count,fields,active_script,active_cue
@@ -63,9 +66,9 @@ def _extract(checkpoint,macro,count,sector_count=_SAVED_SECTORS):
         cls=attrs.get('class','')
         if cls=='sector':
             ident=_component(attrs.get('id'));name=attrs.get('macro','')
-            if not _MACRO.fullmatch(name) or ident in seen_sectors or name.casefold() in seen_macros:
+            if not _MACRO.fullmatch(name) or ident in sectors_by_id or name.casefold() in seen_macros:
                 raise ValueError('ambiguous saved sector ID or macro')
-            seen_sectors.add(ident);seen_macros.add(name.casefold())
+            sectors_by_id[ident]=name;seen_macros.add(name.casefold())
             if name==macro:
                 if selected is not None:raise ValueError('duplicate selected sector')
                 selected=ident
@@ -73,18 +76,21 @@ def _extract(checkpoint,macro,count,sector_count=_SAVED_SECTORS):
         parents=[a for tag,a in ancestry[:-1] if tag=='component']
         sectors=[a for a in parents if a.get('class')=='sector']
         if len(sectors)>1:raise ValueError('ambiguous saved sector ancestry')
-        if not sectors or sectors[0].get('macro')!=macro:return
+        if not sectors or (macro is not None and sectors[0].get('macro')!=macro):return
         ident=_component(attrs.get('id'))
         if ident in ships or len(ships)>=_MAX_SHIPS:raise ValueError('duplicate or excessive saved ships')
-        ships[ident]={'saved_under_dockingbay':any(a.get('class')=='dockingbay' for a in parents),
-                      'saved_immediate_parent_zone':bool(parents and parents[-1].get('class')=='zone')}
+        ships[ident]=(_component(sectors[0].get('id')),
+                      any(a.get('class')=='dockingbay' for a in parents),
+                      bool(parents and parents[-1].get('class')=='zone'))
     _parse(checkpoint,first)
-    if (scripts,cues,vars_count,fields)!=(1,1,1,1) or selected is None or len(seen_sectors)!=sector_count:
+    if ((scripts,cues,vars_count,fields)!=(1,1,1,1) or (macro is not None and selected is None)
+            or len(sectors_by_id)!=sector_count):
         raise ValueError('missing or ambiguous registry or selected sector')
-    group=active=None;matches=0;pending=None;forward={};values=set();target_count=0
+    group=active=None;matches=0;pending=None;forward={};values=set()
+    sector_counts=dict.fromkeys(sectors_by_id if macro is None else (selected,),0)
     ship_counts=dict.fromkeys(ships,0)
     def second(path,attrs):
-        nonlocal group,active,matches,pending,target_count
+        nonlocal group,active,matches,pending
         if path==['savegame','script','refs']:
             if pending is not None:raise ValueError('dangling registry key')
             group=attrs.get('type');active=None
@@ -111,28 +117,35 @@ def _extract(checkpoint,macro,count,sector_count=_SAVED_SECTORS):
             raise ValueError('nested registry element')
         if len(path)>=3 and path[:2]==['savegame','universe'] and path[-1]=='component':
             value=attrs.get('id','');match=_ANY_COMPONENT.fullmatch(value)
-            if match and format(int(match.group(1),16),'x')==selected:
-                target_count+=1
-                if attrs.get('class')!='sector' or attrs.get('macro')!=macro:
-                    raise ValueError('saved sector ID collides with another component')
             if match:
-                ident=format(int(match.group(1),16),'x')
+                ident=match.group(1).lstrip('0').lower()
+                if ident in sector_counts:
+                    sector_counts[ident]+=1
+                    if attrs.get('class')!='sector' or attrs.get('macro')!=sectors_by_id[ident]:
+                        raise ValueError('saved sector ID collides with another component')
                 if ident in ship_counts:ship_counts[ident]+=1
     _parse(checkpoint,second)
-    if pending is not None or matches!=1 or len(forward)!=count or set(forward)!=set(range(1,count+1)) or target_count!=1:
+    if (pending is not None or matches!=1 or len(forward)!=count or set(forward)!=set(range(1,count+1))
+            or any(n!=1 for n in sector_counts.values())):
         raise ValueError('missing or inconsistent saved references')
-    witnesses=[{'index':index,**ships[ident]} for index,ident in sorted(forward.items()) if ident in ships]
-    if not witnesses:raise ValueError('no saved registry witness in requested sector')
-    if any(ship_counts[forward[row['index']]]!=1 for row in witnesses):
-        raise ValueError('saved witness component ID is ambiguous')
-    return {'sector_macro':macro,'sector_saved_component_ref':'[0x'+selected+']',
-            'witnesses':witnesses,'saved_sector_count':len(seen_sectors),
-            'saved_registry_count':count,'runtime_binding_proven':False,
-            'cross_instance_frame_identity_proven':False,'exact_loaded_file_proven':False}
+    grouped={ident:[] for ident in sector_counts}
+    for index,ident in sorted(forward.items()):
+        if ident not in ships:continue
+        if ship_counts[ident]!=1:raise ValueError('saved witness component ID is ambiguous')
+        sector,docked,zone=ships[ident]
+        if sector not in grouped:raise ValueError('saved witness sector missing')
+        grouped[sector].append({'index':index,'saved_under_dockingbay':docked,'saved_immediate_parent_zone':zone})
+    common={'saved_sector_count':len(sectors_by_id),'saved_registry_count':count,
+            'runtime_binding_proven':False,'cross_instance_frame_identity_proven':False,'exact_loaded_file_proven':False}
+    if macro is not None:
+        if not grouped[selected]:raise ValueError('no saved registry witness in requested sector')
+        return dict(common,sector_macro=macro,sector_saved_component_ref='[0x'+selected+']',witnesses=grouped[selected])
+    rows=[{'sector_macro':name,'sector_saved_component_ref':'[0x'+ident+']','witnesses':grouped[ident]}
+          for ident,name in sorted(sectors_by_id.items(),key=lambda item:item[1].casefold())]
+    return dict(common,sectors=rows,registry_entries_without_sector_witness=count-sum(len(v) for v in grouped.values()))
 
 
-def verify(store_path,macro):
-    if not isinstance(macro,str) or not _MACRO.fullmatch(macro):raise ValueError('invalid requested sector macro')
+def _verify(store_path,macro):
     store=Path(os.path.abspath(store_path));before=archive.fingerprints(store)
     source=archive.verify(store)
     if _pointer(store/'CURRENT')!=_pointer(store/'CONFIRMED'):raise ValueError('current checkpoint is not confirmed')
@@ -147,12 +160,24 @@ def verify(store_path,macro):
     return result
 
 
+def verify(store_path,macro):
+    if not isinstance(macro,str) or not _MACRO.fullmatch(macro):raise ValueError('invalid requested sector macro')
+    return _verify(store_path,macro)
+
+
+def verify_all(store_path):
+    """Return all saved sectors with bounded candidate registry indices."""
+    return _verify(store_path,None)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--store',type=Path,default=archive.DEFAULT_STORE)
-    parser.add_argument('--sector-macro',required=True)
+    group=parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--sector-macro')
+    group.add_argument('--all',action='store_true')
     args=parser.parse_args()
-    try:result=verify(args.store,args.sector_macro)
+    try:result=verify_all(args.store) if args.all else verify(args.store,args.sector_macro)
     except (OSError,ValueError) as error:parser.exit(1,'REFUSED: '+str(error)+'\n')
     print(json.dumps(result,indent=2))
 

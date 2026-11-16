@@ -1,7 +1,7 @@
 # Census saved-sector witness candidates
 
 `authority_census_sector_witness_evidence.py` is a read-only offline lookup for
-one exact sector macro in the pinned, confirmed census checkpoint. It first
+one exact sector macro or every saved sector in the pinned, confirmed census checkpoint. It first
 reuses the existing checkpoint/marker/registry provenance verifier, including
 the saved forward/reverse registry bijection. Two additional digest-checked
 streaming passes join saved sector ancestry and that same forward table. The
@@ -9,8 +9,8 @@ selected saved sector must exist exactly once, every saved sector macro must be
 case-insensitively unique. The selected sector and each returned witness ID
 must not collide with another serialized universe component, including
 alternative hex capitalization and leading-zero spellings. Missing, duplicate, malformed,
-changed, unconfirmed or inconsistent inputs fail closed. The selected sector
-must have at least one saved registered ship candidate.
+changed, unconfirmed or inconsistent inputs fail closed. In single-sector mode,
+the selected sector must have at least one saved registered ship candidate.
 
 The result contains the saved sector component reference and sorted registry
 indices whose serialized ship components have that saved sector ancestor. The
@@ -38,5 +38,16 @@ without reading the census archive or starting X4:
 python3 -m unittest discover -s tests -p test_authority_census_sector_witness_evidence.py -v
 ```
 
-When a single lookup is actually needed, its exact target can be supplied via
-`--sector-macro` and optional `--store`. The tool never modifies the archive.
+The `verify_all(store)` API or CLI option `--all` produces all 152 saved sectors
+in the same seven passes, with at most 10,054 total registry-index rows. Empty
+witness lists remain empty; `registry_entries_without_sector_witness` reports
+registered entries with no saved sector ancestry. Saved sectors are sorted by
+case-folded macro and each witness list by saved registry index. To bound memory, at most
+200,000 saved ship components with sector ancestry are retained temporarily;
+component references must fit an unsigned 64-bit value. The check refuses a
+save exceeding either bound. The memory and eligibility assumptions have been
+tested only on synthetic XML, not against the archived census save with this
+new extractor. An input that fails the bound remains inconclusive.
+
+Alternatively, `--sector-macro` requests a single saved sector, with optional
+`--store`. The tool never modifies the archive.

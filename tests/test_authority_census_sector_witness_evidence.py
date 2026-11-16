@@ -54,6 +54,56 @@ class CensusWitness(unittest.TestCase):
         self.assertFalse(result['cross_instance_frame_identity_proven'])
         self.assertEqual(self.extract(xml(),'sector_b')['witnesses'][0]['index'],3)
 
+    def test_all_sectors_share_two_digest_checked_passes(self):
+        cp=self.checkpoint(xml())
+        with patch.object(subject,'_parse',wraps=subject._parse) as parse:
+            result=subject._extract(cp,None,3,sector_count=2)
+        self.assertEqual(parse.call_count,2)
+        self.assertEqual([row['sector_macro'] for row in result['sectors']],['sector_a','sector_b'])
+        self.assertEqual([[row['index'] for row in sector['witnesses']] for sector in result['sectors']],[[1,2],[3]])
+        self.assertEqual(result['registry_entries_without_sector_witness'],0)
+        self.assertFalse(result['cross_instance_frame_identity_proven'])
+
+    def test_all_sectors_report_empty_and_unassigned_without_fabrication(self):
+        ship='<component class="ship_s" id="[0x3]" macro="ship_c"/>'
+        content=xml().replace(ship,'').replace('</universe>',ship+'</universe>')
+        cp=self.checkpoint(content)
+        self.assertTrue(subject.registry.verify(cp,EPOCH,3)['forward_reverse_match'])
+        result=subject._extract(cp,None,3,sector_count=2)
+        self.assertEqual(result['sectors'][1]['witnesses'],[])
+        self.assertEqual(result['registry_entries_without_sector_witness'],1)
+
+    def test_all_sectors_fail_closed_on_collision_and_resource_bound(self):
+        variants=[
+            xml().replace('id="[0x99]" macro="unregistered"','id="[0X0E]" macro="unregistered"'),
+            xml().replace('id="[0x1]" macro="ship_a"','id="[0x1]" macro="ship_a"/><component class="station" id="[0X03]"'),
+            xml().replace('macro="sector_b"','macro="SECTOR_A"'),
+        ]
+        for content in variants:
+            with self.subTest(content=content),self.assertRaises(ValueError):
+                subject._extract(self.checkpoint(content),None,3,sector_count=2)
+        with patch.object(subject,'_MAX_SHIPS',3):
+            with self.assertRaisesRegex(ValueError,'excessive saved ships'):
+                subject._extract(self.checkpoint(xml()),None,3,sector_count=2)
+        self.assertEqual(subject._component('[0x000a]'),'a')
+        with self.assertRaises(ValueError):subject._component('[0x10000000000000000]')
+
+    def test_verify_all_uses_one_provenance_check_and_one_all_lookup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Path(tmp)/'checkpoints';path=store/subject.archive.CHECKPOINT_ID/'save.xml.gz'
+            cp=Checkpoint(subject.archive.CHECKPOINT_ID,path,subject.archive.SHA256,subject.archive.SIZE)
+            evidence={'checkpoint_id':cp.checkpoint_id,'sha256':cp.sha256,'registry_epoch':EPOCH}
+            with patch.object(subject.archive,'fingerprints',return_value={}), \
+                 patch.object(subject.archive,'verify',return_value=evidence) as provenance, \
+                 patch.object(subject,'_pointer',return_value='same'), \
+                 patch.object(subject,'CheckpointStore') as factory, \
+                 patch.object(subject,'_extract',return_value={'sectors':[]}) as extract:
+                factory.return_value.latest_confirmed.return_value=cp
+                result=subject.verify_all(store)
+            provenance.assert_called_once_with(store)
+            extract.assert_called_once_with(cp,None,subject.archive.COUNT)
+            self.assertEqual(result['registry_epoch'],EPOCH)
+
     def test_ambiguous_or_missing_sector_and_component_refs_fail(self):
         variants=[
             xml().replace('macro="sector_b"','macro="SECTOR_A"'),
