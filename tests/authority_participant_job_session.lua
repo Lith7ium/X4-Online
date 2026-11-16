@@ -1,0 +1,31 @@
+local ffi=require('ffi');ffi.cdef[[void TestReset(void);void TestUnpause(void);]];ffi.C.TestReset()
+local epoch,lease=string.rep('a',32),string.rep('b',32)
+X4LAN_CONFIG={authority_participant_job_session=true,authority_participant_port=1234,authority_job_client_port=1235,
+ authority_participant_lease=lease,authority_ticket={world_epoch=epoch},authority_load_save_path='/private/45841/save',
+ authority_job_client_timeout=10,authority_job_client_witnesses={sector_a=1}}
+local sent,queue,order={}, {},{};local opened=0
+local participant_net={send=function(_,s)sent[#sent+1]=s;return true end,receive=function()return table.remove(queue,1)end}
+local job_net={}
+package.loadlib=function()return function()return {open=function(_,port)opened=opened+1;return port==1234 and participant_net or job_net end}end end
+X4LAN_AUTHORITY_X4_CONTROL_ENGINE={new=function()return {}end}
+X4LAN_AUTHORITY_CONTROL_STATE={new=function(_,_,report)return {
+ submit=function(_,owner,e,id,op)assert(owner=='isolated-client' and e==epoch and id==1 and op=='resume');order[#order+1]='submit';return true end,
+ on_update=function()order[#order+1]='participant';ffi.C.TestUnpause();return true end}end}
+X4LAN_AUTHORITY_JOB_CLIENT_OWNER={new_x4=function(c)
+ assert(c.net==job_net and c.witness('sector_a')==1 and c.guard())
+ return {start=function()order[#order+1]='start';return true end,tick=function()order[#order+1]='job';return true end}
+end}
+function GetCurRealTime()return 1 end
+local errors={}
+function DebugError(s)errors[#errors+1]=s end
+X4LAN_MULTI_CREATE_CLIENT={};X4LAN_MULTI_CREATE_INSPECTOR={};X4LAN_RESOLVE_STRING={}
+dofile('tools/dev/authority_participant_job_session.lua')
+queue[1]='CMD|'..lease..'|'..epoch..'|1|resume'
+X4LAN_PARTICIPANT_JOB_TICK()
+assert(opened==2 and sent[1]=='HELLO|'..lease..'|'..epoch)
+assert(table.concat(order,',')=='submit,participant,start,job')
+X4LAN_PARTICIPANT_JOB_TICK();assert(opened==2 and table.concat(order,',')=='submit,participant,start,job,participant,job')
+
+queue[1]='CMD|'..lease..'|'..epoch..'|2|pause'
+X4LAN_PARTICIPANT_JOB_TICK();assert(#errors==1 and errors[1]:match('ERROR'))
+assert(table.concat(order,',')=='submit,participant,start,job,participant,job' and #sent==1)
