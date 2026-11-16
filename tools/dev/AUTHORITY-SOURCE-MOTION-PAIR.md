@@ -314,4 +314,7 @@ They reject player-related ships and require consistent registry, operational,
 sector and docking observations. This is only a point-in-time candidate: it
 does not prove motion, reserve the ship, or replace the source bootstrap's
 checks. The selector is not installed in the supervisor or verified in X4;
-the current diagnostic still requires an explicit index.
+the current diagnostic still requires an explicit index. The source owner can
+optionally run this selector using a separate correlated event route and will
+only register the reported index after selection completes. It is not yet
+installed or connected to a supervisor report channel.

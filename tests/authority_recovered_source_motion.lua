@@ -4,11 +4,25 @@ local B=dofile('src/authority/lua/saved_baseline_source_bootstrap.lua')
 local S=dofile('src/authority/lua/source_motion_sampler.lua')
 local I=dofile('src/authority/lua/source_motion_ipc.lua')
 local G=dofile('src/authority/lua/source_motion_shutdown.lua')
+local C=dofile('tools/dev/authority_registry_motion_candidate.lua')
 local lease,attempt,epoch,gen,nonce,saved=string.rep('a',32),string.rep('b',32),string.rep('c',32),string.rep('d',32),string.rep('e',32),string.rep('f',32)
-local function rig()
+local function rig(with_selection)
  local now=1;local paused=false;local alive=true;local input,out,events,issued,faults={},{},{},{},{}
+ local reports={};local selection,selector_obj
+ if with_selection then selection={nonce=string.rep('9',32),candidates={1,2},
+  register=function(f)events[2]=f;return true end,report=function(r)
+   reports[#reports+1]=r;if with_selection=='mutate' then r.index=2 end
+   if with_selection=='mutate_original' then selector_obj:result().index=2 end
+   if with_selection=='metatable' then r.index=nil;setmetatable(r,{__index={index=1}})end
+   if with_selection=='reenter' then selector_obj:event('late')end;return true
+  end,
+  factory=function(o)
+   o.timeout=5;o.clock=function()return now end;o.issue=function(_,_,v)issued[#issued+1]={kind='candidate',args=v};return true end
+   o.inspect=function()return 'eligible'end;selector_obj=C.new(o);return selector_obj
+  end}
+ end
  local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end,pending=function()return #input>0 end}
- local session=assert(M.new({enabled=true,epoch=epoch,generation=gen,nonce=nonce,saved_nonce=saved,baseline=2,
+ local session=assert(M.new({enabled=true,epoch=epoch,generation=gen,nonce=nonce,saved_nonce=saved,baseline=2,selection=selection,
   running=function()return not paused end,guard=function()return alive end,register=function(f)events[1]=f;return true end,
   fault=function(v)faults[#faults+1]=v end,
   bootstrap_factory=function(o)
@@ -30,7 +44,7 @@ local function rig()
   end,
   ipc_factory=function(o)o.enabled=true;o.lease=lease;o.attempt=attempt;o.epoch=epoch;o.generation=gen;o.timeout=5;o.clock=function()return now end;o.net=net;return I.new(o)end,
   shutdown_factory=G.new}))
- return session,input,out,events,issued,faults,function(v)paused=v end,function(v)now=v end,function(v)alive=v end
+ return session,input,out,events,issued,faults,function(v)paused=v end,function(v)now=v end,function(v)alive=v end,reports
 end
 local suffix='|'..epoch..'|'..gen
 local function initial()
@@ -73,4 +87,64 @@ do
  local app,input,out,_,_,faults,pause=initial()
  input[1]='P|'..lease..'|'..attempt..'|STOP'..suffix..'|2';assert(app:tick() and app:state()=='stopped')
  pause(true);input[1]='';assert(not app:tick() and app:state()=='failed' and #faults>=1)
+end
+
+-- The optional selector has its own event name, while descriptors retain the
+-- original sole handler. Only the selected index can reach bootstrap.
+do
+ local app,input,out,events,issued,faults,_,_,_,reports=rig(true)
+ assert(events[1] and events[2] and issued[1].kind=='candidate')
+ local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ineligible')
+ q=issued[2].args;events[2](q.request_id..'|'..epoch..'|2|ok|0x1|0x2|sector_a')
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
+ assert(#reports==1 and reports[1].index==2)
+ input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|1|2|2';assert(app:tick())
+ assert(issued[3].kind=='bootstrap' and issued[3].args.index==2)
+ q=issued[3].args;events[1](q.request_id..'|'..epoch..'|2|ok|0x1|ship_a|argon|0x2|sector_a')
+ assert(out[#out]:find('|SAVED_REGISTERED|',1,true) and #faults==0)
+ input[1]='P|'..lease..'|'..attempt..'|STOP'..suffix..'|2';assert(app:tick() and app:state()=='stopped')
+ events[2]('late');assert(app:state()=='failed')
+end
+do
+ local app,input,out,events,issued=rig(true)
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
+ input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|1|1|2';assert(not app:tick() and app:state()=='failed')
+ assert(#issued==1)
+end
+do
+ local app,input,out=rig(true)
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
+ input[1]='P|'..lease..'|'..attempt..'|STOP'..suffix..'|1';assert(not app:tick() and app:state()=='failed')
+ for _,v in ipairs(out)do assert(not v:find('|STOPPED|',1,true))end
+end
+do
+ local app,input,_,events,issued=rig(true)
+ local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
+ input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|1|2|2';assert(not app:tick() and app:state()=='failed')
+end
+do
+ local app,input,_,events,issued,_,_,_,_,reports=rig(true)
+ for i=1,2 do local q=issued[i].args;events[2](q.request_id..'|'..epoch..'|'..i..'|ineligible')end
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
+ assert(reports[1].status=='inconclusive')
+ input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|1|1|2';assert(not app:tick() and app:state()=='failed')
+end
+do
+ local app,input,_,events,issued=rig('mutate')
+ local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix
+ assert(not app:tick() and app:state()=='failed')
+end
+do
+ local app,input,_,events,issued=rig('reenter')
+ local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix
+ assert(not app:tick() and app:state()=='failed')
+end
+for _,kind in ipairs({'mutate_original','metatable'})do
+ local app,input,_,events,issued=rig(kind)
+ local q=issued[1].args;events[2](q.request_id..'|'..epoch..'|1|ok|0x1|0x2|sector_a')
+ input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix
+ assert(not app:tick() and app:state()=='failed')
 end
