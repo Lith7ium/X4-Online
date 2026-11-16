@@ -62,8 +62,14 @@ def bind_source_motion(sock, motion, *, process, lease, attempt, epoch, generati
 
 def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, generation,
                                world, client_guard, timeout=30, validate_sample=None,
-                               saved_baseline=None, saved_guard=None, select_recipients=None,candidate_indices=None):
-    """Opt-in single diagnostic source; no assertion of cross-X4 identity."""
+                               saved_baseline=None, saved_guard=None, select_recipients=None,candidate_indices=None,
+                               bind_timeout=None):
+    """Opt-in single diagnostic source; no assertion of cross-X4 identity.
+
+    `bind_timeout`, when supplied, is a per-stage limit: the binding helper
+    starts a fresh deadline for bind and again for handoff. The caller must
+    separately enforce its overall diagnostic and process deadlines.
+    """
     if not callable(client_guard) or not callable(select_recipients):
         sock.close();raise ValueError('running client guard and interest selector required')
     try:
@@ -82,7 +88,8 @@ def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, 
     try:
         context,peer=_guards(sock,process,running)
         bind_running_source(sock,process=process,lease=lease,attempt=attempt,epoch=epoch,
-                            generation=generation,world=world,client_guard=client_guard,timeout=timeout)
+                            generation=generation,world=world,client_guard=client_guard,
+                            timeout=timeout if bind_timeout is None else bind_timeout)
         if context() is not True or peer(sock.getpeername()) is not True:
             raise RuntimeError('running source context changed after handoff')
         return ExperimentalSourceMotionIPC(sock,motion,enabled=True,lease=lease,attempt=attempt,

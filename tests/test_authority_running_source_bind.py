@@ -76,6 +76,33 @@ class RunningBind(unittest.TestCase):
                 ExperimentalSourceJobBinding(sock,enabled=True,lease=L,attempt=A,epoch=E,generation=G,
                     guard=lambda:True,validate_peer=lambda _:True,timeout=timeout,running_diagnostic=mode)
 
+    def test_motion_bind_and_later_operations_can_use_separate_timeouts(self):
+        if not sys.platform.startswith('linux'): self.skipTest('Linux /proc required')
+        server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        source = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        server.bind(('127.0.0.1', 0)); source.bind(('127.0.0.1', 0))
+        source.connect(server.getsockname()); source.settimeout(2)
+        self.addCleanup(server.close); self.addCleanup(source.close)
+        identity, world = context()
+        motion = types.SimpleNamespace(_delivery=types.SimpleNamespace(_host=types.SimpleNamespace(_world=world)))
+        errors = []
+        def worker():
+            try:
+                source.send(f'S|{L}|{A}|HELLO|{E}|{G}'.encode())
+                if source.recv(769) != f'P|{L}|{A}|BOUND|{E}|{G}'.encode(): raise AssertionError('bad bound')
+                source.send(f'S|{L}|{A}|ATTACHED|{E}|{G}'.encode())
+            except BaseException as error: errors.append(error)
+        thread = threading.Thread(target=worker); thread.start()
+        try:
+            with patch.object(motion_bind, 'ExperimentalSourceMotionIPC') as ipc:
+                motion_bind.bind_running_source_motion(server, motion, process=identity, lease=L,
+                    attempt=A, epoch=E, generation=G, world=world, client_guard=lambda: True,
+                    select_recipients=lambda value, members: [], timeout=300, bind_timeout=120)
+                self.assertEqual(ipc.call_args.kwargs['timeout'], 300)
+        finally:
+            thread.join(3)
+        self.assertFalse(thread.is_alive()); self.assertEqual(errors, [])
+
     def test_member_change_inside_guard_or_before_handoff_fails(self):
         for stage in ('guard','handoff'):
             with self.subTest(stage=stage):

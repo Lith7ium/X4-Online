@@ -116,6 +116,119 @@ class Probe(unittest.TestCase):
         self.assertNotIn('source_stop', events)
         self.assertNotIn('a'*32, str(progress))
 
+    def test_extended_diagnostic_timeouts_preserve_sequence_and_fences(self):
+        for mode in ('complete', 'deadline', 'idle_fence', 'bad_order', 'wrong_client_timeout',
+                     'changed_client_timeout', 'changed_client_socket', 'wrong_sent_timeout'):
+            with self.subTest(mode=mode):
+                events, kwargs, _ = self.context()
+                clock = [1.0]
+                kwargs['guard'].deadline = 1000
+                def slow_saved_guard():
+                    clock[0] += 10
+                    return True
+                kwargs['guard'].check = Mock(side_effect=slow_saved_guard)
+                kwargs['client_motion'] = True
+                kwargs['verify_stopped'] = Mock()
+                kwargs['index'] = None
+                kwargs['candidate_indices'] = (1, 2)
+                kwargs['diagnostic_timeouts'] = {
+                    'total': 600, 'source_bind_stage': 120, 'source_operation': 300,
+                    'tcp_send': 240, 'client_bind': 25,
+                }
+                if mode == 'bad_order':
+                    kwargs['diagnostic_timeouts']['tcp_send'] = 25
+                kwargs['world'].session.players = kwargs['world'].session.ready_players = ((1, 'one'),)
+                peer = {'stage': 'admitted', 'deadline': None}
+                tcp = object()
+                kwargs['host'] = SimpleNamespace(_control=SimpleNamespace(_peers={tcp: peer}))
+                kwargs['active'].participant.server_tcp = tcp
+                kwargs['active'].participant.motion_worker_config = {'timeout': 24 if mode == 'wrong_client_timeout' else 25}
+                kwargs['active'].participant._motion_worker_timeout_snapshot = 24 if mode == 'wrong_sent_timeout' else 25
+                selected = {'id': 'peer_1', 'incarnation': 'f'*32}
+                class Delivery:
+                    def __init__(self, _host, *, enabled, timeout):
+                        self_test.assertTrue(enabled)
+                        self_test.assertEqual(timeout, 240)
+                    def membership(self): return (selected,)
+                class Motion:
+                    def __init__(self, *_args, **_kwargs): self._tracks = {}
+                class Sock:
+                    def getsockname(self): return ('127.0.0.1', 1)
+                    def getpeername(self): return ('127.0.0.1', 2)
+                    def fileno(self): return 99
+                kwargs['sock'] = Sock()
+                class Source:
+                    state = 'ready'
+                    sequence = 0
+                    def checked(self):
+                        self_test.assertTrue(self.client_guard())
+                        self_test.assertTrue(self.saved_guard('a'*32, 2))
+                    def request_candidate(self):
+                        events.append('candidate')
+                        self.checked()
+                        clock[0] += 10
+                        if mode == 'deadline': clock[0] = 601
+                        if mode == 'idle_fence': peer['deadline'] = clock[0] + 300
+                        if mode == 'changed_client_timeout':
+                            kwargs['active'].participant.motion_worker_config['timeout'] = 24
+                        if mode == 'changed_client_socket':
+                            kwargs['active'].participant.server_tcp = object()
+                        return 1
+                    def register_saved(self, index):
+                        self.checked(); events.append(('register', index)); clock[0] += 10
+                    def pull(self):
+                        self.checked(); self.checked()
+                        self.sequence += 1
+                        events.append('pull')
+                        clock[0] += 10
+                        sample = {'version': 1, 'epoch': 'a'*32, 'generation': 'd'*32,
+                                  'index': 1, 'sequence': self.sequence, 'sector_macro': 'test',
+                                  'source_time': self.sequence, 'x': 0, 'y': 0, 'z': 0, 'velocity': None}
+                        self.capture(sample)
+                        self.motion._tracks[('a'*32, 'd'*32, 1)] = {
+                            'peer_samples': {('peer_1', 'f'*32): (self.sequence, motion_digest(sample))}}
+                        return sample
+                    def stop_remote(self):
+                        self.checked(); events.append('source_stop'); self.state = 'remote_stopped'; return True
+                    def close(self): events.append('source_close')
+                source = Source()
+                self_test = self
+                def bind(_sock, motion, **options):
+                    self.assertEqual(options['timeout'], 300)
+                    self.assertEqual(options['bind_timeout'], 120)
+                    self.assertTrue(options['client_guard']())
+                    self.assertTrue(options['saved_guard']('a'*32, 2))
+                    clock[0] += 10
+                    events.append('bind')
+                    source.capture = options['validate_sample']
+                    source.client_guard = options['client_guard']
+                    source.saved_guard = options['saved_guard']
+                    source.motion = motion
+                    return source
+                def stop_worker(*, source_stopped):
+                    events.append('client_stop')
+                    return source_stopped()
+                kwargs['active'].participant.stop_motion_worker = Mock(side_effect=stop_worker)
+                with patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(subject.time, 'sleep'), patch.object(subject, 'ExperimentalTCPJobDelivery', Delivery), \
+                     patch.object(subject, 'ExperimentalTCPMotion', Motion), \
+                     patch.object(subject, 'bind_running_source_motion', side_effect=bind), \
+                     patch.object(subject.os, 'stat', return_value=SimpleNamespace(st_dev=1, st_ino=2)), \
+                     patch.object(subject.os, 'fstat', return_value=SimpleNamespace(st_dev=3, st_ino=4)), \
+                     patch.object(subject, 'check_process'), patch.object(subject, 'socket_owner', return_value=True):
+                    if mode == 'complete':
+                        result = subject.run(**kwargs)
+                        self.assertTrue(result['client_motion_receipts_confirmed'])
+                        self.assertGreaterEqual(kwargs['guard'].check.call_count, 8)
+                        self.assertEqual(events, ['pump_active', 'bind', 'candidate', ('register', 1),
+                                                  'pull', 'pull', 'source_stop', 'guard_stop',
+                                                  'client_stop', 'source_close'])
+                    else:
+                        with self.assertRaises((ValueError, RuntimeError, TimeoutError)):
+                            subject.run(**kwargs)
+                        self.assertNotIn(('register', 1), events)
+                        self.assertNotIn('source_stop', events)
+
     @unittest.skipUnless(sys.platform=='linux','Linux process and socket ownership required')
     def test_real_udp_tcp_delivery_with_retained_simulated_client(self):
         from tests import test_authority_experimental_tcp_motion as fixture

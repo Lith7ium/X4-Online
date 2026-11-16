@@ -56,7 +56,8 @@ class SourceProbeDiagnostics:
 
 def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         identity, verify, verify_process, timeout=90, candidate_indices=None,
-        client_motion=False, verify_stopped=None, diagnostics=None):
+        client_motion=False, verify_stopped=None, diagnostics=None,
+        diagnostic_timeouts=None):
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -87,11 +88,62 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or world.session.state != 'running' or world.session.pending is not None or
             world.session.baseline_id is not None):
         raise RuntimeError('running source does not retain the admitted checkpoint')
+    source_timeout = timeout
+    delivery_timeout = 15
+    if diagnostic_timeouts is not None:
+        if (not client_motion or type(diagnostic_timeouts) is not dict or
+                set(diagnostic_timeouts) != {'total', 'source_bind_stage', 'source_operation', 'tcp_send', 'client_bind'}):
+            raise ValueError('invalid extended diagnostic timeouts')
+        total = diagnostic_timeouts['total']
+        source_bind = diagnostic_timeouts['source_bind_stage']
+        source_timeout = diagnostic_timeouts['source_operation']
+        delivery_timeout = diagnostic_timeouts['tcp_send']
+        client_bind = diagnostic_timeouts['client_bind']
+        values = (total, source_bind, source_timeout, delivery_timeout, client_bind)
+        if (any(type(value) not in (int, float) or not math.isfinite(value) for value in values) or
+                not 0 < client_bind <= 30 or not 0 < source_bind <= 120 or
+                not client_bind < delivery_timeout < source_timeout <= 300 or
+                not source_timeout < total <= 86400):
+            raise ValueError('invalid extended diagnostic timeout ordering')
+        timeout = total
+
+        # An admitted peer with its admission response drained has no TCP idle
+        # deadline. Do not invent credit if that condition changes mid-probe.
+        participant = active.participant
+        client_motion_config = participant.motion_worker_config
+        if (type(client_motion_config) is not dict or
+                type(client_motion_config.get('timeout')) not in (int, float) or
+                client_motion_config['timeout'] != client_bind or
+                participant._motion_worker_timeout_snapshot != client_bind):
+            raise RuntimeError('client motion timeout differs from worker configuration')
+        control = host._control
+        peer_socket = participant.server_tcp
+        peer = control._peers.get(peer_socket)
+        if (peer is None or peer.get('stage') != 'admitted' or peer.get('deadline') is not None):
+            raise RuntimeError('diagnostic TCP idle fence unavailable')
+    else:
+        control = peer_socket = peer = participant = client_motion_config = None
     deadline = min(guard.deadline, time.monotonic() + timeout)
 
     def check_deadline():
         if time.monotonic() >= deadline:
             raise TimeoutError('source diagnostic deadline')
+        if control is not None and (host._control is not control or
+                active.participant is not participant or
+                participant.server_tcp is not peer_socket or
+                participant.motion_worker_config is not client_motion_config or
+                type(client_motion_config.get('timeout')) not in (int, float) or
+                client_motion_config['timeout'] != client_bind or
+                participant._motion_worker_timeout_snapshot != client_bind or
+                control._peers.get(peer_socket) is not peer or peer.get('stage') != 'admitted' or
+                peer.get('deadline') is not None):
+            raise RuntimeError('diagnostic TCP idle fence changed')
+
+    def checked_operation(operation, *args, **kwargs):
+        check_deadline()
+        result = operation(*args, **kwargs)
+        check_deadline()
+        return result
 
     def active_guard():
         check_deadline()
@@ -154,7 +206,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     def capture_sample(value):
         staged_samples.append(copy.deepcopy(value))
         return True
-    delivery = ExperimentalTCPJobDelivery(host, enabled=True, timeout=15)
+    delivery = ExperimentalTCPJobDelivery(host, enabled=True, timeout=delivery_timeout)
     motion = ExperimentalTCPMotion(delivery, enabled=True)
     selected_recipient = None
     if client_motion:
@@ -175,26 +227,27 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
 
     if diagnostics is not None:
         diagnostics.enter('bind_source')
-    source = bind_running_source_motion(
+    binding_options = {} if diagnostic_timeouts is None else {'bind_timeout': source_bind}
+    source = checked_operation(bind_running_source_motion,
         sock, motion, process=process, lease=settings['lease'], attempt=settings['attempt'],
         epoch=settings['epoch'], generation=settings['generation'], world=world,
-        client_guard=active_guard, timeout=timeout, saved_baseline=settings['baseline'],
+        client_guard=active_guard, timeout=source_timeout, saved_baseline=settings['baseline'],
         saved_guard=saved_baseline_guard, select_recipients=select_recipients,
-        validate_sample=capture_sample, candidate_indices=candidate_indices,
+        validate_sample=capture_sample, candidate_indices=candidate_indices, **binding_options,
     )
     if candidate_indices is not None:
         if diagnostics is not None:
             diagnostics.enter('select_candidate')
-        index = source.request_candidate()
+        index = checked_operation(source.request_candidate)
     if diagnostics is not None:
         diagnostics.enter('register_source')
-    source.register_saved(index)
+    checked_operation(source.register_saved, index)
     if diagnostics is not None:
         diagnostics.enter('collect_samples')
     samples = []
     for _ in range(20):
         previous_count = len(staged_samples)
-        received = source.pull()
+        received = checked_operation(source.pull)
         if len(staged_samples) > previous_count:
             if len(staged_samples) != previous_count + 1:
                 raise RuntimeError('ambiguous source sample')
@@ -220,12 +273,12 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         raise RuntimeError('two server source samples unavailable')
     if diagnostics is not None:
         diagnostics.enter('stop_source')
-    if source.stop_remote() is not True:
+    if checked_operation(source.stop_remote) is not True:
         raise RuntimeError('source stop unconfirmed')
     active_guard()
     if diagnostics is not None:
         diagnostics.enter('stop_checkpoint_guard')
-    if guard.stop() is not True:
+    if checked_operation(guard.stop) is not True:
         raise RuntimeError('checkpoint guard stop unconfirmed')
     active_guard()
     if client_motion:
@@ -262,7 +315,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             raise RuntimeError('source fence changed after client stop')
     if diagnostics is not None:
         diagnostics.enter('close_source')
-    source.close()
+    checked_operation(source.close)
     public_fields = ('sequence', 'sector_macro', 'source_time', 'x', 'y', 'z', 'velocity')
     public_samples = [{key: sample[key] for key in public_fields} for sample in samples]
     if diagnostics is not None:

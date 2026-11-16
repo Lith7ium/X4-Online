@@ -39,6 +39,27 @@ class FreshEngine(Engine):
 
 
 class HookIntegrationTest(unittest.TestCase):
+    def test_motion_timeout_snapshot_tracks_sent_bytes_not_mutated_config(self):
+        participant = subject.TCPMarkedParticipant(time.monotonic()+10, first_resume_only=True, keep_worker=True)
+        participant.motion_worker_config = {'timeout': 25}
+        class MutatingSocket:
+            def settimeout(self, value): self.timeout = value
+            def sendall(self, data):
+                self.data = data
+                participant.motion_worker_config['timeout'] = 24
+        participant.ipc = MutatingSocket()
+        encoded = b'{"motion":{"timeout":25}}\n'
+        participant._send_worker_configuration(encoded, time.monotonic()+10)
+        self.assertEqual(participant.ipc.data, encoded)
+        self.assertEqual(participant._motion_worker_timeout_snapshot, 25)
+        self.assertEqual(participant.motion_worker_config['timeout'], 24)
+
+        participant._motion_worker_timeout_snapshot = None
+        participant.ipc.sendall = Mock(side_effect=OSError('send failed'))
+        with self.assertRaises(OSError):
+            participant._send_worker_configuration(encoded, time.monotonic()+10)
+        self.assertIsNone(participant._motion_worker_timeout_snapshot)
+
     def test_two_sequential_remote_owner_workers_with_simulated_x4(self):
         # Real coordinator, file transfers, TCP owner/worker handoff and EOF;
         # the client X4 log/identity and UDP simulation receipts are synthetic.

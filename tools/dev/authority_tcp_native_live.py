@@ -126,7 +126,19 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         self.client_tcp = self.server_tcp = self.ipc = self.second = None
         self.control = self.host = self.participants = None
         self.motion_sock = self.motion_worker_config = None
+        self._motion_worker_timeout_snapshot = None
         self.motion_stop_confirmed = False
+
+    def _send_worker_configuration(self, encoded, deadline):
+        """Remember the motion timeout actually sent, only after a full send."""
+        motion_timeout = None
+        if self.motion_worker_config is not None:
+            motion_timeout = json.loads(encoded)['motion']['timeout']
+            if type(motion_timeout) not in (int, float) or not 0 < motion_timeout <= 30:
+                raise ValueError('invalid serialized client motion timeout')
+        self.ipc.settimeout(min(1, marked.remaining(deadline)))
+        self.ipc.sendall(encoded)
+        self._motion_worker_timeout_snapshot = motion_timeout
 
     def _pin_motion_ipc(self):
         connection = self.ipc
@@ -450,7 +462,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
             self.sock.close()
             if motion_sock is not None:
                 self._close_owned_motion_socket()
-            self.ipc.settimeout(min(1, marked.remaining(deadline))); self.ipc.sendall(encoded)
+            self._send_worker_configuration(encoded, deadline)
             guard(); helper.release(); guard()
             while True:
                 guard(); self.control.poll(min(.1, marked.remaining(deadline)))

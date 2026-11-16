@@ -730,6 +730,7 @@ def run(args):
                 diagnostics.append(diagnostic)
                 diagnostic_out = out if count == 1 else out/('diagnostic-%02d' % (index+1))
                 if count != 1: diagnostic_out.mkdir(mode=0o700)
+                client_motion_timeout = 25
                 diagnostic_result = diagnostic_client.run_one(diagnostic, args=args, out=diagnostic_out, game=game,
                     home=home, uid=user.pw_uid, steam=steam, auth=auth, user=user.pw_name,
                     processes=processes, server_proc=proc, server_started=started, server_identity=identity,
@@ -741,7 +742,7 @@ def run(args):
                     check_server_base=verify if source_enabled else None,
                     witness_guard_ready=guard_ready if source_enabled else None,
                     client_motion={'indices':list(source_candidates or (source_index,)),
-                        'generation':source_settings['generation'],'timeout':25} if client_motion else None)
+                        'generation':source_settings['generation'],'timeout':client_motion_timeout} if client_motion else None)
                 if source_enabled:
                     import authority_recovered_source_probe
                     expected_members=tuple(world.session.ready_players)
@@ -754,11 +755,16 @@ def run(args):
                         verify();cancel_diagnostic()
                     def run_source(guard,saved,pump,active):
                         source_context=dict(source_settings,epoch=guard.status[1],baseline=guard.status[2])
+                        # X4's source owner has its own 120-second pending-operation
+                        # deadlines, including binding begun at resume. A longer
+                        # host budget does not extend those or guarantee completion.
                         return run_source_probe_with_progress(result,authority_recovered_source_probe.run,sock=source_sock,
                             settings=source_context,index=source_index,baseline=saved,guard=guard,pump=pump,
                             active=active,host=host,world=world,identity=identity,verify=verify_diagnostic,
                             verify_process=check,candidate_indices=source_candidates,client_motion=client_motion,
-                            verify_stopped=verify if client_motion else None)
+                            verify_stopped=verify if client_motion else None,
+                            diagnostic_timeouts={'total':1200, 'source_bind_stage':120, 'source_operation':300, 'tcp_send':240,
+                                'client_bind':client_motion_timeout} if client_motion else None)
                     result['source_diagnostic'],diagnostic_result=finish_source_diagnostic(
                         diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source,
                         verify_after=verify_motion_stopped if client_motion else None,
