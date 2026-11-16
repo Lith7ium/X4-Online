@@ -2,6 +2,7 @@
 import importlib.util
 import gzip
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import shutil
@@ -190,6 +191,19 @@ class LoopTests(unittest.TestCase):
 
 
 class OwnedCleanupTests(unittest.TestCase):
+    def test_recovery_lock_is_retained_when_service_drain_is_unconfirmed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lock = Path(folder) / 'lock'
+            lock.touch()
+            descriptor = os.open(lock, os.O_RDONLY)
+            errors = []
+            with patch.object(MODULE.live, 'release_lock_target') as release:
+                MODULE.finish_recovery_lock([(descriptor, object())], [], False, errors)
+            release.assert_not_called()
+            self.assertTrue(lock.exists())
+            self.assertTrue(any('lock retained' in error for error in errors))
+            with self.assertRaises(OSError): os.fstat(descriptor)
+
     def test_missing_start_identity_is_unknown_even_after_launcher_exit(self):
         proc = Mock(); proc.poll.return_value = 0
         errors = []

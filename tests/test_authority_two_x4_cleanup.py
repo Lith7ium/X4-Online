@@ -215,7 +215,8 @@ class SupervisorCleanupTests(unittest.TestCase):
         self.assertFalse(result['success']);self.assertEqual(result['owned_cleanup_confirmed'],service_failure)
         self.assertTrue(lock_path.exists())
         if service_failure:
-            self.assertIn('service cleanup failed',result['cleanup_error']);release.assert_called_once()
+            self.assertIn('service cleanup failed',result['cleanup_error']);release.assert_not_called()
+            self.assertIn('lock retained',result['cleanup_error'])
             fake_service.close.assert_called_once();fake_service.server.server_close.assert_called_once()
             self.assertEqual(config.read_text(),'authority_control_lease="redacted"\n')
         else:

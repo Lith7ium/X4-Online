@@ -172,6 +172,10 @@ class FileService:
         self.offered, self.nonces, self.lock = {}, set(), threading.Lock()
         self.served, self.refused, self.active = [], [], 0
         self._transfers = {}  # accepted sockets mapped to their offered name
+        self._handlers = set()  # includes accepted sockets before authentication
+        self._handler_changed = threading.Condition(self.lock)
+        self._closing = False
+        self._offers_inflight = 0
         service = self
 
         class Handler(socketserver.BaseRequestHandler):
@@ -181,6 +185,30 @@ class FileService:
         class Server(socketserver.ThreadingTCPServer):
             allow_reuse_address = True
             daemon_threads = True
+
+            def process_request(self, request, client_address):
+                with service.lock:
+                    closing = service._closing
+                    if not closing:
+                        service._handlers.add(request)
+                if closing:
+                    self.shutdown_request(request)
+                    return
+                try:
+                    super().process_request(request, client_address)
+                except BaseException:
+                    with service._handler_changed:
+                        service._handlers.discard(request)
+                        service._handler_changed.notify_all()
+                    raise
+
+            def process_request_thread(self, request, client_address):
+                try:
+                    super().process_request_thread(request, client_address)
+                finally:
+                    with service._handler_changed:
+                        service._handlers.discard(request)
+                        service._handler_changed.notify_all()
         self.server = Server((bind, port), Handler)
         self.port = self.server.server_address[1]
         self.thread = None
@@ -189,15 +217,26 @@ class FileService:
         """Offer a file under name (checked against sha when given); returns (size, sha)."""
         if not NAME.fullmatch(name):
             raise ValueError(f'not a join file name: {name}')
-        path = Path(path)
-        digest = sha256_file(path)
-        if sha is not None and digest != sha:
-            raise ValueError(f'{path}: SHA-256 {digest[:16]}.. is not the announced {sha[:16]}..')
-        size = path.stat().st_size
-        with self.lock:
-            self._withdraw_locked(name)
-            self.offered[name] = (path, size, digest)
-        return size, digest
+        with self._handler_changed:
+            if self._closing:
+                raise RuntimeError('file service is closing')
+            self._offers_inflight += 1
+        try:
+            path = Path(path)
+            digest = sha256_file(path)
+            if sha is not None and digest != sha:
+                raise ValueError(f'{path}: SHA-256 {digest[:16]}.. is not the announced {sha[:16]}..')
+            size = path.stat().st_size
+            with self.lock:
+                if self._closing:
+                    raise RuntimeError('file service is closing')
+                self._withdraw_locked(name)
+                self.offered[name] = (path, size, digest)
+            return size, digest
+        finally:
+            with self._handler_changed:
+                self._offers_inflight -= 1
+                self._handler_changed.notify_all()
 
     def _withdraw_locked(self, name):
         self.offered.pop(name, None)
@@ -223,13 +262,69 @@ class FileService:
                 self._withdraw_locked(name)
 
     def start(self):
-        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.2}, daemon=True)
-        self.thread.start()
+        with self.lock:
+            if self._closing or self.thread is not None:
+                raise RuntimeError('file service already started or closing')
+            self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.2}, daemon=True)
+            self.thread.start()
         return self
 
     def close(self):
         self.server.shutdown()
         self.server.server_close()
+
+    def close_and_drain(self, *, timeout=2):
+        """Stop an owned diagnostic service and confirm all handlers exited.
+
+        Waits share one deadline. Lock acquisition, socket shutdown and close
+        are synchronous and cannot be preempted; their elapsed time counts and
+        a late return is a timeout. Other users of legacy close() do not acquire
+        this drain guarantee. On timeout the owner must retain its fence.
+        """
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 30:
+            raise ValueError('invalid file service cleanup timeout')
+        deadline = time.monotonic() + timeout
+        with self._handler_changed:
+            if self._closing:
+                raise RuntimeError('file service cleanup already started')
+            self._closing = True
+            self.offered.clear()
+            handlers = tuple(self._handlers)
+        for connection in handlers:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # the handler may already have closed its socket
+
+        shutdown_errors = []
+        def stop_server():
+            try:
+                self.server.shutdown()
+            except BaseException as error:
+                shutdown_errors.append(error)
+        shutdown_thread = None
+        try:
+            if self.thread is not None and self.thread.is_alive():
+                shutdown_thread = threading.Thread(target=stop_server, daemon=True)
+                shutdown_thread.start()
+                shutdown_thread.join(max(0, deadline - time.monotonic()))
+                if shutdown_thread.is_alive():
+                    raise TimeoutError('file service shutdown unconfirmed')
+                if shutdown_errors:
+                    raise RuntimeError('file service shutdown failed') from shutdown_errors[0]
+                self.thread.join(max(0, deadline - time.monotonic()))
+                if self.thread.is_alive():
+                    raise TimeoutError('file service thread remains')
+            with self._handler_changed:
+                while self._handlers or self._offers_inflight:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('file service handlers or offers remain')
+                    self._handler_changed.wait(remaining)
+        finally:
+            self.server.server_close()
+        if time.monotonic() >= deadline:
+            raise TimeoutError('file service cleanup deadline')
 
     def refuse(self, conn, address, reason):
         with self.lock:

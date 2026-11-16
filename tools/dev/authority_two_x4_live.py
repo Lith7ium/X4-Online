@@ -173,6 +173,8 @@ def start_owned_file_service(token, services):
 
 def close_owned_file_service(service):
     """Avoid shutdown() before serve_forever has actually started."""
+    if isinstance(service, joinfiles.FileService):
+        return service.close_and_drain(timeout=2)
     thread = service.thread
     try:
         if thread is not None and thread.is_alive():
@@ -428,9 +430,12 @@ def run(args, *, experiment=None):
             helper_stopped = False
             all_stopped = False
             cleanup_error('helper cleanup unconfirmed', error)
+        services_stopped = True
         for owned_service in reversed(services):
             try: close_owned_file_service(owned_service)
-            except BaseException as error: cleanup_error('service cleanup failed', error)
+            except BaseException as error:
+                services_stopped = False
+                cleanup_error('service cleanup failed', error)
         if sock is not None:
             try: sock.close()
             except BaseException as error: cleanup_error('socket cleanup failed', error)
@@ -468,11 +473,11 @@ def run(args, *, experiment=None):
                 result.update(success=False, error='final receipt or staged state invalid: ' +
                               (str(error) or type(error).__name__))
         if lock_stat is not None:
-            if all_stopped:
+            if all_stopped and services_stopped:
                 try: live.release_lock_target(snapshot.LOCK_TARGET, lock_fd, lock_stat)
                 except BaseException as error: cleanup_error('lock cleanup failed', error)
             else:
-                cleanup_error('lock retained: owned process stop unconfirmed')
+                cleanup_error('lock retained: owned process or service stop unconfirmed')
                 try: os.close(lock_fd)
                 except BaseException as error: cleanup_error('lock descriptor close failed', error)
         try:

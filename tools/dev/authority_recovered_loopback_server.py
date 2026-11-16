@@ -303,6 +303,20 @@ def cleanup_diagnostics(diagnostics, errors):
     return clean
 
 
+def finish_recovery_lock(lockbox, remaining, services_stopped, errors):
+    """Release the created lock only after processes and file services stop."""
+    if not lockbox:
+        return
+    lock_fd, lock_stat = lockbox[0]
+    if remaining is None or remaining or not services_stopped:
+        errors.append('lock retained: owned process or service stop unconfirmed')
+        try: os.close(lock_fd)
+        except BaseException as error: errors.append('lock descriptor: '+type(error).__name__)
+    else:
+        try: live.release_lock_target(snapshot.LOCK_TARGET,lock_fd,lock_stat)
+        except BaseException as error: errors.append('lock cleanup: '+type(error).__name__)
+
+
 def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1):
     """Accept and pump local peers until deadline, including while world is empty.
 
@@ -825,9 +839,12 @@ def run(args):
         if control is not None and not (control._closed or control._failed):
             try: control.close()
             except BaseException as error: errors.append('control cleanup: '+type(error).__name__)
+        services_stopped = True
         for service in services:
             try: owned.close_owned_file_service(service)
-            except BaseException as error: errors.append('service cleanup: '+type(error).__name__)
+            except BaseException as error:
+                services_stopped = False
+                errors.append('service cleanup: '+type(error).__name__)
         if sock is not None:
             try: sock.close()
             except BaseException as error: errors.append('socket cleanup: '+type(error).__name__)
@@ -854,15 +871,7 @@ def run(args):
                     verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
             except BaseException as error:
                 result.update(success=False, error='final recovery evidence invalid: '+str(error))
-        if lockbox:
-            lock_fd, lock_stat = lockbox[0]
-            if remaining is None or remaining:
-                errors.append('lock retained: owned process stop unconfirmed')
-                try: os.close(lock_fd)
-                except BaseException as error: errors.append('lock descriptor: '+type(error).__name__)
-            else:
-                try: live.release_lock_target(snapshot.LOCK_TARGET,lock_fd,lock_stat)
-                except BaseException as error: errors.append('lock cleanup: '+type(error).__name__)
+        finish_recovery_lock(lockbox, remaining, services_stopped, errors)
         try:
             if live.steam_identity(home,user.pw_uid) != steam: errors.append('Steam identity changed')
         except BaseException as error: errors.append('Steam identity unavailable: '+type(error).__name__)
