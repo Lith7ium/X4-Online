@@ -335,6 +335,33 @@ second. The test grant and admission are synthetic, and the server X4 does not
 apply the samples. This does not establish common frames, HA handover,
 gameplay, Windows or Internet operation. [Details](../tools/dev/AUTHORITY-CLIENT-AUTHORITY-PAIR.md).
 
+The first disposable client-to-server setter diagnostic did not reach its
+write test. Both X4 logs show the paused frame screen and the client logged two
+samples of saved NPC 1318. The server logged a preflight of the second sample
+at 2.6464123142468226 units and classified it `NEAR`, below the five-unit
+threshold. The result reports failure and conservatively marks the setter
+outcome uncertain; no INTENT, WRITE_ENTERED, IMMEDIATE or READBACK markers
+appear in either X4 log. The worker's intermediate frames were not retained,
+and no separate setter or packet trace proves absence of a write. Cleanup was
+reported confirmed. The grant/admission are synthetic and this establishes
+neither a server write nor HA handover. [Details](../tools/dev/AUTHORITY-CLIENT-TO-SERVER-APPLY-PAIR.md#attempt-01-preflight-too-near).
+
+A second isolated diagnostic used a genuine later client sample. The server's
+preflight classified it READY at 39.71 units, and its immediate read after a
+single setter call matched that sample's target position. The subsequent
+readback check failed; its combined conditions and later position were not
+logged, so the reason and persistence of the change remain unknown. Save-copy
+hashes matched the archived input and owned-process cleanup was reported.
+This synthetic-grant Linux loopback experiment does not establish HA handover
+or gameplay. [Details](../tools/dev/AUTHORITY-CLIENT-TO-SERVER-APPLY-PAIR.md#attempt-02-immediate-match-later-check-failed).
+
+A third disposable diagnostic added a later observation before the unchanged
+acceptance check. The server immediately read the client sample's target after
+the setter, but after about one real second it read a position 192.7 units
+away; the three-unit check failed. This measures a later position change in one
+local NPC trial, without identifying the responsible engine subsystem or
+demonstrating continuous client control. [Details](../tools/dev/AUTHORITY-CLIENT-TO-SERVER-APPLY-PAIR.md#attempt-03-later-position-measured).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

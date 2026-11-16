@@ -88,10 +88,11 @@ function X4LAN_PARTICIPANT_JOB_TICK()
     local saved_apply
     if cfg.authority_motion_apply_enabled==true then
      assert(saved and type(X4LAN_SAVED_MOTION_APPLY)=='table')
-     saved_apply={enabled=true,module=X4LAN_SAVED_MOTION_APPLY,log=function(line)
+     saved_apply={enabled=true,module=X4LAN_SAVED_MOTION_APPLY,
+      immediate_readback=cfg.authority_motion_apply_immediate_readback,log=function(line)
       if type(line)~='string' or #line>512 or not line:match('^[%w%._%+%- ]+$') then return false end
       local kind=line:match('^(%u+[%u_]*) ')
-      if kind~='INTENT' and kind~='WRITE_ENTERED' and kind~='READBACK' and kind~='PREFLIGHT' then return false end
+      if kind~='INTENT' and kind~='WRITE_ENTERED' and kind~='IMMEDIATE' and kind~='POST_OBSERVED' and kind~='READBACK' and kind~='PREFLIGHT' then return false end
       DebugError('[X4LAN] AUTH_MOTION_APPLY '..line)
       return true
      end}

@@ -253,7 +253,17 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                         'x4_md_ffi_asserted_by_owner':True,'synthetic_server_and_checkpoint':True,
                         'checkpoint_offered_to_x4':False,'event_sequence':event['sequence'],'index':event['index']}
             else:
-                result=delivery_action(delivery,members,guard)
+                def action_guard():
+                    # An action may have irreversible side effects after its
+                    # last TCP request. Fence a failed participant reader
+                    # both before and after checking process/control state.
+                    if failure or stop.is_set() or not thread.is_alive():
+                        raise RuntimeError('participant reader unavailable')
+                    guard()
+                    if failure or stop.is_set() or not thread.is_alive():
+                        raise RuntimeError('participant reader unavailable')
+                    return True
+                result=delivery_action(delivery,members,action_guard)
                 if type(result) is not dict:raise RuntimeError('invalid source delivery result')
             guard()
             if failure:raise RuntimeError('participant thread failed')

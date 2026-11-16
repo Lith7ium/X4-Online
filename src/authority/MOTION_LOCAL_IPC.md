@@ -78,6 +78,13 @@ A bridge allows only one write attempt, with no automatic retry. A
 missing or invalid reply permanently fences the bridge: the game-side write
 may already have happened and cannot be rolled back. The result is the local
 owner's assertion, not an independent visual, shared-frame or gameplay proof.
+An additional, independently enabled `immediate_readback` records a local
+FFI position observation immediately after the one write, with the same
+actor, sector and profile guards. Its `IMMEDIATE` marker is only a point
+observation: the engine may defer the write or move the ship immediately.
+It never replaces the later MD/FFI readback, whose existing time and distance
+requirements remain mandatory for APPLIED. A later failure remains uncertain
+even when an IMMEDIATE marker was recorded; the write is never retried.
 The isolated saved-setter diagnostic carries this preflight through the same
 exclusive TCP reader and the source scheduler. It requests fresh source samples
 one at a time, observing at most 12 samples in 20 seconds by default; explicit

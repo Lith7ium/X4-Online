@@ -36,7 +36,9 @@ function M.new(o)
  assert(not owners[c.net],'motion socket already owned');owners[c.net]=true
  local apply=c.saved_apply
  if apply~=nil then
-  assert(saved and type(apply)=='table' and apply.enabled==true and type(apply.factory)=='function' and type(apply.register)=='function','invalid saved apply')
+  assert(saved and type(apply)=='table' and apply.enabled==true and type(apply.factory)=='function' and type(apply.register)=='function' and
+   (apply.immediate_readback==nil or apply.immediate_readback==true),'invalid saved apply')
+  apply={factory=apply.factory,register=apply.register,immediate_readback=apply.immediate_readback}
  end
  local state,busy='new',false;local last,pending,deadline,delivered=nil,nil,nil,nil
  local staged,bound,writer,operation_identity,apply_used,preflight_ready=nil,nil,nil,nil,false,false
@@ -136,12 +138,13 @@ function M.new(o)
   if kind=='APPLY' then apply_used=true;preflight_ready=false end
   operation_identity={p[5],p[6],p[7],p[8],p[9],p[10]};deadline=last+c.timeout
   local active=kind=='APPLY' and 'applying' or 'preflighting';state=active
-  writer=apply.factory({enabled=true,readonly=kind=='PREFLIGHT' and true or nil,timeout=c.timeout,guard=function()
+  writer=apply.factory({enabled=true,readonly=kind=='PREFLIGHT' and true or nil,
+   immediate_readback=kind=='APPLY' and apply.immediate_readback or nil,timeout=c.timeout,guard=function()
    return state==active and check() and state==active and last>=bound.arrival and last-bound.arrival<=c.max_age
   end,fault=function(reason)
    local allowed={begin_guard=true,dispatch_guard=true,dispatch_issue=true,pre_guard=true,pre_response=true,pre_inspect=true,
     pre_game=true,pre_distance=true,preflight_log=true,pre_intent=true,pre_write_marker=true,write=true,post_guard=true,post_response=true,
-    post_inspect=true,post_game=true,post_readback=true,post_log=true,tick_guard=true,post_dispatch=true,identity=true,begin=true,event=true,tick=true}
+    immediate_inspect=true,immediate_game=true,immediate_log=true,post_inspect=true,post_game=true,post_observation=true,post_readback=true,post_log=true,tick_guard=true,post_dispatch=true,identity=true,begin=true,event=true,tick=true}
    fail((kind=='PREFLIGHT' and 'preflight_' or 'apply_')..(allowed[reason] and reason or 'unknown'))
   end})
   if state~=active or not writer or not check() then return false end
@@ -246,11 +249,12 @@ function M.new_x4(o)
  end
  if c.saved_apply~=nil then
   local a=c.saved_apply
-  assert(type(a)=='table' and a.enabled==true and type(a.module)=='table' and type(a.module.new_x4)=='function')
-  local native_apply=a.module.new_x4
-  c.saved_apply={enabled=true,register=function(fn)return register('X4AuthoritySavedMotionApply.Result',fn)~=false end,
+  assert(type(a)=='table' and a.enabled==true and type(a.module)=='table' and type(a.module.new_x4)=='function' and
+   (a.immediate_readback==nil or a.immediate_readback==true))
+  local native_apply=a.module.new_x4;local apply_log=a.log
+  c.saved_apply={enabled=true,immediate_readback=a.immediate_readback,register=function(fn)return register('X4AuthoritySavedMotionApply.Result',fn)~=false end,
    factory=function(opt)
-    opt.expected_save_path=c.expected_save_path;opt.test_profile='45841';opt.resolve=c.resolve;opt.log=a.log
+    opt.expected_save_path=c.expected_save_path;opt.test_profile='45841';opt.resolve=c.resolve;opt.log=apply_log
     return native_apply(opt)
    end}
  end

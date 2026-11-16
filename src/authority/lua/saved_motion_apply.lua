@@ -16,6 +16,7 @@ function M.new(o)
  for _,k in ipairs({'clock','game','guard','issue','inspect','write','log','fault'})do assert(type(c[k])=='function',k)end
  assert(finite(c.timeout) and c.timeout>1 and c.timeout<=30)
  assert(c.readonly==nil or c.readonly==true)
+ assert(c.immediate_readback==nil or c.immediate_readback==true)
  local state,busy,used='idle',false,false;local last,deadline,pending,written=nil,nil,nil,false
  local api={}
  local function snapshot()
@@ -87,8 +88,25 @@ function M.new(o)
     local target={x=pending.target.x,y=pending.target.y,z=pending.target.z,
      yaw=p.yaw*180/math.pi,pitch=p.pitch*180/math.pi,roll=p.roll*180/math.pi}
     local w,v=pcall(c.write,snapshot(),target);assert(w and v==true and state=='pre' and check())
+    if c.immediate_readback then
+     -- Point-in-time observation only: the engine may defer the write or
+     -- immediately move the actor. Never treat this as the later readback.
+     stage='immediate_inspect';local observed,pnow=pcall(c.inspect,snapshot())
+     assert(observed and pose(pnow) and state=='pre' and check())
+     stage='immediate_game';local timed,game_now=pcall(c.game)
+     assert(timed and finite(game_now) and game_now>=gt and state=='pre' and check())
+     stage='immediate_log';assert(report(('IMMEDIATE %s %d %d %s %.17g %.17g %.17g %.17g'):format(
+      pending.request,pending.index,pending.sequence,pending.digest,pnow.x,pnow.y,pnow.z,game_now)))
+    end
     pending.write_time=last;pending.game=gt;state='settling'
    else
+    if c.immediate_readback then
+     stage='post_observation'
+     local d=distance(p,pending.target);local elapsed=last-pending.write_time
+     assert(finite(d) and finite(elapsed))
+     assert(report(('POST_OBSERVED %s %d %d %s %.17g %.17g %.17g %.17g %.17g %.17g %.17g'):format(
+      pending.request,pending.index,pending.sequence,pending.digest,p.x,p.y,p.z,gt,pending.game,elapsed,d)))
+    end
     stage='post_readback';assert(gt>pending.game and last-pending.write_time>=1 and distance(p,pending.target)<=3)
     stage='post_log';assert(report(('READBACK %s %d %d %s %.17g %.17g %.17g %.17g %.17g'):format(
      pending.request,pending.index,pending.sequence,pending.digest,p.x,p.y,p.z,gt,last-pending.write_time)))

@@ -95,6 +95,16 @@ def validate_client_authority_completion(details, index):
         raise RuntimeError('client authority read-only completion unconfirmed')
     return True
 
+def validate_client_to_server_apply_completion(details, index):
+    """Separate disposable one-shot completion; no job or checkpoint claim."""
+    if type(details) is not dict:
+        raise RuntimeError('client to server apply unconfirmed')
+    read=dict(details,server_x4_motion_applied=False)
+    validate_client_authority_completion(read,index)
+    if details.get('server_x4_motion_applied') is not True or details.get('server_apply_receipt') is not True:
+        raise RuntimeError('client to server apply unconfirmed')
+    return True
+
 
 def run(args):
     if sys.platform!='linux' or os.geteuid()==0:raise ValueError('unprivileged Linux required')
@@ -228,7 +238,10 @@ def run(args):
         inspect_context(require_load=True)
         details=coord.run({'deadline':deadline,'check':lambda:inspect_context(require_load=True)==set(role_names)})
         inspect_context(require_load=True)
-        if getattr(args,'client_authority_index',None) is not None:
+        if getattr(args,'client_to_server_apply',False) is True:
+            if two_clients:raise RuntimeError('client to server apply pair required')
+            validate_client_to_server_apply_completion(details,getattr(args,'client_authority_index',None))
+        elif getattr(args,'client_authority_index',None) is not None:
             if two_clients:raise RuntimeError('client authority pair required')
             validate_client_authority_completion(details,args.client_authority_index)
         elif getattr(args,'saved_index',None) is not None:
