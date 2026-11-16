@@ -15,6 +15,11 @@ simulates the whole world. The mechanism for determining a client's visible
 ships and map view remains to be established, as do subscription transitions,
 refresh and missed-update recovery. A sector view must not be assumed to grant
 visibility of every ship in that sector.
+For a high-attention area, the user confirmed that if its responsible player
+leaves or disconnects, another player present in that area should take over;
+if none is present, responsibility returns to the server. The handover
+protocol, last-confirmed-state recovery and conflict fencing are not yet
+implemented or proven.
 Static inspection of the installed X4 map UI found candidates for detecting
 the open map, its focus and rendered components. The map's `currentsector`
 follows focus/selection and has not been shown to cover everything visible
