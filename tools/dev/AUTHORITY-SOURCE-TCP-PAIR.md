@@ -120,3 +120,27 @@ run’s unrecorded frames. Subsequent diagnostic error codes are likewise
 prepared for future use; they do not identify the original failure. No packet
 trace, full-universe coverage, Windows/Internet operation or gameplay success
 is established by this failed attempt.
+
+
+The next isolated attempt, `.local/authority-source-tcp-continuous-02`, also
+**failed** before a `FINISHED` snapshot. The client log records 16 consecutive
+local applications, indices 10055–10070, then `ERROR event_refused`. The
+correlated receiver returned `Refused`; the staged MD has several Create and
+Inspect refusal branches, and this log does not identify which branch or
+underlying condition fired. The source log samples 17 `delivering` states and
+ends in `delivering`; it does not print the final head's index or sector, so
+that head's identity and outcome remain unproven.
+
+This time the result retains 16 completed worker-progress records, sequences
+1–16 and indices 10055–10070. Those records report five sector macros:
+`cluster_115_sector001_macro`, `cluster_114_sector001_macro`,
+`cluster_08_sector001_macro`, `cluster_403_sector001_macro` and
+`cluster_405_sector001_macro`. The records and worker code support completion
+of each reported client receipt, source MD Ack and REARM; the raw packet and
+PID/socket-inode traces were not separately saved. The result reports
+confirmed owned-process cleanup with no owned processes remaining. More
+specific refusal diagnostics are being prepared separately; they cannot
+retroactively determine this attempt's refusal branch. The synthetic admission,
+artificial client seed/loadout, one local client, non-atomic descriptor,
+unproven frame identity and lack of birth, whole-universe, Windows/Internet,
+persistence or gameplay proof remain as above.

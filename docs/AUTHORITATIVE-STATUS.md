@@ -190,6 +190,14 @@ failure cause remain unknown; owned-process cleanup was confirmed. A slow
 bytewise supervisor reader is a possible explanation for the short saved
 prefix, not a proven reconstruction. See [the failed diagnostic](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#continuous-window-diagnostic).
 
+A subsequent continuous-window attempt also failed before `FINISHED`, after
+16 saved worker-progress records across five reported sectors and 16 local
+client applications. The next sampled source state was `delivering`; its
+identity and outcome are not logged. The client reported `event_refused`,
+but the particular MD refusal branch remains unknown. The saved result reports
+confirmed owned cleanup. These bounded local tests do not establish complete
+coverage or playable multiplayer. [Details](../tools/dev/AUTHORITY-SOURCE-TCP-PAIR.md#continuous-window-diagnostic).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity
