@@ -34,6 +34,15 @@ assert(#result.rows==3 and result.rows[2].assigned=='nil_observed')
 for _,kind in ipairs({'getter_error','invalid_getter','nan','slow','reentrant','control_negative'}) do
  local p=rig(kind);assert(p:start());assert(not p:response(row(0,'0xa','0xb','occupied')));assert(p:state()=='failed',kind)
 end
+local combinations={
+ {'control_negative','occupied','positive_assigned_nil_reservation_occupied'},
+ {'normal','empty','positive_assigned_present_reservation_empty'},
+ {'control_negative','empty','positive_assigned_nil_reservation_empty'},
+}
+for _,item in ipairs(combinations) do
+ local c,ci=rig(item[1]);assert(c:start());local ok,why=c:response(row(0,'0xa','0xb',item[2]))
+ assert(not ok and why==item[3] and c:state()=='failed' and #ci==1)
+end
 local p=rig();assert(p:start());assert(not p:response(row(0,'0xa','0xb','empty')));assert(p:state()=='failed')
 p=rig();assert(p:start());assert(not p:response(row(0,'0xa','0xb','occupied',string.rep('c',32)..'-0')));assert(p:state()=='failed')
 p=rig();assert(p:start());assert(p:response(row(0,'0xa','0xb','occupied')))

@@ -58,3 +58,21 @@ An `INSPECT_CALLBACK_FAILED` category can represent an invalid getter, actor,
 sector, conversion or other inspection failure and does not identify which one.
 Exception text, actor values and request tokens are never placed in these new
 error categories. The diagnostic remains fail-closed and does not retry.
+
+## Second native attempt
+
+The isolated Linux attempt `.local/authority-player-seat-02` again reached the
+checkpoint marker, paused slot-2 NPC read, preflight and creation of two test
+ships. Its first seat response failed the positive control with
+`SEAT_RESULT_POSITIVE_CONTROL_INCONCLUSIVE`; no fixture-seat observations were
+completed, no checkpoint was requested, and the result reported no owned
+processes remaining. The previously logged NPC `pilot=present` is a different
+property from the seat probe's assigned-pilot and slot-reservation getters.
+The existing log does not say which of those two observations failed.
+
+For a later attempt, three fixed failure reasons distinguish the already-read
+slot-0 combinations `nil_observed`/`occupied`, `present`/`empty`, and
+`nil_observed`/`empty`. They do not add an X4 query or change the accepted
+positive-control values. A nil result or empty reservation is an observation,
+not proof of an unoccupied or usable physical seat; nor do simultaneous positive
+values prove that they refer to the same physical person.

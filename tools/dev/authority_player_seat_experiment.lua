@@ -11,7 +11,8 @@ function M.new(o)
   clock_or_timeout=true,guard_failed=true,pause_or_process_guard=true,deadline=true,
   dispatch=true,not_idle=true,unexpected_response=true,response_type=true,response_mismatch=true,
   getter_unavailable=true,identity_unavailable=true,duplicate_ship=true,
-  positive_control_inconclusive=true,sector_mismatch=true,not_waiting=true,md_refused=true,
+  positive_assigned_nil_reservation_occupied=true,positive_assigned_present_reservation_empty=true,
+  positive_assigned_nil_reservation_empty=true,sector_mismatch=true,not_waiting=true,md_refused=true,
   inspect_callback_failed=true,inspect_state_changed=true,inspect_reentrant=true}
  local function fail(code)
   if not failed then failed=true;phase='failed';pcall(o.log,'ERROR '..code) end

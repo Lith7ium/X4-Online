@@ -11,7 +11,7 @@ function ConvertIDTo64Bit(value) return ffi.new('uint64_t',value) end
 function GetCurRealTime() return 1 end
 function GetComponentData(id,field)
  if field=='hullpercent' then return 100 end
- if field=='assignedpilot' then if arg[2]=='getter_error' then error('sensitive getter exception') end;if tonumber(id)==10 then return ffi.new('uint64_t',99) end;return nil end
+ if field=='assignedpilot' then if arg[2]=='getter_error' then error('sensitive getter exception') end;if arg[2]=='assigned_nil' or arg[2]=='both_empty' then return nil end;if tonumber(id)==10 then return ffi.new('uint64_t',99) end;return nil end
  error('invalid getter')
 end
 function X4LAN_SECTOR_READ_EXPORT() return ffi.new('uint64_t',10),ffi.new('uint64_t',11),2,3 end
@@ -29,7 +29,14 @@ send('X4AuthorityPlayerSeatExperiment.Preflight',nonce..'|'..epoch..'|ok')
 X4LAN_PLAYER_SEAT_EXPERIMENT_TICK();assert(requests[2][2]=='Create')
 send('X4AuthorityPlayerSectorFixture.Created',2);X4LAN_PLAYER_SEAT_EXPERIMENT_TICK()
 assert(requests[3][3].slot==0)
-send('X4AuthorityPlayerSeatCalibration.Result',row(0,'0xa','0xb','occupied'))
+local reservation=(arg[2]=='reservation_empty' or arg[2]=='both_empty') and 'empty' or 'occupied'
+send('X4AuthorityPlayerSeatCalibration.Result',row(0,'0xa','0xb',reservation))
+local failure_categories={assigned_nil='POSITIVE_ASSIGNED_NIL_RESERVATION_OCCUPIED',
+ reservation_empty='POSITIVE_ASSIGNED_PRESENT_RESERVATION_EMPTY',both_empty='POSITIVE_ASSIGNED_NIL_RESERVATION_EMPTY'}
+if failure_categories[arg[2]] then
+ assert(logs[#logs]:match(' ERROR SEAT_RESULT_'..failure_categories[arg[2]]..'$'))
+ assert(#requests==3 and not pcall(X4LAN_PLAYER_SEAT_EXPERIMENT_TICK));return
+end
 if arg[2]=='getter_error' then
  assert(logs[#logs]:match(' ERROR SEAT_RESULT_INSPECT_CALLBACK_FAILED$'))
  assert(not table.concat(logs):find('sensitive',1,true))

@@ -37,3 +37,6 @@ class Experiment(unittest.TestCase):
                            cwd=ROOT,check=True,capture_output=True,text=True,timeout=5)
             subprocess.run(['luajit','tests/authority_player_seat_experiment_x4.lua',str(library),'getter_error'],
                            cwd=ROOT,check=True,capture_output=True,text=True,timeout=5)
+            for scenario in ('assigned_nil','reservation_empty','both_empty'):
+                subprocess.run(['luajit','tests/authority_player_seat_experiment_x4.lua',str(library),scenario],
+                               cwd=ROOT,check=True,capture_output=True,text=True,timeout=5)

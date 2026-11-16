@@ -68,7 +68,11 @@ function M.new(o)
   for _,old in ipairs(rows) do if old.actor_key==normalized_actor then return fail('duplicate_ship') end end
   rows[#rows+1]={slot=slot,actor_key=normalized_actor,sector_key=normalized_sector,
                 assigned=sample.assigned,reservation=reservation,x=sample.x,y=sample.y,z=sample.z,hull=sample.hull}
-  if slot==0 and (sample.assigned~='present' or reservation~='occupied') then return fail('positive_control_inconclusive') end
+  if slot==0 then
+   if sample.assigned=='nil_observed' and reservation=='occupied' then return fail('positive_assigned_nil_reservation_occupied') end
+   if sample.assigned=='present' and reservation=='empty' then return fail('positive_assigned_present_reservation_empty') end
+   if sample.assigned=='nil_observed' and reservation=='empty' then return fail('positive_assigned_nil_reservation_empty') end
+  end
   if slot==2 then
    if rows[2].sector_key==rows[3].sector_key or rows[1].sector_key~=rows[3].sector_key then return fail('sector_mismatch') end
    state='done';deadline=nil
