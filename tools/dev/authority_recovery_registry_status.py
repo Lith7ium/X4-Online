@@ -141,15 +141,13 @@ def install(case,nonce,expected,*,enroll=None):
             raise ValueError('invalid enrollment setup')
     lab=Path(case)/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
     module=ui/'recovery_registry_status.lua';script=md/'authority_ship_registry.xml'
-    shutil.copyfile(ROOT/'src/authority/lua/recovery_registry_status.lua',module)
-    shutil.copyfile(ROOT/'tools/dev/authority_ship_registry.xml',script)
     config=ui/'config.lua';text=config.read_text(encoding='ascii')
     if not text.endswith('}\n'):raise ValueError('invalid recovery config')
-    config.write_text(text[:-2]+',authority_registry_nonce="'+nonce+'",authority_registry_expected="'+expected_text+'"}\n',encoding='ascii')
+    base_config=text[:-2]+',authority_registry_nonce="'+nonce+'",authority_registry_expected="'+expected_text+'"}\n'
     manifest=lab/'ui.xml';text=manifest.read_text()
     hook='    <file name="ui/authority_world_bridge_probe.lua" />\n'
     if text.count(hook)!=1:raise ValueError('invalid recovery manifest')
-    manifest.write_text(text.replace(hook,'    <file name="ui/recovery_registry_status.lua" />\n'+hook))
+    base_manifest=text.replace(hook,'    <file name="ui/recovery_registry_status.lua" />\n'+hook)
     probe=ui/'authority_world_bridge_probe.lua';text=probe.read_text()
     hook='local activated=false\n'
     if text.count(hook)!=1:raise ValueError('invalid recovery owner')
@@ -179,19 +177,18 @@ def install(case,nonce,expected,*,enroll=None):
                 ('tools/dev/authority_registry_resolve_string.lua','registry_resolve_string.lua'),
                 ('src/authority/lua/ship_registry_client.lua','ship_registry_client.lua'),
                 ('src/authority/lua/recovery_registry_enroll.lua','recovery_registry_enroll.lua')]
-        for source,name in extras:
-            target=ui/name;shutil.copyfile(ROOT/source,target);protected.append(target)
-        client=ui/'ship_registry_client.lua';contents=client.read_text()
+        client=ui/'ship_registry_client.lua'
+        contents=(ROOT/'src/authority/lua/ship_registry_client.lua').read_text()
         if not contents.endswith('return M\n'):raise ValueError('invalid registry client')
-        client.write_text(contents[:-len('return M\n')]+'X4LAN_SHIP_REGISTRY_CLIENT=M\nreturn M\n')
-        config=ui/'config.lua';contents=config.read_text(encoding='ascii')
-        config.write_text(contents[:-2]+',authority_enroll_epoch="'+enroll['epoch']+'",authority_enroll_nonce="'+enroll['nonce']+
-            '",authority_enroll_limit='+str(enroll['limit'])+',authority_enroll_save_path="'+enroll['save_path']+'"}\n',encoding='ascii')
-        manifest=lab/'ui.xml';contents=manifest.read_text()
+        updated_client=contents[:-len('return M\n')]+'X4LAN_SHIP_REGISTRY_CLIENT=M\nreturn M\n'
+        updated_config=base_config[:-2]+',authority_enroll_epoch="'+enroll['epoch']+'",authority_enroll_nonce="'+enroll['nonce']+\
+            '",authority_enroll_limit='+str(enroll['limit'])+',authority_enroll_save_path="'+enroll['save_path']+'"}\n'
         hook='    <file name="ui/recovery_registry_status.lua" />\n'
-        if contents.count(hook)!=1:raise ValueError('registry status hook missing')
-        manifest.write_text(contents.replace(hook,''.join('    <file name="ui/'+name+'" />\n' for _,name in extras)+hook))
-        text=text.replace('local registry_status=nil\n','local registry_status,registry_handler,registry_enroller=nil,nil,nil\n')
+        if base_manifest.count(hook)!=1:raise ValueError('registry status hook missing')
+        updated_manifest=base_manifest.replace(hook,''.join('    <file name="ui/'+name+'" />\n' for _,name in extras)+hook)
+        hook='local registry_status=nil\n'
+        if text.count(hook)!=1:raise ValueError('registry status state hook missing or duplicated')
+        text=text.replace(hook,'local registry_status,registry_handler,registry_enroller=nil,nil,nil\n')
         old="register=function(f)return RegisterEvent('X4AuthorityShipRegistry.Correlated',f)~=false end,"
         new="""register=function(f)
     registry_handler=f
@@ -219,5 +216,17 @@ def install(case,nonce,expected,*,enroll=None):
   if registry_enroller:state()~='done' then return end
  end
 ''')
+    # Hook validation above is read-only; filesystem failures below are not
+    # transactional and still require the caller to discard the overlay.
+    shutil.copyfile(ROOT/'src/authority/lua/recovery_registry_status.lua',module)
+    shutil.copyfile(ROOT/'tools/dev/authority_ship_registry.xml',script)
+    config.write_text(base_config,encoding='ascii')
+    manifest.write_text(base_manifest)
+    if enroll is not None:
+        for source,name in extras:
+            target=ui/name;shutil.copyfile(ROOT/source,target);protected.append(target)
+        client.write_text(updated_client)
+        config.write_text(updated_config,encoding='ascii')
+        manifest.write_text(updated_manifest)
     probe.write_text(text)
     return protected

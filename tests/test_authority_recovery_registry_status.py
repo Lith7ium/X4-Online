@@ -93,6 +93,82 @@ class StatusTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             status.install('/not/used','a'*32,('ready','b'*32,1,'c'*64),
                 enroll={'epoch':'d'*32,'nonce':'e'*32,'limit':3,'save_path':'/tmp/45841/save'})
+
+    def test_invalid_hooks_do_not_modify_overlay_for_status_or_enrollment(self):
+        hooks = (
+            ('ui.xml', '    <file name="ui/authority_world_bridge_probe.lua" />\n'),
+            ('ui/authority_world_bridge_probe.lua', 'local activated=false\n'),
+            ('ui/authority_world_bridge_probe.lua', ' if not activated then\n'),
+            ('ui/authority_world_bridge_probe.lua',
+             "    AddUITriggeredEvent('X4AuthorityCheckpointMarker','Store',{marker=marker})\n"),
+        )
+        for enrollment in (False, True):
+            for relative, hook in hooks:
+                for replacement in ('', hook + hook):
+                    with self.subTest(enrollment=enrollment, hook=hook, duplicated=bool(replacement)), \
+                         tempfile.TemporaryDirectory() as directory:
+                        case = Path(directory)/'case'
+                        profile = Path(directory)/'45841'
+                        ui = case/'extensions/x4_lan_lab/ui'
+                        lab = ui.parent
+                        ui.mkdir(parents=True)
+                        (lab/'md').mkdir()
+                        profile.mkdir()
+                        def fake_base(case, port, lease, epoch, marker_required):
+                            (ui/'authority_world_bridge_probe.lua').write_text(
+                                (ROOT/'tools/dev/authority_world_bridge_probe.lua').read_text())
+                        with patch.object(recovery.bridge_install, 'install_probe', side_effect=fake_base):
+                            recovery.install_probe(case, profile, 1234, 'a'*32, 'b'*32)
+                        target = lab/relative
+                        original = target.read_text()
+                        self.assertEqual(original.count(hook), 1)
+                        target.write_text(original.replace(hook, replacement))
+                        before = {path.relative_to(lab): path.read_bytes()
+                                  for path in lab.rglob('*') if path.is_file()}
+                        options = {'epoch':'d'*32, 'nonce':'e'*32, 'limit':3,
+                                   'save_path':str(profile/'save')} if enrollment else None
+                        with self.assertRaises(ValueError):
+                            status.install(case, 'c'*32, ('uninitialized',), enroll=options)
+                        after = {path.relative_to(lab): path.read_bytes()
+                                 for path in lab.rglob('*') if path.is_file()}
+                        self.assertEqual(after, before)
+                        target.write_text(original)
+                        installed = status.install(case, 'c'*32, ('uninitialized',), enroll=options)
+                        self.assertEqual(len(installed), 6 if enrollment else 2)
+
+    def test_duplicate_generated_enrollment_hooks_fail_before_writes(self):
+        duplicate_hooks = (
+            '    <file name="ui/recovery_registry_status.lua" />\n',
+            'local registry_status=nil\n',
+            "register=function(f)return RegisterEvent('X4AuthorityShipRegistry.Correlated',f)~=false end,",
+            ' if not registry_status:ready() then return end\n',
+        )
+        for hook in duplicate_hooks:
+            with self.subTest(hook=hook), tempfile.TemporaryDirectory() as directory:
+                case = Path(directory)/'case'
+                profile = Path(directory)/'45841'
+                ui = case/'extensions/x4_lan_lab/ui'
+                lab = ui.parent
+                ui.mkdir(parents=True)
+                (lab/'md').mkdir()
+                profile.mkdir()
+                def fake_base(case, port, lease, epoch, marker_required):
+                    (ui/'authority_world_bridge_probe.lua').write_text(
+                        (ROOT/'tools/dev/authority_world_bridge_probe.lua').read_text())
+                with patch.object(recovery.bridge_install, 'install_probe', side_effect=fake_base):
+                    recovery.install_probe(case, profile, 1234, 'a'*32, 'b'*32)
+                target = lab/'ui.xml' if hook.startswith('    <file') else ui/'authority_world_bridge_probe.lua'
+                target.write_text(target.read_text() + hook)
+                before = {path.relative_to(lab): path.read_bytes()
+                          for path in lab.rglob('*') if path.is_file()}
+                options = {'epoch':'d'*32, 'nonce':'e'*32, 'limit':3,
+                           'save_path':str(profile/'save')}
+                with self.assertRaises(ValueError):
+                    status.install(case, 'c'*32, ('uninitialized',), enroll=options)
+                after = {path.relative_to(lab): path.read_bytes()
+                         for path in lab.rglob('*') if path.is_file()}
+                self.assertEqual(after, before)
+
     def test_installs_into_real_recovery_owner_hooks(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);case=root/'case';profile=root/'45841'
