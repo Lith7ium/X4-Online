@@ -2,7 +2,7 @@ local host=dofile('tools/dev/authority_job_registry_host.lua')
 local probe=dofile('tools/dev/authority_job_registry_probe.lua')
 assert(host.new({enabled=false})==nil)
 assert(host.new_x4({enabled=false})==nil)
-local function scenario(with_event,kind,expose)
+local function scenario(with_event,kind,expose,defer)
  local handlers,queue,issued,rows={}, {}, {}, {}
  local t,last,observed,ack=.0,0,0,0
  local done,fault
@@ -15,6 +15,13 @@ local function scenario(with_event,kind,expose)
   valid=function() return true end,can_observe=function() return kind~='source_stopped' or t<.5 end,clock=function() return t end,
   report=function(...) local row,actor=...;row._test_argc=select('#',...);row._test_actor=actor;rows[#rows+1]=row;return true end,done=function(row) done=row;return true end,
   fault=function(reason) fault=reason end}
+ if defer then
+  opts.defer_ack=true;opts.delivery_timeout=.6
+  opts.queue_acked=function(epoch,seq,index)
+   assert(epoch==opts.epoch and seq==1 and index==2 and ack==1)
+   rows.queue_acked=(rows.queue_acked or 0)+1;return true
+  end
+ end
  opts.trigger=function(screen,operation,args)
   issued[#issued+1]={screen=screen,operation=operation,args=args}
   if kind=='trigger_false' then return false end
@@ -43,6 +50,10 @@ local function scenario(with_event,kind,expose)
  for _=1,30 do
   while #queue>0 do local event=table.remove(queue,1);assert(handlers[event[1]])(nil,event[2]) end
   if app:state()=='done' or app:state()=='failed' then break end
+  if app:state()=='await_delivery' and defer~='timeout' then
+   assert(ack==0 and #rows==1 and rows.queue_acked==nil)
+   assert(app:confirm_delivery(opts.epoch,1,2))
+  end
   t=t+.11;app:tick()
  end
  return app,issued,rows,done,fault
@@ -52,6 +63,11 @@ assert(app:state()=='done',tostring(err));assert(#rows==1 and rows[1].classifica
 assert(rows[1]._test_argc==1 and rows[1]._test_actor==nil)
 local exposed,_,exposed_rows=scenario(true,nil,true)
 assert(exposed:state()=='done' and exposed_rows[1]._test_argc==2 and exposed_rows[1]._test_actor==42)
+local held,held_ops,held_rows,held_result,held_error=scenario(true,nil,true,true)
+assert(held:state()=='done',tostring(held_error));assert(#held_rows==1 and held_rows.queue_acked==1 and held_result.acknowledged==1)
+local expired,expired_ops,expired_rows,_,expired_error=scenario(true,nil,true,'timeout')
+assert(expired:state()=='failed' and expired_error and #expired_rows==1 and expired_rows.queue_acked==nil)
+for _,op in ipairs(expired_ops) do assert(op.operation~='Ack') end
 assert(result.observed==1 and result.acknowledged==1 and result.birth_confirmed==false and result.delivery_confirmed==false)
 local empty,_,_,empty_result=scenario(false)
 assert(empty:state()=='done' and empty_result.classification=='inconclusive_no_events')

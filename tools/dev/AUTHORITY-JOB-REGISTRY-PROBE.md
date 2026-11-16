@@ -72,3 +72,26 @@ an out-of-range response would be too late. This conservative capacity fence
 also means no further existing actors can be processed by this driver once the
 boundary is reached. It does not establish native exhaustion behavior or a
 recovery path.
+# Deferred source queue acknowledgement (experimental)
+
+The existing source probe and host retain their original diagnostic behavior
+unless `defer_ack=true` is explicitly set. In the deferred mode, enrollment
+produces one provisional `report` before the MD queue `Ack`: the source
+remains at `await_delivery`, with that original queue head still retained.
+After a separate owner has verified receipts from all required clients, it may
+call `host:confirm_delivery(epoch, sequence, index)` exactly once. Wrong,
+late, duplicate or reentrant confirmation faults the diagnostic instead of
+advancing it. The mandatory `delivery_timeout` bounds the wait. The host
+requires its existing running-source guard throughout this wait: the paused
+one-shot census coordinator cannot use this path without further integration.
+
+After the corresponding MD `Acked` event, the host calls the mandatory
+`queue_acked(epoch, sequence, index)` callback. It must return exactly true and
+must not reenter the host. A callback failure faults the host but cannot undo
+an already applied MD `Ack`. `report` remains provisional, and actor handles
+are process-local. The external owner must bind client/session incarnations,
+event identity, descriptor and each client receipt before confirmation. This
+module itself neither collects nor authenticates client ACKs, survives a
+restart, creates replicas, or proves that all clients received a ship.
+Queue overflow and unavailable queued objects still fault; no event is silently
+dropped. A running NPC activation is not necessarily a newly built ship.

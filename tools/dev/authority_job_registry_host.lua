@@ -11,6 +11,11 @@ function M.new(o)
  assert(type(o.epoch)=='string' and #o.epoch==32 and o.epoch:match('^[0-9a-f]+$'))
  assert(type(o.baseline)=='table' and #o.baseline<=64 and natural(o.capacity) and o.capacity>=1 and o.capacity<=1024)
  assert(o.expose_actor==nil or type(o.expose_actor)=='boolean')
+ assert(o.defer_ack==nil or type(o.defer_ack)=='boolean')
+ if o.defer_ack then
+  assert(finite(o.delivery_timeout) and o.delivery_timeout>0 and o.delivery_timeout<=600)
+  assert(type(o.queue_acked)=='function','queue_acked required')
+ else assert(o.delivery_timeout==nil,'delivery timeout requires deferred ACK') end
  local attach=o.attach_saved_registry==true
  assert(o.attach_saved_registry==nil or type(o.attach_saved_registry)=='boolean')
  if attach then
@@ -30,6 +35,7 @@ function M.new(o)
  local driver,stop_at,hard_stop,next_poll,stats,records=nil,nil,nil,0,nil,0
  local initial_last=attach and o.expected_last or #o.baseline
  local queue_init_attempted=false
+ local delivery,notifying=nil,false
  local function now()
   local value=o.clock();assert(finite(value) and (not last_clock or value>=last_clock),'clock invalid')
   last_clock=value;return value
@@ -79,9 +85,13 @@ function M.new(o)
  local function begin_observation(t)
   assert(o.can_observe()==true,'source is not running')
   started=t;stop_at=t+o.window;hard_stop=stop_at+o.timeout
-  driver=o.probe.new({enabled=true,epoch=o.epoch,last=initial_last,baseline=baseline,expose_actor=o.expose_actor,
+  driver=o.probe.new({enabled=true,epoch=o.epoch,last=initial_last,baseline=baseline,expose_actor=o.expose_actor,defer_ack=o.defer_ack,
    issue=issue,key=actor_key,to_md_actor=md_actor,valid=o.valid,
    report=function(row,actor)
+    if o.defer_ack then
+     assert(delivery==nil,'delivery already pending')
+     delivery={epoch=row.epoch,sequence=row.sequence,index=row.index}
+    end
     if o.expose_actor==true then assert(o.report(row,actor)==true)
     else assert(o.report(row)==true) end
     records=records+1;return true
@@ -147,12 +157,47 @@ function M.new(o)
   end
   if phase=='front' and (screen==QUEUE or screen==REG) then
    local ok,reason=driver:event(name,value);assert(ok,reason)
-   if driver:state()=='idle' then phase='waiting';deadline=nil;next_poll=t+.1 end
+   assert(not failed and phase=='front','state changed during registry response')
+   if driver:state()=='idle' then
+    phase='waiting';next_poll=t+.1
+    if o.defer_ack and name=='Acked' then
+     assert(delivery and value==delivery.sequence,'queue ACK mismatch')
+     local d=delivery;delivery=nil;notifying=true
+     local sent,accepted=pcall(o.queue_acked,d.epoch,d.sequence,d.index)
+     notifying=false
+     assert(sent and accepted==true and not failed and phase=='waiting','queue ACK callback failed')
+     local after=now()
+     assert(after<deadline and after<hard_stop and o.can_observe()==true,'queue ACK callback expired')
+    end
+    deadline=nil
+   end
+   if driver:state()=='await_delivery' then
+    phase='await_delivery';deadline=t+o.delivery_timeout
+    hard_stop=math.max(hard_stop,deadline+o.timeout)
+   end
    return
   end
   error('unexpected MD response')
  end
  local api={}
+ -- Call only after independently correlating every required client ACK.
+ -- This diagnostic owner does not collect clients or authenticate receipts.
+ function api:confirm_delivery(epoch,sequence,index)
+  if failed or notifying or not o.defer_ack or phase~='await_delivery' then fail('unexpected delivery confirmation');return false end
+  local ok,err=pcall(function()
+   local t=now()
+   assert(t<deadline and t<hard_stop and o.can_observe()==true,'delivery confirmation expired')
+   assert(not failed and phase=='await_delivery' and driver:state()=='await_delivery','state changed before confirmation')
+   phase='front';deadline=t+o.timeout
+   assert(driver:confirm_delivery(epoch,sequence,index),'delivery confirmation refused')
+   assert(not failed and phase=='front' and driver:state()=='ack','state changed during delivery confirmation')
+   local after=now()
+   assert(after<deadline and after<hard_stop and o.can_observe()==true,'ACK dispatch expired')
+   assert(not failed and phase=='front' and driver:state()=='ack','state changed after delivery confirmation')
+  end)
+  if not ok then fail(tostring(err));return false end
+  return true
+ end
  function api:start()
   if phase~='new' then fail('repeated start');return false end
   local ok,err=pcall(function()
@@ -173,6 +218,7 @@ function M.new(o)
   return true
  end
  function api:tick()
+  if notifying then fail('reentrant queue ACK callback');return false,'failed' end
   if failed or phase=='done' then return false,phase end
   local ok,err=pcall(function()
    local t=now()
