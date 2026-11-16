@@ -1,8 +1,8 @@
-# Experimental single held source job owner
+# Experimental held source job owner
 
 `lua/source_single_job_owner.lua` joins the existing saved-registry host,
-running read-only descriptor probe and source IPC/gate for exactly one selected
-activation queue entry. `new_x4` binds the actual local X4 callbacks and FFI
+running read-only descriptor probe and source IPC/gate for sequentially held
+activation queue entries. The default remains one selected entry. `new_x4` binds the actual local X4 callbacks and FFI
 adapters, but installs no extension, opens no socket, launches no process and
 registers no `onUpdate`. A private supervisor must supply one connected
 `x4lan_net` socket, an existing exclusive update owner, the X4 modules and a
@@ -45,12 +45,21 @@ The source IPC snapshots the descriptor and requires receipts from every
 admitted TCP peer before dispatching the held MD Ack. A callback records the
 actual MD `Acked`; only after that callback returns does the owner notify the
 IPC adapter to emit `SOURCE_ACKED`. While waiting for `REARM`, the owner does
-not tick the host or take another queue head. The experiment ends after REARM;
-the game may still have queued or lost other events, and bounded queue overflow
+not tick the host or take another queue head. The default experiment ends after REARM. Optional `max_events` permits a
+configured finite number up to the real queue sequence limit; the separate
+`continuous=true` mode continues until the observation window closes and the
+host has observed an empty queue with matching observed and acknowledged counts.
+It then sends `S|lease|attempt|FINISHED|epoch|generation|count` once, after the
+last REARM. A count of zero is inconclusive; the empty queue is a point sample,
+not proof of complete event coverage. Continuous mode still has the configured
+owner timeout, bounded native queue and registry limits. A supervisor must read
+the terminal message on the same exclusively owned socket and fail closed on
+loss or mismatch. The game may still have lost other events, and queue overflow
 or any guard, response, identity or timeout failure fences the whole run. No
 retry or recovery is safe without separately reconciling possible side effects.
 
-`tests/authority_source_single_job_owner.lua` exercises the actual host,
+`tests/authority_source_single_job_owner.lua` and
+`tests/authority_source_multi_job_owner.lua` exercise the actual host,
 registry probe, source IPC and delivery gate with simulated MD, descriptor,
 network and two clients. It checks peer binding, rejection of an existing
 registry entry, no source Ack after only the first client, the separate MD Ack

@@ -9,6 +9,19 @@ class SourceSingle(unittest.TestCase):
     def test_held_source_event_waits_for_clients_and_actual_md_ack(self):
         subprocess.run(['luajit','tests/authority_source_single_job_owner.lua'],cwd=ROOT,
                        check=True,capture_output=True,text=True,timeout=5)
+    def test_two_fifo_heads_wait_for_per_event_rearm(self):
+        subprocess.run(['luajit','tests/authority_source_multi_job_owner.lua'],cwd=ROOT,
+                       check=True,capture_output=True,text=True,timeout=5)
+    def test_continuous_waits_for_window_and_empty_snapshot(self):
+        for scenario in ('continuous', 'empty'):
+            with self.subTest(scenario=scenario):
+                subprocess.run(['luajit','tests/authority_source_multi_job_owner.lua',scenario],cwd=ROOT,
+                               check=True,capture_output=True,text=True,timeout=5)
+    def test_overflow_and_changed_actor_fail_without_next_ack(self):
+        for scenario in ('overflow','actor','known'):
+            with self.subTest(scenario=scenario):
+                subprocess.run(['luajit','tests/authority_source_multi_job_owner.lua',scenario],cwd=ROOT,
+                               check=True,capture_output=True,text=True,timeout=5)
     def test_running_guard_and_rearm_with_fake_x4_abi(self):
         with tempfile.TemporaryDirectory() as tmp:
             lib=Path(tmp)/'fake.so'
