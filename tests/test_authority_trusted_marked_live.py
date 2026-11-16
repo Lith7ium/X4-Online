@@ -84,9 +84,10 @@ class MarkedHarnessTest(unittest.TestCase):
         self.assertIsNone(result['client_admitted'])
         self.assertEqual(result['admission_state'], 'indeterminate')
 
-    def test_close_failure_does_not_skip_redaction_or_replace_original_error(self):
+    def test_close_failure_preserves_original_error_and_retains_unfenced_config(self):
         calls = []
         class Participant:
+            config = Path('/private/config.lua')
             def close(self): calls.append('close'); raise OSError('close failed')
             def redact(self): calls.append('redact')
         with patch.object(live, 'MarkedParticipant', return_value=Participant()), \
@@ -94,8 +95,23 @@ class MarkedHarnessTest(unittest.TestCase):
              patch.object(live.base, 'run', side_effect=ValueError('original')):
             with self.assertRaisesRegex(ValueError, 'original') as context:
                 live.run(SimpleNamespace(out='/unused'))
-        self.assertEqual(calls, ['close', 'redact'])
+        self.assertEqual(calls, ['close'])
         self.assertTrue(any('close failed' in note for note in context.exception.__notes__))
+        self.assertTrue(any('client config retained' in note for note in context.exception.__notes__))
+
+    def test_close_failure_does_not_skip_confirmed_safe_redaction(self):
+        calls = []
+        class Participant:
+            config = Path('/private/config.lua')
+            def close(self): calls.append('close'); raise OSError('close failed')
+            def redact(self): calls.append('redact')
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(live, 'MarkedParticipant', return_value=Participant()), \
+             patch.object(live.base.snapshot, 'output_path', return_value=Path(tmp)), \
+             patch.object(live.base, 'run', return_value={'success':False,'owned_cleanup_confirmed':True}):
+            result=live.run(SimpleNamespace(out=tmp))
+        self.assertEqual(calls,['close','redact'])
+        self.assertIn('close failed',result['cleanup_error'])
 
 
 if __name__ == '__main__': unittest.main()

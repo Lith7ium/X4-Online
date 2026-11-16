@@ -228,7 +228,8 @@ def run(args):
     finally:
         base.server.install_probe, base.client.install_probe = old_server, old_client
         cleanup_errors = []
-        for name, action in (('participant close', participant.close), ('client lease redaction', participant.redact)):
+        for name, action in (('participant close', participant.close),
+                             ('client lease redaction', lambda: base.redact_client_after_owned_stop(participant, result))):
             try: action()
             except BaseException as error: cleanup_errors.append(name + ' failed: ' + str(error))
         if cleanup_errors:

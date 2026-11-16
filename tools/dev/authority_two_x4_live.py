@@ -218,6 +218,15 @@ def check_final_recovery_files(result, experiment):
         result.update(success=False, error='final recovery state invalid: '+(str(error) or type(error).__name__))
 
 
+def redact_client_after_owned_stop(participant, result):
+    """Redact only when the supervisor confirmed all owned X4 processes stopped."""
+    if not isinstance(result, dict) or result.get('owned_cleanup_confirmed') is not True:
+        if getattr(participant, 'config', None) is not None:
+            raise RuntimeError('client config retained: owned X4 stop unconfirmed')
+        return
+    participant.redact()
+
+
 def run(args, *, experiment=None):
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('unprivileged Linux desktop user required')
@@ -402,6 +411,7 @@ def run(args, *, experiment=None):
         cleanup_errors = []
         all_stopped = True
         remaining_owned = []
+        remaining_known = True
         def cleanup_error(message, error=None):
             cleanup_errors.append(message + ((': ' + type(error).__name__) if error is not None else ''))
             result['success'] = False
@@ -441,8 +451,9 @@ def run(args, *, experiment=None):
                     cleanup_error('owned launcher start identity unavailable')
             except BaseException as error:
                 all_stopped = False
+                remaining_known = False
                 cleanup_error('process cleanup failed', error)
-        result['owned_processes_remaining'] = remaining_owned if helper_stopped else None
+        result['owned_processes_remaining'] = remaining_owned if helper_stopped and remaining_known else None
         result['owned_cleanup_confirmed'] = all_stopped
         if result['success']:
             try:
@@ -472,11 +483,14 @@ def run(args, *, experiment=None):
         server_config = out/'server/case/extensions/x4_lan_lab/ui/config.lua'
         try:
             if server_config.is_file():
-                text = server_config.read_text(encoding='ascii')
-                redacted, count = re.subn(r'authority_control_lease="[0-9a-f]{32}"',
-                                          'authority_control_lease="redacted"', text)
-                if count != 1: raise ValueError('invalid lease')
-                server_config.write_text(redacted, encoding='ascii')
+                if not all_stopped:
+                    cleanup_error('server config retained: owned X4 stop unconfirmed')
+                else:
+                    text = server_config.read_text(encoding='ascii')
+                    redacted, count = re.subn(r'authority_control_lease="[0-9a-f]{32}"',
+                                              'authority_control_lease="redacted"', text)
+                    if count != 1: raise ValueError('invalid lease')
+                    server_config.write_text(redacted, encoding='ascii')
         except BaseException as error: cleanup_error('lease cleanup failed', error)
         if cleanup_errors: result['cleanup_error'] = '; '.join(cleanup_errors)
         try:

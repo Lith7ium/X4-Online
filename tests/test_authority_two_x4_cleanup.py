@@ -177,7 +177,12 @@ class SupervisorCleanupTests(unittest.TestCase):
             set_(supervisor.pwd,'getpwuid',lambda _:user)
             steam_check=set_(supervisor.live,'steam_identity',Mock(side_effect=[steam,('changed',)])
                              if steam_change else Mock(return_value=steam))
-            set_(supervisor.snapshot,'prepare_case',prepare);set_(supervisor.server,'install_probe',lambda *_:None)
+            set_(supervisor.snapshot,'prepare_case',prepare)
+            config=out/'server/case/extensions/x4_lan_lab/ui/config.lua'
+            original='authority_control_lease="'+'a'*32+'"\n'
+            def install(*_):
+                config.parent.mkdir(parents=True);config.write_text(original)
+            set_(supervisor.server,'install_probe',install)
             set_(supervisor.socket,'socket',lambda *a,**k:fake_sock)
             set_(supervisor.live,'create_lock_target',lambda *_:(lock_fd,lock_stat))
             release=set_(supervisor.live,'release_lock_target',Mock(side_effect=lambda *_:os.close(lock_fd)))
@@ -212,8 +217,11 @@ class SupervisorCleanupTests(unittest.TestCase):
         if service_failure:
             self.assertIn('service cleanup failed',result['cleanup_error']);release.assert_called_once()
             fake_service.close.assert_called_once();fake_service.server.server_close.assert_called_once()
+            self.assertEqual(config.read_text(),'authority_control_lease="redacted"\n')
         else:
             self.assertIn('lock retained',result['cleanup_error']);release.assert_not_called()
+            self.assertEqual(config.read_text(),original)
+            self.assertIn('server config retained',result['cleanup_error'])
         if steam_change:
             self.assertEqual(result['error'],'run failure');self.assertIn('Steam identity changed',result['cleanup_error'])
         if system_exit: self.assertEqual(result['error'],'run failure')
@@ -221,6 +229,8 @@ class SupervisorCleanupTests(unittest.TestCase):
             stop_mock.assert_not_called()
             self.assertIsNone(result['owned_processes_remaining'])
             self.assertIn('helper cleanup unconfirmed',result['cleanup_error'])
+        elif not survivor and not service_failure:
+            self.assertIsNone(result['owned_processes_remaining'])
         else:
             self.assertEqual(stop_mock.call_count,2)
             self.assertEqual(stop_mock.call_args_list[0].args,(second,2))

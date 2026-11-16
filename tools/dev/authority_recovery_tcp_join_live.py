@@ -185,13 +185,14 @@ def run(args):
     finally:
         base.client.install_probe = old_client
         errors = []
-        for name, action in (('participant close',participant.close), ('client redaction',participant.redact)):
+        for name, action in (('participant close',participant.close),
+                             ('client redaction',lambda:base.redact_client_after_owned_stop(participant,result))):
             try: action()
             except BaseException as error: errors.append(name+': '+str(error))
         if errors:
             detail = '; '.join(errors)
             if result is not None:
-                result.update(success=False, cleanup_error=detail)
+                result.update(success=False, cleanup_error='; '.join(filter(None,(result.get('cleanup_error'),detail))))
             elif original_error is not None: original_error.add_note(detail)
             else: raise RuntimeError(detail)
     if result.get('success'):

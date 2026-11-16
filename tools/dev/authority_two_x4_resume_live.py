@@ -120,18 +120,28 @@ def run(args):
         if phase == 'load': participant.install(case)
     def run_base(arguments): return old_run(arguments, experiment=participant)
     result = None
+    original_error = None
     try:
         identity.inject, base.run = inject, run_base
         result = identity.run(args)
+    except BaseException as error:
+        original_error = error
+        raise
     finally:
         identity.inject, base.run = old_inject, old_run
-        participant.close()
-        try:
-            participant.redact()
-        except (OSError, UnicodeError, ValueError) as error:
-            if result is None:
-                raise RuntimeError('client lease cleanup failed') from error
-            result.update(success=False, cleanup_error='client lease cleanup failed')
+        cleanup_errors = []
+        for name, action in (('participant close', participant.close),
+                             ('client lease redaction', lambda: base.redact_client_after_owned_stop(participant, result))):
+            try: action()
+            except BaseException as error: cleanup_errors.append(name + ' failed: ' + str(error))
+        if cleanup_errors:
+            detail = '; '.join(cleanup_errors)
+            if result is not None:
+                result.update(success=False, cleanup_error='; '.join(filter(None, (result.get('cleanup_error'), detail))))
+            elif original_error is not None:
+                original_error.add_note(detail)
+            else:
+                raise RuntimeError(detail)
     result['scope'] = ('two isolated Linux X4 processes; assumed exact load; native admission, '
                        'resume and pause; no gameplay, Windows or internet')
     (out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
