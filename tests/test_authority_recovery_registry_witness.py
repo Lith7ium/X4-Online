@@ -33,6 +33,36 @@ class WitnessTests(unittest.TestCase):
             probe=(ui/'authority_world_bridge_probe.lua').read_text()
             self.assertIn("phase='create'",probe)
             with self.assertRaises(ValueError):witness.install(case,'d'*32,'b'*32,2,'create')
+    def test_invalid_hooks_leave_overlay_unchanged_and_retryable(self):
+        hooks = (
+            ('ui.xml', '    <file name="ui/recovery_registry_status.lua" />\n'),
+            ('ui/authority_world_bridge_probe.lua', 'local registry_status=nil\n'),
+            ('ui/authority_world_bridge_probe.lua', ' if not registry_status:ready() then return end\n'),
+        )
+        for relative, hook in hooks:
+            for replacement in ('', hook + hook):
+                with self.subTest(path=relative, duplicate=bool(replacement)), tempfile.TemporaryDirectory() as tmp:
+                    case = Path(tmp)/'case'
+                    lab = case/'extensions/x4_lan_lab'
+                    (lab/'ui').mkdir(parents=True)
+                    (lab/'md').mkdir()
+                    (lab/'ui.xml').write_text('<ui>\n    <file name="ui/recovery_registry_status.lua" />\n</ui>\n')
+                    (lab/'ui/authority_world_bridge_probe.lua').write_text(
+                        'local registry_status=nil\n if not registry_status:ready() then return end\n')
+                    target = lab/relative
+                    original = target.read_text()
+                    self.assertEqual(original.count(hook), 1)
+                    target.write_text(original.replace(hook, replacement))
+                    before = {path.relative_to(lab): path.read_bytes()
+                              for path in lab.rglob('*') if path.is_file()}
+                    with self.assertRaises(ValueError):
+                        witness.install(case, 'd'*32, 'b'*32, 2, 'verify')
+                    after = {path.relative_to(lab): path.read_bytes()
+                             for path in lab.rglob('*') if path.is_file()}
+                    self.assertEqual(after, before)
+                    target.write_text(original)
+                    self.assertEqual(len(witness.install(case, 'd'*32, 'b'*32, 2, 'verify')), 2)
+
     def test_generated_probe_allows_resume_only_for_join(self):
         for allow,mode in ((True,'join'),(True,'pause_before_done'),(False,'standalone'),(False,'standalone_create')):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as d:

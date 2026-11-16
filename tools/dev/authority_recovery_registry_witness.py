@@ -19,12 +19,10 @@ def install(case, nonce, epoch, count, phase, *, allow_resume=False):
     script=md/'authority_registry_witness.xml'; module=ui/'recovery_registry_witness.lua'
     if script.exists() or script.is_symlink() or module.exists() or module.is_symlink():
         raise ValueError('witness diagnostic already installed')
-    shutil.copyfile(ROOT/'tools/dev/authority_registry_witness.xml',script)
-    shutil.copyfile(ROOT/'src/authority/lua/recovery_registry_witness.lua',module)
     manifest=lab/'ui.xml'; data=manifest.read_text()
     hook='    <file name="ui/recovery_registry_status.lua" />\n'
     if data.count(hook)!=1:raise ValueError('missing witness manifest hook')
-    manifest.write_text(data.replace(hook,'    <file name="ui/recovery_registry_witness.lua" />\n'+hook))
+    updated_manifest=data.replace(hook,'    <file name="ui/recovery_registry_witness.lua" />\n'+hook)
     probe=ui/'authority_world_bridge_probe.lua'; data=probe.read_text()
     hook='local registry_status=nil\n'
     if data.count(hook)!=1:raise ValueError('missing witness owner state')
@@ -57,7 +55,12 @@ def install(case, nonce, epoch, count, phase, *, allow_resume=False):
         config += ''' assert(registry_witness:tick())
  if registry_witness:state()~='done' then return end
 '''
-    probe.write_text(data.replace(hook,hook+config))
+    updated_probe=data.replace(hook,hook+config)
+    # Validate every hook before touching the caller-owned isolated overlay.
+    shutil.copyfile(ROOT/'tools/dev/authority_registry_witness.xml',script)
+    shutil.copyfile(ROOT/'src/authority/lua/recovery_registry_witness.lua',module)
+    manifest.write_text(updated_manifest)
+    probe.write_text(updated_probe)
     return [module,script]
 
 

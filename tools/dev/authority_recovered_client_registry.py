@@ -26,12 +26,10 @@ def install(case, nonce, status):
         raise ValueError('invalid client registry status')
     lab = Path(case)/'extensions/x4_lan_lab'; ui = lab/'ui'; md = lab/'md'
     module = ui/'recovery_registry_status.lua'; script = md/'authority_ship_registry.xml'
-    shutil.copyfile(ROOT/'src/authority/lua/recovery_registry_status.lua', module)
-    shutil.copyfile(ROOT/'tools/dev/authority_ship_registry.xml', script)
     manifest = lab/'ui.xml'; text = manifest.read_text(encoding='utf-8')
     hook = '    <file name="ui/authority_download_load_probe.lua" />\n'
     if text.count(hook) != 1: raise ValueError('unexpected client UI manifest')
-    manifest.write_text(text.replace(hook, '    <file name="ui/recovery_registry_status.lua" />\n'+hook), encoding='utf-8')
+    updated_manifest = text.replace(hook, '    <file name="ui/recovery_registry_status.lua" />\n'+hook)
     probe = ui/'authority_download_load_probe.lua'; text = probe.read_text(encoding='utf-8')
     hook = "local state='initial';local failed=false\n"
     if text.count(hook) != 1: raise ValueError('unexpected client load owner')
@@ -57,7 +55,12 @@ def install(case, nonce, status):
   assert(registry_status:tick())
   if not registry_status:ready() then return end
 '''.replace('NONCE', nonce).replace('EXPECTED', expected)
-    probe.write_text(text.replace(hook, hook+code), encoding='utf-8')
+    updated_probe = text.replace(hook, hook+code)
+    # Validate every hook before touching the caller-owned isolated overlay.
+    shutil.copyfile(ROOT/'src/authority/lua/recovery_registry_status.lua', module)
+    shutil.copyfile(ROOT/'tools/dev/authority_ship_registry.xml', script)
+    manifest.write_text(updated_manifest, encoding='utf-8')
+    probe.write_text(updated_probe, encoding='utf-8')
     return [module, script]
 
 

@@ -57,6 +57,30 @@ class RecoveredClientRegistryTests(unittest.TestCase):
             self.assertLess((lab/'ui.xml').read_text().index('recovery_registry_status.lua'),
                             (lab/'ui.xml').read_text().index('authority_download_load_probe.lua'))
 
+    def test_invalid_hooks_leave_overlay_unchanged_and_retryable(self):
+        hooks = (
+            ('ui.xml', '    <file name="ui/authority_download_load_probe.lua" />\n'),
+            ('ui/authority_download_load_probe.lua', "local state='initial';local failed=false\n"),
+            ('ui/authority_download_load_probe.lua', '  if not X4LAN_IDENTITY_READY() then return end\n'),
+        )
+        for relative, hook in hooks:
+            for replacement in ('', hook + hook):
+                with self.subTest(path=relative, duplicate=bool(replacement)), tempfile.TemporaryDirectory() as tmp:
+                    lab = self.setup_case(tmp)
+                    target = lab / relative
+                    original = target.read_text()
+                    self.assertEqual(original.count(hook), 1)
+                    target.write_text(original.replace(hook, replacement))
+                    before = {path.relative_to(lab): path.read_bytes()
+                              for path in lab.rglob('*') if path.is_file()}
+                    with self.assertRaises(ValueError):
+                        subject.install(tmp, self.nonce, ('ready', '1'*32, 3, '2'*64))
+                    after = {path.relative_to(lab): path.read_bytes()
+                             for path in lab.rglob('*') if path.is_file()}
+                    self.assertEqual(after, before)
+                    target.write_text(original)
+                    self.assertEqual(len(subject.install(tmp, self.nonce, ('ready', '1'*32, 3, '2'*64))), 2)
+
     def test_rejects_invalid_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.setup_case(tmp)
