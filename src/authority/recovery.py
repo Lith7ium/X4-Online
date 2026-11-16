@@ -92,18 +92,22 @@ def stage_confirmed_recovery(store, private_profile):
         os.fsync(save_fd)
         os.fsync(root_fd)
         return checkpoint, profile / 'save' / 'save_008.xml.gz'
-    except BaseException:
+    except BaseException as error:
         # Caller guarantees exclusive ownership of the new profile throughout.
         if created_file and save_fd is not None:
             try:
                 os.unlink('save_008.xml.gz', dir_fd=save_fd)
             except FileNotFoundError:
                 pass
+            except BaseException as cleanup_error:
+                error.add_note(f'staged file cleanup failed: {type(cleanup_error).__name__}: {cleanup_error}')
         if created_dir:
             try:
                 os.rmdir('save', dir_fd=root_fd)
             except FileNotFoundError:
                 pass
+            except BaseException as cleanup_error:
+                error.add_note(f'staged directory cleanup failed: {type(cleanup_error).__name__}: {cleanup_error}')
         raise
     finally:
         if save_fd is not None:

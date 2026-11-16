@@ -1,5 +1,6 @@
 """Disposable file tests; no X4 process is started or loaded."""
 import gzip
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -93,6 +94,21 @@ class RecoveryStagingTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 stage_confirmed_recovery(self.store, self.profile)
         self.assertEqual(list(self.profile.iterdir()), [])
+
+    def test_failed_staging_preserves_original_error_if_cleanup_fails(self):
+        checkpoint = self.publish(b'<savegame/>')
+        self.store.confirm(checkpoint)
+        remove_directory = os.rmdir
+        with mock.patch('authority.recovery.os.fsync', side_effect=OSError('staging sync failed')), \
+             mock.patch('authority.recovery.os.unlink', side_effect=PermissionError('unlink denied')), \
+             mock.patch('authority.recovery.os.rmdir', wraps=remove_directory) as rmdir:
+            with self.assertRaisesRegex(OSError, 'staging sync failed') as caught:
+                stage_confirmed_recovery(self.store, self.profile)
+        rmdir.assert_called_once()
+        notes = caught.exception.__notes__
+        self.assertTrue(any('staged file cleanup failed' in note and 'unlink denied' in note for note in notes))
+        self.assertTrue(any('staged directory cleanup failed' in note for note in notes))
+        self.assertTrue((self.profile / 'save' / 'save_008.xml.gz').is_file())
 
 
 if __name__ == '__main__':
