@@ -85,6 +85,14 @@ Native Linux evidence so far:
   seed 7183 and approximate loadouts; activation does not prove ship birth.
   This is not complete-universe synchronization, Windows, Internet or gameplay
   evidence. See [the three-X4 record](../tools/dev/AUTHORITY-CENSUS-REPLICA-TWO-CLIENTS.md).
+* A separate paused single-X4 Linux experiment reported two sequential local
+  creations in different census-witnessed sectors, followed by a replay of
+  each. Its scenario log records the creates, replays and completion; the
+  individual MD and FFI checks are prerequisites in the scenario code, not
+  independently logged observations. Seed 7183, positions and loadouts were
+  artificial. This is not a source event, TCP transfer, multi-client,
+  cross-frame, Windows/Internet, gameplay or persistence test. See the
+  [local multi-create record](../tools/dev/AUTHORITY-MULTI-CREATE-LIVE.md).
 * In an isolated player-seat calibration, an NPC with an observed pilot and
   started Patrol returned a valid assigned pilot while its control-post
   reservation lookup reported empty. The positive control failed before the

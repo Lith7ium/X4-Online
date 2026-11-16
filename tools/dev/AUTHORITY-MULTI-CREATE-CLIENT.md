@@ -52,8 +52,14 @@ Focused tests: `python3 -m unittest discover -s tests -p
 'test_authority_multi_create_client.py' -v`.
 The MD document also passed the installed X4 `08.cat` MD schema; the temporary
 XSD extraction was checked against the catalog digests. Schema validity does
-not establish expression behavior in the game. The inherited Create guards
-and new witness checks contain long expressions; X4 previously rejected an
-unrelated guard at runtime with `Maximum operator nesting level reached`.
-Before any native attempt, review and, where needed, split these expressions;
-the present synthetic and schema checks do not rule out the same parser limit.
+not establish expression behavior in the game. The long Create and witness guards have since been split into short, nested
+conditions that retain their original evaluation order. X4 previously rejected
+an unrelated guard at runtime with `Maximum operator nesting level reached`;
+schema and offline tests do not establish that this script parses in X4.
+
+
+A later bounded native Linux observation of two serial creates and their
+replays in two census-witnessed sectors is recorded in
+[AUTHORITY-MULTI-CREATE-LIVE.md](AUTHORITY-MULTI-CREATE-LIVE.md). It used
+artificial inputs in one isolated process and did not test the source or TCP
+delivery paths.
