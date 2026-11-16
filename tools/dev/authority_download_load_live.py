@@ -120,6 +120,82 @@ def game_identity(proc,started,game):
     return identities[0] if identities else None
 
 
+def create_owned_lock(uid, gid, lockbox):
+    """Register the created lock before delivering a cancellation signal."""
+    deferred = [None]
+    previous = {}
+
+    def remember(number, _frame):
+        deferred[0] = deferred[0] or number
+
+    try:
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous[number] = signal.signal(number, remember)
+        lock_fd, lock_stat = live.create_lock_target(snapshot.LOCK_TARGET, uid, gid)
+        lockbox.append((lock_fd, lock_stat))
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+    if deferred[0] is not None:
+        raise InterruptedError('signal ' + str(deferred[0]))
+
+
+def stop_owned_resources(services, processes, result, errors):
+    """Drain registered services and stop every registered process group."""
+    services_stopped = True
+    for service in reversed(services):
+        try:
+            service.close_and_drain(timeout=2)
+        except BaseException as error:
+            services_stopped = False
+            errors.append('file service cleanup failed: ' + type(error).__name__)
+    processes_stopped = True
+    remaining = []
+    remaining_known = True
+    for process, started in reversed(processes):
+        try:
+            if started is None:
+                # The gated launcher has not received permission to execute X4.
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=15)
+                processes_stopped = False
+                remaining_known = False
+                errors.append('owned launcher start identity unavailable')
+            else:
+                members = snapshot.stop_owned(process, started)
+                if not isinstance(members, list) or any(type(pid) is not int or pid <= 0 for pid in members):
+                    raise RuntimeError('invalid owned cleanup result')
+                remaining.extend(members)
+                if members:
+                    processes_stopped = False
+                    errors.append('owned processes remain')
+        except BaseException as error:
+            processes_stopped = False
+            remaining_known = False
+            errors.append('process cleanup failed: ' + type(error).__name__)
+    result['owned_processes_remaining'] = remaining if remaining_known else None
+    result['owned_cleanup_confirmed'] = services_stopped and processes_stopped
+    return result['owned_cleanup_confirmed']
+
+
+def finish_owned_lock(lock_fd, lock_stat, resources_stopped, errors):
+    """Keep the lock path when an owned process or file service is unconfirmed."""
+    if lock_stat is None:
+        return
+    if resources_stopped:
+        try:
+            live.release_lock_target(snapshot.LOCK_TARGET, lock_fd, lock_stat)
+        except BaseException as error:
+            errors.append('lock cleanup failed: ' + type(error).__name__)
+    else:
+        errors.append('lock retained: owned process or service stop unconfirmed')
+        try:
+            os.close(lock_fd)
+        except BaseException as error:
+            errors.append('lock descriptor close failed: ' + type(error).__name__)
+
+
 def run(args):
     if sys.platform!='linux' or os.geteuid()==0: raise ValueError('unprivileged Linux user required')
     out=snapshot.output_path(args.out);store_dir=base.local_directory(args.store);source_store=CheckpointStore(store_dir)
@@ -137,58 +213,55 @@ def run(args):
     user=pwd.getpwuid(os.geteuid());home=Path(user.pw_dir);steam=live.steam_identity(home,user.pw_uid)
     out.mkdir(mode=0o700,parents=True,exist_ok=False)
     result={'success':False,'scope':'one isolated Linux X4 client; localhost transfer; synthetic server; no admission'}
-    proc=started=lock_fd=lock_stat=service=None;handlers={}
+    lockbox=[];handlers={};services=[];processes=[]
     try:
         case,profile,binds,lock=snapshot.prepare_case(out,game,home)
         saved_time=base.verify_origin(store_dir,checkpoint,profile)
         (out/'checkpoints').mkdir(mode=0o700);new_store=CheckpointStore(out/'checkpoints')
-        token=secrets.token_hex(16);service=joinfiles.FileService(token,slots=(1,)).start()
+        for number in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP): handlers[number]=signal.signal(number,snapshot.cancel_capture)
+        create_owned_lock(user.pw_uid,user.pw_gid,lockbox)
+        # Imported lazily to reuse the registered, signal-fenced lifecycle.
+        import authority_two_x4_live as owned
+        token=secrets.token_hex(16);service=owned.start_owned_file_service(token,services)
         world,ticket,target=stage_download(service,new_store,checkpoint,out,profile)
         config=install_probe(case,profile,ticket)
         protected=[config,case/'extensions/x4_lan_lab/ui.xml',profile/'content.xml',profile/'config.xml']
         protected += [case/'extensions/x4_lan_lab/ui'/name for name in
                       ('client_load_barrier.lua','x4_client_load_engine.lua','authority_download_load_probe.lua')]
         expected={path:live.sha(path) for path in protected}
-        lock_fd,lock_stat=live.create_lock_target(snapshot.LOCK_TARGET,user.pw_uid,user.pw_gid)
-        for number in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP): handlers[number]=signal.signal(number,snapshot.cancel_capture)
         command=base.readonly_save_command(case,game,binds,lock,args.display,auth,user.pw_name,args.seed,target)
         pos=command.index('--die-with-parent')
         for path in protected:
             command[pos:pos]=['--ro-bind',str(path),str(path)];pos+=3
-        with (out/'process.log').open('wb') as log:
-            proc=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
-            started=live.start_ticks(proc.pid);deadline=time.monotonic()+args.timeout
-            watch=ReceiptWatch(profile/'engine-output.log',ticket);seen_game=None
-            while True:
-                if time.monotonic()>=deadline: raise TimeoutError('client load observation timed out')
-                identity=game_identity(proc,started,game)
-                if identity is not None:
-                    if seen_game is not None and identity!=seen_game: raise RuntimeError('X4 process changed')
-                    seen_game=identity
-                elif seen_game is not None: raise RuntimeError('X4 process disappeared')
-                if any(live.sha(path)!=digest for path,digest in expected.items()):
-                    raise ValueError('protected configuration changed')
-                if live.steam_identity(home,user.pw_uid)!=steam: raise RuntimeError('Steam identity changed')
-                caught_up=watch.poll()
-                if watch.stage and seen_game is None: raise RuntimeError('receipt without owned X4 process')
-                if caught_up and watch.stage==2:
-                    if world.session.state!='paused' or world.session.ready_players: raise RuntimeError('unexpected admission')
-                    result.update(success=True,transfer_verified=True,load_requested=True,pause_observed=True,
-                        staged_save_read_only=True,configuration_read_only=True,saved_game_time=str(saved_time),
-                        exact_loaded_file_proven=False,admitted=False)
-                    break
-                time.sleep(.1)
+        proc,started=owned.spawn_owned_gated(command,out/'process.log',processes)
+        deadline=time.monotonic()+args.timeout
+        watch=ReceiptWatch(profile/'engine-output.log',ticket);seen_game=None
+        while True:
+            if time.monotonic()>=deadline: raise TimeoutError('client load observation timed out')
+            identity=game_identity(proc,started,game)
+            if identity is not None:
+                if seen_game is not None and identity!=seen_game: raise RuntimeError('X4 process changed')
+                seen_game=identity
+            elif seen_game is not None: raise RuntimeError('X4 process disappeared')
+            if any(live.sha(path)!=digest for path,digest in expected.items()):
+                raise ValueError('protected configuration changed')
+            if live.steam_identity(home,user.pw_uid)!=steam: raise RuntimeError('Steam identity changed')
+            caught_up=watch.poll()
+            if watch.stage and seen_game is None: raise RuntimeError('receipt without owned X4 process')
+            if caught_up and watch.stage==2:
+                if world.session.state!='paused' or world.session.ready_players: raise RuntimeError('unexpected admission')
+                result.update(success=True,transfer_verified=True,load_requested=True,pause_observed=True,
+                    staged_save_read_only=True,configuration_read_only=True,saved_game_time=str(saved_time),
+                    exact_loaded_file_proven=False,admitted=False)
+                break
+            time.sleep(.1)
     except (Exception,KeyboardInterrupt) as error: result['error']=str(error)
     finally:
-        if service is not None: service.close()
-        if proc is not None and started is None and proc.poll() is None:
-            try: proc.terminate();proc.wait(timeout=15)
-            except (OSError,subprocess.TimeoutExpired): result.update(success=False,cleanup_error='launcher cleanup failed')
-        if started is not None:
-            try:
-                remaining=snapshot.stop_owned(proc,started);result['owned_processes_remaining']=remaining
-                if remaining: result.update(success=False,cleanup_error='owned processes remain')
-            except (OSError,subprocess.TimeoutExpired): result.update(success=False,cleanup_error='process cleanup failed')
+        cleanup_errors = []
+        for number in handlers:
+            try: signal.signal(number, signal.SIG_IGN)
+            except BaseException as error: cleanup_errors.append('cleanup signal fence failed: ' + type(error).__name__)
+        resources_stopped = stop_owned_resources(services, processes, result, cleanup_errors)
         if result['success']:
             try:
                 while True:
@@ -198,14 +271,19 @@ def run(args):
                 if (watch.stage!=2 or live.sha(target)!=ticket['sha256'] or
                     any(live.sha(path)!=digest for path,digest in expected.items())):
                     raise ValueError('final receipt or configuration invalid')
-            except (OSError,ValueError): result.update(success=False,error='final receipt or staged state invalid')
-        if lock_stat is not None:
-            try: live.release_lock_target(snapshot.LOCK_TARGET,lock_fd,lock_stat)
-            except (OSError,RuntimeError): result.update(success=False,cleanup_error='lock cleanup failed')
-        for number,handler in handlers.items(): signal.signal(number,handler)
+            except BaseException as error:
+                result.update(success=False, error='final receipt or staged state invalid: ' + type(error).__name__)
+        if lockbox:
+            finish_owned_lock(*lockbox[0], resources_stopped, cleanup_errors)
+        for number,handler in handlers.items():
+            try: signal.signal(number,handler)
+            except BaseException as error: cleanup_errors.append('signal restore failed: ' + type(error).__name__)
         try:
-            if live.steam_identity(home,user.pw_uid)!=steam: result.update(success=False,error='Steam identity changed')
-        except (OSError,ValueError,RuntimeError): result.update(success=False,error='Steam identity unavailable')
+            if live.steam_identity(home,user.pw_uid)!=steam: cleanup_errors.append('Steam identity changed')
+        except BaseException as error:
+            cleanup_errors.append('Steam identity unavailable: ' + type(error).__name__)
+        if cleanup_errors:
+            result.update(success=False, cleanup_error='; '.join(cleanup_errors))
         (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
     return result
 
