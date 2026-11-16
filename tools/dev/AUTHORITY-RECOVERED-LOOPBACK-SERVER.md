@@ -670,6 +670,15 @@ The new save was published as `CURRENT` but not confirmed; `CONFIRMED` remained
 the earlier join baseline. The error alone does not establish which registry
 entries are missing or why. The result reported no owned X4 processes remaining.
 
+A subsequent pinned, read-only analysis of that unconfirmed `CURRENT` found
+the 10,082 saved registry entries and sealed witness tables bijective, but only
+10,060 matching ship components under the inspected universe structure. The
+22 missing matches did not include indices 687 or 688. Checkpoint bytes, marker,
+and pointer metadata were checked for that analysis; the previous `CONFIRMED`
+save was not rescanned. Reproducible local diagnostic material is retained under
+`.local/motion09-checkpoint-readonly/`. Missing matches do not establish whether
+ships were destroyed, stored differently, or excluded by a parser assumption.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
