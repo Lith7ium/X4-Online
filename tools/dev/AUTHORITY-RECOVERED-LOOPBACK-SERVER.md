@@ -98,6 +98,41 @@ exact bytes X4 consumed or that no simulation occurred before pause. This run
 does not establish a real client load, playable multiplayer, gameplay,
 universe-wide consistency, Windows or Internet operation.
 
+## Recovered server with one real Linux client
+
+On 2026-11-16 the opt-in `--diagnostic-client` path ran once with private X4
+profiles and loopback networking. The artifacts are in
+`.local/authority-real-client-once-01/server`; the parent orchestration result
+is in `.local/authority-real-client-once-01/result.json`. The server's native
+log records a recovery request, marker `c4e0b98e123a273edb2551c96f50681f`
+and pause in that order. The separate client X4 log records its ticket-bound
+load request, marker `3a434ddef339d02ce12146b38831c73b`, two saved fixture
+references and pause receipt, in that order. The client save copy hashes to
+`324cc3e740f7dac8cff3657d4e11564ee9205308378d446870f383b174b54c74`,
+matching the ticket for `checkpoint-aa92d86532a1498699d6c4efda33606d`.
+The client-log ordering and file hash were checked again from the retained
+artifacts. These checks do not independently establish that X4 consumed every
+byte of the staged file.
+
+The supervisor reports a trusted client claim over TCP, admission and native
+server/client resume confirmations through the participant-control path; its
+result also reports a clean helper exit, final client log/input verification
+and confirmed client process stop. These are supervisor and helper receipts,
+not an independently retained TCP packet capture. After the client disconnected,
+the supervisor reports server pause and save, ending with the paused confirmed
+checkpoint `checkpoint-13890e69102c474ca46bea976d0db960`, SHA-256
+`4127ff1670de6a488020ac9ae0cab9eb6583c8532c064626049b3e93f7ee5369`.
+The final saved bytes were independently rehashed, and the marker
+`5d6dac1ea4b95f6dcb117098934fba23` was verified in that checkpoint. The
+`CURRENT` and `CONFIRMED` pointers agree, the endpoint file is absent, and
+the supervisor reports no owned processes remaining.
+
+The later `serve` loop reports zero accepted and zero admitted connections:
+the diagnostic client was accepted before that loop and is counted in the
+separate `diagnostic_client` result. No second real client joined this run.
+The outcome does not establish repeat real-client joins, Windows, Internet,
+gameplay, world consistency or the complete persistent shared-world scenario.
+
 ## Internal diagnostic procedure
 
 The following procedure

@@ -129,6 +129,26 @@ def settle_shutdown(control, world, store, check):
     return saved
 
 
+def stop_owned_processes(processes, helpers_stopped, errors):
+    """Return known survivors or None whenever stopping any process is uncertain."""
+    if not helpers_stopped:
+        return None
+    remaining = []
+    uncertain = False
+    for proc, started in reversed(processes):
+        try:
+            if started is None:
+                uncertain = True
+                if proc.poll() is None: proc.terminate(); proc.wait(timeout=15)
+                errors.append('launcher identity unavailable')
+            else:
+                remaining.extend(snapshot.stop_owned(proc, started))
+        except BaseException as error:
+            uncertain = True
+            errors.append('owned cleanup: '+type(error).__name__)
+    return None if uncertain else remaining
+
+
 def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1):
     """Accept and pump local peers until deadline, including while world is empty.
 
@@ -201,6 +221,7 @@ def run(args):
     processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=None
     endpoint=out/'endpoint.json'; deadline=time.monotonic()+args.timeout
     watch=target=checkpoint=expected=None
+    diagnostic = None
     try:
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
@@ -276,12 +297,6 @@ def run(args):
         world._participants = GuardedParticipants(host, enabled=True, timeout=120)
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
-        # Endpoint contains a bearer secret. The containing output and file are owner-only.
-        fd = os.open(endpoint, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'w', encoding='ascii') as stream:
-            json.dump({'version':1,'control_host':'127.0.0.1','control_port':listener.getsockname()[1],
-                       'file_host':'127.0.0.1','file_port':service.port,'file_token':service.token,'file_slot':1}, stream)
-            stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
         # Guard every synchronous engine call, including potentially long save operations.
         original = world._engine
         class GuardedEngine:
@@ -294,6 +309,25 @@ def run(args):
                 return value
         world._engine = GuardedEngine()
         serving[0] = True
+        if getattr(args, 'diagnostic_client', False):
+            # One opt-in local test client, all resources still registered to
+            # this supervisor and protected by its single global lock.
+            import authority_recovered_server_client as diagnostic_client
+            diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory)
+            diagnostic_result = diagnostic_client.run_one(diagnostic, args=args, out=out, game=game,
+                home=home, uid=user.pw_uid, steam=steam, auth=auth, user=user.pw_name,
+                processes=processes, server_proc=proc, server_started=started, server_identity=identity,
+                checkpoint=checkpoint, recovery_target=target, server_expected=expected,
+                recovery_watch=watch, listener=listener, host=host, service=service, world=world,
+                session=session, control=control, check_server=verify)
+            result['diagnostic_client'] = diagnostic_result
+        # Publish only after the private diagnostic socket has been accepted.
+        # The endpoint contains a bearer secret; its directory is owner-only.
+        fd = os.open(endpoint, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w', encoding='ascii') as stream:
+            json.dump({'version':1,'control_host':'127.0.0.1','control_port':listener.getsockname()[1],
+                       'file_host':'127.0.0.1','file_port':service.port,'file_token':service.token,'file_slot':1}, stream)
+            stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
         result.update(serve(listener, host, deadline=deadline, check=check, should_stop=lambda: stop[0]))
         # Withdraw endpoint first, then disconnect peers; the coordinator's
         # last-disconnect path must pause and save before terminating X4.
@@ -325,17 +359,16 @@ def run(args):
         if sock is not None:
             try: sock.close()
             except BaseException as error: errors.append('socket cleanup: '+type(error).__name__)
-        remaining=[]
-        for proc,started in reversed(processes):
-            try:
-                if started is None:
-                    if proc.poll() is None: proc.terminate(); proc.wait(timeout=15)
-                    errors.append('launcher identity unavailable')
-                else: remaining.extend(snapshot.stop_owned(proc,started))
-            except BaseException as error: errors.append('owned cleanup: '+type(error).__name__)
+        helpers_stopped = True
+        if diagnostic is not None:
+            try: diagnostic.cleanup_diagnostic()
+            except BaseException as error:
+                helpers_stopped = False
+                errors.append('diagnostic helper cleanup unconfirmed: '+type(error).__name__)
+        remaining = stop_owned_processes(processes, helpers_stopped, errors)
         result['owned_processes_remaining']=remaining
         if remaining: errors.append('owned processes remain')
-        if result['success'] and not remaining:
+        if result['success'] and remaining == []:
             try:
                 verify_final_recovery(watch)
                 if (live.sha(target) != checkpoint.sha256 or
@@ -345,7 +378,7 @@ def run(args):
                 result.update(success=False, error='final recovery evidence invalid: '+str(error))
         if lockbox:
             lock_fd, lock_stat = lockbox[0]
-            if remaining or any(e.startswith(('owned cleanup:', 'launcher identity unavailable')) for e in errors):
+            if remaining is None or remaining:
                 errors.append('lock retained: owned process stop unconfirmed')
                 try: os.close(lock_fd)
                 except BaseException as error: errors.append('lock descriptor: '+type(error).__name__)
@@ -355,6 +388,9 @@ def run(args):
         try:
             if live.steam_identity(home,user.pw_uid) != steam: errors.append('Steam identity changed')
         except BaseException as error: errors.append('Steam identity unavailable: '+type(error).__name__)
+        if diagnostic is not None and remaining == []:
+            try: diagnostic.redact()
+            except BaseException as error: errors.append('diagnostic lease cleanup: '+type(error).__name__)
         config=out/'case/extensions/x4_lan_lab/ui/config.lua'
         try:
             if config.is_file():
@@ -379,6 +415,8 @@ def main():
     parser.add_argument('--store',type=Path,default=source.DEFAULT_STORE)
     parser.add_argument('--display',required=True); parser.add_argument('--timeout',type=float,default=3600)
     parser.add_argument('--seed',type=int,default=276944566)
+    parser.add_argument('--diagnostic-client', action='store_true',
+                        help='start one private Linux diagnostic client before serving other loopback clients')
     try: result=run(parser.parse_args())
     except (OSError,ValueError,RuntimeError) as error: parser.exit(1,'REFUSED: '+str(error)+'\n')
     print(json.dumps(result,indent=2)); return 0 if result['success'] else 1

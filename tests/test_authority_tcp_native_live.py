@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev'),str(ROOT/'tests')]
 import authority_tcp_native_live as subject
+import authority_remote_load_pair_live as remote
 from authority.checkpoints import CheckpointStore
 from authority.save_transfer import SaveOffers
 from authority.world import WorldCoordinator
@@ -92,6 +93,9 @@ class HookIntegrationTest(unittest.TestCase):
     def test_first_resume_only_stops_helper_without_second_join(self):
         self.exercise_fake_game(last_disconnect=False,first_resume_only=True)
 
+    def test_remote_owner_handoff_reaches_worker_before_resume(self):
+        self.exercise_fake_game(last_disconnect=False, first_resume_only=True, remote_owner=True)
+
     def test_incompatible_resume_options_refused_before_socket_creation(self):
         for kwargs in ({'last_disconnect':True,'first_resume_only':True},
                        {'last_disconnect':1},{'first_resume_only':1}):
@@ -104,7 +108,8 @@ class HookIntegrationTest(unittest.TestCase):
     def test_failed_last_save_leaves_indeterminate_server_result(self):
         self.exercise_fake_game(last_disconnect=True,fail_final_save=True)
 
-    def exercise_fake_game(self, *, last_disconnect,delay_eof=False,fail_final_save=False,first_resume_only=False):
+    def exercise_fake_game(self, *, last_disconnect,delay_eof=False,fail_final_save=False,first_resume_only=False,
+                           remote_owner=False):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'store').mkdir(); (root/'client/save').mkdir(parents=True)
             (root/'game').mkdir(); (root/'game/X4').symlink_to('/proc/self/exe')
@@ -113,7 +118,8 @@ class HookIntegrationTest(unittest.TestCase):
             engine=FreshEngine(root);engine._timeout=5
             engine.fail_final_save=fail_final_save
             world=WorldCoordinator('a'*32,engine,store,SaveOffers(service,store))
-            participant=subject.TCPMarkedParticipant(time.monotonic()+15,last_disconnect=last_disconnect,first_resume_only=first_resume_only)
+            participant_type = remote.RemoteParticipant if remote_owner else subject.TCPMarkedParticipant
+            participant=participant_type(time.monotonic()+15,last_disconnect=last_disconnect,first_resume_only=first_resume_only)
             udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);udp.bind(('127.0.0.1',0));udp.settimeout(.05)
             stop=threading.Event();commands=[]
             destination=participant.sock.getsockname()

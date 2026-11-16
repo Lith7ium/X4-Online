@@ -34,7 +34,7 @@ class Participant(LocalParticipantControl):
                              (ROOT/'src/authority/lua/x4_control_engine.lua', 'x4_control_engine.lua'),
                              (ROOT/'tools/dev/authority_two_x4_participant_probe.lua', 'authority_two_x4_participant_probe.lua')):
             shutil.copyfile(source, ui/name)
-        server_lib = case.parent.parent/'server/case/extensions/x4_lan_lab/native/x4lan_net.so'
+        server_lib = getattr(self, 'server_library', case.parent.parent/'server/case/extensions/x4_lan_lab/native/x4lan_net.so')
         shutil.copyfile(server_lib, lab/'native/x4lan_net.so')
         config = ui/'config.lua'; text = config.read_text(encoding='ascii')
         if not text.endswith('}\n'): raise ValueError('unexpected client config')

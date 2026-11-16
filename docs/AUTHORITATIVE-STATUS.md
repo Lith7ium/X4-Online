@@ -425,6 +425,15 @@ work in earlier LAN experiments provides useful prior evidence, but its
 fixture-specific guards and reference-frame assumptions are not yet a general
 NPC solution.
 
+A later recovered-server diagnostic used one real isolated Linux X4 client.
+Its retained logs show the ordered load request, saved marker, fixture references
+and pause. The supervisor reports TCP admission, native client/server resume,
+client cleanup and a confirmed server checkpoint after disconnect. The
+subsequent accept-loop counters are zero because this client joined before that
+loop; no second real client was tested. This does not establish Windows, WAN,
+gameplay or complete persistent-world behavior.
+[Evidence and limits](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#recovered-server-with-one-real-linux-client).
+
 An isolated NPC constant-velocity experiment logged conversion errors for its
 requested zero-vector expression. Its historical success flag only reflects
 the harness checks; the setter's physical effect and release outcome remain

@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('authority_recovered_loopback_server',
@@ -87,6 +88,30 @@ class LoopTests(unittest.TestCase):
             def failed(): raise RuntimeError('owned X4 disappeared')
             with self.assertRaisesRegex(RuntimeError,'owned X4 disappeared'):
                 MODULE.serve(listener,Host(),deadline=time.monotonic()+1,check=failed)
+
+
+class OwnedCleanupTests(unittest.TestCase):
+    def test_missing_start_identity_is_unknown_even_after_launcher_exit(self):
+        proc = Mock(); proc.poll.return_value = 0
+        errors = []
+        self.assertIsNone(MODULE.stop_owned_processes([[proc, None]], True, errors))
+        self.assertIn('launcher identity unavailable', errors)
+
+    def test_failed_stop_is_unknown_and_does_not_skip_other_processes(self):
+        first, second = Mock(), Mock()
+        errors = []
+        def stop(proc, started):
+            if proc is second: raise RuntimeError('stop unconfirmed')
+            return []
+        with patch.object(MODULE.snapshot, 'stop_owned', side_effect=stop) as stop_owned:
+            self.assertIsNone(MODULE.stop_owned_processes([[first, 1], [second, 2]], True, errors))
+        self.assertEqual(stop_owned.call_count, 2)
+        self.assertIn('owned cleanup: RuntimeError', errors)
+
+    def test_uncertain_helper_never_claims_empty_process_set(self):
+        with patch.object(MODULE.snapshot, 'stop_owned') as stop_owned:
+            self.assertIsNone(MODULE.stop_owned_processes([[Mock(), 1]], False, []))
+        stop_owned.assert_not_called()
 
 
 class PreviousSourceTests(unittest.TestCase):
