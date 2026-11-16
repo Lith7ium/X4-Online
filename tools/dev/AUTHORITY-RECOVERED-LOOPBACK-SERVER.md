@@ -173,6 +173,45 @@ exclude both diagnostic clients.
 The clients ran sequentially, not together; gameplay, shared-world consistency,
 Windows and Internet access remain unproven.
 
+## Recovered server with two overlapping real Linux clients
+
+On 2026-11-16 one opt-in `--diagnostic-overlap` run used isolated profiles and
+loopback; retained artifacts are in `.local/authority-overlapping-clients-once-01`.
+Each client X4 log records a load request, its corresponding saved marker and
+a pause in that order. The first request identifies checkpoint
+`checkpoint-5f54d6a91f2040588b7f4b1ae7944f9a`, SHA-256
+`1ebebd2862dfbac0989921150f0600bb006b2156e187aa6196a62986b6396038`,
+and marker `25adad4ee7f4c6efd0341b26e0b20fcd`. The second identifies the
+different checkpoint `checkpoint-e7cf3c46b0bf493fbbc93cb64dfa435b`, SHA-256
+`5b5383e244edf5352c82e63711c72cfc3b89a33d3eb57f6be1ff99f1fee7adf1`,
+and marker `f135902caf326e9f252be336fe4a52ae`. The supervisor reports
+matching client staged-save hashes and final protected-input checks. The
+orchestrator also verifies the retained checkpoint bytes and saved markers.
+These observations do not prove exactly which bytes either X4 process loaded.
+
+The supervisor reports both TCP admissions and resumes, two distinct client
+PID/start-time identities on the same server PID/start-time identity, and
+two active participants before the first client leaves. After that departure,
+it reports one participant remaining and the session still `running`. This is
+a supervisor state observation: game-time progression after the first
+departure was not independently measured. Following the second departure, the
+supervisor reports a final paused, confirmed checkpoint
+`checkpoint-a8c53cab0d5e4d5886db93aafef41fa9`, SHA-256
+`50f0f5e1247d51a44504b33766a78e729c33cdb8ee4a5f0ced06bb90dbdc6bc6`,
+with marker `f3c7a8ccdfcaab66a42e86f3c01f8cb2`; the orchestrator checks the
+stored checkpoint and marker. The later accept-loop counters exclude these
+diagnostic clients. There is no independent TCP packet capture. The supervisor
+reports no owned processes remaining and the orchestrator reports cleanup
+confirmed.
+
+During the run, a sample of the supervisor's `/proc` I/O counters rose by
+approximately 607 MB of `rchar` over two seconds, with no increase in
+`read_bytes`; sampled open descriptors included save files. The guard code
+repeatedly hashes staged saves, making repeated hashing a plausible contributor,
+but this was not a profiler-based attribution or a measurement of its effect
+on wall-clock time. This run does not demonstrate two players' controls,
+gameplay, universe consistency, Windows or Internet operation.
+
 ## Internal diagnostic procedure
 
 The following procedure

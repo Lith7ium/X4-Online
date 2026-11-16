@@ -154,6 +154,55 @@ class ServerClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'bad marker'):
                     subject.settle_departure(host, world, control, 'peer', time.monotonic()+2, Mock(), ticket, 'a'*32)
 
+    def test_overlap_guards_other_client_while_each_is_finalized(self):
+        active=[]; events=[]
+        world=SimpleNamespace(session=SimpleNamespace(state='running', players=((1,'a'),(2,'b')),
+                                                      ready_players=((1,'a'),(2,'b'))))
+        control=SimpleNamespace(_peers={'a':object(),'b':object()})
+        def verify():
+            events.append(('verify', tuple(a.participant.server_tcp for a in active)))
+        def start(index):
+            peer=('a','b')[index]
+            def finish():
+                events.append(('finish',peer,tuple(a.participant.server_tcp for a in active)))
+                verify()
+                return {'client_ticket':{'checkpoint_id':'old'}, 'client_loaded_marker':'a'*32,
+                        'server_x4_pid':10, 'server_x4_start_ticks':11,
+                        'client_x4_pid':20+index, 'client_x4_start_ticks':21+index}
+            return subject.ActiveClient(SimpleNamespace(server_tcp=peer),{},finish)
+        def tick(_timeout):
+            control._peers.pop('a'); world.session.players=((2,'b'),); world.session.ready_players=((2,'b'),)
+        host=SimpleNamespace(tick=tick)
+        checkpoint=SimpleNamespace(checkpoint_id='new',sha256='b'*64,marker='c'*32)
+        with patch.object(subject.recovery.tcp,'await_eof') as eof, \
+             patch.object(subject,'settle_departure',return_value=checkpoint) as settle:
+            result=supervisor.run_overlapping_diagnostics(start=start,active_clients=active,world=world,
+                host=host,control=control,deadline=time.monotonic()+2,verify=verify)
+        self.assertTrue(result['diagnostic_overlap_confirmed'])
+        self.assertTrue(result['diagnostic_remaining_session_running'])
+        self.assertEqual(result['diagnostic_overlap_clients'][1]['departure_checkpoint_id'],'new')
+        self.assertIn(('finish','a',('b',)),events)
+        self.assertIn(('finish','b',()),events)
+        self.assertEqual(active,[])
+        eof.assert_called_once(); settle.assert_called_once()
+
+    def test_overlap_requires_three_distinct_correlated_x4_processes(self):
+        first={'server_x4_pid':10,'server_x4_start_ticks':11,
+               'client_x4_pid':20,'client_x4_start_ticks':21}
+        second=dict(first,client_x4_pid=30,client_x4_start_ticks=31)
+        supervisor.validate_overlap_identities(first,second)
+        for invalid in (dict(first), dict(second,server_x4_pid=12),
+                        dict(second,client_x4_pid=10,client_x4_start_ticks=11),
+                        dict(second,client_x4_pid=True)):
+            with self.assertRaises(ValueError): supervisor.validate_overlap_identities(first,invalid)
+
+    def test_active_finalization_is_never_retried_after_partial_failure(self):
+        finish=Mock(side_effect=RuntimeError('uncertain cleanup'))
+        active=subject.ActiveClient(Mock(),{},finish)
+        with self.assertRaisesRegex(RuntimeError,'uncertain cleanup'): active.finish()
+        with self.assertRaisesRegex(RuntimeError,'already finalized'): active.finish()
+        finish.assert_called_once()
+
     def test_public_evidence_contains_only_expected_correlation_fields(self):
         ticket = dict(world_epoch='a'*32, connection_handle=1, baseline_id=2,
                       load_generation=3, checkpoint_id='checkpoint-'+'b'*32,

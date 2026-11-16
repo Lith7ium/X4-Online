@@ -18,6 +18,18 @@ capture, and matching files do not prove exact file consumption by X4. This
 does not establish simultaneous clients, gameplay, Windows or Internet access.
 See the [sequential-client run](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#recovered-server-with-two-sequential-real-linux-clients).
 
+A subsequent isolated Linux loopback run used one recovered server and two
+overlapping real X4 clients. Both client logs record their load request,
+respective marker and pause. The supervisor reports both admitted and resumed,
+distinct live client process identities with one server identity, a running
+session after the first departure and a marked paused checkpoint after the
+last. These reports are not an independent packet capture, and game-time
+progression after the first departure was not independently observed. The
+run does not establish gameplay, Windows or Internet access. Guard checks
+repeatedly hash staged inputs; sampled process I/O showed high read activity,
+but its impact on elapsed time was not measured. See the
+[overlapping-client run](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#recovered-server-with-two-overlapping-real-linux-clients).
+
 One isolated Linux loopback run exercised a recovered X4 server with two
 sequential TCP save downloads, then restarted a second X4 server from the first
 server's confirmed final checkpoint and downloaded another save. The restart
@@ -35,6 +47,18 @@ simulates the whole world. The mechanism for determining a client's visible
 ships and map view remains to be established, as do subscription transitions,
 refresh and missed-update recovery. A sector view must not be assumed to grant
 visibility of every ship in that sector.
+
+The user also chose to let a slow client skip superseded position updates and
+prefer the latest state, while events such as ship creation and destruction
+must be handled separately and reliably acknowledged. This is the intended
+behavior, not a completed delivery guarantee. A fixed-fixture loopback relay
+retains a latest position, and the experimental ship state accepts sequence
+gaps; neither provides this policy for a real shared-world session. The
+experimental job/motion scheduler is serialized and may be held up by an
+in-flight motion delivery. Reliable destruction delivery, reconnect and
+reconciliation, bounded queues, and the combined behavior under slow clients
+remain to be implemented and demonstrated.
+
 The experimental remote checkpoint download now propagates the load attempt's
 absolute monotonic deadline through the shared file fetcher, including each
 network address and socket read. DNS resolution, an in-progress filesystem

@@ -50,6 +50,7 @@ class ServerClient(combined.RecoveredRemoteParticipant):
             raise
 
     def cleanup_diagnostic(self):
+        self._active_check = None
         errors = []
         for helper in reversed(self.helpers):
             try: helper.stop()
@@ -142,10 +143,24 @@ def settle_departure(host, world, control, peer, deadline, check, ticket, marker
     return saved
 
 
+
+class ActiveClient:
+    """Retained diagnostic with explicit owner-driven finalization."""
+    def __init__(self, participant, result, finish):
+        self.participant, self.result, self._finish = participant, result, finish
+        self._finished = False
+
+    def finish(self):
+        if self._finished: raise RuntimeError('diagnostic already finalized')
+        # Never retry a partially completed cleanup as if it had not run.
+        self._finished = True
+        return self._finish()
+
 def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             processes, server_proc, server_started, server_identity, checkpoint,
             recovery_target, server_expected, recovery_watch, listener, host, service,
-            world, session, control, check_server, server_out=None, expected_baseline=None, cancel_check=None):
+            world, session, control, check_server, server_out=None, expected_baseline=None, cancel_check=None,
+            check_base=None):
     """Load one genuine local client, confirm admission/resume and disconnect.
 
     Must run on the server's owner/main thread; it registers its X4 in the
@@ -155,6 +170,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     base = recovery.base
     if cancel_check is not None and not callable(cancel_check):
         raise ValueError('invalid diagnostic cancellation check')
+    if participant.keep_worker and not callable(check_base):
+        raise ValueError('retained client requires an independent base guard')
     participant.cancel_check = cancel_check
     deadline = participant.run_deadline
     participant.checkpoint = checkpoint
@@ -213,18 +230,21 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
         if watch.stage and client_identity is None: raise RuntimeError('receipt without owned client X4')
         if caught_up and watch.stage == 2:
             if base.live.sha(target) != ticket['sha256']: raise ValueError('client staged save changed')
-            def check_protected():
-                check_server()
+            def client_context(check):
+                check()
                 return base.check_live_context(deadline=deadline, server_proc=server_proc,
                     server_started=server_started, server_identity=server_identity, client_proc=proc,
                     client_started=started, client_identity=client_identity, game=game, home=home,
                     uid=uid, steam=steam, target=target, ticket=ticket, expected=expected)
+            def check_protected(): return client_context(check_server)
+            def active_protected(): return client_context(check_base)
             original_accept = session.accept
             try:
                 participant.on_ready(world=world, handle=handle, ticket=ticket, target=target,
                     server_identity=server_identity, server_proc=server_proc, server_started=server_started,
                     client_identity=client_identity, client_proc=proc, client_started=started,
-                    game=game, out=out, deadline=deadline, result=result, check_protected=check_protected)
+                    game=game, out=out, deadline=deadline, result=result, check_protected=check_protected,
+                    active_check_protected=active_protected if participant.keep_worker else None)
             finally:
                 # TCPMarkedParticipant temporarily wraps accept with a guard for
                 # this particular client. Never leak that guard to later joins.
@@ -232,26 +252,32 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             if (result.get('client_admitted') is not True or
                     result.get('native_server_and_client_resume_confirmed') is not True or
                     result.get('tcp_claim_used') is not True or
-                    result.get('helper_clean_exit') is not True):
+                    (result.get('helper_active') is not True if participant.keep_worker
+                     else result.get('helper_clean_exit') is not True)):
                 raise RuntimeError('diagnostic admission or participant resume not confirmed')
-            # Stop helpers before X4, then verify final evidence while the server
-            # stays alive. Keep the process registered until stop is confirmed.
-            participant.cleanup_diagnostic()
-            remaining = base.snapshot.stop_owned(proc, started)
-            if remaining: raise RuntimeError('diagnostic client X4 stop unconfirmed')
-            matches = [index for index, record in enumerate(processes)
-                       if len(record) == 2 and record[0] is proc and record[1] == started]
-            if len(matches) != 1: raise RuntimeError('diagnostic process registration changed')
-            del processes[matches[0]]
-            check_server()
-            if (base.live.sha(target) != ticket['sha256'] or
-                    any(base.live.sha(path) != digest for path, digest in expected.items())):
-                raise ValueError('final client inputs changed')
-            relative_log = Path('case/home/.config/EgoSoft/X4/45841/engine-output.log')
-            participant.verify_logs(out/'server'/relative_log, out/'client'/relative_log, ticket, participant.marker)
-            check_server()
-            participant.redact()
-            participant.config = None
-            record_client_evidence(result, ticket, participant.marker, client_identity, server_identity)
-            return result
+            def finish():
+                # The supervisor removes this client from its aggregate first.
+                # Reap helpers before X4 and keep the X4 registered on uncertainty.
+                participant.cleanup_diagnostic()
+                remaining = base.snapshot.stop_owned(proc, started)
+                if remaining: raise RuntimeError('diagnostic client X4 stop unconfirmed')
+                matches = [index for index, record in enumerate(processes)
+                           if len(record) == 2 and record[0] is proc and record[1] == started]
+                if len(matches) != 1: raise RuntimeError('diagnostic process registration changed')
+                del processes[matches[0]]
+                check_server()
+                if (base.live.sha(target) != ticket['sha256'] or
+                        any(base.live.sha(path) != digest for path, digest in expected.items())):
+                    raise ValueError('final client inputs changed')
+                relative_log = Path('case/home/.config/EgoSoft/X4/45841/engine-output.log')
+                participant.verify_logs(out/'server'/relative_log, out/'client'/relative_log, ticket, participant.marker)
+                check_server()
+                participant.redact()
+                participant.config = None
+                record_client_evidence(result, ticket, participant.marker, client_identity, server_identity)
+                return result
+            if participant.keep_worker:
+                participant.check_active()
+                return ActiveClient(participant, result, finish)
+            return finish()
         time.sleep(.1)

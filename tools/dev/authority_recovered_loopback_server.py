@@ -204,6 +204,55 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
     return {'accepted_connections': accepted, 'admitted_connections': admitted}
 
 
+
+
+def validate_overlap_identities(first, second):
+    """Correlate the three independently tracked Linux X4 process identities."""
+    identities = []
+    for result in (first, second):
+        pairs = []
+        for role in ('server', 'client'):
+            pair = (result.get(role+'_x4_pid'), result.get(role+'_x4_start_ticks'))
+            if any(type(value) is not int or value <= 0 for value in pair):
+                raise ValueError('invalid diagnostic X4 identity')
+            pairs.append(pair)
+        identities.append(pairs)
+    if (identities[0][0] != identities[1][0] or
+            len({identities[0][0], identities[0][1], identities[1][1]}) != 3):
+        raise ValueError('diagnostic X4 identities are not three distinct processes')
+
+def run_overlapping_diagnostics(*, start, active_clients, world, host, control, deadline, verify):
+    """Own two overlapping diagnostics and settle their ordered departures."""
+    import authority_recovered_server_client as client
+    if active_clients: raise ValueError('diagnostics must start with an empty active set')
+    for index in range(2):
+        active = start(index)
+        active_clients.append(active)
+        verify()
+    if (world.session.state != 'running' or len(world.session.ready_players) != 2 or
+            len(world.session.players) != 2):
+        raise RuntimeError('two active diagnostic participants not confirmed')
+    # The remaining participant is guarded during each intentional departure.
+    first = active_clients.pop(0)
+    first_result = first.finish()
+    first_peer = first.participant.server_tcp
+    client.recovery.tcp.await_eof(first_peer, deadline, verify)
+    while first_peer in control._peers:
+        verify(); host.tick(min(.1, client.recovery.marked.remaining(deadline)))
+    if (world.session.state != 'running' or len(world.session.players) != 1 or
+            len(world.session.ready_players) != 1):
+        raise RuntimeError('remaining diagnostic participant did not stay running')
+    second = active_clients.pop(0)
+    second_result = second.finish()
+    baseline = client.settle_departure(host, world, control, second.participant.server_tcp,
+        deadline, verify, second_result['client_ticket'], second_result['client_loaded_marker'])
+    second_result.update(departure_checkpoint_id=baseline.checkpoint_id,
+                         departure_checkpoint_sha256=baseline.sha256,
+                         departure_checkpoint_marker=baseline.marker)
+    validate_overlap_identities(first_result, second_result)
+    return {'diagnostic_overlap_confirmed':True, 'diagnostic_remaining_session_running':True,
+            'diagnostic_overlap_clients':[first_result, second_result]}
+
 def run(args):
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('unprivileged Linux user required')
@@ -233,6 +282,7 @@ def run(args):
     endpoint=out/'endpoint.json'; deadline=time.monotonic()+args.timeout
     watch=target=checkpoint=expected=None
     diagnostics = []
+    active_clients = []
     try:
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
@@ -304,7 +354,10 @@ def run(args):
                                          check=verify_process, validate_answer=validate_answer)
             def _quiet(self, peers, deadline):
                 verify_process(); result = super()._quiet(peers, deadline); verify_process(); return result
-        def verify_process(): check()
+        def verify_process():
+            check()
+            for active in tuple(active_clients): active.participant.check_active()
+            check()
         world._participants = GuardedParticipants(host, enabled=True, timeout=120)
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
@@ -315,7 +368,7 @@ def run(args):
                 value = getattr(original, name)
                 if name in ('pause','resume','save','checkpoint_published') and callable(value):
                     def call(*args):
-                        check(); result = value(*args); check(); operations.append(name); return result
+                        verify_process(); result = value(*args); verify_process(); operations.append(name); return result
                     return call
                 return value
         world._engine = GuardedEngine()
@@ -325,6 +378,33 @@ def run(args):
             raise ValueError('only two sequential diagnostic clients are supported')
         if diagnostic_count is not None and getattr(args, 'diagnostic_client', False):
             raise ValueError('choose one diagnostic mode')
+        overlap = getattr(args, 'diagnostic_overlap', False)
+        if type(overlap) is not bool or (overlap and (getattr(args, 'diagnostic_client', False) or diagnostic_count is not None)):
+            raise ValueError('choose one diagnostic mode')
+        if overlap:
+            import authority_recovered_server_client as diagnostic_client
+            def cancel_overlap():
+                if stop[0]: raise InterruptedError('diagnostic cancelled')
+                verify_process()
+            def base_overlap():
+                if stop[0]: raise InterruptedError('diagnostic cancelled')
+                verify()
+                if stop[0]: raise InterruptedError('diagnostic cancelled')
+            def verify_overlap():
+                cancel_overlap(); verify(); cancel_overlap()
+            def start_overlap(index):
+                diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory, keep_worker=True)
+                diagnostics.append(diagnostic)
+                diagnostic_out = out/('overlap-%02d' % (index+1)); diagnostic_out.mkdir(mode=0o700)
+                return diagnostic_client.run_one(diagnostic, args=args, out=diagnostic_out, game=game,
+                    home=home, uid=user.pw_uid, steam=steam, auth=auth, user=user.pw_name,
+                    processes=processes, server_proc=proc, server_started=started, server_identity=identity,
+                    checkpoint=checkpoint, recovery_target=target, server_expected=expected,
+                    recovery_watch=watch, listener=listener, host=host, service=service, world=world,
+                    session=session, control=control, check_server=verify_overlap, check_base=base_overlap,
+                    server_out=out, cancel_check=cancel_overlap)
+            result.update(run_overlapping_diagnostics(start=start_overlap, active_clients=active_clients,
+                world=world, host=host, control=control, deadline=deadline, verify=verify_overlap))
         if getattr(args, 'diagnostic_client', False) or diagnostic_count == 2:
             # Opt-in local test clients, all resources still registered to
             # this supervisor and protected by its single global lock.
@@ -452,6 +532,8 @@ def main():
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')
+    diagnostic_options.add_argument('--diagnostic-overlap', action='store_true',
+                        help='start two overlapping private Linux diagnostic clients before serving other peers')
     diagnostic_options.add_argument('--diagnostic-clients', type=int, choices=(2,),
                         help='start two sequential private Linux diagnostic clients before serving other peers')
     try: result=run(parser.parse_args())

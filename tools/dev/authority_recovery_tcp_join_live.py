@@ -63,8 +63,8 @@ def check_client_log(path, ticket, marker):
 
 
 class RecoveredParticipant(tcp.TCPMarkedParticipant):
-    def __init__(self, deadline, store):
-        super().__init__(deadline, first_resume_only=True)
+    def __init__(self, deadline, store, *, keep_worker=False):
+        super().__init__(deadline, first_resume_only=True, keep_worker=keep_worker)
         self.source_store = store
         self.checkpoint = self.target = self.recovery_watch = None
         self.server_expected = None
@@ -143,6 +143,13 @@ class RecoveredParticipant(tcp.TCPMarkedParticipant):
             self.check_server_files()
             return client_guard() is True
         kwargs['check_protected'] = combined
+        if kwargs.get('active_check_protected') is not None:
+            active_guard = kwargs['active_check_protected']
+            def active_combined():
+                if active_guard() is not True: return False
+                self.check_server_files()
+                return active_guard() is True
+            kwargs['active_check_protected'] = active_combined
         return super().on_ready(**kwargs)
 
 

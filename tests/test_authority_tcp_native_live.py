@@ -112,6 +112,89 @@ class HookIntegrationTest(unittest.TestCase):
                 if not (control._closed or control._failed): control.close()
                 listener.close();service.close();service.thread.join(2)
 
+    def test_two_overlapping_remote_workers_with_simulated_x4(self):
+        # Real transfer, control sockets and two worker processes. X4 identities,
+        # logs, pause/resume receipts and engine are synthetic in this test.
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); (root/'store').mkdir(); (root/'game').mkdir()
+            (root/'game/X4').symlink_to('/proc/self/exe')
+            store=CheckpointStore(root/'store'); service=FileService('f'*32,slots=(1,)).start()
+            engine=FreshEngine(root); engine._timeout=5
+            world=WorldCoordinator('a'*32,engine,store,SaveOffers(service,store))
+            session=TrustedMarkerLoadSession(world,enabled=True)
+            control=ExperimentalTCPControl(session,enabled=True,idle_timeout=30,keepalive_enabled=True)
+            host=ExperimentalLocalHost(world,control,service,enabled=True)
+            world._participants=subject.GuardedTCPParticipants(host,enabled=True,timeout=5)
+            listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            listener.bind(('127.0.0.1',0)); listener.listen(2)
+            deadline=time.monotonic()+30; participants=[]; fakes=[]; results=[]
+            identity=(os.getpid(),subject.marked.base.live.start_ticks(os.getpid()))
+            try:
+                with patch.object(subject.marked.base.client,'game_identity',return_value=identity):
+                    for index in range(2):
+                        out=root/('overlap-%02d' % index); (out/'client/save').mkdir(parents=True)
+                        participant=sequential.ServerClient(deadline,root/'source',keep_worker=True)
+                        participants.append(participant)
+                        # Freeze prior participants: a changing aggregate here would
+                        # make the first participant recursively check itself.
+                        def check_previous(previous=tuple(participants[:-1])):
+                            for prior in previous: prior.check_active()
+                            return True
+                        participant.cancel_check=check_previous
+                        participant.check_server_files=lambda:True
+                        participant.checkpoint=SimpleNamespace(checkpoint_id='initial',marker='0'*32)
+                        participant.session,participant.control,participant.host=session,control,host
+                        participant.participants=world._participants
+                        participant.client_tcp=socket.create_connection(listener.getsockname(),timeout=2)
+                        participant.server_tcp,_=listener.accept()
+                        handle=host.adopt(participant.server_tcp)
+                        baseline=sequential.prepare_join_baseline(host,world,deadline,check_previous)
+                        ticket,target=participant.offer_and_download(world,service,handle,out/'client',out/'client')
+                        sequential.verify_join_offer(ticket,participant.marker,baseline)
+                        udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); udp.bind(('127.0.0.1',0)); udp.settimeout(.05)
+                        stop=threading.Event(); commands=[]; destination=participant.sock.getsockname()
+                        def fake_client(udp=udp, stop=stop, commands=commands, destination=destination, participant=participant):
+                            while not stop.is_set():
+                                udp.sendto(('HELLO|'+participant.lease+'|'+'a'*32).encode(),destination)
+                                try: data,peer=udp.recvfrom(1024)
+                                except socket.timeout: continue
+                                except OSError: return
+                                row=data.decode().split('|')
+                                if len(row)==5 and row[0]=='CMD':
+                                    _,lease,epoch,number,operation=row; commands.append(operation)
+                                    udp.sendto('|'.join(('RECEIPT',lease,epoch,number,operation,'confirmed')).encode(),peer)
+                        thread=threading.Thread(target=fake_client); thread.start()
+                        fakes.append((udp,stop,thread,commands))
+                        result={}; original_accept=session.accept
+                        try:
+                            with patch.object(participant,'verify_logs'), patch.object(participant,'check_server_files',return_value=True):
+                                participant.on_ready(world=world,handle=handle,ticket=ticket,target=target,
+                                    server_identity=identity,server_proc=object(),server_started=identity[1],
+                                    client_identity=identity,client_proc=object(),client_started=identity[1],
+                                    game=root/'game',out=out,deadline=deadline,result=result,check_protected=check_previous,
+                                    active_check_protected=lambda:True)
+                        finally: session.accept=original_accept
+                        self.assertTrue(result['helper_active']); self.assertTrue(participant.check_active())
+                        results.append(result)
+                    self.assertEqual(world.session.state,'running')
+                    self.assertEqual(len(world.session.ready_players),2)
+                    self.assertEqual(fakes[0][3],['pause','resume','pause','resume'])
+                    self.assertEqual(fakes[1][3],['pause','resume'])
+                    self.assertTrue(all(p.helpers[-1].proc.poll() is None for p in participants))
+                    # A vanished first worker is detected by the shared guard for
+                    # the second, preventing it from claiming healthy overlap.
+                    participants[0].helpers[-1].stop()
+                    with self.assertRaisesRegex(RuntimeError,'worker exited'):
+                        check_previous()
+                    self.assertTrue(participants[1].check_active())
+            finally:
+                for participant in reversed(participants): participant.cleanup_diagnostic()
+                for udp,stop,thread,_ in fakes:
+                    stop.set(); thread.join(2); udp.close()
+                    self.assertFalse(thread.is_alive())
+                if not (control._closed or control._failed): control.close()
+                listener.close(); service.close(); service.thread.join(2)
+
     def test_eof_check_refuses_unexpected_data(self):
         listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         listener.bind(('127.0.0.1',0));listener.listen(1)

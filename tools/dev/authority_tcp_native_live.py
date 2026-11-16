@@ -109,16 +109,26 @@ class GuardedCheckpointEngine:
 
 class TCPMarkedParticipant(marked.MarkedParticipant):
     """Private test supervisor; one host owner and one reaped client helper."""
-    def __init__(self, deadline, *, last_disconnect=False, first_resume_only=False):
-        if type(last_disconnect) is not bool or type(first_resume_only) is not bool or (last_disconnect and first_resume_only):
+    def __init__(self, deadline, *, last_disconnect=False, first_resume_only=False, keep_worker=False):
+        if (type(last_disconnect) is not bool or type(first_resume_only) is not bool or
+                type(keep_worker) is not bool or (last_disconnect and first_resume_only) or
+                (keep_worker and not first_resume_only)):
             raise ValueError('invalid disconnect or resume-only options')
         super().__init__()
         self.run_deadline = deadline
         self.last_disconnect = last_disconnect
         self.first_resume_only = first_resume_only
+        self.keep_worker = keep_worker
+        self._active_check = None
         self.helpers = []
         self.client_tcp = self.server_tcp = self.ipc = self.second = None
         self.control = self.host = self.participants = None
+
+    def check_active(self):
+        """Check a retained worker and its guarded X4 context, or fail closed."""
+        if self._active_check is None:
+            raise RuntimeError('no retained active worker')
+        return self._active_check()
 
     def join(self, world):
         marked.remaining(self.run_deadline)
@@ -168,6 +178,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
     def cleanup_before_owned_processes(self):
         # The base harness invokes this with cancellation signals fenced before
         # any owned X4 process or its lock can be released.
+        self._active_check = None
         errors = []
         for helper in reversed(self.helpers):
             try: helper.stop()
@@ -195,17 +206,22 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         return marked.observe_logs(server_log, client_log, ticket, marker)
 
     def on_ready(self, *, world, handle, ticket, target, server_identity, server_proc, server_started,
-                 client_identity, client_proc, client_started, game, out, deadline, result, check_protected):
+                 client_identity, client_proc, client_started, game, out, deadline, result, check_protected,
+                 active_check_protected=None):
         deadline = min(deadline, self.run_deadline)
         profile = Path('case/home/.config/EgoSoft/X4/45841/engine-output.log')
         server_log, client_log = out/'server'/profile, out/'client'/profile
-        def guard():
+        if active_check_protected is None: active_check_protected = check_protected
+        if not callable(active_check_protected): raise ValueError('invalid active context guard')
+        def guard_for(check):
             if (time.monotonic() >= deadline or
                     marked.base.client.game_identity(server_proc, server_started, game) != server_identity or
                     marked.base.client.game_identity(client_proc, client_started, game) != client_identity or
-                    check_protected() is not True):
+                    check() is not True):
                 raise RuntimeError('deadline, protected files or owned X4 changed')
             return True
+        def guard(): return guard_for(check_protected)
+        def active_context(): return guard_for(active_check_protected)
         guard(); self.verify_logs(server_log, client_log, ticket, self.marker); guard()
         attempt = self.offer.attempt_id
         self.client_load.observe_load_requested(attempt)
@@ -237,6 +253,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                 raise RuntimeError('remote load claim not admitted')
         ipc_parent, ipc_child = socket.socketpair()
         self.ipc = ipc_parent
+        retained = False
         try:
             st = (game/'X4').stat()
             config = {'version':1, 'claim':encode_load_claim(claim).decode('ascii'),
@@ -276,6 +293,26 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                 result.update(server_state='running', native_server_and_client_resume_confirmed=True)
                 if self.first_resume_only:
                     result.update(simulated_second_join=False, pending_operation=None)
+                    if self.keep_worker:
+                        def active_check():
+                            active_context()
+                            if helper.proc.poll() is not None:
+                                raise RuntimeError('active participant worker exited')
+                            peer = self.control._peers.get(self.server_tcp)
+                            if (peer is None or peer['handle'] != handle or peer['stage'] != 'admitted' or
+                                    handle not in {h for h, _ in world.session.ready_players}):
+                                raise RuntimeError('active participant admission changed')
+                            readable, _, exceptional = select.select([self.ipc], [], [self.ipc], 0)
+                            if readable or exceptional:
+                                raise RuntimeError('active participant worker IPC changed')
+                            active_context()
+                            return True
+                        active_check()
+                        self._active_check = active_check
+                        result.update(tcp_claim_used=True, tcp_participant_commands_used=True,
+                                      helper_active=True)
+                        retained = True
+                        return
                 else:
                     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     try:
@@ -362,7 +399,9 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         finally:
             ipc_child.close()
             # Repeat in the base cleanup hook if this attempt cannot confirm it.
-            for helper in reversed(self.helpers): helper.stop()
+            if not retained:
+                self._active_check = None
+                for helper in reversed(self.helpers): helper.stop()
 
 
 def run(args):
