@@ -450,6 +450,7 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
         _pump_call(pump)
         offset = part.stat().st_size if part.is_file() else 0
         _pump_call(pump)
+        progress_callback_running = False
         try:
             with _connect(host, port, timeout, deadline, pump, pump_interval) as conn:
                 request = request_line(token, slot, name, offset)
@@ -532,7 +533,9 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
                         _remaining(deadline)
                         got += len(data)
                         if progress:
+                            progress_callback_running = True
                             progress(name, got, size)
+                            progress_callback_running = False
                             _remaining(deadline)
                 if got < size:
                     last = FetchError(f'{name}: connection lost at {got} of {size} bytes')
@@ -550,6 +553,8 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
         except FetchError:
             raise
         except (OSError, ValueError) as error:
+            if progress_callback_running:
+                raise
             _remaining(deadline)
             last = FetchError(f'{name}: {error}')
     raise last or FetchError(f'{name}: no attempt left')

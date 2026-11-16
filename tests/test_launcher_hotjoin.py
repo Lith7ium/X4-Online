@@ -87,6 +87,37 @@ class FileServiceTests(unittest.TestCase):
         joinfiles.fetch('127.0.0.1', self.service.port, TOKEN, 3, 'j600.x4join', part.parent / 'j600.x4join', expect_sha=self.sha)
         self.assertEqual((part.parent / 'j600.x4join').read_bytes(), self.data)
 
+    def test_logger_failure_does_not_retry_download(self):
+        state = {'tick': 600, 'package_sha': self.sha}
+        for error_type in (BrokenPipeError, ValueError):
+            with self.subTest(error_type=error_type):
+                logger_error = error_type('output failed')
+                log = mock.Mock(side_effect=[logger_error, None])
+                destination = self.dir / error_type.__name__
+                with mock.patch.object(joinfiles, '_connect', wraps=joinfiles._connect) as connect, \
+                     mock.patch.object(joinfiles.time, 'sleep'):
+                    with self.assertRaises(error_type) as raised:
+                        hotjoin.fetch_files('127.0.0.1', self.service.port, TOKEN, 3,
+                                            state, destination, log=log)
+                self.assertIs(raised.exception, logger_error)
+                self.assertEqual(connect.call_count, 1)
+                self.assertEqual(log.call_count, 1)
+                self.assertTrue((destination / 'j600.x4join.part').exists())
+                self.assertFalse((destination / 'j600.x4join').exists())
+
+    def test_transport_error_still_retries(self):
+        actual_connect = joinfiles._connect
+        with mock.patch.object(joinfiles, '_connect', side_effect=[OSError('disconnected'),
+                                                                   mock.DEFAULT],
+                               wraps=actual_connect) as connect, \
+             mock.patch.object(joinfiles.time, 'sleep'):
+            result = joinfiles.fetch('127.0.0.1', self.service.port, TOKEN, 3,
+                                     'j600.x4join', self.dir / 'retry',
+                                     expect_sha=self.sha, retries=1)
+        self.assertEqual(connect.call_count, 2)
+        self.assertEqual(result, self.sha)
+        self.assertEqual((self.dir / 'retry').read_bytes(), self.data)
+
     def test_refusals(self):
         with self.assertRaisesRegex(joinfiles.FetchError, r'refused by the host \(mac\)'):
             joinfiles.fetch('127.0.0.1', self.service.port, 'f' * 32, 3, 'j600.x4join', self.dir / 'a', retries=0)
