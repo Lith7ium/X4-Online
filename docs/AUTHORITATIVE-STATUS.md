@@ -93,6 +93,14 @@ Native Linux evidence so far:
   artificial. This is not a source event, TCP transfer, multi-client,
   cross-frame, Windows/Internet, gameplay or persistence test. See the
   [local multi-create record](../tools/dev/AUTHORITY-MULTI-CREATE-LIVE.md).
+* A separate single-X4 Linux diagnostic resumed after an observed pause and
+  logged one synthetic create in a census-witnessed sector while sampled game
+  time advanced. The correlated MD and running-FFI checks are prerequisites in
+  the owner code; their individual observations are not separately logged.
+  Seed, position and loadout were artificial. Samples do not prove continuous
+  running, and this is not a source/TCP, multiple-client, Windows/Internet,
+  gameplay or persistence test. See the
+  [running local-create record](../tools/dev/AUTHORITY-MULTI-CREATE-RUNNING.md).
 * In an isolated player-seat calibration, an NPC with an observed pilot and
   started Patrol returned a valid assigned pilot while its control-post
   reservation lookup reported empty. The positive control failed before the

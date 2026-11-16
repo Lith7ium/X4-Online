@@ -1,5 +1,5 @@
 local ffi=require('ffi')
-ffi.cdef[[void TestMode(int);]]
+ffi.cdef[[void TestMode(int);void TestGameTime(double);]]
 local resolve=assert(loadfile('tools/dev/authority_registry_resolve_string.lua'))()
 local module=assert(loadfile('src/authority/lua/x4_multi_create_inspector.lua'))()
 local function decimal(s)
@@ -90,5 +90,93 @@ do
  local app=assert(module.new_x4(cfg));local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
  assert(ok==false and app:state()=='failed');ffi.C.TestMode(0)
 end
+-- Running is separately armed before each MD request; progress is sampled
+-- across asynchronous frames, not required between synchronous FFI reads.
+do
+ ffi.C.TestMode(8);local app=make({running=true})
+ assert(app:arm_running() and app:state()=='armed')
+ ffi.C.TestGameTime(101)
+ local key,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(ok and key=='18446744073709551615' and app:state()=='ready')
+ assert(app:arm_running());ffi.C.TestGameTime(102)
+ _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d);assert(ok)
+end
+do
+ ffi.C.TestMode(8);local app=make({running=true});assert(app:arm_running())
+ local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(not ok and app:state()=='failed') -- no game-time progress
+end
+do
+ ffi.C.TestMode(8);local app=make({running=true});assert(app:arm_running())
+ ffi.C.TestGameTime(99);local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(not ok and app:state()=='failed')
+end
+do
+ ffi.C.TestMode(8);local app=make({running=true});assert(app:arm_running())
+ ffi.C.TestMode(0);local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(not ok and app:state()=='failed') -- unexpected pause
+end
+do
+ ffi.C.TestMode(8);local app=make({running=true})
+ local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(not ok and app:state()=='failed') -- never acknowledge without arm
+end
+do
+ ffi.C.TestMode(8);local app=make({running=true});assert(app:arm_running())
+ assert(not app:arm_running() and app:state()=='failed')
+end
+do
+ ffi.C.TestMode(0);local app=make();assert(not app:arm_running() and app:state()=='failed')
+end
+do
+ ffi.C.TestMode(8);local cfg={running=true};cfg.guard=function()cfg.running=false;return true end
+ local app=make(cfg);assert(app:arm_running());ffi.C.TestGameTime(101)
+ local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d);assert(ok)
+end
+do
+ ffi.C.TestMode(8);local app=make({running=true});assert(app:arm_running())
+ now=now+3;ffi.C.TestGameTime(101)
+ local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(not ok and app:state()=='failed') -- timeout includes MD request
+end
+do
+ ffi.C.TestMode(8);local count=0
+ local app=make({running=true,guard=function()
+  count=count+1;if count==3 then ffi.C.TestGameTime(101) end
+  return true
+ end})
+ assert(app:arm_running())
+ local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(not ok and app:state()=='failed' and count==2) -- progress cannot first occur inside reads
+end
+do
+ ffi.C.TestMode(8);local count=0
+ local app=make({running=true,guard=function()
+  count=count+1;if count==2 then ffi.C.TestGameTime(102) end
+  if count==3 then ffi.C.TestGameTime(101) end
+  return true
+ end})
+ assert(app:arm_running())
+ local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(not ok and app:state()=='failed') -- rollback during readback
+end
+do
+ ffi.C.TestMode(8);local count=0
+ local app=make({running=true,guard=function()
+  count=count+1;if count==2 then ffi.C.TestMode(0) end
+  return true
+ end})
+ assert(app:arm_running());ffi.C.TestGameTime(101)
+ local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(not ok and app:state()=='failed') -- guard changes paused state
+end
+do
+ ffi.C.TestMode(8);local authorized=true
+ local app=make({running=true,guard=function()return authorized end})
+ assert(app:arm_running());ffi.C.TestGameTime(101);authorized=false
+ local _,ok=app:inspect('0xffffffffffffffff','0x2a',10055,d)
+ assert(not ok and app:state()=='failed') -- process owner revoked
+end
+ffi.C.TestMode(0)
 assert(module.new_x4({enabled=false})==nil)
 print('multi-create FFI fake ABI checks passed')
