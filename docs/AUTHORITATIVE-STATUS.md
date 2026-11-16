@@ -8,6 +8,13 @@ eventually trade, fight, board and command ships. The simulation may pause
 when nobody is connected and during joins. See the detailed experiment notes
 for evidence and restrictions.
 
+An offline result for the pinned census save groups all 10,054 registry
+indices exactly once by saved sector ancestry: 140 of 152 saved sectors have
+at least one witness. Its reported checkpoint, digest and registry epoch match
+the pinned provenance values. This is saved-state evidence, not a runtime
+sector binding or proof of a shared coordinate frame. See the
+[census witness notes](../tools/dev/AUTHORITY-CENSUS-SECTOR-WITNESS.md).
+
 Native Linux evidence so far:
 
 * One paused X4 process read all 10,054 indices in a recorded registry: 10,052

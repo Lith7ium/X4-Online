@@ -45,9 +45,24 @@ registered entries with no saved sector ancestry. Saved sectors are sorted by
 case-folded macro and each witness list by saved registry index. To bound memory, at most
 200,000 saved ship components with sector ancestry are retained temporarily;
 component references must fit an unsigned 64-bit value. The check refuses a
-save exceeding either bound. The memory and eligibility assumptions have been
-tested only on synthetic XML, not against the archived census save with this
-new extractor. An input that fails the bound remains inconclusive.
+save exceeding either bound. An input that fails the bound remains inconclusive.
 
 Alternatively, `--sector-macro` requests a single saved sector, with optional
 `--store`. The tool never modifies the archive.
+
+## Recorded all-sector result
+
+The existing `.local/authority-census-sector-witness-all-01.json` reports 152
+saved sectors: 140 have at least one registered witness and 12 have none. Its
+rows contain every registry index from 1 through 10,054 exactly once, with no
+unassigned entries. In the saved ancestry, 10,052 have a zone as immediate
+component parent and two are below a docking bay. These are saved-component
+categories, not live docking or position checks.
+
+The JSON reports the recorded checkpoint ID, compressed SHA-256 and registry
+epoch, matching the verifier's pinned constants. The verifier also requires
+the confirmed pointer, saved marker, registry bijection and digest-checked
+streams. The JSON was independently checked for schema, duplicates, ordering
+and index coverage without rereading the archive; the JSON by itself cannot
+independently prove which save bytes were processed. It establishes no runtime
+actor binding or cross-instance sector-coordinate frame.
