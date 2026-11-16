@@ -1,7 +1,7 @@
 -- Opt-in isolated participant + job session. The existing load owner drives tick.
 local cfg=X4LAN_CONFIG
 if not cfg or cfg.authority_participant_job_session~=true then return end
-local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);]]
+local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);double GetCurrentGameTime(void);]]
 local failed=false;local participant,participant_net,job,job_net_owner,engine,next_hello=nil,nil,nil,nil,nil,0
 local function fail()
  if not failed then failed=true;DebugError('[X4LAN] AUTH_PARTICIPANT_JOB ERROR') end
@@ -38,6 +38,8 @@ function X4LAN_PARTICIPANT_JOB_TICK()
   end
   assert(participant:on_update())
   if not job and not ffi.C.IsGamePaused() then
+   local game=tonumber(ffi.C.GetCurrentGameTime());assert(game and game>=0 and game<math.huge)
+   DebugError('[X4LAN] AUTH_PARTICIPANT_JOB RUNNING '..string.format('%.17g',game))
    job=assert(X4LAN_AUTHORITY_JOB_CLIENT_OWNER.new_x4({enabled=true,
     lease=cfg.authority_job_client_lease,attempt=cfg.authority_job_client_attempt,
     epoch=cfg.authority_job_client_epoch,generation=cfg.authority_job_client_generation,
@@ -46,7 +48,12 @@ function X4LAN_PARTICIPANT_JOB_TICK()
     expected_save_path=cfg.authority_load_save_path,net=job_net_owner,
     client=X4LAN_MULTI_CREATE_CLIENT,inspector_module=X4LAN_MULTI_CREATE_INSPECTOR,resolve=X4LAN_RESOLVE_STRING,
     witness=function(sector)return cfg.authority_job_client_witnesses[sector]end,
-    guard=function()return not failed end,fault=fail}))
+    guard=function()return not failed end,fault=fail,
+    audit=function(index)
+     local game=tonumber(ffi.C.GetCurrentGameTime());if not game or game<0 or game>=math.huge then return false end
+     DebugError('[X4LAN] AUTH_PARTICIPANT_JOB LOCAL_APPLIED '..string.format('%.0f',index)..' '..string.format('%.17g',game))
+     return true
+    end}))
    assert(job:start())
   end
   if job then assert(job:tick()) end

@@ -27,5 +27,5 @@ assert(table.concat(order,',')=='submit,participant,start,job')
 X4LAN_PARTICIPANT_JOB_TICK();assert(opened==2 and table.concat(order,',')=='submit,participant,start,job,participant,job')
 
 queue[1]='CMD|'..lease..'|'..epoch..'|2|pause'
-X4LAN_PARTICIPANT_JOB_TICK();assert(#errors==1 and errors[1]:match('ERROR'))
+X4LAN_PARTICIPANT_JOB_TICK();assert(#errors==2 and errors[1]:match('RUNNING') and errors[2]:match('ERROR'))
 assert(table.concat(order,',')=='submit,participant,start,job,participant,job' and #sent==1)

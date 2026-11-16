@@ -20,6 +20,7 @@ function M.new(o)
  assert(o.lease~=o.attempt and o.lease~=o.epoch and o.lease~=o.generation and o.attempt~=o.epoch and o.attempt~=o.generation and o.epoch~=o.generation)
  assert(integer(o.baseline,1) and integer(o.seed,0) and o.seed<=2147483647)
  assert(type(o.timeout)=='number' and o.timeout>0 and o.timeout<=30)
+ assert(o.audit==nil or type(o.audit)=='function')
  for _,k in ipairs({'clock','guard','issue','witness','fault'})do assert(type(o[k])=='function',k..' required')end
  assert(type(o.client)=='table' and type(o.client.new)=='function' and type(o.inspector)=='table' and type(o.inspector.inspect)=='function' and type(o.inspector.arm_running)=='function')
  assert((type(o.net)=='table' or type(o.net)=='userdata') and type(o.net.send)=='function' and type(o.net.receive)=='function')
@@ -114,6 +115,10 @@ function M.new(o)
    if not send(response('READY')) then busy=false;return fail('ready_send') end
    deadline=nil;phase='ready'
   elseif phase=='reply' then
+   if o.audit then
+    local noted,accepted=call(o.audit,pending.index)
+    if not noted or accepted~=true or not check() then busy=false;return fail('audit') end
+   end
    if not pending or not send(response('APPLIED')) then busy=false;return fail('applied_send') end
    last_seq=last_seq+1;pending=nil;deadline=nil;phase='ready'
   end

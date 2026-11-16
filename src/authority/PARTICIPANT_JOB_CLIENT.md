@@ -40,7 +40,37 @@ witness and witnesses can move or disappear; no fallback is implemented.
 
 Focused offline tests drive the real Lua client and inspector through a fake C
 ABI, and connect the actual Python IPC and Lua owner over local UDP with
-simulated MD/FFI behavior. This does not establish an actual X4 participant,
-server source, complete-universe reconciliation, Windows, Internet, gameplay,
-trade, combat or persistent multiplayer. The UI installer and session have not
-been executed in X4.
+simulated MD/FFI behavior.
+
+## Bounded native observation, 2026-11-16
+
+The single isolated Linux X4 run `.local/authority-tcp-job-x4-01` reported
+`success: true`, a coordinator-reported TCP job receipt and no remaining owned
+processes. The X4 log records the load request, marker and pause observations,
+then `RUNNING` at game time 3.037 and `LOCAL_APPLIED` for index 10055 at
+3.130753225 in the configured `cluster_01_sector001_macro` test case. The
+log does not independently record the individual MD or FFI values. The owner
+code emits `LOCAL_APPLIED` only after the separately correlated MD responses
+and local FFI inspector accept the operation, and before its UDP `APPLIED`
+response. The TCP participant code sends its receipt only after the UDP bridge
+returns success. This cross-process ordering is supported by code and the
+coordinator result; no packet capture was taken. The worker checks local UDP
+peer ownership against the X4 process via `/proc`; this is supported by the
+worker code and its success result. The raw PID, socket-inode and receipt values
+were not retained as independent evidence.
+
+The diagnostic used a real local TCP host/participant delivery path and local
+UDP to the isolated X4 owner. The server engine, its admission claim and
+checkpoint, and the submitted ship descriptor were synthetic; the checkpoint
+offered by that synthetic coordinator was not supplied to X4. X4 separately
+loaded the pinned census checkpoint under the isolated load/marker guard,
+without independent proof of exact X4 file consumption. The test descriptor
+used macro `ship_gen_m_tugboat_01_a_macro`, faction `pioneers`, artificial
+seed 7183, synthetic local coordinates `(-400, 100000, 500)` and an approximate
+level-1 loadout. It did not originate from a live server NPC event.
+
+The game-time samples do not prove uninterrupted running. This one local test
+does not establish source-to-client integration, multiple X4 clients,
+complete-universe reconciliation, a shared cross-process coordinate frame,
+Windows, Internet, gameplay, trade, combat or persistent multiplayer. The
+result makes no claim that the entire X4 log is free of unrelated errors.

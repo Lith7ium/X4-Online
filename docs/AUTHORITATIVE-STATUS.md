@@ -101,6 +101,17 @@ Native Linux evidence so far:
   running, and this is not a source/TCP, multiple-client, Windows/Internet,
   gameplay or persistence test. See the
   [running local-create record](../tools/dev/AUTHORITY-MULTI-CREATE-RUNNING.md).
+* A later single-X4 Linux run combined the running local job owner with the
+  experimental loopback TCP participant and local UDP bridge. The X4 log
+  reports a local apply after game-time progression, and the coordinator
+  reports a TCP receipt. The MD/FFI checks and cross-process ordering are
+  supported by owner/participant code and the result, without separate MD/FFI
+  logs or a packet trace. UDP `/proc` peer binding is likewise a worker-code
+  and result assertion; raw PID/inode and receipt values were not retained.
+  Server engine, admission, checkpoint and descriptor
+  were synthetic; seed and loadout were artificial. This is not a live-source,
+  multiple-X4, Windows/Internet, gameplay or persistence test. See the
+  [participant job record](../src/authority/PARTICIPANT_JOB_CLIENT.md).
 * In an isolated player-seat calibration, an NPC with an observed pilot and
   started Patrol returned a valid assigned pilot while its control-post
   reservation lookup reported empty. The positive control failed before the
