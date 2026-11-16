@@ -211,7 +211,8 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         self.client_load.observe_load_requested(attempt)
         self.client_load.observe_loaded_marker(attempt, self.marker)
         self.client_load.observe_pause(attempt, True)
-        claim = self.client_load.make_claim(attempt)
+        load_pump = getattr(self, 'pump_loading', None)
+        claim = self.client_load.make_claim(attempt, pump=load_pump)
         self.guard, self.deadline, self.handle = guard, deadline, handle
         self.participants.guard, self.participants.deadline = guard, deadline
         self.enroll(ticket['world_epoch'], deadline-1)
@@ -227,6 +228,13 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                           exact_loaded_file_proven=False)
             return outcome
         self.session.accept = guarded_accept
+        remote_finish = getattr(self, 'finish_remote_load', None)
+        if remote_finish is not None:
+            if not callable(remote_finish): raise ValueError('invalid remote load handoff')
+            self.client_tcp = remote_finish(guard, deadline)
+            guard()
+            if result.get('client_admitted') is not True:
+                raise RuntimeError('remote load claim not admitted')
         ipc_parent, ipc_child = socket.socketpair()
         self.ipc = ipc_parent
         try:
@@ -237,6 +245,8 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                       'deadline':deadline, 'controller_timeout':min(120, marked.remaining(deadline)),
                       'client_process':{'pid':client_identity[0], 'start_ticks':client_identity[1],
                                         'exe_dev':st.st_dev, 'exe_ino':st.st_ino}}
+            if remote_finish is not None:
+                config['already_admitted'] = True
             encoded = json.dumps(config, separators=(',', ':')).encode('ascii')+b'\n'
             if len(encoded)>4096: raise ValueError('helper configuration too large')
             helper = OwnedHelper([sys.executable, str(ROOT/'tools/dev/authority_tcp_native_worker.py'),

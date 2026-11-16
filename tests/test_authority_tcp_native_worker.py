@@ -84,6 +84,14 @@ class WorkerTest(unittest.TestCase):
         self.engine.settimeout(.05)
         with self.assertRaises(socket.timeout):self.engine.recvfrom(1024)
 
+    def test_admitted_handoff_does_not_resend_claim_and_accepts_queued_command(self):
+        self.cfg['already_admitted']=True
+        cmd=self.command();self.server.sendall(json.dumps(cmd).encode()+b'\n')
+        self.config();self.event('active');self.udp_reply('resume')
+        self.assertEqual(json.loads(line(self.server)),dict(cmd,kind='participant_receipt',status='confirmed'))
+        self.ipc.sendall(b'{"command":"stop"}\n');self.event('stopped')
+        self.assertEqual(self.proc.wait(timeout=2),0)
+
     def test_process_identity_mismatch_refuses_claim(self):
         self.cfg['client_process']['start_ticks']+=1
         self.config();self.event('failed');self.assertEqual(self.proc.wait(timeout=2),1)

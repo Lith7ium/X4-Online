@@ -68,8 +68,10 @@ def config_value(raw):
     obj=parse_json(raw)
     fields={'version','claim','epoch','handle','lease','udp_peer','udp_next_id','deadline',
             'controller_timeout','client_process'}
-    if type(obj) is not dict or set(obj)!=fields or type(obj['version']) is not int or obj['version']!=1:
+    if type(obj) is not dict or set(obj) not in (fields, fields | {'already_admitted'}) or type(obj['version']) is not int or obj['version']!=1:
         raise ValueError('invalid worker configuration')
+    if 'already_admitted' in obj and obj['already_admitted'] is not True:
+        raise ValueError('invalid handoff state')
     if (type(obj['epoch']) is not str or not _HEX.fullmatch(obj['epoch']) or
             type(obj['lease']) is not str or not _HEX.fullmatch(obj['lease']) or
             type(obj['handle']) is not int or not 1<=obj['handle']<=MAX_INTEGER or
@@ -185,13 +187,14 @@ def run(tcp,udp,ipc):
         if readable or bad: raise RuntimeError('parent IPC closed or requested stop during operation')
         context()
     guard()
-    if select.select([tcp],[],[tcp],0)[0]: raise RuntimeError('unexpected input before claim')
-    send_frame(tcp,claim,deadline,guard)
-    ack=parse_json(read_line(tcp,MAX_MESSAGE,deadline,guard))
-    if (type(ack) is not dict or set(ack)!={'version','kind','attempt_id'} or
-            type(ack['version']) is not int or ack['version']!=1 or
-            ack['kind']!='accepted' or ack['attempt_id']!=attempt):
-        raise ValueError('unexpected admission response')
+    if not cfg.get('already_admitted'):
+        if select.select([tcp],[],[tcp],0)[0]: raise RuntimeError('unexpected input before claim')
+        send_frame(tcp,claim,deadline,guard)
+        ack=parse_json(read_line(tcp,MAX_MESSAGE,deadline,guard))
+        if (type(ack) is not dict or set(ack)!={'version','kind','attempt_id'} or
+                type(ack['version']) is not int or ack['version']!=1 or
+                ack['kind']!='accepted' or ack['attempt_id']!=attempt):
+            raise ValueError('unexpected admission response')
     guard()
     controller=GuardedParticipant(udp,cfg,guard)
     adapter=ExperimentalTCPParticipantClient(tcp,controller,enabled=True,epoch=cfg['epoch'],

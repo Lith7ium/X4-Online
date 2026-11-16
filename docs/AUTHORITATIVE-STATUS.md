@@ -40,8 +40,12 @@ client and matching server. The client pumps it during transfer and hash
 operations; callers must explicitly poll while waiting for X4 load events.
 The interval must be shorter than the server's configured idle timeout. DNS,
 individual filesystem calls, an unpumped X4 wait, and long synchronous server
-work can still exceed the relevant deadline. The client is not wired to a
-runnable session, and local tests do not establish Windows or Internet joining.
+work can still exceed the relevant deadline. One isolated Linux/Linux loopback
+diagnostic now uses the remote-load owner through a cooperative TCP claim and
+participant resume. Its X4 log records the ordered load request, saved marker
+and pause; the TCP admission and resume are supervisor results. The save hashes
+match, but exact file consumption is unproven. This is not a playable session or
+evidence of Windows or Internet joining. See the [remote-load pair notes](../tools/dev/AUTHORITY-REMOTE-LOAD-PAIR.md).
 The native UDP library's build tool now writes only to an explicitly selected
 new directory. A local Windows crossbuild produced a PE DLL with the Lua entry
 point and Windows monotonic clock imports; loading that DLL in Windows X4 and

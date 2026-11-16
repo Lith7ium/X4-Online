@@ -362,6 +362,10 @@ def run(args, *, experiment=None):
             if live.steam_identity(home, user.pw_uid) != steam: raise RuntimeError('Steam identity changed')
             if any(live.sha(path) != digest for path, digest in expected.items()):
                 raise ValueError('client protected configuration changed')
+            pump_loading = getattr(experiment, 'pump_loading', None)
+            if pump_loading is not None:
+                if not callable(pump_loading): raise ValueError('invalid load pump hook')
+                pump_loading()
             caught_up = watch.poll()
             if watch.stage and client_identity is None: raise RuntimeError('receipt without owned X4')
             if caught_up and watch.stage == 2:
