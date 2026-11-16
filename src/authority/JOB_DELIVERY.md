@@ -3,7 +3,10 @@
 `lua/job_delivery.lua` is a default-off, in-memory offline building block. It
 starts no game, registers no handlers and provides no transport or persistence.
 It does not establish that an activation is a birth, that a replica is correct,
-or that all creations in X4 are observed. It has not been used in a native run.
+or that all creations in X4 are observed. A later isolated native harness used
+the gate with one simulated delivery participant; it did not demonstrate
+multiple native clients or general gameplay replication. See
+`tools/dev/AUTHORITY-CENSUS-REPLICA-PAIR.md` for its evidence and limits.
 
 `new` requires `enabled=true`, a monotonic `clock`, a timeout in (0, 300]
 seconds, a `generation` token and `membership`, `send` and `release` callbacks.
