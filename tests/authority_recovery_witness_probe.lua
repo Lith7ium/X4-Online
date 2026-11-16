@@ -4,7 +4,7 @@ local phase=mode=='standalone_create' and 'create' or 'verify'
 local now,paused=0,true;local update;local events={};local pending;local packets={};local sent={};local logs={};local bridge_updates=0
 package.loaded.ffi={cdef=function()end,C={IsPlayerValid=function()return true end,
  IsGamePaused=function()return paused end,IsSaveListLoadingComplete=function()return true end,ReloadSaveList=function()end}}
-local net={send=function(_,v)sent[#sent+1]=v;return true end,receive=function()return table.remove(packets,1)end}
+local net={send=function(_,v)sent[#sent+1]=v;return true end,pending=function()return #packets>0 end,receive=function()return table.remove(packets,1)end}
 package.loadlib=function()return function()return {open=function()return net end}end end
 X4LAN_CONFIG={authority_world_bridge=true,test_profile='45841',authority_control_port=1234,
  authority_control_lease=string.rep('a',32),authority_world_epoch=string.rep('b',32),authority_marker_required=true,

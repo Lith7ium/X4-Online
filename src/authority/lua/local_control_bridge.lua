@@ -26,10 +26,26 @@ function M.new(cfg,engine,net)
   return true
  end
  function bridge:marker_stored(marker)
-  local now=engine.real_time()
-  if faulted or not waiting_marker or marker~=waiting_marker.marker or type(now)~='number'
+  local clock_ok,now=pcall(engine.real_time)
+  if not clock_ok or faulted or not waiting_marker or marker~=waiting_marker.marker or type(now)~='number'
     or now~=now or now>=waiting_marker.deadline then
    faulted=true;return false,'marker_receipt'
+  end
+  -- The native owner exposes readiness so a queued packet cannot be skipped
+  -- by this asynchronous callback. Legacy injected transports without
+  -- readiness retain their old behaviour. This sampled check is not an atomic
+  -- fence against a packet arriving after the check or the start of save.
+  if net.pending~=nil then
+   local pending_marker=waiting_marker
+   local checked,packet_waiting=pcall(net.pending,net)
+   if not checked or packet_waiting~=false or faulted or waiting_marker~=pending_marker then
+    faulted=true;return false,'marker_pending_packet'
+   end
+   clock_ok,now=pcall(engine.real_time)
+   if not clock_ok or faulted or waiting_marker~=pending_marker or type(now)~='number' or
+      now~=now or now>=pending_marker.deadline then
+    faulted=true;return false,'marker_pending_packet'
+   end
   end
   local number=waiting_marker.number;waiting_marker=nil
   return submit_save(number)
@@ -37,7 +53,11 @@ function M.new(cfg,engine,net)
  function bridge:update()
   if faulted then return false,'faulted' end
   for _=1,16 do
-   local packet=net:receive();if not packet then break end
+   -- A transport exception must also fence a marker callback already in
+   -- flight; the outer update owner alone cannot cancel that callback.
+   local received,packet=pcall(net.receive,net)
+   if not received then faulted=true;return false,'receive' end
+   if not packet then break end
    if waiting_marker then faulted=true;return false,'marker_pending' end
    local typ,l,e,id,op,marker=packet:match('^([A-Z]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|([a-z]+)|([0-9a-f]+)$')
    if not typ then typ,l,e,id,op=packet:match('^([A-Z]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|?([a-z]*)$') end

@@ -3,7 +3,7 @@ local recovery,bridge=assert(arg[1]),assert(arg[2])
 local menu,valid,paused=true,false,false
 local now=0; local callbacks,update=0,nil; local messages={}; local loads=0
 local sent={};local incoming={}
-local net={send=function(_,value)sent[#sent+1]=value;return true end,
+local net={send=function(_,value)sent[#sent+1]=value;return true end,pending=function()return #incoming>0 end,
  receive=function()return table.remove(incoming,1) end}
 package.loaded.ffi={cdef=function()end,NULL={},string=function(v)return v end,C={
  IsStartmenu=function()return menu end, IsPlayerValid=function()return valid end,

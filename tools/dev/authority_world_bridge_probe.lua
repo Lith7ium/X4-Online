@@ -4,6 +4,23 @@ if not cfg or cfg.authority_world_bridge~=true then return end
 local ffi=require('ffi');local C=ffi.C
 ffi.cdef[[bool IsPlayerValid(void);bool IsSaveListLoadingComplete(void);void ReloadSaveList(void);]]
 local started,bridge,net,engine,next_hello,loaded_at=false,nil,nil,nil,0,nil
+local function checked_control_socket(socket)
+ assert(type(socket.pending)=='function','control UDP readiness unavailable')
+ return {
+  send=function(_,packet)return socket:send(packet)end,
+  pending=function()return socket:pending()end,
+  receive=function()
+   local ready=socket:pending()
+   assert(type(ready)=='boolean','control UDP readiness failed')
+   -- Do not consume a packet arriving after an empty readiness check. It
+   -- remains queued for the next update, including malformed datagrams.
+   if not ready then return nil end
+   local packet=socket:receive()
+   assert(type(packet)=='string' and #packet>0 and #packet<=768,'invalid control UDP datagram')
+   return packet
+  end,
+ }
+end
 local function frame()
  if not C.IsPlayerValid() then return end
  local now=GetCurRealTime()
@@ -12,7 +29,7 @@ local function frame()
   assert(cfg.test_profile=='45841')
   engine=assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.new({enabled=true,test_profile='45841'}))
   local lib=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
-  net=lib.open('127.0.0.1',cfg.authority_control_port)
+  net=checked_control_socket(assert(lib.open('127.0.0.1',cfg.authority_control_port)))
   C.ReloadSaveList();started=true
  end
  if not started then return end

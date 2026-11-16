@@ -1,8 +1,12 @@
 -- Offline doubles for the generated private probe. Never loads X4.
 local script=assert(arg[1]); local now=0; local ready=false; local paused=true
 local update; local packets={}; local sent={}; local errors={}; local created,updates=0,0
-local net={send=function(_,v) sent[#sent+1]=v;return true end,
- receive=function() return table.remove(packets,1) end}
+local net={send=function(_,v) sent[#sent+1]=v;return true end,pending=function()return #packets>0 end,
+ receive=function()
+  local packet=table.remove(packets,1)
+  if packet=='' or (packet and #packet>768)then return nil end
+  return packet
+ end}
 package.loaded.ffi={cdef=function()end,C={IsPlayerValid=function()return true end,
  IsGamePaused=function()return paused end,IsSaveListLoadingComplete=function()return true end,
  ReloadSaveList=function()end}}
@@ -36,3 +40,10 @@ assert(created==0 and #errors==1);update();assert(created==0)
 created=0;sent={};errors={};packets={};now=0;paused=true
 assert(loadfile(script))();update();now=4;paused=false;update()
 assert(created==0 and #errors==1)
+-- Invalid native datagrams must not disappear during recovery activation.
+for _,packet in ipairs({'',('x'):rep(769)})do
+ created=0;sent={};errors={};packets={};now=0;paused=true
+ assert(loadfile(script))();update();now=4;packets[1]=packet;update()
+ assert(created==0 and #errors==1 and #sent==1)
+ for _,message in ipairs(sent)do assert(not message:find('ACTIVATED|',1,true))end
+end
