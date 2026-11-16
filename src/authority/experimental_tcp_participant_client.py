@@ -4,6 +4,7 @@ The caller owns this connected socket after consuming the load-accepted frame,
 the X4 process and the injected synchronous controller. A controller result is
 a local assertion; this module does not establish process or peer identity.
 """
+import copy
 import json
 import math
 import re
@@ -13,6 +14,7 @@ import threading
 import time
 
 from .load_messages import MAX_INTEGER, MAX_MESSAGE, _pairs, _reject_constant
+from .experimental_tcp_job_delivery import job_event, job_digest
 
 
 class ExperimentalTCPParticipantClient:
@@ -21,7 +23,7 @@ class ExperimentalTCPParticipantClient:
     The controller must bound its own synchronous pause/resume calls. This
     adapter checks its deadline after a call but cannot interrupt that call.
     """
-    def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30):
+    def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None):
         if (enabled is not True or type(conn) is not socket.socket or conn.family != socket.AF_INET or
                 conn.proto not in (0, socket.IPPROTO_TCP) or
                 conn.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM or
@@ -40,6 +42,9 @@ class ExperimentalTCPParticipantClient:
         self._in = self._out = b''
         self._deadline = None
         self._last = 0
+        if apply_job is not None and not callable(apply_job):
+            raise ValueError('job application must be callable')
+        self._apply_job=apply_job;self._job_incarnation=None;self._last_job=None
         self._failed = self._closed = self._busy = False
 
     def _fault(self):
@@ -73,6 +78,8 @@ class ExperimentalTCPParticipantClient:
             command = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs, parse_constant=_reject_constant)
         except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
             raise ValueError('invalid participant command') from error
+        if type(command) is dict and command.get('kind')=='job_delivery':
+            return self._job(command)
         fields = {'version', 'kind', 'epoch', 'connection_handle', 'request_id', 'operation'}
         if (type(command) is not dict or set(command) != fields or
                 type(command['version']) is not int or command['version'] != 1 or
@@ -90,6 +97,33 @@ class ExperimentalTCPParticipantClient:
             raise RuntimeError('local participant state not confirmed')
         reply = dict(command, kind='participant_receipt', status='confirmed')
         self._out = json.dumps(reply, sort_keys=True, separators=(',', ':')).encode('utf-8') + b'\n'
+
+    def _job(self, command):
+        fields={'version','kind','connection_handle','request_id','session_epoch','incarnation','event'}
+        if (self._apply_job is None or set(command)!=fields or type(command.get('version')) is not int or
+                command['version']!=1 or type(command.get('connection_handle')) is not int or
+                command['connection_handle']!=self._handle or command.get('session_epoch')!=self._epoch or
+                type(command.get('request_id')) is not int or type(command.get('incarnation')) is not str or
+                not re.fullmatch(r'[0-9a-f]{32}',command['incarnation'])):
+            raise ValueError('invalid job command')
+        event=job_event(command['event'])
+        if (command['request_id']!=event['sequence'] or
+                self._job_incarnation is not None and self._job_incarnation!=command['incarnation'] or
+                self._last_job is not None and (event['epoch'],event['generation'])!=self._last_job[:2] or
+                self._last_job is not None and event['sequence']!=self._last_job[2]+1):
+            raise ValueError('stale job command')
+        self._quiet()
+        self._job_incarnation=command['incarnation']
+        self._last_job=(event['epoch'],event['generation'],event['sequence'])
+        digest=job_digest(event)
+        applied=copy.deepcopy(event)
+        confirmed=self._apply_job(applied)
+        self._within();self._quiet()
+        if job_digest(applied)!=digest:raise ValueError('job application mutated its event')
+        if confirmed is not True:raise RuntimeError('local job application not confirmed')
+        reply={k:command[k] for k in ('version','connection_handle','request_id','session_epoch','incarnation')}
+        reply.update(kind='job_receipt',status='applied',event_sha256=digest)
+        self._out=json.dumps(reply,sort_keys=True,separators=(',', ':'),allow_nan=False).encode()+b'\n'
 
     def poll(self, timeout=0):
         """Pump bounded I/O once; True means a receipt was sent to the socket."""

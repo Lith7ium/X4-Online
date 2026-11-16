@@ -57,6 +57,12 @@ class ExperimentalTCPControl:
         self._thread = threading.get_ident()
         self._failed = False
         self._closed = False
+        self._reader_lease = None
+        self._job_delivery_owner = None
+
+    def _reader_free(self):
+        if self._reader_lease is not None:
+            raise RuntimeError('control sockets are leased to an exclusive operation')
 
     def _owner(self):
         if threading.get_ident() != self._thread:
@@ -75,6 +81,7 @@ class ExperimentalTCPControl:
     def adopt(self, conn):
         """Adopt one connected socket; caller retains listener and transport policy."""
         self._owner()
+        self._reader_free()
         if (type(conn) is not socket.socket or conn.family != socket.AF_INET or conn.proto not in (0, socket.IPPROTO_TCP) or
                 conn.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM):
             raise ValueError('connected IPv4 TCP stream socket required')
@@ -169,6 +176,7 @@ class ExperimentalTCPControl:
     def poll(self, timeout=0):
         """Handle bounded socket I/O and idle expiry once on the owner thread."""
         self._owner()
+        self._reader_free()
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 <= timeout <= 1:
             raise ValueError('invalid poll timeout')
         now = time.monotonic()
@@ -234,6 +242,7 @@ class ExperimentalTCPControl:
         The coordinator still decides whether a resume is valid.
         """
         self._owner()
+        self._reader_free()
         ready = True
         for conn, peer in tuple(self._peers.items()):
             if peer['deadline'] is not None and time.monotonic() >= peer['deadline']:
@@ -262,6 +271,7 @@ class ExperimentalTCPControl:
     def close(self):
         """Disconnect all adopted sockets, retaining no listener or thread."""
         self._owner()
+        self._reader_free()
         try:
             for conn in tuple(self._peers): self._drop(conn)
         finally:

@@ -37,6 +37,7 @@ class ExperimentalTCPParticipants:
     def _control(self, operation, handles):
         host = self._host
         host._control._owner()
+        host._control._reader_free()
         if self._failed or self._busy or host._failed:
             raise RuntimeError('participant control unavailable; fence all components')
         world = host._world
