@@ -282,3 +282,19 @@ It seals the event route and faults late or reentrant events. This gate is not
 installed in an X4 session: a future owner must actually route the unique MD
 event through it and keep checking its status and error log after stop. An
 in-flight saved-baseline bootstrap can no longer be closed as if it completed.
+
+The opt-in recovered-source installer adds a source-only owner to an existing
+recovery update loop. It binds the provided epoch and count to that loop's
+registry configuration, checks the private save path, and uses one descriptor
+event route and a separate UDP context. Offline tests use simulated X4 state;
+this installer is not connected to the recovery supervisor or proven in X4.
+The future supervisor must establish checkpoint and mapping provenance, protect
+and redact the configuration, bind the UDP peer to its process, monitor
+`AUTH_RECOVERED_SOURCE ERROR` through cleanup, and fence pause/save until STOP
+and subsequent checks succeed. The additional MD script also requires an
+explicit provenance decision before any resulting checkpoint is reused.
+
+The local UDP library exposes a nonblocking `pending()` check so the source can
+reject queued empty or oversized datagrams before and after STOP. This check is
+a point-in-time observation, not a guarantee against future arrivals. The C
+implementation has not been tested under Windows.

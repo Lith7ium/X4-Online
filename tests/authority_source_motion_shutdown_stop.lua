@@ -15,7 +15,7 @@ local function rig(pending)
  local life=assert(G.new({enabled=true,bootstrap=boot,sampler=sampler,guard=function()return true end,
   quiescent=function()return true end,route=function()return true end,fault=function(v)faults[#faults+1]=v end}))
  if pending then assert(boot:begin(1))end
- local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end}
+ local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end,pending=function()return #input>0 end}
  local ipc=assert(I.new({enabled=true,lease=lease,attempt=attempt,epoch=epoch,generation=gen,
   timeout=5,clock=function()return 1 end,guard=function()return true end,net=net,
   stop=function()return life:stop()end,fault=function(v)faults[#faults+1]=v end}))

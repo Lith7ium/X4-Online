@@ -2,7 +2,7 @@ local mod=dofile('src/authority/lua/source_motion_ipc.lua')
 local lease,attempt,epoch,gen=string.rep('a',32),string.rep('b',32),string.rep('c',32),string.rep('d',32)
 local function rig()
  local input,out={},{};local now=1;local fault
- local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end}
+ local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end,pending=function()return #input>0 end}
  local app=assert(mod.new({enabled=true,lease=lease,attempt=attempt,epoch=epoch,generation=gen,timeout=5,
   clock=function()return now end,guard=function()return true end,net=net,fault=function(v)fault=v end}))
  return app,input,out,function(t)now=t end,function()return fault end
@@ -32,7 +32,7 @@ assert(mod.new({enabled=false})==nil)
 -- STOP is opt-in, correlated and cannot succeed while sampling or closure fails.
 do
  local closed=0;local input,out={},{};local now=1;local fault
- local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end}
+ local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end,pending=function()return #input>0 end}
  local x=assert(mod.new({enabled=true,lease=lease,attempt=attempt,epoch=epoch,generation=gen,timeout=5,
   clock=function()return now end,guard=function()return true end,net=net,fault=function(v)fault=v end,
   stop=function()closed=closed+1;return true end}))
@@ -43,7 +43,7 @@ do
 end
 for _,mode in ipairs({'disabled','wrong_sequence','wrong_epoch','pending','callback_failure'})do
  local input,out={},{};local closed=0
- local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end}
+ local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end,pending=function()return #input>0 end}
  local cfg={enabled=true,lease=lease,attempt=attempt,epoch=epoch,generation=gen,timeout=5,
   clock=function()return 1 end,guard=function()return true end,net=net,fault=function()end}
  if mode~='disabled' then cfg.stop=function()closed=closed+1;return mode~='callback_failure' end end
@@ -55,4 +55,27 @@ for _,mode in ipairs({'disabled','wrong_sequence','wrong_epoch','pending','callb
  assert(not x:tick() and x:state()=='failed')
  for _,packet in ipairs(out)do assert(not packet:find('|STOPPED|',1,true))end
  assert(closed==(mode=='callback_failure' and 1 or 0))
+end
+
+-- A packet queued behind STOP is not allowed to follow a successful STOPPED.
+do
+ local input,out={},{};local closed=0
+ local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end,pending=function()return #input>0 end}
+ local x=assert(mod.new({enabled=true,lease=lease,attempt=attempt,epoch=epoch,generation=gen,timeout=5,
+  clock=function()return 1 end,guard=function()return true end,net=net,fault=function()end,
+  stop=function()closed=closed+1;return true end}))
+ bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|STOP'..suffix..'|1';input[2]=''
+ assert(not x:tick() and x:state()=='failed' and closed==1)
+ for _,v in ipairs(out)do assert(not v:find('|STOPPED|',1,true))end
+end
+-- Failed or ambiguous readiness inspection must not acknowledge shutdown.
+for _,mode in ipairs({'nil','raise','queued'})do
+ local input,out={},{}
+ local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end,
+  pending=function()if mode=='raise' then error('pending failed')end;if mode=='nil' then return nil end;return true end}
+ local x=assert(mod.new({enabled=true,lease=lease,attempt=attempt,epoch=epoch,generation=gen,timeout=5,
+  clock=function()return 1 end,guard=function()return true end,net=net,fault=function()end,stop=function()return true end}))
+ bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|STOP'..suffix..'|1'
+ assert(not x:tick() and x:state()=='failed')
+ for _,v in ipairs(out)do assert(not v:find('|STOPPED|',1,true))end
 end

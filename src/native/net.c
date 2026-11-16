@@ -23,6 +23,7 @@ typedef SOCKET net_socket;
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
 typedef int net_socket;
@@ -103,6 +104,26 @@ static int net_send(lua_State* L) {
     }
     int sent = (int)send(conn->fd, payload, (int)length, 0);
     p_lua_pushboolean(L, sent == (int)length);
+    return 1;
+}
+
+/* Readability also detects empty and oversized datagrams, which receive()
+ * intentionally reports as nil. A nil result here means the check failed. */
+static int net_pending(lua_State* L) {
+    connection* conn = p_luaL_checkudata(L, 1, METATABLE);
+    if (conn->fd == INVALID_NET) { p_lua_pushnil(L); return 1; }
+#ifndef _WIN32
+    if (conn->fd >= FD_SETSIZE) { p_lua_pushnil(L); return 1; }
+#endif
+    fd_set readfds; FD_ZERO(&readfds); FD_SET(conn->fd, &readfds);
+    struct timeval timeout = {0, 0};
+#ifdef _WIN32
+    int ready = select(0, &readfds, NULL, NULL, &timeout);
+#else
+    int ready = select(conn->fd + 1, &readfds, NULL, NULL, &timeout);
+#endif
+    if (ready < 0) p_lua_pushnil(L);
+    else p_lua_pushboolean(L, ready > 0);
     return 1;
 }
 
@@ -192,6 +213,7 @@ EXPORT int luaopen_x4lan_net(lua_State* L) {
     p_luaL_newmetatable(L, METATABLE);
     p_lua_pushvalue(L, -1); p_lua_setfield(L, -2, "__index");
     method(L, "send", net_send); method(L, "receive", net_receive);
+    method(L, "pending", net_pending);
     method(L, "close", net_close); method(L, "__gc", net_close);
     p_lua_settop(L, -2);
     p_lua_createtable(L, 0, 2);

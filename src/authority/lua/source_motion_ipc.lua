@@ -19,6 +19,7 @@ function M.new(c)
   c.saved_baseline={limit=c.saved_baseline.limit,guard=c.saved_baseline.guard}
  end
  assert((type(c.net)=='table' or type(c.net)=='userdata') and type(c.net.send)=='function' and type(c.net.receive)=='function')
+ if c.stop~=nil then assert(type(c.net.pending)=='function')end
  local state,busy='new',false;local last,deadline,request,seq,saved_index=nil,nil,nil,0,nil
  local api={}
  local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
@@ -74,6 +75,10 @@ function M.new(c)
      state='stopping';assert(check())
      local invoked,closed=pcall(c.stop)
      assert(invoked and closed==true and state=='stopping' and check())
+     -- Refuse acknowledgement if any datagram is already queued, including
+     -- empty or oversized packets that receive() itself cannot distinguish.
+     local checked,queued=pcall(c.net.pending,c.net)
+     assert(checked and queued==false and state=='stopping' and check())
      assert(send({'STOPPED',c.epoch,c.generation,string.format('%.0f',request)}))
      seq=request;request=nil;deadline=nil;state='stopped'
     elseif p[4]=='PULL' then state='requested' else
@@ -118,6 +123,14 @@ function M.new(c)
    assert(send(fields));seq=request;request=nil;deadline=nil;state='ready'
   end)
   busy=false;if not ok then return fail('complete')end;return true
+ end
+ -- After STOP, source activity is disabled but the socket remains owned.
+ -- Do not consult the running-world guard: a confirmed pause is now allowed.
+ function api:check_stopped()
+  if busy or state~='stopped' then return fail('stopped_check')end
+  busy=true;local ok,has=pcall(c.net.pending,c.net);busy=false
+  if not ok or has~=false or state~='stopped' then return fail('late_packet')end
+  return true
  end
  function api:state()return state end
  return api
