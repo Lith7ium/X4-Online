@@ -56,7 +56,38 @@ class Worker(unittest.TestCase):
      'game_time':3.,'position':[0. if status=='EXHAUST' else (-4.75 if status=='FOURTH' else -4.95),0.,0.]}}
   if status in ('STREAM','STREAM_FAIL','STREAM_SKIP'):c['observe_limit']=2
   c=worker.config(json.dumps(c).encode())
-  if status=='STREAM':
+  if status=='MOTION_INIT_FAIL':
+   closed=[]
+   original_close=worker.ExperimentalParticipantJobIPC.close
+   def close_job(obj):
+    if obj._sock is sj:closed.append('job')
+    return original_close(obj)
+   with patch.object(worker.ExperimentalParticipantJobIPC,'close',close_job), \
+        patch.object(worker,'ExperimentalParticipantMotionIPC',side_effect=ValueError('motion init failed')):
+    with self.assertRaisesRegex(ValueError,'motion init failed'):worker.run(cc,cj,ca,sc,sj,sm,x,c)
+   self.assertEqual(closed,['job'])
+  elif status in ('CLEANUP_FAIL','OP_AND_CLEANUP_FAIL'):
+   closed=[]
+   original_close=worker.ExperimentalParticipantMotionIPC.close
+   def close_motion(obj):
+    closed.append('motion')
+    return original_close(obj)
+   patches=[patch.object(worker.ExperimentalParticipantJobIPC,'close',side_effect=OSError('job close failed')),
+            patch.object(worker.ExperimentalParticipantMotionIPC,'close',close_motion)]
+   if status=='OP_AND_CLEANUP_FAIL':
+    patches.append(patch.object(worker.ExperimentalParticipantMotionIPC,'preflight',side_effect=ValueError('operation failed')))
+   from contextlib import ExitStack
+   with ExitStack() as stack:
+    for item in patches:stack.enter_context(item)
+    expected=ValueError if status=='OP_AND_CLEANUP_FAIL' else BaseExceptionGroup
+    with self.assertRaises(expected) as caught:worker.run(cc,cj,ca,sc,sj,sm,x,c)
+   self.assertEqual(closed,['motion'])
+   if status=='OP_AND_CLEANUP_FAIL':
+    self.assertEqual(str(caught.exception),'operation failed')
+    self.assertTrue(any('job close failed' in note for note in caught.exception.__notes__))
+   else:
+    self.assertTrue(any(str(e)=='job close failed' for e in caught.exception.exceptions))
+  elif status=='STREAM':
    result=worker.run(cc,cj,ca,sc,sj,sm,x,c)
    self.assertEqual(result['observed_sequences'],[2,3]);self.assertTrue(result['server_observe_receipts'])
    self.assertEqual(log.read_text().splitlines(),['RESUME','BIND:2','PREFLIGHT:2','OBSERVE:2','BIND:3','PREFLIGHT:3','OBSERVE:3'])
@@ -117,4 +148,7 @@ class Worker(unittest.TestCase):
  def test_candidate_limit_never_resumes(self):self.case('EXHAUST')
  def test_time_budget_never_resumes(self):self.case('TIMEOUT')
  def test_fourth_real_sample_is_selected(self):self.case('FOURTH')
+ def test_cleanup_failure_still_closes_motion(self):self.case('CLEANUP_FAIL')
+ def test_operation_failure_survives_cleanup_failure(self):self.case('OP_AND_CLEANUP_FAIL')
+ def test_motion_initialization_failure_closes_job(self):self.case('MOTION_INIT_FAIL')
 if __name__=='__main__':unittest.main()

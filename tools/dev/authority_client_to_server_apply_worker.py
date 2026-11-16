@@ -69,6 +69,22 @@ def config(raw):
     c['server_snapshot']=snapshot
     return c
 
+def close_owners(owners, original_error):
+    """Attempt each close and preserve a pending operation failure."""
+    errors = []
+    for name, owner in owners:
+        try:
+            owner.close()
+        except BaseException as error:
+            errors.append((name, error))
+    if not errors:
+        return
+    if original_error is not None:
+        for name, error in errors:
+            original_error.add_note(f'{name} cleanup failed: {type(error).__name__}: {error}')
+        return
+    raise BaseExceptionGroup('participant owner cleanup failed', [error for _, error in errors])
+
 def run(cc,cj,ca,sc,sj,sm,private,c):
     sockets=(cc,cj,ca,sc,sj,sm)
     for s in sockets:client.validate_udp(s)
@@ -122,8 +138,12 @@ def run(cc,cj,ca,sc,sj,sm,private,c):
         if timeout<=0:raise TimeoutError('server operation budget exhausted')
         job=ExperimentalParticipantJobIPC(sj,enabled=True,lease=c['server_job_lease'],attempt=c['server_job_attempt'],
             epoch=c['job_epoch'],generation=c['generation'],guard=guard,validate_peer=lambda p:peer_guard(p,sj),timeout=timeout)
-        motion=ExperimentalParticipantMotionIPC(sm,enabled=True,lease=c['server_motion_lease'],attempt=c['server_motion_attempt'],
-            epoch=c['job_epoch'],generation=c['generation'],guard=guard,validate_peer=lambda p:peer_guard(p,sm),timeout=timeout,allow_apply='observe_limit' not in c,observe_limit=c.get('observe_limit'))
+        try:
+            motion=ExperimentalParticipantMotionIPC(sm,enabled=True,lease=c['server_motion_lease'],attempt=c['server_motion_attempt'],
+                epoch=c['job_epoch'],generation=c['generation'],guard=guard,validate_peer=lambda p:peer_guard(p,sm),timeout=timeout,allow_apply='observe_limit' not in c,observe_limit=c.get('observe_limit'))
+        except BaseException as error:
+            close_owners((('job', job),), error)
+            raise
         try:
             job.wait_ready();motion.wait_ready();guard()
             selected=candidate['sequence'];observed=[];skipped=[]
@@ -149,7 +169,7 @@ def run(cc,cj,ca,sc,sj,sm,private,c):
                     import select
                     select.select([private],[],[private],min(.05,max(0,c['deadline']-time.monotonic())));guard()
         finally:
-            job.close();motion.close()
+            close_owners((('job', job), ('motion', motion)), sys.exception())
         result={'event':'result','ok':True,'tcp_admitted':True,'synthetic_server_checkpoint_and_admission':True,
             'client_authority_registered':True,'index':base.INDEX,'sector_macro':base.SECTOR,'samples':samples,
             'frame_identity_proven':False,
