@@ -31,8 +31,10 @@ class _History:
 def _seconds(value):
     if type(value) not in (int, float):
         raise ValueError('source seconds must be a finite number')
-    try: number = float(value)
-    except OverflowError as error: raise ValueError('invalid source seconds') from error
+    try:
+        number = float(value)
+    except OverflowError as error:
+        raise ValueError('invalid source seconds') from error
     if not math.isfinite(number) or not 0 <= number <= 1e12:
         raise ValueError('invalid source seconds')
     return number
@@ -60,16 +62,24 @@ class ExperimentalMotionRates:
         if type(max_tracks) is not int or not 1 <= max_tracks <= 1_000_000:
             raise ValueError('invalid track bound')
         values = (min_seconds, max_seconds, max_rate)
-        if any(type(v) not in (int, float) for v in values):
+        if any(type(value) not in (int, float) for value in values):
             raise ValueError('invalid rate bounds')
-        try: low, high, limit = (float(v) for v in values)
-        except OverflowError as error: raise ValueError('invalid rate bounds') from error
-        if (not all(math.isfinite(v) for v in (low, high, limit)) or
-                not 0 < low <= high <= 60 or not 0 < limit <= 1e9):
+        try:
+            minimum_interval, maximum_interval, rate_limit = (
+                float(value) for value in values
+            )
+        except OverflowError as error:
+            raise ValueError('invalid rate bounds') from error
+        if (not all(math.isfinite(value) for value in
+                    (minimum_interval, maximum_interval, rate_limit)) or
+                not 0 < minimum_interval <= maximum_interval <= 60 or
+                not 0 < rate_limit <= 1e9):
             raise ValueError('invalid rate bounds')
         self._registry = registry
         self._max_tracks = max_tracks
-        self._min_seconds, self._max_seconds, self._max_rate = low, high, limit
+        self._min_seconds = minimum_interval
+        self._max_seconds = maximum_interval
+        self._max_rate = rate_limit
         self._history = {}
 
     def update(self, world_epoch, ship_id, generation, authority_epoch, owner,
@@ -77,7 +87,7 @@ class ExperimentalMotionRates:
         """Apply one newer full position; commit rate history only on success."""
         if type(ship_id) is not str or not 1 <= len(ship_id) <= 256:
             raise ValueError('invalid ship ID')
-        if type(sequence) is not int or not 1 <= sequence <= (1 << 63)-1:
+        if type(sequence) is not int or not 1 <= sequence <= (1 << 63) - 1:
             raise ValueError('invalid sequence')
         if type(position) is not Position:
             raise ValueError('position must be an exact Position')
@@ -85,30 +95,40 @@ class ExperimentalMotionRates:
         previous = self._history.get(ship_id)
         if previous is None and len(self._history) >= self._max_tracks:
             raise ValueError('motion track limit reached')
-        lineage = previous is not None and (previous.generation, previous.authority_epoch, previous.owner) == (generation, authority_epoch, owner)
-        if lineage and self._registry._current(ship_id, generation, authority_epoch) is not previous.last_state:
+        same_lineage = previous is not None and (
+            previous.generation, previous.authority_epoch, previous.owner
+        ) == (generation, authority_epoch, owner)
+        if (same_lineage and
+                self._registry._current(ship_id, generation, authority_epoch)
+                is not previous.last_state):
             raise ValueError('registry changed outside this motion adapter')
-        if lineage and (sequence <= previous.last_sequence or now < previous.last_seconds):
+        if same_lineage and (sequence <= previous.last_sequence or now < previous.last_seconds):
             raise ValueError('stale sequence or regressed source clock')
-        same_frame = lineage and previous.frame == position.sector
+        same_frame = same_lineage and previous.frame == position.sector
         rate = None
         reference, reference_seconds = position, now
         if same_frame:
-            dt = now - previous.reference_seconds
-            if dt < self._min_seconds:
+            elapsed_seconds = now - previous.reference_seconds
+            if elapsed_seconds < self._min_seconds:
                 reference, reference_seconds = previous.reference, previous.reference_seconds
-            elif dt <= self._max_seconds:
-                dx = (position.x - previous.reference.x) / dt
-                dy = (position.y - previous.reference.y) / dt
-                dz = (position.z - previous.reference.z) / dt
-                if all(math.isfinite(v) for v in (dx, dy, dz)) and math.hypot(dx, dy, dz) <= self._max_rate:
-                    rate = Velocity(dx, dy, dz)
+            elif elapsed_seconds <= self._max_seconds:
+                rate_x = (position.x - previous.reference.x) / elapsed_seconds
+                rate_y = (position.y - previous.reference.y) / elapsed_seconds
+                rate_z = (position.z - previous.reference.z) / elapsed_seconds
+                components = (rate_x, rate_y, rate_z)
+                if (all(math.isfinite(component) for component in components) and
+                        math.hypot(*components) <= self._max_rate):
+                    rate = Velocity(*components)
         # The registry enforces epoch, actual live generation, authority, owner,
         # and sequence. A rejection cannot advance the estimator's history.
-        result = self._registry.update(world_epoch, ship_id, generation, authority_epoch,
-                                       owner, sequence, position, rate)
-        self._history[ship_id] = _History(generation, authority_epoch, owner, sequence, now,
-                                          position.sector, reference, reference_seconds, result)
+        result = self._registry.update(
+            world_epoch, ship_id, generation, authority_epoch, owner, sequence,
+            position, rate,
+        )
+        self._history[ship_id] = _History(
+            generation, authority_epoch, owner, sequence, now, position.sector,
+            reference, reference_seconds, result,
+        )
         return result
 
     def forget(self, ship_id):
