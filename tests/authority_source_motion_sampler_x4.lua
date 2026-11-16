@@ -8,9 +8,22 @@ X4LAN_RESOLVE_STRING=dofile('tools/dev/authority_registry_resolve_string.lua')
 local epoch,generation,nonce=string.rep('a',32),string.rep('b',32),string.rep('c',32)
 local sent,out,errors={}, {}, {};local now=0
 function GetCurRealTime()return now end
-local conversion='good';local dock_reads=0
-function ConvertIDTo64Bit(v)if conversion=='bad_roundtrip' then return 42 end;return v end
-function ConvertStringToLuaID(v)if conversion=='wrong_id' then return 42 elseif conversion=='rounded_id' then return 9007199254740992 elseif conversion=='high_exact' then return X4LAN_RESOLVE_STRING.parse_hex('0x20000000000001') end;return tonumber(v) end
+local conversion='good';local dock_reads=0;local opaque=newproxy(true)
+local exact_high=X4LAN_RESOLVE_STRING.parse_hex('0x20000000000001')
+function ConvertIDTo64Bit(v)
+ if conversion=='opaque_error' then error('conversion failed') end
+ if conversion=='bad_roundtrip' or conversion=='opaque_wrong' then return 42 end
+ if conversion=='opaque_rounded' then return 9007199254740992 end
+ if conversion=='opaque_good' and v==opaque then return exact_high end
+ return v
+end
+function ConvertStringToLuaID(v)
+ if conversion=='wrong_id' then return 42 elseif conversion=='rounded_id' then return 9007199254740992
+ elseif conversion=='high_exact' then return exact_high
+ elseif conversion=='opaque_good' or conversion=='opaque_wrong' or conversion=='opaque_rounded' or conversion=='opaque_error' then return opaque
+ elseif conversion=='unsupported' then return {} end
+ return tonumber(v)
+end
 local docked=false
 function GetComponentData(_,a,b,c)dock_reads=dock_reads+1;assert(a=='isdocked' and b=='isdocking' and c=='isinternallystored');return docked,false,false end
 function AddUITriggeredEvent(screen,op,args)assert(screen=='X4AuthorityJobDescriptorProbe' and op=='Read');sent[#sent+1]=args;return true end
@@ -51,6 +64,16 @@ conversion='rounded_id';local before=dock_reads;local bad=new_high()
 assert(not bad:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},high) and dock_reads==before)
 conversion='high_exact';local good=new_high()
 assert(good:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},high) and dock_reads>before)
+
+-- X4 may expose LuaID as an opaque userdata. It is admissible only if its
+-- conversion back to the independently captured uint64 is exact; no number
+-- or string representation of the userdata is used as an identity.
+conversion='opaque_good';local prior=dock_reads;local opaque_good=new_high()
+assert(type(opaque)=='userdata' and opaque_good:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},high) and dock_reads>prior)
+for _,mode in ipairs({'opaque_wrong','opaque_rounded','opaque_error','unsupported'})do
+ conversion=mode;prior=dock_reads;local invalid=new_high()
+ assert(not invalid:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},high) and dock_reads==prior)
+end
 
 -- Opt-in fault stages identify a failed conversion or docking read without
 -- emitting actor IDs or raw property values; the failure still fences sampling.

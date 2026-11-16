@@ -15,8 +15,24 @@ request is established. No source-to-client motion sample was demonstrated.
 After that failed run, bounded opt-in diagnostic reason codes were added for
 the source job, local motion IPC and sampler stages. The actor conversion and
 dock-check substage can be named without logging actor handles or raw property
-values. These codes describe future faults; they do not retroactively diagnose
-the failed run and have only been exercised with simulated X4 inputs.
+values. These codes do not retroactively diagnose the first failed run.
+
+A second isolated attempt, `.local/authority-source-motion-pair-02`, also
+returned `success=false` with confirmed owned cleanup. Its client log again
+recorded local apply for index 10055; no client `BUFFERED` marker was recorded.
+The source log recorded `sampler register_id_roundtrip sampler_register`. This
+locates the failure in the sampler's local LuaID identity checks but does not
+identify which check failed or the actual returned LuaID type; there is no
+packet trace or independently recorded source acknowledgement frame.
+
+The reviewed sampler did contain an incompatible check: it rejected all
+opaque Lua `userdata` before converting them back to uint64. The revised code
+allows userdata only as an opaque input to `ConvertIDTo64Bit`, then requires
+the result to equal the independently retained exact actor uint64. Numeric and
+cdata inputs still additionally require an exact direct check. LuaJIT tests
+exercise real userdata, wrong and rounded reverse conversions and a uint64
+above 2^53. An opaque userdata return is a plausible explanation of attempt 02,
+not an observed return type or a proven cause; no native follow-up is claimed.
 
 `authority_source_motion_pair_live.py` is a default-off, single-event diagnostic
 using the existing private two-X4 lifecycle. It stages the pinned census save

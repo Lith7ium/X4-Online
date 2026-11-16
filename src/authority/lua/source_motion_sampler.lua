@@ -180,7 +180,13 @@ function M.new_x4(c)
    binding_stage='id_convert'
    local id=to_lua_id(key);if not id then return false end
    binding_stage='id_roundtrip'
-   local from_id=resolve_actor(id);if not from_id or from_id~=original then return false end
+   -- X4 LuaIDs may be opaque userdata. Do not inspect or stringify them:
+   -- only their exact converted uint64 can establish identity. Numeric and
+   -- cdata values must additionally pass the direct, non-rounding check.
+   local kind=type(id)
+   if kind=='number' or kind=='cdata' then
+    local from_id=resolve_actor(id);if not from_id or from_id~=original then return false end
+   elseif kind~='userdata' then return false end
    local roundtrip=resolve_actor(to64(id));if not roundtrip or roundtrip~=original then return false end
    binding_stage='dock_values'
    local docked,docking,stored=component_data(id,'isdocked','isdocking','isinternallystored')

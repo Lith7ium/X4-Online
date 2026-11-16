@@ -221,6 +221,13 @@ the in-flight job/motion outcome and exact fault remain unknown. Owned cleanup
 was reported confirmed. Diagnostic codes added afterward are offline-tested
 and do not establish the cause of that run. [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md).
 
+A second attempt reached the source sampler's `register_id_roundtrip` guard
+and failed without a client motion-buffer marker. The client logged local
+creation of index 10055, and owned cleanup was reported confirmed. A code
+incompatibility with opaque Lua userdata has since been fixed and tested
+offline, but the failed run did not record the LuaID type; the precise cause
+and native effectiveness of the fix remain unproven.
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity
