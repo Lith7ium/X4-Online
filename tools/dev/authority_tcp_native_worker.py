@@ -2,6 +2,7 @@
 """One opt-in Linux native-client worker; no X4 is started by this module.
 
 The parent gives this process exclusive ownership of three inherited sockets.
+An explicit diagnostic opt-in adds a fourth, separate motion UDP socket.
 All secrets travel over the private IPC socket, never argv or standard output.
 
 The three argv values are inherited TCP, UDP and private AF_UNIX stream FDs.
@@ -33,6 +34,7 @@ from authority.experimental_tcp_participant_client import ExperimentalTCPPartici
 from authority.local_participant_control import LocalParticipantControl
 from authority.load_messages import MAX_INTEGER, MAX_MESSAGE, _pairs, _reject_constant
 from authority.trusted_load_messages import decode_load_claim
+from authority.experimental_participant_motion_ipc import ExperimentalParticipantMotionIPC
 
 MAX_CONFIG=16384
 MAX_IPC=256
@@ -68,7 +70,8 @@ def config_value(raw):
     obj=parse_json(raw)
     fields={'version','claim','epoch','handle','lease','udp_peer','udp_next_id','deadline',
             'controller_timeout','client_process'}
-    if type(obj) is not dict or set(obj) not in (fields, fields | {'already_admitted'}) or type(obj['version']) is not int or obj['version']!=1:
+    if (type(obj) is not dict or not fields<=set(obj) or set(obj)-fields-{'already_admitted','motion'} or
+            type(obj['version']) is not int or obj['version']!=1):
         raise ValueError('invalid worker configuration')
     if 'already_admitted' in obj and obj['already_admitted'] is not True:
         raise ValueError('invalid handoff state')
@@ -83,11 +86,22 @@ def config_value(raw):
     if (type(peer) is not list or len(peer)!=2 or peer[0]!='127.0.0.1' or
             type(peer[1]) is not int or not 1<=peer[1]<=65535):
         raise ValueError('invalid loopback participant peer')
+    if 'motion' in obj:
+        motion=obj['motion']
+        if (type(motion) is not dict or set(motion)!={'lease','attempt','epoch','generation','timeout'} or
+            any(type(motion[k]) is not str or not _HEX.fullmatch(motion[k]) for k in ('lease','attempt','epoch','generation')) or
+            len({motion[k] for k in ('lease','attempt','epoch','generation')})!=4 or
+            motion['lease'] in (obj['lease'],obj['epoch']) or motion['attempt'] in (obj['lease'],obj['epoch']) or
+            not finite(motion['timeout']) or not 0<motion['timeout']<=30 or
+            2*motion['timeout']>=obj['controller_timeout']):
+            raise ValueError('invalid motion context or timeout')
     try: raw_claim=obj['claim'].encode('ascii')
     except UnicodeError as error: raise ValueError('invalid claim encoding') from error
     claim=decode_load_claim(raw_claim)
     if claim.receipt.world_epoch!=obj['epoch'] or claim.receipt.connection_handle!=obj['handle']:
         raise ValueError('claim does not match worker context')
+    if 'motion' in obj and claim.receipt.attempt_id in (obj['motion']['lease'],obj['motion']['attempt']):
+        raise ValueError('motion secret conflicts with claim attempt')
     if time.monotonic()>=obj['deadline']: raise TimeoutError('expired worker configuration')
     check_process(obj['client_process'])
     return obj,raw_claim,claim.receipt.attempt_id
@@ -136,7 +150,7 @@ def event(ipc,kind,deadline):
     send_frame(ipc,raw,deadline,lambda:None)
 
 
-def verify_sockets(tcp,udp,ipc):
+def verify_sockets(tcp,udp,ipc,motion_udp=None):
     if (tcp.family!=socket.AF_INET or tcp.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM or
             tcp.getsockname()[0]!='127.0.0.1' or tcp.getpeername()[0]!='127.0.0.1'):
         raise ValueError('loopback TCP socket required')
@@ -146,12 +160,24 @@ def verify_sockets(tcp,udp,ipc):
     if ipc.family!=socket.AF_UNIX or ipc.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM:
         raise ValueError('private IPC stream required')
     ipc.getpeername()
+    sockets=[tcp,udp,ipc]
+    if motion_udp is not None:
+        if (motion_udp.family!=socket.AF_INET or motion_udp.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
+            motion_udp.getsockname()[0]!='127.0.0.1' or motion_udp.getsockname()[1]<1):
+            raise ValueError('bound loopback motion UDP required')
+        try: motion_udp.getpeername()
+        except OSError: pass
+        else: raise ValueError('motion UDP must be unconnected')
+        sockets.append(motion_udp)
+    identities=[(os.fstat(s.fileno()).st_dev,os.fstat(s.fileno()).st_ino) for s in sockets]
+    if len(set(identities))!=len(identities): raise ValueError('socket ownership aliases')
 
 
 class GuardedParticipant:
     """Own a previously enrolled UDP controller reconstructed from private state."""
-    def __init__(self,udp,cfg,guard):
+    def __init__(self,udp,cfg,guard,motion_gate=None):
         self.guard,self.deadline,self.timeout=guard,cfg['deadline'],cfg['controller_timeout']
+        self.motion_gate=motion_gate
         controller=LocalParticipantControl.__new__(LocalParticipantControl)
         controller.sock=udp;controller.lease=cfg['lease'];controller.peer=tuple(cfg['udp_peer'])
         controller.epoch=cfg['epoch'];controller.handle=cfg['handle'];controller.next_id=cfg['udp_next_id']
@@ -166,16 +192,51 @@ class GuardedParticipant:
         result=getattr(self.controller,operation)(handles)
         self.guard()
         return result
-    def pause(self,handles): return self.call('pause',handles)
-    def resume(self,handles): return self.call('resume',handles)
+    def pause(self,handles):
+        if self.motion_gate is not None:self.motion_gate.running=False
+        return self.call('pause',handles)
+    def resume(self,handles):
+        result=self.call('resume',handles)
+        if self.motion_gate is not None and result is True:self.motion_gate.running=True
+        return result
     def close(self): self.controller.close()
 
 
-def run(tcp,udp,ipc):
-    verify_sockets(tcp,udp,ipc)
+class LazyMotion:
+    """One participant-thread UDP owner, first bound only after resume."""
+    def __init__(self,sock,cfg,guard):
+        self.sock,self.cfg,self.guard=sock,cfg,guard
+        self.running=False;self.bridge=None
+        self.destination=sock.getsockname()
+    def __call__(self,sample,despawn):
+        if not self.running or despawn is not False:raise RuntimeError('motion while paused or unsupported despawn')
+        self.guard()
+        if self.bridge is None:
+            # Imported here to avoid a module cycle when this file is __main__.
+            from authority_tcp_job_client_live import socket_owner
+            def peer(address):
+                self.guard()
+                return self.sock.getsockname()==self.destination and socket_owner(address,self.destination,self.cfg['client_process']) is True
+            def context():
+                self.guard()
+                return self.running and self.sock.getsockname()==self.destination
+            m=self.cfg['motion']
+            self.bridge=ExperimentalParticipantMotionIPC(self.sock,enabled=True,lease=m['lease'],attempt=m['attempt'],
+                epoch=m['epoch'],generation=m['generation'],guard=context,validate_peer=peer,timeout=m['timeout'])
+            self.bridge.wait_ready()
+        self.guard()
+        return self.bridge(sample,despawn)
+    def close(self):
+        if self.bridge is None:self.sock.close()
+        elif self.bridge.state not in ('closed','failed'):self.bridge.close()
+
+
+def run(tcp,udp,ipc,motion_udp=None):
+    verify_sockets(tcp,udp,ipc,motion_udp)
     tcp.setblocking(False);ipc.setblocking(False)
     # Bootstrap timeout is bounded even before receiving an absolute deadline.
     cfg,claim,attempt=config_value(read_line(ipc,MAX_CONFIG,time.monotonic()+30))
+    if ('motion' in cfg)!=(motion_udp is not None): raise ValueError('motion socket/config mismatch')
     deadline=cfg['deadline']
     def context():
         if time.monotonic()>=deadline: raise TimeoutError('worker deadline')
@@ -196,9 +257,20 @@ def run(tcp,udp,ipc):
                 ack['kind']!='accepted' or ack['attempt_id']!=attempt):
             raise ValueError('unexpected admission response')
     guard()
-    controller=GuardedParticipant(udp,cfg,guard)
+    motion=LazyMotion(motion_udp,cfg,guard) if motion_udp is not None else None
+    controller=GuardedParticipant(udp,cfg,guard,motion)
     adapter=ExperimentalTCPParticipantClient(tcp,controller,enabled=True,epoch=cfg['epoch'],
-        handle=cfg['handle'],timeout=min(cfg['controller_timeout'],max(.001,deadline-time.monotonic())))
+        handle=cfg['handle'],timeout=min(cfg['controller_timeout'],max(.001,deadline-time.monotonic())),apply_motion=motion)
+    cleaned=False
+    def cleanup():
+        nonlocal cleaned
+        if cleaned:return
+        cleaned=True;errors=[]
+        for action in (lambda:adapter.close() if not adapter._closed and not adapter._failed else None,
+                       controller.close, lambda:motion.close() if motion is not None else None):
+            try:action()
+            except BaseException as error:errors.append(error)
+        if errors:raise BaseExceptionGroup('participant worker cleanup failed',errors)
     try:
         guard()
         event(ipc,'active',deadline)
@@ -211,21 +283,21 @@ def run(tcp,udp,ipc):
             if ipc in readable:
                 request=parse_json(read_line(ipc,MAX_IPC,deadline))
                 if request!={'command':'stop'}: raise ValueError('invalid worker command')
-                adapter.close();controller.close();event(ipc,'stopped',deadline)
+                cleanup()
+                event(ipc,'stopped',deadline)
                 return
             context()
             adapter.poll(0)
             context()
     finally:
-        if not adapter._closed and not adapter._failed: adapter.close()
-        controller.close()
+        cleanup()
 
 
 def main(argv):
-    if len(argv)!=3: return 2
+    if len(argv) not in (3,4): return 2
     try:
         fds=[int(x) for x in argv]
-        if any(fd<3 for fd in fds) or len(set(fds))!=3: return 2
+        if any(fd<3 for fd in fds) or len(set(fds))!=len(fds): return 2
     except ValueError: return 2
     sockets=[]
     try:
@@ -233,7 +305,7 @@ def main(argv):
         run(*sockets)
         return 0
     except BaseException:
-        if len(sockets)==3:
+        if len(sockets)>=3:
             try: event(sockets[2],'failed',time.monotonic()+.25)
             except BaseException: pass
         return 1

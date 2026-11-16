@@ -24,7 +24,8 @@ function GetCurRealTime() return lib.monotonic() end
 function RegisterEvent(name,fn) assert(not handlers[name]);handlers[name]=fn;return true end
 function AddUITriggeredEvent(screen,op,args)
  assert(screen=='X4AuthoritySavedBaselineMotionBind' and op=='Bind' and args.baseline==10054 and args.index==42)
- requests[#requests+1]={args=args,when=lib.monotonic()+.08};return true
+ if os.getenv('TEST_MOTION_BIND_TRACE')=='1' then io.stdout:write('BIND\n');io.stdout:flush() end
+ requests[#requests+1]={args=args,when=lib.monotonic()+(tonumber(os.getenv('TEST_MOTION_BIND_DELAY')) or .08)};return true
 end
 function ConvertStringToLuaID(s)return ffi.new('uint64_t',tonumber(s))end
 function ConvertIDTo64Bit(v)return v end
