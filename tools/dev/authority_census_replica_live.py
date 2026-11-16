@@ -85,6 +85,17 @@ def load_observation(raw,ticket,*,partial=False):
             'exact_loaded_file_proven':False,'continuous_pause_proven':False}
 
 
+def validate_client_authority_completion(details, index):
+    """Completion for a read-only client->server test; no replica/job claims."""
+    if (index!=1318 or type(details) is not dict or details.get('client_authority_registered') is not True or
+        details.get('client_authority_index')!=index or details.get('client_authority_sample_received') is not True or
+        details.get('server_x4_motion_applied') is not False or details.get('checkpoint_identity_proven') is not False or
+        details.get('frame_identity_proven') is not False or details.get('synthetic_tcp_checkpoint_and_admission') is not True or
+        any(k in details for k in ('tcp_ack_after_client_replica','ship_creation_requested','source_queue_acked','artificial_seed'))):
+        raise RuntimeError('client authority read-only completion unconfirmed')
+    return True
+
+
 def run(args):
     if sys.platform!='linux' or os.geteuid()==0:raise ValueError('unprivileged Linux required')
     deferred=getattr(args,'defer_source_ack',False)
@@ -217,7 +228,10 @@ def run(args):
         inspect_context(require_load=True)
         details=coord.run({'deadline':deadline,'check':lambda:inspect_context(require_load=True)==set(role_names)})
         inspect_context(require_load=True)
-        if getattr(args,'saved_index',None) is not None:
+        if getattr(args,'client_authority_index',None) is not None:
+            if two_clients:raise RuntimeError('client authority pair required')
+            validate_client_authority_completion(details,args.client_authority_index)
+        elif getattr(args,'saved_index',None) is not None:
             if (two_clients or type(details) is not dict or details.get('saved_baseline_registered') is not True or
                 details.get('saved_index')!=args.saved_index or details.get('motion_client_bound_buffered') is not True or
                 details.get('motion_pose_applied') is not False or details.get('checkpoint_identity_proven') is not False or

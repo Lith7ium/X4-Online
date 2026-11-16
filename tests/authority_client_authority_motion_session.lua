@@ -9,7 +9,7 @@ local function rig(mode)
    assert(e==epoch and g==generation and i==1318)
    if mode=='reentrant' and session then pcall(function()session:tick()end)end
    return granted
-  end,fault=function()end,register=function(f)callback=f;return true end,
+  end,fault=function()end,audit=function()return mode~='audit_failure' end,register=function(f)callback=f;return true end,
   ipc_factory=function(x)return ipcmod.new({enabled=true,lease=lease,attempt=attempt,epoch=epoch,generation=generation,
    timeout=5,clock=function()return now end,guard=x.guard,fault=x.fault,net=net,
    saved_baseline={limit=10054,guard=function()return x.guard()end}})end,
@@ -50,8 +50,8 @@ local function rig(mode)
   input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|3';assert(session:tick());expected_request=3
  else assert(#out==3)end
  callback(nil,('e'):rep(32)..'|ok')
- if mode=='late_failure' then assert(session:state()=='failed' and #out==3);return end
+ if mode=='late_failure' or mode=='audit_failure' then assert(session:state()=='failed' and #out==3);return end
  assert(out[#out]=='S|'..lease..'|'..attempt..'|SAMPLE'..suffix..'|'..expected_request..'|1318|1|cluster_115_sector001_macro|10|1|2|3|-|-|-')
 end
-for _,mode in ipairs({'ok','late_failure','grant_revoked','reentrant','pull_before_register','foreign_index','no_sample_then_sample'})do rig(mode)end
+for _,mode in ipairs({'ok','late_failure','grant_revoked','reentrant','pull_before_register','foreign_index','no_sample_then_sample','audit_failure'})do rig(mode)end
 print('client authority local session IPC checks passed')

@@ -102,16 +102,24 @@ class SyntheticEngine:
     def save(self): self.path.write_bytes(gzip.compress(_XML.encode()));return self.path
 
 
-def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_guard=None,expected_jobs=1,motion_udp=None,allow_motion_apply=False):
+def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_guard=None,expected_jobs=1,motion_udp=None,allow_motion_apply=False,authority_udp=None,authority_grant=None):
     if expected_jobs is not None and (type(expected_jobs) is not int or not 1<=expected_jobs<=8):
         raise ValueError('invalid bounded job count')
     if delivery_action is not None and not callable(delivery_action):raise ValueError('invalid delivery action')
     if extra_guard is not None and not callable(extra_guard):raise ValueError('invalid extra guard')
     if type(allow_motion_apply) is not bool or (allow_motion_apply and motion_udp is None):raise ValueError('invalid one-shot apply mode')
+    if (authority_udp is None)!=(authority_grant is None) or (authority_udp is not None and (motion_udp is not None or expected_jobs is not None or delivery_action is None)):
+        raise ValueError('invalid authority diagnostic mode')
+    if authority_grant is not None:
+        from authority.experimental_tcp_client_authority_motion import grant_value
+        authority_grant=grant_value(authority_grant)
+        if (authority_grant['session_epoch']!=c['epoch'] or authority_grant['epoch']!=c['job_epoch'] or
+            authority_grant['generation']!=c['generation']):raise ValueError('authority context differs')
     job_epoch=event['epoch'] if event is not None else c['job_epoch']
     validate_udp(participant_udp);validate_udp(job_udp)
     sockets=[participant_udp,job_udp]
     if motion_udp is not None:validate_udp(motion_udp);sockets.append(motion_udp)
+    if authority_udp is not None:validate_udp(authority_udp);sockets.append(authority_udp)
     if len({s.getsockname() for s in sockets})!=len(sockets): raise ValueError('distinct UDP sockets required')
     if control.family!=socket.AF_UNIX or control.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM:
         raise ValueError('private control stream required')
@@ -161,7 +169,7 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
             if ack!={'version':1,'kind':'accepted','attempt_id':bound.offer.attempt_id}:
                 raise RuntimeError('synthetic admission not accepted')
             def participant():
-                bridge=None;adapter=None;motion_bridge=None
+                bridge=None;adapter=None;motion_bridge=None;authority_bridge=None;resumed=False
                 try:
                     ctl=LocalParticipantControl.__new__(LocalParticipantControl)
                     ctl.sock=participant_udp;ctl.lease=c['participant_lease'];ctl.peer=participant_peer
@@ -169,9 +177,12 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                     class GuardedControl:
                         def pause(self,handles): raise RuntimeError('unexpected pause in one-shot experiment')
                         def resume(self,handles):
+                            nonlocal resumed
                             if not peer_guard(participant_peer,participant_udp): raise RuntimeError('control peer changed')
                             r=ctl.resume(handles)
                             if not peer_guard(participant_peer,participant_udp): raise RuntimeError('control peer changed')
+                            if r is not True:raise RuntimeError('resume not confirmed')
+                            resumed=True
                             return r
                     bridge=ExperimentalParticipantJobIPC(job_udp,enabled=True,lease=c['lease'],attempt=c['attempt'],
                         epoch=job_epoch,generation=c['generation'],guard=guard,
@@ -186,11 +197,24 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                                                               timeout=min(25,deadline-time.monotonic()-1),apply_job=bridge,
                                                               apply_motion=motion_bridge,
                                                               apply_motion_once=motion_bridge.apply_once if allow_motion_apply else None,
-                                                              preflight_motion=motion_bridge.preflight if allow_motion_apply else None)
+                                                              preflight_motion=motion_bridge.preflight if allow_motion_apply else None,
+                                                              authority_grant=authority_grant,
+                                                              authority_guard=(lambda v: guard() and v==authority_grant) if authority_grant is not None else None,
+                                                              pull_authority_motion=(lambda: authority_bridge.pull()) if authority_grant is not None else None)
                     # Resume is the first command. READY arrives only after X4 resumed.
                     while not adapter.poll(.1): guard()
                     bridge.wait_ready()
                     if motion_bridge is not None:motion_bridge.wait_ready()
+                    if authority_grant is not None:
+                        from authority_client_authority_bind import bind_client_authority
+                        def grant(e,g,i,t,inc,session):
+                            return (guard() and (e,g,i,t,inc,session)==(authority_grant['epoch'],authority_grant['generation'],
+                                    authority_grant['index'],authority_grant['token'],authority_grant['incarnation'],authority_grant['session_epoch']))
+                        authority_bridge=bind_client_authority(authority_udp,process=process,lease=c['authority_lease'],
+                            attempt=c['authority_attempt'],epoch=job_epoch,generation=c['generation'],
+                            incarnation=authority_grant['incarnation'],token=authority_grant['token'],session_epoch=c['epoch'],
+                            guard=guard,running=lambda: resumed and guard(),grant=grant,timeout=min(20,deadline-time.monotonic()-5))
+                        authority_bridge.register_saved()
                     if expected_jobs is None:
                         while not stop.is_set():adapter.poll(.1);guard()
                     else:
@@ -208,10 +232,14 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                     if motion_bridge is not None:
                         try:motion_bridge.close()
                         except BaseException as error:failure.append(error)
+                    if authority_bridge is not None:
+                        try:authority_bridge.close()
+                        except BaseException as error:failure.append(error)
             thread=threading.Thread(target=participant,daemon=True);thread.start()
             guard();host.tick(.1);guard()
             if world.session.state!='running' or failure: raise RuntimeError('participant resume failed')
             delivery=ExperimentalTCPJobDelivery(host,enabled=True,timeout=min(28,deadline-time.monotonic()-1))
+            if authority_grant is not None:delivery.bind_test_incarnation(handle,authority_grant['incarnation'],enabled=True)
             members=delivery.membership();seen=[]
             if len(members)!=1: raise RuntimeError('unexpected admitted set')
             def ack(peer,received):

@@ -42,7 +42,7 @@ class TCPToLua(unittest.TestCase):
      except BaseException as exc:
       if not stop.is_set():errors.append(exc)
     thread=threading.Thread(target=participant);thread.start();case.case.host.tick(.1)
-    delivery=ExperimentalTCPJobDelivery(case.case.host,enabled=True,timeout=3);delivery._incarnations[1]=grant['incarnation']
+    delivery=ExperimentalTCPJobDelivery(case.case.host,enabled=True,timeout=3);delivery.bind_test_incarnation(1,grant['incarnation'],enabled=True)
     owner=ExperimentalTCPClientAuthorityMotion(delivery,enabled=True,grant=grant,guard=lambda g:g==grant and proc.poll() is None)
     sample=owner.pull()
     self.assertIsNotNone(sample);self.assertEqual((sample['index'],sample['sequence'],sample['sector_macro'],sample['velocity']),

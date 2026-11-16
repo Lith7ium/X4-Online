@@ -153,7 +153,13 @@ function X4LAN_PARTICIPANT_JOB_TICK()
        X4LAN_AUTHORITY_MARKER_READY()==true and not failed and job:state()=='ready' and not ffi.C.IsGamePaused() and
        (not motion or motion:state()=='ready')
      end,
-     grant=function(a,b,i)return a==e and b==g and i==1318 and grant(a,b,i,grant_token,incarnation,world)==true end,fault=fail}))
+     grant=function(a,b,i)return a==e and b==g and i==1318 and grant(a,b,i,grant_token,incarnation,world)==true end,
+     audit=function(index,sequence,sector,t,px,py,pz)
+      if index~=1318 or type(sequence)~='number' or sequence<1 or sequence%1~=0 or sector~='cluster_115_sector001_macro' then return false end
+      for _,v in ipairs({t,px,py,pz})do if type(v)~='number' or v~=v or v==math.huge or v==-math.huge then return false end end
+      DebugError(('[X4LAN] AUTH_CLIENT_AUTHORITY SAMPLE %d %d %s %.17g %.17g %.17g %.17g'):format(index,sequence,sector,t,px,py,pz))
+      return true
+     end,fault=fail}))
     assert(client_authority:start())
    end
    if client_authority then assert(client_authority:tick())end

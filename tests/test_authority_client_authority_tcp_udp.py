@@ -59,7 +59,7 @@ class AuthorityTCPUDP(unittest.TestCase):
    self.assertFalse(any(t.is_alive() for t in workers));self.assertEqual(errors,[])
   self.addCleanup(finish)
   case.case.host.tick(.1);delivery=ExperimentalTCPJobDelivery(case.case.host,enabled=True,timeout=1)
-  delivery._incarnations[1]=grant['incarnation']
+  delivery.bind_test_incarnation(1,grant['incarnation'],enabled=True)
   owner=ExperimentalTCPClientAuthorityMotion(delivery,enabled=True,grant=grant,guard=lambda g:g==grant)
   sample=owner.pull()
   self.assertEqual(sample['index'],1318);self.assertEqual(sample['sequence'],1);self.assertIsNone(sample['velocity'])

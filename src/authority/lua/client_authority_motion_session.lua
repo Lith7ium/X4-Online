@@ -6,6 +6,7 @@ function M.new(o)
  local c={};for k,v in pairs(o)do c[k]=v end
  for _,k in ipairs({'guard','grant','register','ipc_factory','reader_factory','fault'})do assert(type(c[k])=='function',k)end
  assert(c.index==1318 and c.baseline==10054)
+ assert(c.audit==nil or type(c.audit)=='function')
  local state,busy='new',false;local ipc,reader,staged,registered=nil,nil,nil,false
  local api={}
  local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
@@ -58,6 +59,10 @@ function M.new(o)
    assert(check() and not staged and reader:event(value)==true and state=='ready' and check())
    if staged then
     assert(registered and ipc:requested() and check());local sample=staged;staged=nil
+    if c.audit then
+     local ok,a=pcall(c.audit,sample.index,sample.sequence,sample.sector_macro,sample.source_time,sample.x,sample.y,sample.z)
+     assert(ok and a==true and state=='ready' and check())
+    end
     assert(ipc:complete(sample) and state=='ready' and check())
    end
   end);busy=false;if not ok then return fail('event')end;return true

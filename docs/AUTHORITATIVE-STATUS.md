@@ -326,6 +326,15 @@ an X4 ID-conversion error; an exact local reference roundtrip was added before
 the successful run, but the precise original callsite was not logged. XML
 schema validation remains outstanding. [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md#optional-saved-registry-diagnostic).
 
+A separate Linux/Linux client-authority diagnostic reported two saved NPC
+position samples traveling from the client through local IPC to a synthetic
+TCP server. The client X4 log records both positions and client game times;
+the saved worker/coordinator result reports receipt, an unknown first velocity
+and a second velocity derived from the position difference per client game
+second. The test grant and admission are synthetic, and the server X4 does not
+apply the samples. This does not establish common frames, HA handover,
+gameplay, Windows or Internet operation. [Details](../tools/dev/AUTHORITY-CLIENT-AUTHORITY-PAIR.md).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

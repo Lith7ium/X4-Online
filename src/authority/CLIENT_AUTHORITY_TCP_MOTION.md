@@ -39,6 +39,7 @@ reader, bootstrap and sampler through native loopback UDP and a real local TCP
 participant. Its `/proc` checks bind the spawned Lua test process, not X4; MD,
 FFI-dependent game state, time and the authority grant are simulated. The outer
 participant onUpdate and `new_x4()` wiring are not exercised. TCP admission is
-a test fixture and the participant incarnation is injected directly into its
-delivery owner; neither actual assignment nor handover is demonstrated. These tests do not
+a synthetic test fixture; its fresh test incarnation is bound once to the
+admitted handle by the explicit opt-in binder. Neither actual assignment nor
+handover is demonstrated. These tests do not
 establish native X4, Internet, Windows or shared-world behavior.

@@ -26,7 +26,7 @@ class AuthorityTCP(unittest.TestCase):
   def finish():stop.set();thread.join(2);self.assertFalse(thread.is_alive())
   self.addCleanup(finish)
   case.case.host.tick(.1);delivery=ExperimentalTCPJobDelivery(case.case.host,enabled=True,timeout=1)
-  delivery._incarnations[1]=grant['incarnation']
+  delivery.bind_test_incarnation(1,grant['incarnation'],enabled=True)
   owner=ExperimentalTCPClientAuthorityMotion(delivery,enabled=True,grant=grant,guard=server_guard)
   return case,owner,delivery,calls,errors
  def test_empty_then_two_exact_samples_over_one_admitted_socket(self):
