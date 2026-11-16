@@ -158,7 +158,7 @@ class ServerClientTests(unittest.TestCase):
 
     def test_overlap_guards_other_client_while_each_is_finalized(self):
         active=[]; events=[]
-        world=SimpleNamespace(session=SimpleNamespace(state='running', players=((1,'a'),(2,'b')),
+        world=SimpleNamespace(session=SimpleNamespace(state='running', pending=None, players=((1,'a'),(2,'b')),
                                                       ready_players=((1,'a'),(2,'b'))))
         control=SimpleNamespace(_peers={'a':object(),'b':object()})
         def verify():
@@ -176,15 +176,24 @@ class ServerClientTests(unittest.TestCase):
             control._peers.pop('a'); world.session.players=((2,'b'),); world.session.ready_players=((2,'b'),)
         host=SimpleNamespace(tick=tick)
         checkpoint=SimpleNamespace(checkpoint_id='new',sha256='b'*64,marker='c'*32)
+        def observe(_deadline, _tick, check):
+            events.append(('clock',tuple(a.participant.server_tcp for a in active)))
+            check()
+            return {'server_game_time_before':1.0,'server_game_time_after':2.0}
+        clock=SimpleNamespace(observe=observe)
         with patch.object(subject.recovery.tcp,'await_eof') as eof, \
              patch.object(subject,'settle_departure',return_value=checkpoint) as settle:
             result=supervisor.run_overlapping_diagnostics(start=start,active_clients=active,world=world,
-                host=host,control=control,deadline=time.monotonic()+2,verify=verify)
+                host=host,control=control,deadline=time.monotonic()+2,verify=verify,clock=clock)
         self.assertTrue(result['diagnostic_overlap_confirmed'])
         self.assertTrue(result['diagnostic_remaining_session_running'])
         self.assertEqual(result['diagnostic_overlap_clients'][1]['departure_checkpoint_id'],'new')
         self.assertIn(('finish','a',('b',)),events)
         self.assertIn(('finish','b',()),events)
+        self.assertIn(('clock',('b',)),events)
+        self.assertLess(events.index(('finish','a',('b',))),events.index(('clock',('b',))))
+        self.assertLess(events.index(('clock',('b',))),events.index(('finish','b',())))
+        self.assertEqual(result['diagnostic_remaining_server_clock']['server_game_time_after'],2.0)
         self.assertEqual(active,[])
         eof.assert_called_once(); settle.assert_called_once()
 

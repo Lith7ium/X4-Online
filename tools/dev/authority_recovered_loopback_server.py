@@ -236,7 +236,7 @@ def validate_overlap_identities(first, second):
             len({identities[0][0], identities[0][1], identities[1][1]}) != 3):
         raise ValueError('diagnostic X4 identities are not three distinct processes')
 
-def run_overlapping_diagnostics(*, start, active_clients, world, host, control, deadline, verify):
+def run_overlapping_diagnostics(*, start, active_clients, world, host, control, deadline, verify, clock=None):
     """Own two overlapping diagnostics and settle their ordered departures."""
     import authority_recovered_server_client as client
     if active_clients: raise ValueError('diagnostics must start with an empty active set')
@@ -257,6 +257,17 @@ def run_overlapping_diagnostics(*, start, active_clients, world, host, control, 
     if (world.session.state != 'running' or len(world.session.players) != 1 or
             len(world.session.ready_players) != 1):
         raise RuntimeError('remaining diagnostic participant did not stay running')
+    clock_result = None
+    if clock is not None:
+        remaining = tuple(world.session.ready_players)
+        def check_remaining():
+            verify()
+            if (world.session.state != 'running' or world.session.pending is not None or
+                    tuple(world.session.ready_players) != remaining or len(world.session.players) != 1 or
+                    first_peer in control._peers):
+                raise RuntimeError('remaining participant changed during clock observation')
+        def tick(): host.tick(min(.1, client.recovery.marked.remaining(deadline)))
+        clock_result = clock.observe(deadline, tick, check_remaining)
     second = active_clients.pop(0)
     second_result = second.finish()
     baseline = client.settle_departure(host, world, control, second.participant.server_tcp,
@@ -265,8 +276,10 @@ def run_overlapping_diagnostics(*, start, active_clients, world, host, control, 
                          departure_checkpoint_sha256=baseline.sha256,
                          departure_checkpoint_marker=baseline.marker)
     validate_overlap_identities(first_result, second_result)
-    return {'diagnostic_overlap_confirmed':True, 'diagnostic_remaining_session_running':True,
-            'diagnostic_overlap_clients':[first_result, second_result]}
+    result = {'diagnostic_overlap_confirmed':True, 'diagnostic_remaining_session_running':True,
+              'diagnostic_overlap_clients':[first_result, second_result]}
+    if clock_result is not None: result['diagnostic_remaining_server_clock'] = clock_result
+    return result
 
 def run(args):
     if sys.platform != 'linux' or os.geteuid() == 0:
@@ -293,7 +306,7 @@ def run(args):
     result = {'supervisor_version':1, 'success':False, 'scope':'isolated recovered Linux X4, loopback only; not gameplay or Internet',
               'windows_tested':False, 'internet_tested':False, 'exact_loaded_file_proven':False,
               'engine_operations':operations}
-    processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=None
+    processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=clock_sock=None
     endpoint=out/'endpoint.json'; deadline=time.monotonic()+args.timeout
     watch=target=checkpoint=expected=None
     diagnostics = []
@@ -314,6 +327,13 @@ def run(args):
         sock.bind(('127.0.0.1', 0)); sock.settimeout(.25)
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
         protected = bridge.install_probe(case, profile, sock.getsockname()[1], lease, epoch)
+        clock = None
+        if getattr(args, 'diagnostic_overlap', False):
+            import authority_overlap_clock
+            clock_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            clock_sock.bind(('127.0.0.1', 0))
+            protected.append(authority_overlap_clock.install(case, clock_sock.getsockname()[1]))
+            clock = authority_overlap_clock.OverlapClock(clock_sock, lease)
         protected.append(bridge.install_saved_identity_fixture(case, fixture))
         expected = {path:live.sha(path) for path in protected}
         store_path = out/'checkpoints'; store_path.mkdir(mode=0o700)
@@ -424,7 +444,7 @@ def run(args):
                     check_server_base=server_overlap,
                     server_out=out, cancel_check=cancel_overlap)
             result.update(run_overlapping_diagnostics(start=start_overlap, active_clients=active_clients,
-                world=world, host=host, control=control, deadline=deadline, verify=verify_overlap))
+                world=world, host=host, control=control, deadline=deadline, verify=verify_overlap, clock=clock))
             overlap_guard[0] = None
         if getattr(args, 'diagnostic_client', False) or diagnostic_count == 2:
             # Opt-in local test clients, all resources still registered to
@@ -498,6 +518,9 @@ def run(args):
         if sock is not None:
             try: sock.close()
             except BaseException as error: errors.append('socket cleanup: '+type(error).__name__)
+        if clock_sock is not None:
+            try: clock_sock.close()
+            except BaseException as error: errors.append('clock socket cleanup: '+type(error).__name__)
         helpers_stopped = cleanup_diagnostics(diagnostics, errors)
         remaining = stop_owned_processes(processes, helpers_stopped, errors)
         result['owned_processes_remaining']=remaining

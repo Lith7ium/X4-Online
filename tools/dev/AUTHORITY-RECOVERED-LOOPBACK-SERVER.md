@@ -215,8 +215,28 @@ gameplay, universe consistency, Windows or Internet operation.
 A later guard change reduces nested duplicate server-file hashes in the overlap
 path. Focused offline tests check the retained file, process, worker and peer
 checks and failure handling; the timing of every individual hash is not
-identical to the recorded run. The change has not been measured in a native
-X4 run, so its effect on native runtime is unknown.
+identical to the recorded run. Its effect on native runtime has not been
+measured.
+
+The overlap diagnostic now installs a separate, read-only loopback clock
+observer in its disposable server case. After the first EOF and while the
+remaining participant is guarded, it requests two correlated observations of
+the server X4 pause flag and game clock. It requires both to report running
+and the second game time to increase before allowing the second departure.
+Focused loopback and supervisor tests use simulated observer responses.
+
+A subsequent isolated Linux run with this observer is recorded in
+`.local/authority-overlap-clock-once-01`. After the first participant's EOF
+and while the supervisor reported one remaining participant, it reports two
+correlated, unpaused server-X4 game-time observations: `30.117642696000075`
+and `34.040424454000075`. After the second departure it reports a paused
+checkpoint `checkpoint-774a1c96f5544dfaa5b1ce3c5f88e9f2`, SHA-256
+`21c0cce9ec5d6bd97abc5f7ec640c0f0556e783b0838bc99cc8c2dde11861e33`,
+and no owned processes remaining; the orchestrator reports cleanup confirmed.
+The later accept-loop counters exclude the two diagnostic clients. These are
+supervisor results with no independent UDP or TCP packet capture. The samples
+do not establish uninterrupted progress between them, exact loaded file
+consumption, gameplay, Windows or Internet operation.
 
 ## Internal diagnostic procedure
 

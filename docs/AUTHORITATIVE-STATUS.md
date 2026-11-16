@@ -30,6 +30,15 @@ repeatedly hash staged inputs; sampled process I/O showed high read activity,
 but its impact on elapsed time was not measured. See the
 [overlapping-client run](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#recovered-server-with-two-overlapping-real-linux-clients).
 
+A later isolated Linux overlap run included a read-only server clock observer.
+After the first client's EOF, while the supervisor reported one remaining
+participant, it reports two unpaused X4 game-time samples rising from
+`30.117642696000075` to `34.040424454000075`. After the final departure it
+reports a paused checkpoint and cleanup. No independent UDP or TCP packet
+capture establishes these supervisor results. The two samples do not prove
+uninterrupted progress or gameplay; Windows and Internet remain untested. See
+the same [overlap notes](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#recovered-server-with-two-overlapping-real-linux-clients).
+
 One isolated Linux loopback run exercised a recovered X4 server with two
 sequential TCP save downloads, then restarted a second X4 server from the first
 server's confirmed final checkpoint and downloaded another save. The restart
