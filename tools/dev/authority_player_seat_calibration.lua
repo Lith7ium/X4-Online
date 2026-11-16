@@ -32,12 +32,12 @@ function M.new(o)
   return true
  end
  local function request()
-  if not check() then return false end
+  local guarded,reason=check();if not guarded then return false,reason end
   local request_id=o.nonce..'-'..slot
   state='waiting';generation={};deadline=last+o.timeout
   if not finite(deadline) then return fail('deadline') end
   local ok,sent=call(o.issue,SCREEN,'Read',{epoch=o.epoch,slot=slot,request_id=request_id})
-  if not ok then return false end
+  if not ok then return false,sent end
   if sent~=true then return fail('dispatch') end
   return check()
  end
@@ -47,7 +47,7 @@ function M.new(o)
  end
  function api:response(value)
   if state~='waiting' then return fail('unexpected_response') end
-  if not check() then return false end
+  local guarded,reason=check();if not guarded then return false,reason end
   if type(value)~='string' or #value>256 then return fail('response_type') end
   local request_id,epoch,raw_slot,actor,sector,reservation=value:match('^([0-9a-f%-]+)|([0-9a-f]+)|([012])|(0[xX][0-9a-fA-F]+)|(0[xX][0-9a-fA-F]+)|([a-z]+)$')
   if request_id~=o.nonce..'-'..slot or epoch~=o.epoch or raw_slot~=tostring(slot) or
@@ -55,12 +55,12 @@ function M.new(o)
    return fail('response_mismatch')
   end
   local ok,sample=call(o.inspect,actor,sector)
-  if not ok then return false end
+  if not ok then return false,'inspect_'..tostring(sample) end
   if type(sample)~='table' or (sample.assigned~='present' and sample.assigned~='nil_observed') or
      not finite(sample.x) or not finite(sample.y) or not finite(sample.z) or not finite(sample.hull) then
    return fail('getter_unavailable')
   end
-  if not check() then return false end
+  guarded,reason=check();if not guarded then return false,reason end
   local normalized_actor=sample.actor_key;local normalized_sector=sample.sector_key
   if type(normalized_actor)~='string' or normalized_actor=='' or type(normalized_sector)~='string' or normalized_sector=='' then
    return fail('identity_unavailable')

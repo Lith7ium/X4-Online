@@ -7,7 +7,19 @@ function M.new(o)
  assert(token(o.epoch) and token(o.nonce) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
  for _,n in ipairs({'guard','issue','make_seat','log','live'}) do assert(type(o[n])=='function') end
  local phase='new';local failed=false;local busy=false;local first,last,game,actor,sector,seat,result
- local function fail() if not failed then failed=true;phase='failed';pcall(o.log,'ERROR FAULT') end;return false end
+ local reasons={callback_failed=true,state_changed=true,reentrant=true,clock_failed=true,
+  clock_or_timeout=true,guard_failed=true,pause_or_process_guard=true,deadline=true,
+  dispatch=true,not_idle=true,unexpected_response=true,response_type=true,response_mismatch=true,
+  getter_unavailable=true,identity_unavailable=true,duplicate_ship=true,
+  positive_control_inconclusive=true,sector_mismatch=true,not_waiting=true,md_refused=true,
+  inspect_callback_failed=true,inspect_state_changed=true,inspect_reentrant=true}
+ local function fail(code)
+  if not failed then failed=true;phase='failed';pcall(o.log,'ERROR '..code) end
+  return false
+ end
+ local function seat_fail(prefix,reason)
+  return fail(prefix..'_'..(type(reason)=='string' and reasons[reason] and reason:upper() or 'UNKNOWN'))
+ end
  local function checked()
   local t,g,a,s=o.guard()
   assert(finite(t) and t>=0 and finite(g) and g>=0 and type(a)=='string' and a~='' and type(s)=='string' and s~='')
@@ -20,22 +32,32 @@ function M.new(o)
    last=t2
   end
  end
- local function action(fn)
-  if failed or busy then return fail() end
-  busy=true;local ok=pcall(function() checked();fn();assert(not failed);checked() end);busy=false
-  if not ok or failed then return fail() end
+ local function action(fn,label)
+  if failed then return false end
+  if busy then return fail('REENTRANT') end
+  busy=true
+  local ok=pcall(checked)
+  if not ok or failed then busy=false;return fail('PRE_GUARD') end
+  local stage=label
+  local function setstage(s) stage=s end
+  ok=pcall(fn,setstage)
+  if not ok or failed then busy=false;return fail(stage) end
+  ok=pcall(checked);busy=false
+  if not ok or failed then return fail('POST_GUARD') end
   return true
  end
  local api={}
  function api:tick()
-  return action(function()
+  return action(function(setstage)
    if phase=='new' then
     phase='preflight';assert(o.issue('X4AuthorityPlayerSeatExperiment','Preflight',{epoch=o.epoch,request_id=o.nonce})==true)
    elseif phase=='create' then
     phase='created_wait';assert(o.issue('X4AuthorityPlayerSectorFixture','Create',{epoch=o.epoch})==true)
    elseif phase=='seat_start' then
-    seat=o.make_seat();assert(seat);phase='seat_wait';assert(seat:start())
-   elseif phase=='seat_wait' then assert(seat:tick())
+    setstage('SEAT_CONSTRUCT');seat=o.make_seat();assert(seat);phase='seat_wait'
+    setstage('SEAT_START');local ok,why=seat:start();if not ok then seat_fail('SEAT_START',why);error('seat') end
+   elseif phase=='seat_wait' then
+    setstage('SEAT_TICK');local ok,why=seat:tick();if not ok then seat_fail('SEAT_TICK',why);error('seat') end
    elseif phase=='report' then
     assert(result and result.classification=='inconclusive' and result.positive_control_observed==true and
      result.seat_free_proven==false and result.player_control_proven==false and result.save_authorized==false)
@@ -44,23 +66,29 @@ function M.new(o)
     assert(r[2].assigned=='nil_observed' and r[2].reservation=='empty' and r[3].assigned=='nil_observed' and r[3].reservation=='empty')
     checked();phase='done';o.log('POSITIVE');o.log('NEGATIVE1');o.log('NEGATIVE2');o.log('DONE')
    elseif phase~='preflight' and phase~='created_wait' and phase~='done' then error('state') end
-  end)
+  end,'TICK')
  end
  function api:preflight(v)
   return action(function()
    assert(phase=='preflight' and v==o.nonce..'|'..o.epoch..'|ok');phase='create';o.log('PREFLIGHT')
-  end)
+  end,'PREFLIGHT_RESULT')
  end
  function api:created(v)
-  return action(function() assert(phase=='created_wait' and type(v)=='number' and v==2);phase='seat_start';o.log('CREATED') end)
+  return action(function() assert(phase=='created_wait' and type(v)=='number' and v==2);phase='seat_start';o.log('CREATED') end,'CREATED_RESULT')
  end
  function api:response(v)
   return action(function()
-   assert(phase=='seat_wait' and seat);local ok,r=seat:response(v);assert(ok and not failed)
+   assert(phase=='seat_wait' and seat);local ok,r=seat:response(v)
+   if not ok then seat_fail('SEAT_RESULT',r);error('seat') end
+   assert(not failed)
    if seat:state()=='done' then assert(type(r)=='table');result=r;phase='report' end
-  end)
+  end,'SEAT_RESULT')
  end
- function api:refused() return fail() end
+ function api:refused(source)
+  if source=='preflight' then return fail('PREFLIGHT_REFUSED') end
+  if source=='fixture' then return fail('FIXTURE_REFUSED') end
+  return fail('SEAT_REFUSED')
+ end
  function api:state() return phase end
  return api
 end
@@ -102,10 +130,10 @@ local app=M.new{enabled=true,epoch=epoch,nonce=nonce,timeout=cfg.authority_playe
   timeout=cfg.authority_player_seat_timeout,expected_save_path=cfg.authority_read_save_path} end,
  log=function(s) DebugError('[X4LAN] AUTH_PLAYER_SEAT_EXPERIMENT '..s) end}
 RegisterEvent('X4AuthorityPlayerSeatExperiment.Preflight',function(_,v) app:preflight(v) end)
-RegisterEvent('X4AuthorityPlayerSeatExperiment.Refused',function() app:refused() end)
+RegisterEvent('X4AuthorityPlayerSeatExperiment.Refused',function() app:refused('preflight') end)
 RegisterEvent('X4AuthorityPlayerSectorFixture.Created',function(_,v) app:created(v) end)
-RegisterEvent('X4AuthorityPlayerSectorFixture.Refused',function() app:refused() end)
+RegisterEvent('X4AuthorityPlayerSectorFixture.Refused',function() app:refused('fixture') end)
 RegisterEvent('X4AuthorityPlayerSeatCalibration.Result',function(_,v) app:response(v) end)
-RegisterEvent('X4AuthorityPlayerSeatCalibration.Refused',function() app:refused() end)
+RegisterEvent('X4AuthorityPlayerSeatCalibration.Refused',function() app:refused('seat') end)
 function X4LAN_PLAYER_SEAT_EXPERIMENT_TICK() if not app:tick() then error('player seat experiment failed') end end
 return M

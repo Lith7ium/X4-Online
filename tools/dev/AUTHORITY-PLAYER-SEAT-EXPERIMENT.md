@@ -38,3 +38,23 @@ fixture-creation handler remains one-shot and disabled in normal installs;
 `PlayerFixtureBridge.save()` remains blocked. The experiment should be run
 only from a shell after separate review of the current changes and environment;
 no native result or Windows/Internet claim follows from the synthetic tests.
+
+## First native attempt
+
+The isolated Linux attempt `.local/authority-player-seat-01` loaded the pinned
+checkpoint, observed the expected marker, read slot 2 with a pilot, and logged
+pause and preflight. It then logged two player-owned test-ship references and
+`CREATED`, followed by the generic `ERROR FAULT`; it did not reach a successful
+seat result. The result was unsuccessful and reported no owned processes left.
+No checkpoint was requested. The logs do not determine whether the post-create
+guard, seat initialization, MD response, or a subsequent read failed. They do
+not establish an empty pilot seat or playable controls.
+
+For a later isolated attempt, the owner now emits only fixed error categories:
+`PRE_GUARD`, `POST_GUARD`, `SEAT_CONSTRUCT`, `SEAT_START_*`, `SEAT_TICK_*`,
+`SEAT_RESULT_*`, or the corresponding event/refusal/reentrancy category. Seat
+reasons are restricted to a fixed allowlist; other values become `UNKNOWN`.
+An `INSPECT_CALLBACK_FAILED` category can represent an invalid getter, actor,
+sector, conversion or other inspection failure and does not identify which one.
+Exception text, actor values and request tokens are never placed in these new
+error categories. The diagnostic remains fail-closed and does not retry.

@@ -11,7 +11,7 @@ function ConvertIDTo64Bit(value) return ffi.new('uint64_t',value) end
 function GetCurRealTime() return 1 end
 function GetComponentData(id,field)
  if field=='hullpercent' then return 100 end
- if field=='assignedpilot' then if tonumber(id)==10 then return ffi.new('uint64_t',99) end;return nil end
+ if field=='assignedpilot' then if arg[2]=='getter_error' then error('sensitive getter exception') end;if tonumber(id)==10 then return ffi.new('uint64_t',99) end;return nil end
  error('invalid getter')
 end
 function X4LAN_SECTOR_READ_EXPORT() return ffi.new('uint64_t',10),ffi.new('uint64_t',11),2,3 end
@@ -30,8 +30,13 @@ X4LAN_PLAYER_SEAT_EXPERIMENT_TICK();assert(requests[2][2]=='Create')
 send('X4AuthorityPlayerSectorFixture.Created',2);X4LAN_PLAYER_SEAT_EXPERIMENT_TICK()
 assert(requests[3][3].slot==0)
 send('X4AuthorityPlayerSeatCalibration.Result',row(0,'0xa','0xb','occupied'))
+if arg[2]=='getter_error' then
+ assert(logs[#logs]:match(' ERROR SEAT_RESULT_INSPECT_CALLBACK_FAILED$'))
+ assert(not table.concat(logs):find('sensitive',1,true))
+ assert(not pcall(X4LAN_PLAYER_SEAT_EXPERIMENT_TICK));return
+end
 send('X4AuthorityPlayerSeatCalibration.Result',row(1,'0xc','0xd','empty'))
 send('X4AuthorityPlayerSeatCalibration.Result',row(2,'0xe','0xb','empty'))
 X4LAN_PLAYER_SEAT_EXPERIMENT_TICK();assert(logs[#logs]:match(' DONE$'))
 send('X4AuthorityPlayerSeatCalibration.Result',row(2,'0xe','0xb','empty'))
-assert(logs[#logs]:match(' ERROR FAULT$'));assert(not pcall(X4LAN_PLAYER_SEAT_EXPERIMENT_TICK))
+assert(logs[#logs]:match(' ERROR SEAT_RESULT$'));assert(not pcall(X4LAN_PLAYER_SEAT_EXPERIMENT_TICK))
