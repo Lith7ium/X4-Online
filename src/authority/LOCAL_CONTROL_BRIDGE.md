@@ -30,6 +30,12 @@ The UI retains the slot until a verified checkpoint has been published and the
 Lua controller explicitly acknowledges `confirm_save`. Load confirmation and
 player authentication are still external and are not established by this bridge.
 
+An exchange's local timeout includes the bounded pre-command HELLO drain. An
+external supervisor deadline is not atomically bound through command dispatch;
+the supervisor must handle an operation that crosses that deadline. Deadline
+checks cannot interrupt an in-progress filesystem operation or cancel an
+already dispatched X4 operation.
+
 Packets are local experimental control messages protected by a per-run secret,
 not a security boundary against a same-user process. There are no retries. Loss,
 timeout, malformed receipts, verification failure, and process failure leave the

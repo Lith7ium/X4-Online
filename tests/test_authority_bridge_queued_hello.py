@@ -76,4 +76,57 @@ class QueuedHelloTests(unittest.TestCase):
         with self.assertRaises(BlockingIOError):self.peer.recvfrom(769)
         with self.assertRaisesRegex(RuntimeError,'fenced'):adapter._exchange(self.verify,self.verified)
 
+    def test_local_deadline_expiring_during_or_after_drain_sends_nothing(self):
+        for queue_hello in (False, True):
+            with self.subTest(queue_hello=queue_hello):
+                self.recv.settimeout(0.13)
+                if queue_hello:
+                    self.peer.sendto(self.hello,self.recv.getsockname())
+                adapter=self.adapter();adapter._timeout=0.2
+                # The third reading falls either on the next drain iteration
+                # or on the pre-send check after observing an empty queue.
+                with patch('authority.local_control_bridge.time.monotonic',side_effect=(10.0,10.0,10.3)):
+                    with self.assertRaises(TimeoutError):adapter._exchange(self.verify,self.verified)
+                self.assertEqual(self.recv.gettimeout(),0.13)
+                self.peer.settimeout(0.05)
+                with self.assertRaises(socket.timeout):self.peer.recvfrom(769)
+                with self.assertRaisesRegex(RuntimeError,'fenced'):adapter._exchange(self.verify,self.verified)
+
+    def test_receipt_read_after_deadline_is_not_accepted(self):
+        adapter=self.adapter();adapter._timeout=0.2
+        self.recv.settimeout(0.13);errors=[]
+        def answer():
+            try:
+                data,address=self.peer.recvfrom(769)
+                if data!=self.verify.encode():raise AssertionError('unexpected command')
+                self.peer.sendto(self.verified.encode(),address)
+            except BaseException as error:errors.append(error)
+        worker=threading.Thread(target=answer);worker.start()
+        try:
+            with patch('authority.local_control_bridge.time.monotonic',side_effect=(10.0,10.0,10.0,10.0,10.3)):
+                with self.assertRaises(TimeoutError):adapter._exchange(self.verify,self.verified)
+            worker.join(2);self.assertFalse(worker.is_alive());self.assertFalse(errors)
+            self.assertEqual(self.recv.gettimeout(),0.13)
+            with self.assertRaisesRegex(RuntimeError,'fenced'):adapter._exchange(self.verify,self.verified)
+        finally:
+            worker.join(2)
+
+    def test_send_timeout_uses_remaining_budget_and_restores_socket(self):
+        self.recv.settimeout(0.13)
+        adapter=self.adapter();adapter._timeout=0.2
+        class TimeoutDuringSend:
+            def __init__(self,sock):self.sock=sock;self.send_timeout=None
+            def __getattr__(self,name):return getattr(self.sock,name)
+            def sendto(self,command,peer):
+                self.send_timeout=self.sock.gettimeout()
+                raise socket.timeout('simulated send timeout')
+        wrapped=TimeoutDuringSend(self.recv);adapter._sock=wrapped
+        with patch('authority.local_control_bridge.time.monotonic',side_effect=(10.0,10.0,10.1)):
+            with self.assertRaises(socket.timeout):adapter._exchange(self.verify,self.verified)
+        self.assertAlmostEqual(wrapped.send_timeout,0.1)
+        self.assertEqual(self.recv.gettimeout(),0.13)
+        self.peer.settimeout(0.05)
+        with self.assertRaises(socket.timeout):self.peer.recvfrom(769)
+        with self.assertRaisesRegex(RuntimeError,'fenced'):adapter._exchange(self.verify,self.verified)
+
 if __name__=='__main__':unittest.main()

@@ -3,7 +3,8 @@
 Blocking methods implement WorldCoordinator's synchronous engine contract over
 asynchronous Lua receipts. Use only with a disposable, isolated profile and a
 fenced X4 process. A timeout permanently poisons this adapter: it does not fence
-an already dispatched X4 operation. The caller serializes every access.
+an already dispatched X4 operation. The caller serializes every access. Checks
+around I/O are observations, not atomic dispatch fences.
 """
 import re
 import socket
@@ -50,6 +51,14 @@ class LocalControlBridge:
         if self._poisoned:
             raise RuntimeError('bridge is fenced after an indeterminate operation')
         self._poisoned = True
+        deadline = time.monotonic() + self._timeout
+
+        def remaining():
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise TimeoutError('native control receipt timed out; engine state indeterminate')
+            return seconds
+
         old_timeout = self._sock.gettimeout()
         try:
             # Save verification can leave periodic HELLOs filling the receive
@@ -58,21 +67,19 @@ class LocalControlBridge:
             self._sock.setblocking(False)
             hello = f'HELLO|{self._lease}|{self._epoch}'.encode('ascii')
             for _ in range(_MAX_QUEUED_PACKETS):
+                remaining()
                 try: data, peer = self._sock.recvfrom(769)
                 except BlockingIOError: break
                 if peer == self._peer and data != hello:
                     raise RuntimeError('unexpected native control receipt before command')
             else:
                 raise RuntimeError('native control receive queue did not drain')
-            self._sock.settimeout(old_timeout)
+            self._sock.settimeout(remaining())
             self._sock.sendto(command.encode('ascii'), self._peer)
-            deadline = time.monotonic() + self._timeout
             while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError('native control receipt timed out; engine state indeterminate')
-                self._sock.settimeout(remaining)
+                self._sock.settimeout(remaining())
                 data, peer = self._sock.recvfrom(769)
+                remaining()
                 if peer != self._peer:
                     continue
                 if data == f'HELLO|{self._lease}|{self._epoch}'.encode('ascii'):
