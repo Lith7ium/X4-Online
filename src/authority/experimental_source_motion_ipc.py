@@ -125,10 +125,30 @@ class ExperimentalSourceMotionIPC:
             raise RuntimeError('source motion X4 peer ownership changed')
         if self._saved_guard is not None:
             good=self._saved_fence()
-            if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
-                self._motion._delivery._host._failed or threading.get_ident()!=self._owner or
-                time.monotonic()>=deadline or self._sock.getsockname()!=self._local or self._sock.getpeername()!=self._peer):
-                raise RuntimeError('saved baseline guard failed')
+            # Evaluate the existing conditions in the same short-circuit order.
+            # The fixed suffix distinguishes the observed failure without
+            # printing checkpoint data, socket addresses, or callback errors.
+            reason = None
+            if good is not True:
+                reason = 'guard_false'
+            elif self._state != phase:
+                reason = 'phase_changed'
+            elif self._motion._failed:
+                reason = 'motion_failed'
+            elif self._motion._delivery._failed:
+                reason = 'delivery_failed'
+            elif self._motion._delivery._host._failed:
+                reason = 'host_failed'
+            elif threading.get_ident() != self._owner:
+                reason = 'thread_changed'
+            elif time.monotonic() >= deadline:
+                reason = 'operation_deadline'
+            elif self._sock.getsockname() != self._local:
+                reason = 'local_socket_changed'
+            elif self._sock.getpeername() != self._peer:
+                reason = 'peer_socket_changed'
+            if reason is not None:
+                raise RuntimeError('saved baseline guard failed: ' + reason)
             good=self._call_fenced(self._guard)
             if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
                 self._motion._delivery._host._failed or time.monotonic()>=deadline):

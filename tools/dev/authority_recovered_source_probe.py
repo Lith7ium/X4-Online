@@ -33,6 +33,11 @@ class SourceProbeDiagnostics:
         self.pump_process_guard_calls = 0
         self.pump_client_guard_calls = 0
         self.samples_received = 0
+        self.pull_attempts = 0
+        self.empty_pulls = 0
+        self.last_pull_seconds = None
+        self.prevalidated_samples = 0
+        self.confirmed_client_receipts = 0
 
     def enter(self, phase):
         now = time.monotonic()
@@ -51,7 +56,11 @@ class SourceProbeDiagnostics:
                 'saved_checkpoint_guard_seconds': self.saved_checkpoint_guard_seconds,
                 'pump_process_guard_calls': self.pump_process_guard_calls,
                 'pump_client_guard_calls': self.pump_client_guard_calls,
-                'samples_received': self.samples_received}
+                'samples_received': self.samples_received,
+                'pull_attempts': self.pull_attempts, 'empty_pulls': self.empty_pulls,
+                'last_pull_seconds': self.last_pull_seconds,
+                'prevalidated_samples': self.prevalidated_samples,
+                'confirmed_client_receipts': self.confirmed_client_receipts}
 
 
 def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
@@ -205,6 +214,9 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
 
     def capture_sample(value):
         staged_samples.append(copy.deepcopy(value))
+        if diagnostics is not None:
+            # Parsed source sample staged locally; not a delivered receipt.
+            diagnostics.prevalidated_samples += 1
         return True
     delivery = ExperimentalTCPJobDelivery(host, enabled=True, timeout=delivery_timeout)
     motion = ExperimentalTCPMotion(delivery, enabled=True)
@@ -247,7 +259,14 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     samples = []
     for _ in range(20):
         previous_count = len(staged_samples)
-        received = checked_operation(source.pull)
+        if diagnostics is not None:
+            diagnostics.pull_attempts += 1
+            pull_started_at = time.monotonic()
+        try:
+            received = checked_operation(source.pull)
+        finally:
+            if diagnostics is not None:
+                diagnostics.last_pull_seconds = time.monotonic() - pull_started_at
         if len(staged_samples) > previous_count:
             if len(staged_samples) != previous_count + 1:
                 raise RuntimeError('ambiguous source sample')
@@ -261,6 +280,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                 expected_receipt = (received['sequence'], motion_digest(received))
                 if track is None or track['peer_samples'].get(recipient_key) != expected_receipt:
                     raise RuntimeError('motion receipt digest not recorded for client')
+                if diagnostics is not None:
+                    diagnostics.confirmed_client_receipts += 1
             samples.append(staged_samples[-1])
             if diagnostics is not None:
                 diagnostics.samples_received = len(samples)
@@ -268,6 +289,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                 break
         elif received is not None:
             raise RuntimeError('uncaptured motion receipt')
+        elif diagnostics is not None:
+            diagnostics.empty_pulls += 1
         time.sleep(.1)
     if len(samples) != 2:
         raise RuntimeError('two server source samples unavailable')

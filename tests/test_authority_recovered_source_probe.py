@@ -54,6 +54,9 @@ class Probe(unittest.TestCase):
         self.assertEqual(diagnostics.snapshot()['phase'],'complete')
         self.assertEqual(diagnostics.snapshot()['samples_received'],2)
         self.assertEqual(diagnostics.snapshot()['saved_checkpoint_guard_calls'],1)
+        self.assertEqual(diagnostics.snapshot()['pull_attempts'],2)
+        self.assertEqual(diagnostics.snapshot()['prevalidated_samples'],2)
+        self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'],0)
     def test_unconfirmed_source_stop_never_closes_or_authorizes_guard_shutdown(self):
         events,kwargs,bind=self.context(stop=False)
         with patch.object(subject,'ExperimentalTCPJobDelivery'),patch.object(subject,'ExperimentalTCPMotion'), \
@@ -85,6 +88,56 @@ class Probe(unittest.TestCase):
         with patch.object(subject.time,'monotonic',side_effect=lambda:clock[0]):
             with self.assertRaises(TimeoutError):subject.run(**kwargs)
         self.assertNotIn('bind',events);self.assertNotIn('source_stop',events)
+
+    def test_pull_diagnostics_distinguish_empty_and_unfinished_sample(self):
+        for mode in ('empty_then_complete', 'sample_then_failure'):
+            with self.subTest(mode=mode):
+                _, kwargs, original_bind = self.context()
+                clock = [1.0]
+                kwargs['guard'].deadline = 1000
+                diagnostics = subject.SourceProbeDiagnostics()
+                kwargs['diagnostics'] = diagnostics
+
+                def bind(sock, motion, **options):
+                    source = original_bind(sock, motion, **options)
+                    original_pull = source.pull
+                    pull_count = [0]
+
+                    def pull():
+                        pull_count[0] += 1
+                        clock[0] += 10
+                        if pull_count[0] == 1 and mode == 'empty_then_complete':
+                            return None
+                        original_pull()
+                        if mode == 'sample_then_failure':
+                            raise RuntimeError('simulated failure after validation')
+
+                    source.pull = pull
+                    return source
+
+                with patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(subject.time, 'sleep'), patch.object(subject, 'ExperimentalTCPJobDelivery'), \
+                     patch.object(subject, 'ExperimentalTCPMotion'), \
+                     patch.object(subject, 'bind_running_source_motion', side_effect=bind), \
+                     patch.object(subject.os, 'stat', return_value=SimpleNamespace(st_dev=1, st_ino=2)):
+                    if mode == 'sample_then_failure':
+                        with self.assertRaisesRegex(RuntimeError, 'simulated failure'):
+                            subject.run(**kwargs)
+                    else:
+                        subject.run(**kwargs)
+                progress = diagnostics.snapshot()
+                self.assertEqual(progress['last_pull_seconds'], 10)
+                self.assertEqual(progress['confirmed_client_receipts'], 0)
+                if mode == 'sample_then_failure':
+                    self.assertEqual(progress['pull_attempts'], 1)
+                    self.assertEqual(progress['empty_pulls'], 0)
+                    self.assertEqual(progress['prevalidated_samples'], 1)
+                    self.assertEqual(progress['samples_received'], 0)
+                else:
+                    self.assertEqual(progress['pull_attempts'], 3)
+                    self.assertEqual(progress['empty_pulls'], 1)
+                    self.assertEqual(progress['prevalidated_samples'], 2)
+                    self.assertEqual(progress['samples_received'], 2)
 
     def test_supervisor_retains_timeout_phase_and_guard_cost_without_secrets(self):
         events, kwargs, _ = self.context()
@@ -285,6 +338,8 @@ class Probe(unittest.TestCase):
         for mode in ('ok','wrong_sample','wrong_digest','no_receipt','worker_failure','bad_socket'):
             with self.subTest(mode=mode):
                 events,kwargs,_=self.context();kwargs['client_motion']=True;kwargs['verify_stopped']=Mock()
+                diagnostics = subject.SourceProbeDiagnostics()
+                kwargs['diagnostics'] = diagnostics
                 kwargs['world'].session.players=kwargs['world'].session.ready_players=((1,'one'),)
                 selected={'id':'peer_1','incarnation':'f'*32}
                 class Delivery:
@@ -332,6 +387,7 @@ class Probe(unittest.TestCase):
                     if mode=='ok':
                         result=subject.run(**kwargs)
                         self.assertTrue(result['client_motion_receipts_confirmed'])
+                        self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'], 2)
                         self.assertEqual(len(result['client_receipt_sample_sha256']),2)
                         self.assertFalse(result['second_sample_velocity_present'])
                         self.assertLess(events.index('source_stop'),events.index('client_stop'))
@@ -339,3 +395,6 @@ class Probe(unittest.TestCase):
                     else:
                         with self.assertRaises(RuntimeError):subject.run(**kwargs)
                         self.assertNotIn('source_close',events)
+                        if mode in ('wrong_sample', 'wrong_digest', 'no_receipt'):
+                            self.assertEqual(diagnostics.snapshot()['prevalidated_samples'], 1)
+                            self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'], 0)
