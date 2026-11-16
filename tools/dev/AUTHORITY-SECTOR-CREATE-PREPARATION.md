@@ -71,7 +71,8 @@ read the source position. No collision-free location, native receiver behaviour,
 exact duplicate avoidance, arbitrary-sector identity, NPC equivalence, real
 network delivery, client reconciliation or playable multiplayer is established.
 Candidate counts observe only the bounded selection, not a complete world.
-The tests are synthetic and XML structural checks; no game was started.
+The preparation tests were synthetic and XML structural checks; the later
+isolated native attempts are described below.
 
 ## First native attempt and diagnostic hardening
 
@@ -127,3 +128,33 @@ and reverse-conversion call or comparison, without logging IDs or exceptions.
 Fake LuaJIT tests cover real userdata, exact uint64 above 2^53, failed and
 rounded reverse conversions, unsupported types and direct checks. They do not
 establish the actual native return type or the cause of the second failure.
+
+## Third native attempt: two remote sectors in one paused process
+
+The isolated Linux run `.local/authority-sector-create-03` reports success and
+no owned processes remaining. Its log records the checkpoint load request,
+saved marker, slot-2 read and pause receipt, followed by ordered Preflight and
+Initialize dispatches. Each Create and Inspect dispatch has its before/after
+receipt, followed by six readback rows, `PENDING` and `DONE`. The after receipt
+is only local dispatch acceptance; the subsequent readbacks are the evidence
+for this bounded case. The archived receiver, inspector, engine and run-script
+bytes match the reviewed sources; the owner and driver overlays match apart
+from their expected module exports.
+
+Registry index 3 was created and replayed in
+`cluster_33_sector001_macro`, and index 4 likewise in
+`cluster_45_sector001_macro`; both sectors were reported remote from the
+player's sector. Each position readback was (-400, 100000, 500) in that
+sector's coordinate space. The argon faction-wide count for the selected ship
+macro started at 156, was 157 after index 3 and its replay, and 158 after
+index 4 and its replay; final reads of both indices retained 158. The log
+reports game time 3.014 throughout these readbacks. These are artificial test
+ships and requested fixture positions in one paused process, not transferred
+positions or observations of naturally generated NPCs. The count is neither a
+sector-wide nor a universe-wide census, and the fixture does not establish
+collision-free placement or exclusion of all duplicate objects.
+
+This run does not establish two-process replication, network delivery, client
+identity or reconciliation, continued simulation, or gameplay. Pause and
+process checks are sampled, not proof of continuous pause or exact X4-loaded
+bytes. No checkpoint was requested by this experiment.
