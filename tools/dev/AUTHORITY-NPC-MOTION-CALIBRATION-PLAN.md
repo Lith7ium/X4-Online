@@ -22,10 +22,13 @@ that autonomous NPCs can safely be controlled this way.
   requesting MD `set_object_velocity`. This is not evidence that an arbitrary
   rotated or moving parent accepts a sector-frame vector. The old path's reset
   is not proof of safe release for AI-controlled ships.
-* A [single unpiloted fixture observation](../../docs/AUTHORITY-FIXTURE-VELOCITY-EXPERIMENT.md)
-  recorded approximately 10 m displacement per real second following a native
-  velocity request, then near-stationarity following zero and release. There was
-  no native velocity-vector readback, proven axis or unit, restoration of the
+* A [single fixture observation](../../docs/AUTHORITY-FIXTURE-VELOCITY-EXPERIMENT.md)
+  recorded approximately 10 m displacement per real second between samples,
+  then near-stationarity between the final samples; the first final sample had
+  returned to the original baseline position. The engine also logged conversion
+  and arithmetic-type errors for the requested expressions, so setter effects,
+  units and release are inconclusive despite the historical success flag. There
+  was no native velocity-vector readback, proven axis, restoration of the
   original mode, or independent collision-clearance proof. The earlier
   [NPC flight experiment](AUTHORITY-NPC-FLIGHT.md) used position writes and
   readbacks, not a native velocity setter.

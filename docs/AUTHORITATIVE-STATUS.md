@@ -104,6 +104,10 @@ An isolated NPC constant-velocity experiment logged conversion errors for its
 requested zero-vector expression. Its historical success flag only reflects
 the harness checks; the setter's physical effect and release outcome remain
 inconclusive. See [the diagnostic](../tools/dev/AUTHORITY-NPC-CONSTANTVEL.md).
+An earlier fixture-velocity run likewise logged conversion and arithmetic-type
+errors for its requested expressions. Its observed displacements remain useful
+measurements, but the setter effect and units are inconclusive despite the
+historical success flag. See [the fixture record](AUTHORITY-FIXTURE-VELOCITY-EXPERIMENT.md).
 
 The main remaining work includes connecting the real X4 participant to network
 control, resolving sector and object identity on each client, continuously

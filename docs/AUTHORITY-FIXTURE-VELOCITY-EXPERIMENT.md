@@ -20,7 +20,7 @@ state, a missing receipt or timeout ends the owned disposable process; if a
 failure prevents the stop request, process termination and discarding the copied
 snapshot are the containment, not a verified reset.
 
-The supervisor demands ordered receipts, a quiet baseline, 2–50 m displacement
+The historical supervisor demanded ordered receipts, a quiet baseline, 2–50 m displacement
 in each of two motion intervals, and at most 1 m between the two post-reset
 observations. Positions come from X4's `GetObjectPositionInSector`; the test
 has **no native velocity-vector readback**. Thus a pass would show movement and
@@ -51,12 +51,22 @@ synthetic checks, including the existing warp runner, are run with
 `python3 -m unittest discover -s tests -p 'test_authority_fixture*live.py' -v`.
 Mock Lua and XML checks do not validate actual X4 behavior.
 
-## Native observation
+## Native observation and engine errors
 
-One isolated Linux X4 run completed successfully on 2026-11-15. The baseline
-displacement was 0 m; the two motion intervals measured approximately 10.05 m
-and 9.99 m; the interval after reset measured 0 m. The measured interval was
-approximately one real-time second. The test stopped its own processes and
-reported unchanged Steam identity. This is a single-fixture observation subject
-to the limitations above; it does not demonstrate networked velocity, motion
-smoothing, cross-platform behavior, or fleet-scale synchronization.
+The historical `.local/authority-velocity-01/result.json` reports success for
+one isolated Linux X4 run on 2026-11-15, but its engine log contains conversion
+and arithmetic-type errors for `10m / 1s` and `0m / 1s` before the logged
+baseline and requests. The historical validator did not reject these errors.
+The accepted setter values, the requested units, and any causal effect of the
+start and reset requests are therefore **inconclusive**; the success flag is
+not evidence of a successful velocity calibration.
+
+The recorded position observations themselves remain: baseline displacement
+0 m, subsequent sampled intervals approximately 10.05 m and 9.99 m in about
+one real-time second each, and 0 m between the two post-reset samples. The
+first post-reset sample had returned to the original baseline x coordinate,
+approximately 20.04 m away from the preceding motion sample; the recorded
+samples do not establish when or why that change occurred. The test reported
+no remaining owned processes and unchanged Steam identity. It did not measure
+a native velocity vector or prove setter causation, release, units, networking,
+motion smoothing, cross-platform behavior, or fleet-scale synchronization.
