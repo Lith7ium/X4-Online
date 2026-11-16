@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('descriptor_loopback', ROOT / 'tools/dev/authority_descriptor_loopback.py')
@@ -90,6 +91,66 @@ class Loopback(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'guard failed'):
             m.receive_descriptor(server, 'a'*32, 'b'*32, inspect, time.monotonic()+2, guard)
         self.assertEqual(client.recv(1024), b''); client.close()
+
+    def test_guard_failure_during_blocked_receiver_and_sender_wait(self):
+        for role in ('receiver', 'sender'):
+            with self.subTest(role=role):
+                client, server = pair()
+                allowed = threading.Event(); allowed.set()
+                waiting = threading.Event(); errors = []; inspected = []
+                original_select = m.select.select
+                watched = server if role == 'receiver' else client
+                def observed_select(readable, writable, exceptional, timeout):
+                    if watched in readable:
+                        waiting.set()
+                    return original_select(readable, writable, exceptional, timeout)
+                def run():
+                    try:
+                        if role == 'receiver':
+                            m.receive_descriptor(server, 'a'*32, 'b'*32,
+                                lambda d: inspected.append(d) or True, time.monotonic()+5, allowed.is_set)
+                        else:
+                            m.send_descriptor(client, desc(), time.monotonic()+5, allowed.is_set)
+                    except BaseException as e:
+                        errors.append(e)
+                thread = threading.Thread(target=run, daemon=True)
+                try:
+                    with mock.patch.object(m.select, 'select', side_effect=observed_select):
+                        thread.start()
+                        if role == 'sender':
+                            server.settimeout(2)
+                            data = b''
+                            while not data.endswith(b'\n'):
+                                chunk = server.recv(1024)
+                                self.assertTrue(chunk)
+                                data += chunk
+                            self.assertEqual(m._decode(data[:-1]), desc())
+                        self.assertTrue(waiting.wait(2))
+                        allowed.clear()
+                        thread.join(1.5)
+                        self.assertFalse(thread.is_alive())
+                    self.assertEqual(len(errors), 1)
+                    self.assertIsInstance(errors[0], RuntimeError)
+                    self.assertEqual(str(errors[0]), 'guard failed')
+                    self.assertEqual(inspected, [])
+                    self.assertEqual(watched.fileno(), -1)
+                finally:
+                    allowed.clear()
+                    client.close(); server.close()
+                    thread.join(2)
+
+    def test_short_poll_does_not_replace_absolute_deadline(self):
+        client, server = pair(); checks = []
+        started = time.monotonic()
+        try:
+            with self.assertRaisesRegex(TimeoutError, 'deadline expired'):
+                m.receive_descriptor(server, 'a'*32, 'b'*32, lambda _: True,
+                                     started + .36, lambda: checks.append(True) or True)
+            self.assertGreaterEqual(time.monotonic() - started, .30)
+            self.assertGreaterEqual(len(checks), 3)
+            self.assertEqual(server.fileno(), -1)
+        finally:
+            client.close()
 
     def test_sender_rejects_stale_and_boolean_ack(self):
         for mutate in ({'seq': 2}, {'seq': True}, {'attempt':'f'*32}, {'extra':1}):

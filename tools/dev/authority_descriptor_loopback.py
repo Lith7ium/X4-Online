@@ -13,6 +13,7 @@ import socket
 import time
 
 _LIMIT = 1024
+_WAIT_POLL_SECONDS = 0.2
 _TOKEN = re.compile(r'[0-9a-f]{32}\Z', re.ASCII)
 _NAME = re.compile(r'[A-Za-z0-9_.-]{1,128}\Z', re.ASCII)
 _FIELDS = frozenset(('version', 'type', 'attempt', 'epoch', 'seq', 'index',
@@ -88,12 +89,19 @@ def _socket(sock):
 
 
 def _wait(sock, write, deadline, guard):
-    _check(deadline, guard)
-    readable, writable, exceptional = select.select([] if write else [sock], [sock] if write else [], [sock],
-                                                   max(0, deadline - time.monotonic()))
-    _check(deadline, guard)
-    if exceptional or not (writable if write else readable):
-        raise TimeoutError('socket wait failed')
+    while True:
+        _check(deadline, guard)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('deadline expired')
+        readable, writable, exceptional = select.select(
+            [] if write else [sock], [sock] if write else [], [sock],
+            min(_WAIT_POLL_SECONDS, remaining))
+        _check(deadline, guard)
+        if exceptional:
+            raise TimeoutError('socket wait failed')
+        if writable if write else readable:
+            return
 
 
 def _write(sock, data, deadline, guard):
