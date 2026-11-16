@@ -60,9 +60,29 @@ class ExperimentalJobMotionScheduler:
             self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
         self._state='working'
         try:
+            self._require_quiet_job()
             result=self._call(self._motion,self._motion.register_saved,index)
             if result is not True:raise RuntimeError('saved registration unconfirmed')
+            self._require_quiet_job()
             self._state='ready';return True
+        except BaseException:
+            self._fail();raise
+    def _require_quiet_job(self):
+        readable,_,bad=select.select([self._job._sock],[],[self._job._sock],0)
+        if readable or bad:raise RuntimeError('unexpected source job during saved motion')
+    def step_motion_only(self):
+        """Diagnostic fence: do not consume, acknowledge or discard a source job.
+
+        Point checks cannot exclude a producer event that is not yet queued.
+        """
+        if self._state!='ready' or threading.get_ident()!=self._owner:
+            self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
+        self._state='working'
+        try:
+            self._require_quiet_job()
+            sample=self._call(self._motion,self._motion.pull)
+            self._require_quiet_job()
+            self._state='ready';return sample
         except BaseException:
             self._fail();raise
     def close(self):

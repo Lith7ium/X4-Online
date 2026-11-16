@@ -99,9 +99,11 @@ end
 
 function M.new_x4(cfg)
  if type(cfg)~='table' or cfg.enabled~=true then return nil,'disabled' end
+ local saved_baseline=cfg.saved_baseline~=nil
  assert(type(cfg.guard)=='function' and type(cfg.expected_save_path)=='string' and cfg.expected_save_path:sub(1,1)=='/'
   and cfg.expected_save_path:sub(-11)=='/45841/save')
  for _,n in ipairs({'AddUITriggeredEvent','GetCurRealTime','ConvertIDTo64Bit'}) do assert(type(_G[n])=='function',n..' unavailable') end
+ if saved_baseline then assert(type(ConvertStringToLuaID)=='function','ConvertStringToLuaID unavailable') end
  assert(type(X4LAN_RESOLVE_STRING)=='table' and type(X4LAN_RESOLVE_STRING.actor_u64)=='function'
   and type(X4LAN_RESOLVE_STRING.parse_hex)=='function')
  local ffi=require('ffi')
@@ -118,7 +120,16 @@ function M.new_x4(cfg)
  end
  local function actor_key(actor)
   local original=X4LAN_RESOLVE_STRING.actor_u64(actor);assert(original)
-  local converted=X4LAN_RESOLVE_STRING.actor_u64(ConvertIDTo64Bit(actor))
+  local ref=actor
+  if saved_baseline then
+   -- Saved bootstrap returns an exact uint64, whereas X4's conversion API
+   -- expects a Lua component reference. Reconstitute it without losing bits.
+   ref=ConvertStringToLuaID(component_key(original));local kind=type(ref)
+   if kind=='number' or kind=='cdata' then
+    local direct=X4LAN_RESOLVE_STRING.actor_u64(ref);assert(direct and direct==original)
+   else assert(kind=='userdata') end
+  end
+  local converted=X4LAN_RESOLVE_STRING.actor_u64(ConvertIDTo64Bit(ref))
   assert(converted and original==converted)
   return component_key(converted)
  end

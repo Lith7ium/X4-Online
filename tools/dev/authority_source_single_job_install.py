@@ -25,7 +25,9 @@ UI=(('tools/dev/authority_checkpoint_marker_probe.lua','authority_checkpoint_mar
 def install(case,profile,ticket,settings):
     required={'control_port','control_lease','job_port','lease','attempt','epoch','generation','descriptor_request',
               'timeout','host_timeout','window','capacity','baseline'}
-    if type(settings) is not dict or not required<=set(settings) or set(settings)-required not in (set(),{'max_events'},{'continuous'},{'motion'},{'max_events','motion'},{'continuous','motion'}):raise ValueError('invalid source settings')
+    if (type(settings) is not dict or not required<=set(settings) or
+        not set(settings)-required<={'max_events','continuous','motion','saved_nonce'} or
+        ('max_events' in settings and 'continuous' in settings)):raise ValueError('invalid source settings')
     if 'continuous' in settings and settings['continuous'] is not True:raise ValueError('continuous must be explicitly enabled')
     if 'max_events' in settings and (type(settings['max_events']) is not int or not 2<=settings['max_events']<=8):raise ValueError('invalid bounded source count')
     keys=('control_lease','lease','attempt','epoch','generation','descriptor_request')
@@ -40,6 +42,9 @@ def install(case,profile,ticket,settings):
     if not (1<=settings['window']<=90 and 0<settings['host_timeout']<=30 and
             settings['window']+20<=settings['timeout']<=120):raise ValueError('invalid source timing')
     motion=settings.get('motion')
+    saved_nonce=settings.get('saved_nonce')
+    if 'saved_nonce' in settings and (motion is None or type(saved_nonce) is not str or not re.fullmatch(r'[0-9a-f]{32}',saved_nonce)):
+        raise ValueError('saved baseline requires motion and a fresh nonce')
     if motion is not None:
         if type(motion) is not dict or set(motion)!={'port','lease','attempt','nonce'}:
             raise ValueError('invalid motion settings')
@@ -50,8 +55,11 @@ def install(case,profile,ticket,settings):
         tokens=[settings[k] for k in keys]+[ticket['world_epoch']]+[motion[k] for k in ('lease','attempt','nonce')]
         if len(set(tokens))!=len(tokens) or motion['nonce'][:16]==settings['descriptor_request'][:16]:
             raise ValueError('overlapping motion context or descriptor prefixes')
+        if saved_nonce is not None and (saved_nonce in tokens or saved_nonce[:16] in (motion['nonce'][:16],settings['descriptor_request'][:16])):
+            raise ValueError('overlapping saved descriptor context')
     modules=UI[:-1]+((('src/authority/lua/source_motion_ipc.lua','source_motion_ipc.lua'),
-                     ('src/authority/lua/source_motion_sampler.lua','source_motion_sampler.lua')) if motion is not None else ())+UI[-1:]
+                     ('src/authority/lua/source_motion_sampler.lua','source_motion_sampler.lua')) if motion is not None else ())+(
+                     (('src/authority/lua/saved_baseline_source_bootstrap.lua','saved_baseline_source_bootstrap.lua'),) if saved_nonce is not None else ())+UI[-1:]
     config=base.load.install_probe(case,profile,ticket)
     lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md';native=lab/'native'
     for name in MD:shutil.copyfile(archive.saved_state_script(name) if name in BASE_MD else ROOT/'tools/dev'/name,md/name)
@@ -65,6 +73,7 @@ def install(case,profile,ticket,settings):
         ',authority_source_single_job_session=true'+
         (',authority_source_max_events='+str(settings['max_events']) if 'max_events' in settings else '')+
         (',authority_source_continuous=true' if settings.get('continuous') is True else '')+
+        (',authority_source_saved_enabled=true,authority_source_saved_nonce='+literal(saved_nonce) if saved_nonce is not None else '')+
         (',authority_source_motion_enabled=true,authority_source_motion_port='+str(motion['port'])+
          ''.join(',authority_source_motion_'+k+'='+literal(motion[k]) for k in ('lease','attempt','nonce')) if motion is not None else '')+
         ''.join(',authority_source_'+k+'='+literal(settings[k]) for k in keys)+

@@ -8,7 +8,7 @@ from authority.experimental_source_job_bridge import ExperimentalSourceJobBridge
 from authority.experimental_job_motion_scheduler import ExperimentalJobMotionScheduler
 
 class SavedMotion(unittest.TestCase):
- def setup_bridge(self,mode='ok',saved=True):
+ def setup_bridge(self,mode='ok',saved=True,on_pull=None):
   case=fixture.MotionTCP('test_invalid_values_and_no_fake_velocity');case.setUp();self.addCleanup(case.doCleanups)
   peer=case.case.connect();case.case.offer_and_claim(peer);case.client(peer,1);case.case.host.tick(.1)
   delivery=ExperimentalTCPJobDelivery(case.case.host,enabled=True,timeout=.5)
@@ -30,6 +30,7 @@ class SavedMotion(unittest.TestCase):
     b.send('|'.join(response).encode())
     if mode=='ok':
      p=b.recv(769).decode().split('|');received.append(p)
+     if on_pull:on_pull()
      b.send('|'.join(['S','1'*32,'2'*32,'NO_SAMPLE','b'*32,'c'*32,p[6]]).encode())
    except (OSError,TimeoutError):return
   thread=threading.Thread(target=source);thread.start();self.addCleanup(thread.join,2)
@@ -63,7 +64,7 @@ class SavedMotion(unittest.TestCase):
   a.connect(b.getsockname());b.connect(a.getsockname())
   job=ExperimentalSourceJobBridge(motion._delivery,a,enabled=True,lease='7'*32,attempt='8'*32,
       epoch='b'*32,generation='c'*32,guard=lambda:True,timeout=1)
-  return ExperimentalJobMotionScheduler(job,bridge,enabled=True)
+  scheduler=ExperimentalJobMotionScheduler(job,bridge,enabled=True);scheduler._test_peer=b;return scheduler
  def test_scheduler_owns_saved_registration(self):
   _,bridge,motion,_=self.setup_bridge()
   scheduler=self.make_scheduler(bridge,motion)
@@ -93,5 +94,16 @@ class SavedMotion(unittest.TestCase):
   bridge._saved_guard=attack
   self.assertTrue(bridge.register_saved(42));self.assertTrue(blocked)
   self.assertFalse(case.case.host._failed);bridge.close()
+ def test_saved_registration_refuses_already_queued_source_job(self):
+  case,bridge,motion,received=self.setup_bridge('timeout');scheduler=self.make_scheduler(bridge,motion)
+  scheduler._test_peer.send(b'unexpected job')
+  with self.assertRaises(RuntimeError):scheduler.register_saved(42)
+  self.assertEqual(received,[]);self.assertEqual(scheduler.state,'failed');self.assertTrue(case.case.host._failed)
+ def test_motion_only_fences_job_arriving_during_pull(self):
+  ref={};case,bridge,motion,_=self.setup_bridge(on_pull=lambda:ref['scheduler']._test_peer.send(b'unexpected job'))
+  scheduler=self.make_scheduler(bridge,motion);ref['scheduler']=scheduler
+  self.assertTrue(scheduler.register_saved(42))
+  with self.assertRaises(RuntimeError):scheduler.step_motion_only()
+  self.assertEqual(scheduler.state,'failed');self.assertTrue(case.case.host._failed)
 
 if __name__=='__main__':unittest.main()

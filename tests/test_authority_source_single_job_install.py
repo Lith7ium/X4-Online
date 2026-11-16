@@ -39,11 +39,13 @@ class Install(unittest.TestCase):
    motion={'port':1236,'lease':'1'*32,'attempt':'2'*32,'nonce':'3'*32}
    for bad in ({**motion,'port':1235},{**motion,'lease':'a'*32},{**motion,'nonce':'e'*16+'0'*16}):
     with self.assertRaises(ValueError):m.install(case,profile,self.ticket(),{**self.settings(),'motion':bad})
-   files=m.install(case,profile,self.ticket(),{**self.settings(),'continuous':True,'motion':motion})
+   with self.assertRaises(ValueError):m.install(case,profile,self.ticket(),{**self.settings(),'motion':motion,'saved_nonce':'3'*16+'4'*16})
+   files=m.install(case,profile,self.ticket(),{**self.settings(),'continuous':True,'motion':motion,'saved_nonce':'5'*32})
    config=(ui/'config.lua').read_text()
    self.assertIn('authority_source_motion_enabled=true',config)
    self.assertIn('authority_source_motion_port=1236',config)
    self.assertIn(ui/'source_motion_ipc.lua',files);self.assertIn(ui/'source_motion_sampler.lua',files)
+   self.assertIn(ui/'saved_baseline_source_bootstrap.lua',files);self.assertIn('authority_source_saved_enabled=true',config)
    owner=(ui/'authority_download_load_probe.lua').read_text()
    self.assertEqual(owner.count("SetScript('onUpdate'"),1)
  def test_source_control_and_job_tick_are_serialized(self):

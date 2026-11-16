@@ -26,4 +26,20 @@ function ConvertIDTo64Bit(value) return ffi.new('uint64_t',value) end
 -- Sector context changed between correlation and sampling.
 issued={};cfg.actor=id;fake.test_context(false)
 app=M.new_x4(cfg);assert(app:start());assert(not app:response(response('0x20000000000001')))
+-- A saved-bootstrap actor is a uint64 cdata, not the Lua component reference
+-- accepted by X4's ConvertIDTo64Bit. Model that distinction with userdata.
+fake.test_context(true);issued={};cfg.saved_baseline=100
+cfg.row={epoch=epoch,index=2,classification='saved_baseline'}
+local opaque=newproxy();local bad_opaque=newproxy()
+function ConvertStringToLuaID(s)assert(s=='9007199254740993');return opaque end
+function ConvertIDTo64Bit(ref)assert(ref==opaque,'expected Lua component userdata');return id end
+app=M.new_x4(cfg);assert(app:start());assert(#issued==1)
+ok,row=app:response(response('0x20000000000001'));assert(ok and row.index==2 and row.sequence==nil)
+-- Exact roundtrip remains mandatory; rounded Lua numbers and wrong refs fail.
+issued={};function ConvertIDTo64Bit(ref)assert(ref==opaque);return id+ffi.new('uint64_t',1) end
+app=M.new_x4(cfg);assert(not app:start() and #issued==0)
+issued={};function ConvertStringToLuaID(_)return 9007199254740992 end
+app=M.new_x4(cfg);assert(not app:start() and #issued==0)
+issued={};function ConvertStringToLuaID(_)return bad_opaque end
+app=M.new_x4(cfg);assert(not app:start() and #issued==0)
 print('fake X4 job descriptor checks passed')

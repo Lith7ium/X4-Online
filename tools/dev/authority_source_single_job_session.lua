@@ -38,6 +38,10 @@ local function mark(state)
  local g=tonumber(C.GetCurrentGameTime());assert(g and g==g and g>=0 and g<math.huge)
  DebugError('[X4LAN] AUTH_SOURCE_SINGLE STATE '..state..' '..string.format('%.17g',g))
 end
+local function source_idle()
+ return cfg.authority_source_saved_enabled~=true or not resume_used or
+  (source~=nil and source:state()=='observing')
+end
 function X4LAN_SOURCE_SINGLE_JOB_TICK()
  if failed then return end
  if saved and (session_busy or router_busy) then fail('session','event');return end
@@ -45,8 +49,16 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
  local ok=pcall(function()
   assert(C.IsPlayerValid())
   if not source then
-   if cfg.authority_source_saved_baseline~=nil then
+   if cfg.authority_source_saved_enabled==true or cfg.authority_source_saved_baseline~=nil then
+    assert(not (cfg.authority_source_saved_enabled==true and cfg.authority_source_saved_baseline~=nil))
     local s=cfg.authority_source_saved_baseline
+    if cfg.authority_source_saved_enabled==true then
+     local epoch,baseline=cfg.authority_source_epoch,cfg.authority_source_baseline
+     s={enabled=true,via_ipc=true,nonce=cfg.authority_source_saved_nonce,guard=function(e,b)
+      return not failed and source_idle() and e==epoch and b==baseline and not C.IsGamePaused() and
+       type(X4LAN_AUTHORITY_MARKER_READY)=='function' and X4LAN_AUTHORITY_MARKER_READY()==true and not failed and source_idle() and not C.IsGamePaused()
+     end}
+    end
     assert(cfg.authority_source_motion_enabled==true and type(s)=='table' and s.enabled==true and
      type(s.guard)=='function' and ((s.via_ipc==true and s.next_index==nil) or
      (s.via_ipc==nil and type(s.next_index)=='function')) and type(s.nonce)=='string' and
@@ -81,7 +93,7 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
     local motion_net=assert(lib.open('127.0.0.1',cfg.authority_source_motion_port))
     motion=assert(X4LAN_AUTHORITY_SOURCE_MOTION_IPC.new({enabled=true,lease=cfg.authority_source_motion_lease,
      attempt=cfg.authority_source_motion_attempt,epoch=cfg.authority_source_epoch,generation=cfg.authority_source_generation,
-     timeout=cfg.authority_source_host_timeout,clock=GetCurRealTime,guard=function()return not failed end,net=motion_net,
+     timeout=cfg.authority_source_host_timeout,clock=GetCurRealTime,guard=function()return not failed and source_idle() end,net=motion_net,
      saved_baseline=saved and saved.via_ipc and {limit=saved.baseline,guard=function(epoch,baseline)
       return not failed and not C.IsGamePaused() and saved.guard(epoch,baseline)==true and not failed and not C.IsGamePaused()
      end} or nil,fault=fault('motion_ipc')}))
@@ -90,7 +102,7 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
      interval=.1,timeout=cfg.authority_source_host_timeout,min_dt=.02,max_dt=1,
      diagnostics=true,
      descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,resolve=X4LAN_RESOLVE_STRING,
-     expected_save_path=cfg.authority_load_save_path,guard=function()return not failed and not C.IsGamePaused() end,
+     expected_save_path=cfg.authority_load_save_path,guard=function()return not failed and source_idle() and not C.IsGamePaused() end,
      binding_guard=function(row,actor)
       local known=confirmed[row.index]
       return known~=nil and known.sequence==row.sequence and known.actor==actor
@@ -104,7 +116,7 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
      bootstrap=assert(X4LAN_SAVED_BASELINE_SOURCE_BOOTSTRAP.new_x4({enabled=true,
       epoch=saved.epoch,baseline=saved.baseline,nonce=saved.nonce,
       timeout=cfg.authority_source_host_timeout,expected_save_path=cfg.authority_load_save_path,
-      resolve=X4LAN_RESOLVE_STRING,guard=function()return not failed end,baseline_guard=saved.guard,
+      resolve=X4LAN_RESOLVE_STRING,guard=function()return not failed and source_idle() end,baseline_guard=saved.guard,
       complete=function(index,actor,sector)
        if failed or staged or saved_bindings[index] then return false end
        staged={index=index,actor=actor,sector=sector};return true
@@ -163,7 +175,9 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
    assert(control:submit('isolated-source',epoch,tonumber(id),op))
   end
   stage='control_update';assert(control:on_update())
+  assert(source_idle())
   if source:state()~='done' then stage='job_tick';assert(source:tick()) end
+  assert(source_idle())
   if motion then
    stage='motion_tick';assert(motion:tick())
    if bootstrap and not C.IsGamePaused() then

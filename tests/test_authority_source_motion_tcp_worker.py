@@ -11,6 +11,9 @@ SOURCE = SOURCE_SCRIPT.replace(
 SOURCE = SOURCE.replace('select.select([ctl,job]', 'select.select([ctl,job,m]')
 SOURCE = SOURCE.replace("  elif v[3]=='BOUND':job.send", "  elif s is m:\n   if v[3]=='BOUND':m.send(('S|'+'6'*32+'|'+'7'*32+'|ATTACHED'+suffix).encode())\n   elif v[3]=='PULL':\n    answer=('S|'+'6'*32+'|'+'7'*32+'|')\n    if ready:\n     samples+=1\n     value='|10055|1|sector_a|2.5|1|2|3|-|-|-' if samples==1 else '|10055|2|sector_a|3|2|2|3|'+('3' if os.environ.get('BAD_RATE') else '2')+'|0|0'\n     answer+='SAMPLE'+suffix+'|'+v[-1]+value\n    else:answer+='NO_SAMPLE'+suffix+'|'+v[-1]\n    m.send(answer.encode())\n   else:raise AssertionError(v)\n  elif v[3]=='BOUND':job.send")
 SOURCE = SOURCE.replace("  elif v[3]=='REARM':\n", "  elif v[3]=='REARM':\n   ready=True\n")
+SOURCE_SAVED=SOURCE.replace("   else:candidate()", "   elif os.environ.get('UNEXPECTED_JOB')=='1':candidate()")
+SOURCE_SAVED=SOURCE_SAVED.replace("   elif v[3]=='PULL':", "   elif v[3]=='REGISTER_SAVED':\n    assert v[7:] == ['42','100'];ready=True\n    m.send(('|'.join(['S','6'*32,'7'*32,'SAVED_REGISTERED',epoch,gen]+v[6:9])).encode())\n   elif v[3]=='PULL':")
+SOURCE_SAVED=SOURCE_SAVED.replace('|10055|1|sector_a','|42|1|sector_a').replace('|10055|2|sector_a','|42|2|sector_a')
 CLIENT = CLIENT_SCRIPT.replace("epoch='a'*32", "m=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);m.connect(('127.0.0.1',int(os.environ['MOTION'])))\nepoch='a'*32")
 CLIENT = CLIENT.replace("end=time.monotonic()+5", "end=time.monotonic()+20")
 CLIENT = CLIENT.replace('select.select([p,j]', 'select.select([p,j,m]')
@@ -18,7 +21,7 @@ CLIENT = CLIENT.replace("   j.send(('X|'+lease+'|'+attempt+'|READY|'+epoch+'|'+g
 CLIENT = CLIENT.replace("  else:\n   assert v[0]=='P'", "  elif s is m:\n   assert v[0]=='M' and v[3]=='BIND'\n   if os.environ.get('MOTION_LOG'):\n    with open(os.environ['MOTION_LOG'],'a') as f:f.write(v[8]+'\\n')\n   m.send(('|'.join(['R','4'*32,'5'*32,'BOUND']+v[4:11])).encode())\n  else:\n   assert v[0]=='P'")
 
 class MotionWorker(unittest.TestCase):
- def run_diagnostic(self,count,bad_rate=False):
+ def run_diagnostic(self,count,bad_rate=False,saved=False):
   cc,cj,cm,sc,sj,sm=(udp() for _ in range(6))
   for sock in (cc,cj,cm,sc,sj,sm):self.addCleanup(sock.close)
   import socket
@@ -29,7 +32,7 @@ class MotionWorker(unittest.TestCase):
   client=subprocess.Popen([sys.executable,'-c',CLIENT],env=dict(os.environ,P=str(cc.getsockname()[1]),J=str(cj.getsockname()[1]),MOTION=str(cm.getsockname()[1]),MOTION_LOG=evidence))
   source_env=dict(os.environ,CTL=str(sc.getsockname()[1]),JOB=str(sj.getsockname()[1]),MOTION=str(sm.getsockname()[1]))
   if bad_rate:source_env['BAD_RATE']='1'
-  source=subprocess.Popen([sys.executable,'-c',SOURCE],env=source_env,stdout=subprocess.PIPE)
+  source=subprocess.Popen([sys.executable,'-c',SOURCE_SAVED if saved else SOURCE],env=source_env,stdout=subprocess.PIPE)
   def finish():
    for p in (client,source):
     if p.poll() is None:p.terminate()
@@ -42,20 +45,28 @@ class MotionWorker(unittest.TestCase):
     'source_control_lease':'3'*32,'source_world_epoch':'e'*32,'source_process':identity(source),
     'index':10055,'sectors':['sector_a'],'client_motion_lease':'4'*32,'client_motion_attempt':'5'*32,
     'source_motion_lease':'6'*32,'source_motion_attempt':'7'*32,'motion_count':count}
+  if saved:c.update(saved_index=42,saved_baseline=100,saved_sector='sector_a')
   if bad_rate:
    with self.assertRaises(ValueError):worker.run(cc,cj,cm,sc,sj,sm,private,worker.config(json.dumps(c).encode()))
    with open(evidence) as f:self.assertEqual(f.read().splitlines(),['1'])
    return
   result=worker.run(cc,cj,cm,sc,sj,sm,private,worker.config(json.dumps(c).encode()))
-  self.assertTrue(result['tcp_job_receipt']);self.assertTrue(result['source_md_ack_observed'])
+  if saved:
+   self.assertTrue(result['saved_baseline_registered']);self.assertFalse(result['checkpoint_identity_proven'])
+   self.assertNotIn('tcp_job_receipt',result);self.assertNotIn('source_md_ack_observed',result)
+   self.assertNotIn('ship_creation_requested',result)
+  else:
+   self.assertTrue(result['tcp_job_receipt']);self.assertTrue(result['source_md_ack_observed'])
   self.assertTrue(result['motion_client_bound_buffered']);self.assertFalse(result['motion_frame_identity_proven'])
   samples=[result['motion_sample']] if count==1 else result['motion_samples']
   self.assertEqual([s['sequence'] for s in samples],list(range(1,count+1)))
-  self.assertTrue(all(s['index']==10055 for s in samples));self.assertIsNone(samples[0]['velocity'])
+  self.assertTrue(all(s['index']==(42 if saved else 10055) for s in samples));self.assertIsNone(samples[0]['velocity'])
   if count==2:self.assertEqual(samples[1]['velocity'],{'x':2,'y':0,'z':0})
 
  def test_one_sample_keeps_legacy_shape(self):self.run_diagnostic(1)
  def test_two_samples_over_real_tcp_and_owned_udp_peers(self):self.run_diagnostic(2)
  def test_wrong_second_rate_is_fenced_before_client_bind(self):self.run_diagnostic(2,True)
+ def test_saved_index_one_sample_without_job(self):self.run_diagnostic(1,saved=True)
+ def test_saved_index_two_samples_without_job(self):self.run_diagnostic(2,saved=True)
 
 if __name__=='__main__':unittest.main()

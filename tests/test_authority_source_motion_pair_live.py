@@ -68,6 +68,28 @@ class MotionPair(unittest.TestCase):
                'tools/dev/authority_multi_create_receiver.xml','tools/dev/authority_participant_job_session.lua',
                'tools/dev/authority_motion_ipc_supervisor.py'):
    self.assertIn(ROOT/path,sources)
+ def test_saved_mode_requires_pinned_index_and_saved_only_evidence(self):
+  with patch.object(m.MotionCoordinator,'_sources',side_effect=m.pair.Coordinator._sources):
+   with self.assertRaises(ValueError):m.MotionCoordinator({'sector_a':(1,)},saved_index=2)
+   with self.assertRaises(ValueError):m.MotionCoordinator({'sector_a':(1,),'sector_b':(1,)},saved_index=1)
+   saved=m.MotionCoordinator({'sector_a':(1,2)},defer_source_ack=True,saved_index=1)
+  self.addCleanup(saved.cleanup_after_owned_processes)
+  sample={'version':1,'epoch':m.archive.REGISTRY_EPOCH,'generation':saved.generation,'index':1,'sequence':1,
+   'sector_macro':'sector_a','source_time':102.125,'x':1,'y':2,'z':3,'velocity':None}
+  result={'event':'result','ok':True,'tcp_admitted':True,'synthetic_server_checkpoint_and_admission':True,
+   'saved_baseline_registered':True,'index':1,'sector_macro':'sector_a','checkpoint_identity_proven':False,
+   'frame_identity_proven':False,'motion_pose_applied':False,'motion_client_bound_buffered':True,
+   'motion_velocity_source':'position_difference_per_source_game_second','motion_frame_identity_proven':False,'motion_sample':sample}
+  saved._validate_motion_result(result);saved.result=result;saved.tickets={'server':{},'client':{}}
+  source=b'[X4LAN] AUTH_SOURCE_SINGLE STATE binding 10\n[X4LAN] AUTH_SOURCE_SINGLE STATE observing 10\n'
+  client=b'[X4LAN] AUTH_PARTICIPANT_JOB RUNNING 10\n[X4LAN] AUTH_PARTICIPANT_MOTION BUFFERED 1 1 sector_a 102.125\n'
+  with patch.object(saved,'check_sources',return_value=True),patch.object(m.lifecycle,'load_observation',return_value={'marker_checked':True}):
+   self.assertTrue(saved.verify_final({'server':source,'client':client}))
+   for raw in (client+b'[X4LAN] AUTH_PARTICIPANT_JOB LOCAL_APPLIED 1 10\n',client.replace(b'RUNNING',b'UNKNOWN')):
+    with self.assertRaises(ValueError):saved.verify_final({'server':source,'client':raw})
+   with self.assertRaises(ValueError):saved.verify_final({'server':source+b'[X4LAN] AUTH_SOURCE_SINGLE STATE reading 11\n','client':client})
+  for change in ({'source_md_ack_observed':True},{'checkpoint_identity_proven':True},{'index':2}):
+   with self.assertRaises(ValueError):saved._validate_motion_result({**result,**change})
  def test_chunked_result_with_expensive_guard_and_strict_suffix_fence(self):
   receive,send=socket.socketpair();self.addCleanup(receive.close);self.addCleanup(send.close)
   result=self.result();result['motion_sample']['sector_macro']='sector_'+('a'*100)

@@ -20,14 +20,20 @@ X4LAN_AUTHORITY_JOB_CLIENT_OWNER={new_x4=function(c)
   return true
  end}
 end}
-X4LAN_REPLICA_MOTION_BINDING={}
+X4LAN_REPLICA_MOTION_BINDING={};X4LAN_SAVED_BASELINE_MOTION_BINDING={}
+local saved_config,marker=true,true
 X4LAN_MOTION_CLIENT_OWNER={new_x4=function(c)
  assert(c.net==motion_net and c.guard())
+ saved_config=c.saved_baseline
  return {start=function()order[#order+1]='motion_start';return true end,tick=function()order[#order+1]='motion';return true end,state=function()return 'ready' end}
 end}
-if os.getenv('TEST_MOTION_SESSION')=='1' then
+if os.getenv('TEST_MOTION_SESSION') then
  X4LAN_CONFIG.authority_motion_client_enabled=true;X4LAN_CONFIG.authority_motion_client_port=1236
+ if os.getenv('TEST_MOTION_SESSION')=='saved' then
+  X4LAN_CONFIG.authority_motion_client_saved_enabled=true;X4LAN_CONFIG.authority_motion_client_epoch=epoch;X4LAN_CONFIG.authority_job_client_baseline=10054
+ end
 end
+function X4LAN_AUTHORITY_MARKER_READY()return marker end
 function GetCurRealTime()return 1 end
 local errors={}
 function DebugError(s)errors[#errors+1]=s end
@@ -35,8 +41,13 @@ X4LAN_MULTI_CREATE_CLIENT={};X4LAN_MULTI_CREATE_INSPECTOR={};X4LAN_RESOLVE_STRIN
 dofile('tools/dev/authority_participant_job_session.lua')
 queue[1]='CMD|'..lease..'|'..epoch..'|1|resume'
 X4LAN_PARTICIPANT_JOB_TICK()
-if os.getenv('TEST_MOTION_SESSION')=='1' then
+if os.getenv('TEST_MOTION_SESSION') then
  assert(opened==3 and table.concat(order,',')=='submit,participant,start,job,motion_start,motion')
+ if os.getenv('TEST_MOTION_SESSION')=='saved' then
+  assert(saved_config and saved_config.binding==X4LAN_SAVED_BASELINE_MOTION_BINDING and saved_config.guard(epoch,10054))
+  assert(not saved_config.guard(('f'):rep(32),10054) and not saved_config.guard(epoch,10053))
+  marker=false;assert(not saved_config.guard(epoch,10054));marker=true
+ else assert(saved_config==nil)end
  X4LAN_PARTICIPANT_JOB_TICK();assert(opened==3 and table.concat(order,',')=='submit,participant,start,job,motion_start,motion,participant,job,motion')
  return
 end

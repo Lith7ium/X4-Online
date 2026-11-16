@@ -55,7 +55,8 @@ class Runner(unittest.TestCase):
             witness=root/'witness.json';witness.write_bytes(b'');out=root/'new'
             args=SimpleNamespace(out=out,store=store,timeout=300,window=30,seed=1,game=game,display=':0')
             args.two_clients=mode.startswith('multi_')
-            args.defer_source_ack=mode.startswith('deferred_') or args.two_clients
+            args.defer_source_ack=mode.startswith(('deferred_','saved_')) or args.two_clients
+            if mode.startswith('saved_'):args.saved_index=41
             user=SimpleNamespace(pw_dir=str(root),pw_uid=1000,pw_gid=1000,pw_name='tester')
             set_=lambda obj,name,value:stack.enter_context(patch.object(obj,name,value))
             set_(m.os,'geteuid',lambda:1000);stack.enter_context(patch.dict(m.os.environ,{'XAUTHORITY':str(auth)}))
@@ -111,6 +112,11 @@ class Runner(unittest.TestCase):
             coord.add_role.side_effect=lambda role:{'role':'server' if role=='server' else 'client'}
             def run(context):
                 assert context['check']() is True
+                if mode.startswith('saved_'):
+                    details={'saved_baseline_registered':True,'saved_index':41,'motion_client_bound_buffered':True,
+                             'motion_pose_applied':False,'checkpoint_identity_proven':False,'frame_identity_proven':False}
+                    if mode=='saved_bad':details['ship_creation_requested']=True
+                    return details
                 if mode.startswith('no_event'):
                     raise m.coordinator.NoNewRegistryEntry('no new registry entry observed')
                 coord.replica_dispatch_attempted=True
@@ -169,10 +175,10 @@ class Runner(unittest.TestCase):
                 self.assertEqual(installed,[{'role':'server','defer_source_ack':True},{'role':'client'},{'role':'client'}])
                 self.assertGreaterEqual(resource_check.call_count,2)
             else:resource_check.assert_not_called()
-            if mode in ('ok','deferred_ok','multi_ok'):
+            if mode in ('ok','deferred_ok','multi_ok','saved_ok'):
                 self.assertTrue(result['success']);self.assertTrue(result['owned_cleanup_confirmed'])
                 self.assertEqual(result['owned_processes_remaining'],[]);release.assert_called_once()
-                self.assertTrue(result['ship_creation_requested']);self.assertFalse(result['multiplayer_proven'])
+                self.assertEqual(result['ship_creation_requested'],mode!='saved_ok');self.assertFalse(result['multiplayer_proven'])
             else:
                 self.assertFalse(result['success'])
                 if mode=='dispatch_uncertain':self.assertTrue(result['ship_creation_requested'])
@@ -185,7 +191,7 @@ class Runner(unittest.TestCase):
             return result
 
     def test_lifecycle_and_fencing(self):
-        for mode in ('ok','deferred_ok','deferred_missing_ack','multi_ok','multi_missing_client','multi_helper_failure','multi_client2_crash','multi_alias','multi_low_resources','signal_verify','signal_second','helper_failure','stop_error','final_fault','swap_before_first','swap_before_second',
+        for mode in ('ok','deferred_ok','deferred_missing_ack','saved_ok','saved_bad','multi_ok','multi_missing_client','multi_helper_failure','multi_client2_crash','multi_alias','multi_low_resources','signal_verify','signal_second','helper_failure','stop_error','final_fault','swap_before_first','swap_before_second',
                      'no_event','no_event_bad_final','no_event_udp_error','no_event_lock_error','no_event_steam_error',
                      'live_md_error','no_event_final_md_error','dispatch_uncertain'):
             with self.subTest(mode=mode):self.simulate(mode)

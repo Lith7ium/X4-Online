@@ -175,3 +175,79 @@ processes and retain profile locks until cleanup is confirmed on any failure.
 Offline tests use simulated X4 ABI/MD, and any future native run needs
 independent static review, a fresh
 private output directory, a display owned by that run and verified cleanup.
+
+## Optional saved-registry diagnostic
+
+The separate `--saved-index INDEX` path selects exactly one eligible index from
+the checksum-pinned census witness artifact and its one saved sector. Both
+private instances receive opt-in saved-baseline readers; their ordinary marker,
+pinned save, isolated process and socket guards remain in force. The source
+registers that actor locally via `REGISTER_SAVED`; the Python bridge creates a
+motion track only after the correlated local registration response. The client
+resolves the same registry index in its own saved registry and reports a
+hold-only buffer push. There is no invented job receipt or ship creation.
+
+During the saved attempt the source's observed job-owner phase must remain
+`observing`; the worker also rejects an unexpected source-job packet before
+or during motion operations. These checks are point-in-time guards and do not
+prove atomically that no job activation occurred between observations. A
+competing job, unavailable or docked actor, sector change, timeout, guard loss
+or uncertain operation fences the experiment; none is automatically retried.
+The selected index's saved-sector eligibility does not guarantee a live actor.
+The expected marker and pinned staging are not independent proof of the exact
+file consumed by X4 or identical cross-process sector frames. TCP admission is
+synthetic, X4 receives no motion setter, and this mode had not yet been run
+natively at implementation time. It does not establish interest management, Windows, WAN or gameplay.
+
+On 2026-11-16, `.local/authority-source-motion-saved-01` reported failure
+`source or participant owner fault` and confirmed owned cleanup with no owned
+processes remaining. Both logs record load requested, the expected marker and
+pause; the client records `RUNNING`, but no `BUFFERED` marker. The source logs
+`binding`, `attaching`, `await_go`, `observing`, then at game time 3.22 the X4
+error `ConvertIDTo64Bit(): invalid id` followed by `AUTH_SOURCE_SINGLE ERROR
+sampler tick sampler_tick`. There is no separate persisted trace proving the
+registration response, a TCP motion receipt or the precise failing conversion
+call.
+
+The saved bootstrap hands an exact uint64 cdata to the source sampler; the
+saved descriptor reader previously passed that value directly to
+`ConvertIDTo64Bit`, whereas X4's conversion can require a Lua component
+reference. This is a concrete code-level explanation consistent with the log,
+but the actual failing call and native value type were not recorded. The
+saved-only reader now reconstructs a local Lua reference, verifies any numeric
+or cdata value without rounding, and requires the converted uint64 to equal the
+original before reading. A fake X4 test rejects uint64 cdata as a Lua reference
+and checks an opaque userdata with an exact value above 2^53 plus incorrect
+roundtrips. The following run used this change, although it cannot isolate the
+precise cause of the earlier failure.
+
+
+On 2026-11-16, the fresh `.local/authority-source-motion-saved-02` run
+reported success for one saved registry index, 1318, in
+`cluster_115_sector001_macro`. Both X4 logs record load requested, the
+expected marker inspection and pause. The source log then records `binding`,
+`attaching`, `await_go` and `observing`; the client log records `RUNNING`
+followed by `BUFFERED 1318 1 cluster_115_sector001_macro 3.226889243`. The
+client marker records the source game-time field, not a synchronized
+cross-process timestamp. These log lines alone do not show the UDP registration
+or a TCP receipt.
+
+The saved result reports a locally registered saved baseline, one sample and
+a client bind/buffer confirmation. The sample has source game time
+`3.226889243`, position `(-131815.453125, 1456.1622314453125,
+-44962.0703125)` and unknown velocity (`null`). The reviewed worker and owner
+code make the correlated source registration, TCP receipt and client-local
+MD/FFI binding prerequisites for the reported result; the retained artifacts
+do not include a packet trace or separate raw worker JSON. The result reports
+no requested ship creation, no pose application, confirmed owned cleanup and
+no remaining owned processes. The client buffer is hold-only.
+
+This bounded result covers one existing saved index, one client and one source
+sample in two local Linux X4 processes. It does not prove exact X4 save-file
+consumption, cross-process actor or sector-frame identity, an atomically
+unchanged source job state, speed, movement application, continuous
+synchronization, interest management, persistence, combat, trade, boarding,
+Windows or Internet operation. TCP admission and checkpoint proof in the
+network coordinator are synthetic. The successful rerun is consistent with
+the conversion fix; it does not establish which exact conversion failed in
+the previous run.

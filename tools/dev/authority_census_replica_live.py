@@ -217,10 +217,17 @@ def run(args):
         inspect_context(require_load=True)
         details=coord.run({'deadline':deadline,'check':lambda:inspect_context(require_load=True)==set(role_names)})
         inspect_context(require_load=True)
-        if (type(details) is not dict or details.get('tcp_ack_after_client_replica') is not True
-            or details.get('ship_creation_requested') is not True or details.get('artificial_seed') != 7183
-            or (deferred and details.get('source_queue_acked') is not True)
-            or (two_clients and details.get('clients_confirmed')!=['client1','client2'])):
+        if getattr(args,'saved_index',None) is not None:
+            if (two_clients or type(details) is not dict or details.get('saved_baseline_registered') is not True or
+                details.get('saved_index')!=args.saved_index or details.get('motion_client_bound_buffered') is not True or
+                details.get('motion_pose_applied') is not False or details.get('checkpoint_identity_proven') is not False or
+                details.get('frame_identity_proven') is not False or
+                any(k in details for k in ('tcp_ack_after_client_replica','ship_creation_requested','source_queue_acked','artificial_seed'))):
+                raise RuntimeError('saved baseline completion unconfirmed')
+        elif (type(details) is not dict or details.get('tcp_ack_after_client_replica') is not True
+              or details.get('ship_creation_requested') is not True or details.get('artificial_seed') != 7183
+              or (deferred and details.get('source_queue_acked') is not True)
+              or (two_clients and details.get('clients_confirmed')!=['client1','client2'])):
             raise RuntimeError('replica completion unconfirmed')
         result.update(success=True,participant=details,witness_artifact_sha256=verified.witness_sha256)
     except coordinator.NoNewRegistryEntry as error:

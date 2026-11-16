@@ -10,6 +10,6 @@ class SourceSavedIPC(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    lib=Path(d)/'fake.so'
    subprocess.run(['cc','-shared','-fPIC','-O2',str(ROOT/'tests/fixtures/multi_create_running_owner_abi.c'),'-o',str(lib)],check=True,capture_output=True)
-   for scenario in ('normal','range','baseline','foreign','guard','register_fail','postcheck','timeout','pending_packet','pending_register','deadline_response'):
+   for scenario in ('normal','range','baseline','foreign','guard','register_fail','postcheck','timeout','pending_packet','pending_register','deadline_response','native_normal','native_job','native_marker'):
     with self.subTest(scenario=scenario):
      subprocess.run(['luajit','tests/authority_source_saved_ipc_session.lua',scenario],cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(lib)),check=True,capture_output=True,text=True,timeout=5)

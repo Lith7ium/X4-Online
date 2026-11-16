@@ -277,11 +277,19 @@ At that default, one sample for each of the 10,052 positioned census entries
 would take at least about 168 seconds even without processing or network delay.
 This is a calculated lower bound for that diagnostic configuration, not a
 throughput measurement or a claim about what the eventual implementation can do.
-An experimental, separate [saved-baseline binder](../src/authority/SAVED_BASELINE_MOTION_BINDING.md)
-now offers a read-only local path for selected existing registry indices. It has
-offline fake-X4 coverage only, relies on a caller-supplied baseline guard, and
-does not establish loaded-checkpoint or cross-process identity. XML schema
-validation and a native X4 run remain outstanding.
+An experimental [saved-baseline binder](../src/authority/SAVED_BASELINE_MOTION_BINDING.md)
+provides a read-only local path for selected existing registry indices. An
+isolated Linux/Linux diagnostic subsequently reported success for one saved
+index, 1318, and one position sample delivered to the client hold buffer. Both
+X4 logs show the requested load, expected marker and pause; the client also
+logged `BUFFERED 1318 1`. The correlated source registration and TCP receipt
+are supported by the saved result and worker/owner code, without a packet trace
+or retained raw worker JSON. Velocity was unknown and no pose was applied. The
+network admission is synthetic; exact loaded-file, actor and sector-frame
+identity across processes remain unproven. The preceding attempt failed with
+an X4 ID-conversion error; an exact local reference roundtrip was added before
+the successful run, but the precise original callsite was not logged. XML
+schema validation remains outstanding. [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md#optional-saved-registry-diagnostic).
 
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.

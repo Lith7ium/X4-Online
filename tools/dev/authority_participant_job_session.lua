@@ -74,13 +74,23 @@ function X4LAN_PARTICIPANT_JOB_TICK()
    assert(job:tick())
    if cfg.authority_motion_client_enabled==true and not motion and job:state()=='ready' then
     local motion_net=netlib.open('127.0.0.1',cfg.authority_motion_client_port)
+    local saved
+    if cfg.authority_motion_client_saved_enabled==true then
+     local epoch,baseline=cfg.authority_motion_client_epoch,cfg.authority_job_client_baseline
+     saved={enabled=true,baseline=baseline,binding=X4LAN_SAVED_BASELINE_MOTION_BINDING,guard=function(e,b)
+      return not failed and job:state()=='ready' and not ffi.C.IsGamePaused() and e==epoch and b==baseline and
+       type(X4LAN_AUTHORITY_MARKER_READY)=='function' and X4LAN_AUTHORITY_MARKER_READY()==true and
+       not failed and job:state()=='ready' and not ffi.C.IsGamePaused()
+     end}
+    end
     motion=assert(X4LAN_MOTION_CLIENT_OWNER.new_x4({enabled=true,net=motion_net,
      lease=cfg.authority_motion_client_lease,attempt=cfg.authority_motion_client_attempt,
      epoch=cfg.authority_motion_client_epoch,generation=cfg.authority_motion_client_generation,
      nonce=cfg.authority_motion_client_nonce,timeout=cfg.authority_motion_client_timeout,
      max_age=cfg.authority_motion_client_max_age,max_tracks=cfg.authority_motion_client_max_tracks,
      expected_save_path=cfg.authority_load_save_path,resolve=X4LAN_RESOLVE_STRING,
-     binding=X4LAN_REPLICA_MOTION_BINDING,buffer=X4LAN_MOTION_BUFFER,guard=function()return not failed and job:state()=='ready' end,fault=fail,
+     binding=X4LAN_REPLICA_MOTION_BINDING,buffer=X4LAN_MOTION_BUFFER,saved_baseline=saved,
+     guard=function()return not failed and job:state()=='ready' end,fault=fail,
      audit=function(index,sequence,sector,source_time)
       if type(index)~='number' or type(sequence)~='number' or type(sector)~='string' or not sector:match('^[A-Za-z0-9_]+$') or
          type(source_time)~='number' or source_time~=source_time then return false end
