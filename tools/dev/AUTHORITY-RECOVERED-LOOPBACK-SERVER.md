@@ -679,6 +679,16 @@ save was not rescanned. Reproducible local diagnostic material is retained under
 `.local/motion09-checkpoint-readonly/`. Missing matches do not establish whether
 ships were destroyed, stored differently, or excluded by a parser assumption.
 
+One further pinned streaming pass found no `<component id>` definition for
+those 22 references anywhere in the saved XML, using bracketed hexadecimal IDs
+with either letter case and optional leading zeroes. It rechecked the save's
+size and digest, registry bijection, and pointer metadata; the marker evidence
+was taken from the prior analysis of the same digest. Definitions using other
+elements, attributes, or ID formats remain unknown. This result does not
+establish destruction, runtime identity, or the cause of the missing matches.
+The local diagnostic and its bounded synthetic checks are retained alongside
+the earlier analysis; no additional X4 process was started.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
