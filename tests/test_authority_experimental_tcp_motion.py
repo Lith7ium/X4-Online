@@ -102,14 +102,24 @@ class MotionTCP(unittest.TestCase):
         self.setup_pair();first=self.sample();self.assertTrue(self.motion.send(first))
         with self.assertRaises(ValueError):self.motion.send(self.sample(2,'sector_b',2,{'x':1,'y':0,'z':0}))
         self.assertTrue(self.case.host._failed)
-    def test_motion_and_job_share_owner_and_frame_change_resets_velocity(self):
+    def test_motion_and_job_share_owner_and_frame_change_requires_resync(self):
         self.setup_pair();self.assertTrue(self.motion.send(self.sample()))
         job={'epoch':'b'*32,'generation':'d'*32,'sequence':1,'index':10055,
              'descriptor':{'macro':'ship_a','faction':'argon','sector_macro':'sector_a','x':1,'y':2,'z':3}}
         self.assertTrue(self.delivery.deliver(job,self.delivery.membership(),lambda *_:True))
         time.sleep(.01)
-        self.assertTrue(self.motion.send(self.sample(2,'sector_b',2)))
-        self.assertEqual([v[1]['sector_macro'] for v in self.received],['sector_a','sector_a','sector_b','sector_b'])
+        with self.assertRaises(ValueError):self.motion.send(self.sample(2,'sector_b',2))
+        self.assertEqual([v[1]['sector_macro'] for v in self.received],['sector_a','sector_a'])
+        self.assertTrue(self.case.host._failed)
+    def recipient_frame_change_fails_before_send(self,velocity):
+        self.setup_pair();members=self.delivery.membership()
+        self.assertTrue(self.motion.send(self.sample(),recipients=[members[0]]));time.sleep(.01)
+        self.assertTrue(self.motion.send(self.sample(2,'sector_b',2),recipients=[members[1]]));time.sleep(.01)
+        with self.assertRaises(ValueError):self.motion.send(self.sample(3,'sector_b',3,velocity),recipients=[members[0]])
+        self.assertEqual([(r[0],r[1]['sector_macro']) for r in self.received],[(1,'sector_a'),(2,'sector_b')])
+        self.assertTrue(self.case.host._failed)
+    def test_reentry_changed_frame_with_unknown_rate_fails(self):self.recipient_frame_change_fails_before_send(None)
+    def test_reentry_changed_frame_with_known_rate_fails(self):self.recipient_frame_change_fails_before_send({'x':1,'y':0,'z':0})
     def test_failed_consumer_fences_host_after_partial_delivery(self):
         self.setup_pair(failure=True)
         with self.assertRaises((RuntimeError,ValueError,ConnectionError,OSError)):

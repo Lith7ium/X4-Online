@@ -86,7 +86,7 @@ class ExperimentalTCPMotion:
         if current is not None and not self._tracks[current]['closed']:
             self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
             raise ValueError('previous lifetime is still active')
-        self._tracks[key]={'sequence':0,'time':None,'sent':None,'frame':None,'closed':False}
+        self._tracks[key]={'sequence':0,'time':None,'sent':None,'frame':None,'closed':False,'peer_frames':{}}
         self._current[(epoch,index)]=key
 
     def send(self, raw, *, despawn=False, guard=None, recipients=None, _source=None):
@@ -136,6 +136,11 @@ class ExperimentalTCPMotion:
                     if identity in wanted or identity not in full:raise ValueError('duplicate or foreign motion recipient')
                     wanted.add(identity)
                 selected=tuple(h for h in handles if ('peer_'+str(h),incarnations[h]) in wanted)
+            if not despawn:
+                for h in selected:
+                    peer=('peer_'+str(h),incarnations[h])
+                    if peer in state['peer_frames'] and state['peer_frames'][peer]!=value['sector_macro']:
+                        raise ValueError('recipient motion frame changed without resync')
             host._control._reader_free()
         except BaseException:
             self._failed=True;d._failed=True;host._failed=True
@@ -171,7 +176,9 @@ class ExperimentalTCPMotion:
                 ExperimentalTCPParticipants._quiet(d,peers,deadline)
             check_guard()
             state['sequence']=value['sequence'];state['sent']=time.monotonic();state['closed']=despawn
-            if not despawn:state['time']=value['source_time'];state['frame']=value['sector_macro']
+            if not despawn:
+                state['time']=value['source_time'];state['frame']=value['sector_macro']
+                for h in selected:state['peer_frames'][('peer_'+str(h),incarnations[h])]=value['sector_macro']
             return True
         except BaseException:
             self._failed=True;d._failed=True;host._failed=True

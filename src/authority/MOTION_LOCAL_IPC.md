@@ -18,6 +18,26 @@ unknown. Local actor handles are never transmitted. Unexpected packets, stale
 identity, PID/peer guard loss, timeout or uncertain send permanently fault the
 bridge and the shared TCP host. No UDP retries or fabricated receipts occur.
 
+Optionally the session owner supplies `select_recipients(sample, members)`.
+It receives detached copies of the validated sample and currently admitted
+`{'id', 'incarnation'}` members and must return a list or tuple of distinct
+current members. The callback runs under the shared exclusive TCP reader
+fence; sample or membership mutation, foreign/stale recipients, reentrancy,
+timeout or changed connection state fail closed. The selected peers must
+confirm through the existing TCP motion sender. Without a selector the old
+all-admitted behavior remains; that behavior does not establish interest.
+
+An explicit empty selection consumes and discards that source sample with no
+TCP send or receipt; `pull()` returns `None`, just as for `NO_SAMPLE`. In both
+cases this does not report a delivery. Sequence, source time and frame checks
+include discarded samples, so an old/replayed sample cannot become valid by
+skipping delivery. A later selected sample may have a sequence gap. No empty
+selection removes, expires or hides an earlier client sample. The caller must
+provide actual, current sector/map interest and fence subscription changes;
+re-entry, client-local object bootstrap, cross-frame reconciliation, sector
+transition and despawn remain unresolved. The selector does not change the
+all-client job/create ACK rules and does not itself implement interest.
+
 `ExperimentalParticipantMotionIPC` pins one READY peer using an explicit
 process/socket validator. A TCP participant callback sends one BIND request,
 then blocks until the same request, epoch, generation, index, sequence, sector

@@ -18,9 +18,10 @@ is finite X4 source game time in seconds (0..1e12); coordinates are bounded
 finite values (±1e7). Velocity is explicitly null when unknown, or a complete
 finite x/y/z vector (±5000), interpreted as a derivative per source game
 second, not a proven native velocity. No actor or sector handle is transported.
-A sector change must carry null velocity; downstream interpolation must reset at
-that boundary. Macro equality does not establish cross-process coordinate-frame
-identity.
+A source sector change must carry null velocity. A selected peer that already
+received this track in a different sector faults before any send, even with
+null velocity; no per-peer frame reset is implemented. Macro equality does not
+establish cross-process coordinate-frame identity.
 
 Updates must increase sequence and source time. Per-index sends are rate limited
 by source process monotonic time, configurable from 1/240 second to 10 seconds;
@@ -42,13 +43,14 @@ peers receive the sample. Every selected peer must return its correlated
 receipt; a partial success cannot be rolled back. Empty selection is refused.
 This option does not alter the job/create delivery's all-participant ACK rule.
 
-The source bridge does not yet supply a recipient list, and this module does
-not compute sectors viewed in the map or manage subscriptions. First delivery
+The source bridge can use an optional caller-supplied selector; neither module
+computes sectors viewed in the map or manages subscriptions. First delivery
 may begin at a later increasing sequence, but the owner must establish each
 client's local actor binding. Leaving interest sends no removal, hiding or
 expiry command; an old held sample can remain indefinitely. On re-entry an
 older client frame may differ from the sender's current frame even if the last
-two source samples match. The current local X4 binding faults sector changes;
+two source samples match. The sender fences this per peer incarnation and
+track, and the current local X4 binding also faults sector changes;
 there is no general unsubscribe/reset/rejoin or cross-frame reconciliation.
 Callers must fence or separately resolve these cases and cannot infer a safe
 rejoin from a successful targeted send. No choice of recipients proves shared
