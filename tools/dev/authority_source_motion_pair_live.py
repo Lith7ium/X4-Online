@@ -119,6 +119,7 @@ class MotionCoordinator(pair.Coordinator):
                 'epoch':archive.REGISTRY_EPOCH,'generation':self.generation,'nonce':r['motion_nonce'],
                 'timeout':15,'max_age':15,'max_tracks':1024}
             if self.saved_index is not None:motion['saved_baseline']=True
+            motion=self.motion_settings(motion)
             files=client_install.install(case,profile,ticket,settings,self.witnesses,motion)
         self.check_sources();return files
 
@@ -153,6 +154,7 @@ class MotionCoordinator(pair.Coordinator):
         if self.motion_count==2:cfg['motion_count']=2
         if self.saved_index is not None:
             cfg.update(saved_index=self.saved_index,saved_baseline=archive.COUNT,saved_sector=self.saved_sector)
+        cfg=self.worker_config(cfg)
         payload=json.dumps(cfg,separators=(',',':'),allow_nan=False).encode('ascii')+b'\n'
         if len(payload)>16384:raise ValueError('private worker configuration too large')
         self.private.settimeout(min(2,deadline-time.monotonic()));self.private.sendall(payload);guard()
@@ -173,6 +175,9 @@ class MotionCoordinator(pair.Coordinator):
         key='motion_sample' if self.motion_count==1 else 'motion_samples'
         self.output_details[key]=result[key]
         return self.output_details
+
+    def motion_settings(self,settings):return settings
+    def worker_config(self,config):return config
 
     def _validate_motion_result(self,result):
         key='motion_sample' if self.motion_count==1 else 'motion_samples'

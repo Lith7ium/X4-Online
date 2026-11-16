@@ -278,6 +278,14 @@ confirmed cleanup. This is bounded evidence for those paused local readings,
 not proof of cross-process actor identity, universal frame equality or frame
 compatibility after resume. [Details](../tools/dev/AUTHORITY-SAVED-FRAME-PAIR.md).
 
+A separate opt-in saved-actor setter diagnostic failed after both paused frame
+reads completed and the client logged `BUFFERED 1318 1`. Its client log then
+reported a generic apply error, with no INTENT, WRITE_ENTERED or READBACK
+marker. The writer code places the markers before the setter; no independent
+FFI trace exists, so the result conservatively leaves its outcome uncertain.
+Fixed failure-stage diagnostics were added afterward, without establishing
+this run's cause. [Details](../tools/dev/AUTHORITY-SAVED-SETTER-PAIR.md).
+
 The current motion diagnostic is not a full-fleet synchronization design. Its
 pair runner configures at most 1,024 client tracks, and its source bridge pulls
 one sample at a time with a default global minimum interval of 1/60 real second.

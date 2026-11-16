@@ -23,6 +23,7 @@ local function new_binding(o,screen)
  assert(token(c.epoch) and token(c.generation) and token(c.nonce) and integer(c.index) and name(c.sector_macro))
  assert(finite(c.timeout) and c.timeout>0 and c.timeout<=300 and finite(c.max_age) and c.max_age>0 and c.max_age<=300)
  for _,k in ipairs({'clock','guard','issue','inspect','complete'})do assert(type(c[k])=='function',k..' required')end
+ assert(c.capture_binding==nil or type(c.capture_binding)=='function')
  local phase,busy='idle',false;local last,deadline,pending,previous,actor_key,sector_key,zone_key,request_seq=nil,nil,nil,0,nil,nil,nil,0
  local api={}
  local function fail(reason)phase='failed';pending=nil;deadline=nil;return false,reason end
@@ -73,6 +74,12 @@ local function new_binding(o,screen)
   local ok,a,s,valid,zone=call(c.inspect,actor,sector,c.index,c.sector_macro)
   if not ok or a~=expected_actor or s~=expected_sector or valid~=true or type(zone)~='string' or
      not zone:match('^[1-9]%d*$') or #zone>20 or (zone_key and zone_key~=zone) or not check() then return fail('ffi_binding') end
+  -- Local references are provisional until event() returns true. This opt-in
+  -- callback is never used for transport and receives exact decimal strings.
+  if c.capture_binding then
+   local captured,accepted=call(c.capture_binding,expected_actor,expected_sector,zone,c.index,pending.sequence)
+   if not captured or accepted~=true or not check() then return fail('capture') end
+  end
   local result={epoch=c.epoch,generation=c.generation,index=c.index,sequence=pending.sequence,sector_macro=c.sector_macro}
   phase='delivering';local good,accepted=call(c.complete,result)
   if not good or accepted~=true or result.epoch~=c.epoch or result.generation~=c.generation or result.index~=c.index or

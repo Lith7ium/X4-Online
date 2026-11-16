@@ -100,3 +100,10 @@ function X4LAN_FRAME_READ_TICK()
   else assert(state=='waiting' or state=='done')end
  end);busy=false;if not ok then fail('tick') end
 end
+-- This handoff is only valid while the frame observation's pause fence holds.
+function X4LAN_FRAME_READ_DONE()
+ if failed or state~='done' or busy then return false end
+ local ok,valid=pcall(guard)
+ if not ok or valid~=true then return fail('handoff') end
+ return true
+end

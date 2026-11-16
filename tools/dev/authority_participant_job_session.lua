@@ -83,13 +83,24 @@ function X4LAN_PARTICIPANT_JOB_TICK()
        not failed and job:state()=='ready' and not ffi.C.IsGamePaused()
      end}
     end
+    local saved_apply
+    if cfg.authority_motion_apply_enabled==true then
+     assert(saved and type(X4LAN_SAVED_MOTION_APPLY)=='table')
+     saved_apply={enabled=true,module=X4LAN_SAVED_MOTION_APPLY,log=function(line)
+      if type(line)~='string' or #line>512 or not line:match('^[%w%._%+%- ]+$') then return false end
+      local kind=line:match('^(%u+[%u_]*) ')
+      if kind~='INTENT' and kind~='WRITE_ENTERED' and kind~='READBACK' then return false end
+      DebugError('[X4LAN] AUTH_MOTION_APPLY '..line)
+      return true
+     end}
+    end
     motion=assert(X4LAN_MOTION_CLIENT_OWNER.new_x4({enabled=true,net=motion_net,
      lease=cfg.authority_motion_client_lease,attempt=cfg.authority_motion_client_attempt,
      epoch=cfg.authority_motion_client_epoch,generation=cfg.authority_motion_client_generation,
      nonce=cfg.authority_motion_client_nonce,timeout=cfg.authority_motion_client_timeout,
      max_age=cfg.authority_motion_client_max_age,max_tracks=cfg.authority_motion_client_max_tracks,
      expected_save_path=cfg.authority_load_save_path,resolve=X4LAN_RESOLVE_STRING,
-     binding=X4LAN_REPLICA_MOTION_BINDING,buffer=X4LAN_MOTION_BUFFER,saved_baseline=saved,
+     binding=X4LAN_REPLICA_MOTION_BINDING,buffer=X4LAN_MOTION_BUFFER,saved_baseline=saved,saved_apply=saved_apply,
      guard=function()return not failed and job:state()=='ready' end,fault=fail,
      audit=function(index,sequence,sector,source_time)
       if type(index)~='number' or type(sequence)~='number' or type(sector)~='string' or not sector:match('^[A-Za-z0-9_]+$') or
@@ -102,7 +113,7 @@ function X4LAN_PARTICIPANT_JOB_TICK()
    end
    if motion then
     if job:state()=='ready' then assert(motion:tick())
-    elseif motion:state()=='pending' then error('concurrent job and motion') end
+    elseif motion:state()=='pending' or motion:state()=='applying' then error('concurrent job and motion') end
    end
   end
  end)

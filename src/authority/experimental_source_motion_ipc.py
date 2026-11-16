@@ -45,7 +45,7 @@ class ExperimentalSourceMotionIPC:
         self._sock=sock;self._peer=peer;self._local=sock.getsockname();self._motion=motion
         self._lease=lease;self._attempt=attempt;self._epoch=epoch;self._generation=generation
         self._guard=guard;self._validate=validate_peer;self._validate_sample=validate_sample;self._select_recipients=select_recipients;self._timeout=float(timeout)
-        self._state='ready';self._owner=threading.get_ident();self._next=0;self._indices=set();self._scheduler_owner=None;self._scheduler_lease=None
+        self._state='ready';self._owner=threading.get_ident();self._next=0;self._indices=set();self._saved_indices=set();self._scheduler_owner=None;self._scheduler_lease=None
         self._last_pull=None;self._observed={}
         self._saved_baseline=saved_baseline;self._saved_guard=saved_guard
         motion._source_owner=self
@@ -192,7 +192,7 @@ class ExperimentalSourceMotionIPC:
             if data!=expected:raise ValueError('foreign saved registration response')
             self._quiet(deadline,'registering')
             self._motion_call(self._motion.track,self._epoch,self._generation,index)
-            self._check(deadline,'registering');self._indices.add(index);self._state='ready';return True
+            self._check(deadline,'registering');self._indices.add(index);self._saved_indices.add(index);self._state='ready';return True
         except BaseException:self._fail();raise
     def pull(self,*,_scheduler=None):
         self._reserved(_scheduler)
@@ -260,6 +260,20 @@ class ExperimentalSourceMotionIPC:
             self._observed[value['index']]={'sequence':value['sequence'],'time':value['source_time'],'frame':value['sector_macro']}
             self._quiet(deadline,'pulling');self._last_pull=time.monotonic();self._state='ready'
             return None if selected==[] else value
+        except BaseException:self._fail();raise
+    def apply_once(self,sample,*,_scheduler=None):
+        """Opt-in local writer request for a previously confirmed saved sample."""
+        self._reserved(_scheduler)
+        if self._state!='ready' or threading.get_ident()!=self._owner or self._saved_guard is None:
+            self._fail();raise RuntimeError('saved motion apply unavailable')
+        self._state='applying';deadline=time.monotonic()+self._timeout
+        try:
+            value=motion_value(sample)
+            if value['index'] not in self._saved_indices:raise ValueError('unregistered saved actor')
+            self._quiet(deadline,'applying')
+            if self._motion_call(self._motion.apply_once,value,guard=lambda:self._check(deadline,'applying') or True) is not True:
+                raise RuntimeError('motion readback not confirmed')
+            self._quiet(deadline,'applying');self._state='ready';return True
         except BaseException:self._fail();raise
     def close(self,*,_scheduler=None):
         self._reserved(_scheduler)

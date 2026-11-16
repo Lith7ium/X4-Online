@@ -55,15 +55,16 @@ def motion_digest(value, *, despawn=False):
 
 class ExperimentalTCPMotion:
     """Share the job owner's socket lease; callbacks own real game binding."""
-    def __init__(self, delivery, *, enabled=False, min_interval=1/60, max_tracks=100000):
+    def __init__(self, delivery, *, enabled=False, min_interval=1/60, max_tracks=100000, allow_apply=False):
         if (enabled is not True or type(delivery) is not ExperimentalTCPJobDelivery or
-            type(min_interval) not in (int,float) or not math.isfinite(min_interval) or not 1/240 <= min_interval <= 10 or
+            type(allow_apply) is not bool or type(min_interval) not in (int,float) or not math.isfinite(min_interval) or not 1/240 <= min_interval <= 10 or
             type(max_tracks) is not int or not 1 <= max_tracks <= 100000):
             raise ValueError('invalid enabled motion owner')
         delivery._host._check()
         if getattr(delivery, '_motion_owner', None) is not None:raise ValueError('motion owner already bound')
         delivery._motion_owner=self;self._delivery=delivery;self._tracks={};self._current={};self._source_owner=None;self._source_lease=None
         self._min_interval=float(min_interval);self._max_tracks=max_tracks;self._failed=False
+        self._allow_apply=allow_apply;self._apply_attempted=False
 
     def _reserved(self,owner):
         if self._source_owner is not None and (owner is None or owner is not self._source_lease):
@@ -86,7 +87,7 @@ class ExperimentalTCPMotion:
         if current is not None and not self._tracks[current]['closed']:
             self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
             raise ValueError('previous lifetime is still active')
-        self._tracks[key]={'sequence':0,'time':None,'sent':None,'frame':None,'closed':False,'peer_frames':{}}
+        self._tracks[key]={'sequence':0,'time':None,'sent':None,'frame':None,'closed':False,'peer_frames':{},'peer_samples':{}}
         self._current[(epoch,index)]=key
 
     def send(self, raw, *, despawn=False, guard=None, recipients=None, _source=None):
@@ -178,7 +179,9 @@ class ExperimentalTCPMotion:
             state['sequence']=value['sequence'];state['sent']=time.monotonic();state['closed']=despawn
             if not despawn:
                 state['time']=value['source_time'];state['frame']=value['sector_macro']
-                for h in selected:state['peer_frames'][('peer_'+str(h),incarnations[h])]=value['sector_macro']
+                for h in selected:
+                    peer=('peer_'+str(h),incarnations[h]);state['peer_frames'][peer]=value['sector_macro']
+                    state['peer_samples'][peer]=(value['sequence'],motion_digest(value))
             return True
         except BaseException:
             self._failed=True;d._failed=True;host._failed=True
@@ -189,3 +192,53 @@ class ExperimentalTCPMotion:
             else:self._failed=True;d._failed=True;host._failed=True
             d._active=False;host._busy=False
             if changed:raise RuntimeError('motion socket lease changed')
+
+    def apply_once(self,raw,*,guard=None,_source=None):
+        """Opt-in one-peer apply/readback after an exactly confirmed motion sample.
+
+        This is a caller assertion; a failure after dispatch cannot undo a write.
+        """
+        self._reserved(_source);d=self._delivery;host=d._host;host._check()
+        try:
+            if not self._allow_apply or self._apply_attempted or self._failed or d._failed:
+                raise RuntimeError('one-shot motion apply unavailable')
+            if guard is not None and not callable(guard):raise ValueError('invalid operation guard')
+            value=motion_value(raw);key=(value['epoch'],value['generation'],value['index'])
+            state=self._tracks.get(key);members=d.membership();handles,peers=d._peers();incarnations=dict(d._incarnations)
+            if len(members)!=1 or len(handles)!=1:raise RuntimeError('one admitted apply participant required')
+            h=handles[0];peer=('peer_'+str(h),incarnations[h]);digest=motion_digest(value)
+            if (not state or state['closed'] or state['peer_samples'].get(peer)!=(value['sequence'],digest) or
+                members!=({'id':peer[0],'incarnation':peer[1]},)):
+                raise ValueError('apply sample is not the confirmed participant sample')
+            host._control._reader_free()
+        except BaseException:
+            self._failed=True;d._failed=True;host._failed=True;raise
+        lease=object();host._control._reader_lease=lease;host._busy=True;d._active=True;self._apply_attempted=True
+        try:
+            deadline=time.monotonic()+d._timeout
+            def check():
+                if guard is not None and guard() is not True:raise RuntimeError('motion apply guard failed')
+                if (time.monotonic()>=deadline or self._failed or d._failed or host._failed or host._busy is not True or
+                    d._active is not True or host._control._reader_lease is not lease or d._incarnations!=incarnations):
+                    raise RuntimeError('motion apply state changed')
+            check();ExperimentalTCPParticipants._quiet(d,peers,deadline)
+            req={'version':1,'kind':'motion_apply','connection_handle':h,'session_epoch':host._world.session.world_epoch,
+                 'incarnation':incarnations[h],'request_id':value['sequence'],'sample':value}
+            expected={k:req[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
+            expected.update(kind='motion_applied_receipt',status='applied',sample_sha256=digest)
+            data=json.dumps(req,sort_keys=True,separators=(',', ':'),allow_nan=False).encode('ascii')+b'\n'
+            if len(data)>MAX_MESSAGE+1:raise ValueError('motion apply frame too large')
+            conn,p=peers[h]
+            ExperimentalTCPParticipants._exchange(d,conn,p,[],data,expected,deadline,check=check if guard else None)
+            check();current,current_peers=d._peers()
+            if current!=handles or current_peers[h]!=peers[h] or d._incarnations!=incarnations:
+                raise RuntimeError('motion apply membership changed')
+            ExperimentalTCPParticipants._quiet(d,peers,deadline);check();return True
+        except BaseException:
+            self._failed=True;d._failed=True;host._failed=True;raise
+        finally:
+            changed=host._control._reader_lease is not lease
+            if not changed:host._control._reader_lease=None
+            else:self._failed=True;d._failed=True;host._failed=True
+            d._active=False;host._busy=False
+            if changed:raise RuntimeError('motion apply reader lease changed')

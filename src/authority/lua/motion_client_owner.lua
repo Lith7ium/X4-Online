@@ -1,5 +1,5 @@
 -- Default-off local motion bind IPC; one existing UI owner drives start/tick.
--- No setter, actor handle on wire, independent update hook or TCP reader.
+-- The optional disposable setter keeps actor handles local; no extra update hook or TCP reader.
 local M={};local MAX=9007199254740991
 local owners=setmetatable({},{__mode='k'});local registered=false
 local function token(v,n)return type(v)=='string' and #v==n and v:match('^[0-9a-f]+$')~=nil end
@@ -34,7 +34,12 @@ function M.new(o)
  assert(c.audit==nil or type(c.audit)=='function')
  assert((type(c.net)=='table' or type(c.net)=='userdata') and type(c.net.send)=='function' and type(c.net.receive)=='function')
  assert(not owners[c.net],'motion socket already owned');owners[c.net]=true
+ local apply=c.saved_apply
+ if apply~=nil then
+  assert(saved and type(apply)=='table' and apply.enabled==true and type(apply.factory)=='function' and type(apply.register)=='function','invalid saved apply')
+ end
  local state,busy='new',false;local last,pending,deadline,delivered=nil,nil,nil,nil
+ local staged,bound,writer,apply_identity,apply_used=nil,nil,nil,nil,false
  local tracks,track_count={},0;local api={}
  local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
  local function check()
@@ -68,6 +73,7 @@ function M.new(o)
   busy=true;local ok=pcall(function()
    assert(check());assert(c.register(function(_,v)api:event(v)end)==true and state=='new')
    if saved then assert(saved.register(function(_,v)api:event(v,'saved')end)==true and state=='new')end
+   if apply then assert(apply.register(function(_,v)api:apply_event(v)end)==true and state=='new')end
    state='ready';assert(send(reply('READY')))
   end);busy=false;if not ok then return fail('start')end;return true
  end
@@ -95,7 +101,11 @@ function M.new(o)
    local nonce=c.nonce -- full 128-bit owner nonce; binding adds index and request counter
    local route=saved and index<=saved.baseline and 'saved' or 'replica'
    local factory=route=='saved' and saved.factory or c.factory
-   local binding=assert(factory({epoch=c.epoch,generation=c.generation,index=index,sector_macro=p[10],nonce=nonce,
+   local binding=assert(factory({capture_binding=apply and function(actor,sector,zone,idx,sequence)
+     if state~='pending' or not pending or pending.route~='saved' or idx~=pending.index or sequence~=pending.sequence or staged then return false end
+     if type(actor)~='string' or type(sector)~='string' or type(zone)~='string' then return false end
+     staged={actor_key=actor,sector_key=sector,zone_key=zone,index=idx,sequence=sequence};return true
+    end or nil,epoch=c.epoch,generation=c.generation,index=index,sector_macro=p[10],nonce=nonce,
     timeout=c.timeout,max_age=c.max_age,complete=function(result)
      if state~='pending' or delivered or not pending or type(result)~='table' or result.epoch~=c.epoch or
         result.generation~=c.generation or result.index~=pending.index or result.sequence~=pending.sequence or result.sector_macro~=pending.sector then return false end
@@ -106,20 +116,57 @@ function M.new(o)
    if type(buffer)~='table' or type(buffer.push)~='function' or state~='ready' or not check() then return false end
    entry={sector=p[10],binding=binding,buffer=buffer,route=route};tracks[index]=entry
   end
+  staged=nil
   pending={identity={p[5],p[6],p[7],p[8],p[9],p[10],p[11]},index=index,sequence=seq,sector=p[10],binding=entry.binding,
    buffer=entry.buffer,route=entry.route,arrival=arrival,source_time=t,position={x,y,z},rate=rate}
   deadline=last+c.timeout;state='pending'
   local ok,v=pcall(entry.binding.begin,entry.binding,{epoch=c.epoch,generation=c.generation,index=index,sequence=seq,sector_macro=p[10]},arrival)
   return ok and v==true and state=='pending' and check()
  end
+ local function accept_apply(raw)
+  local p=split(raw)
+  if not apply or apply_used or not bound or #p~=10 or p[1]~='M' or p[2]~=c.lease or p[3]~=c.attempt or p[4]~='APPLY' or
+   not token(p[5],32) or p[6]~=c.epoch or p[7]~=c.generation or p[8]~=bound.index_text or
+   p[9]~=bound.sequence_text or p[10]~=bound.digest then return false end
+  apply_used=true;apply_identity={p[5],p[6],p[7],p[8],p[9],p[10]};deadline=last+c.timeout;state='applying'
+  writer=apply.factory({enabled=true,timeout=c.timeout,guard=function()
+   return state=='applying' and check() and state=='applying' and last>=bound.arrival and last-bound.arrival<=c.max_age
+  end,fault=function(reason)
+   local allowed={begin_guard=true,dispatch_guard=true,dispatch_issue=true,pre_guard=true,pre_response=true,pre_inspect=true,
+    pre_game=true,pre_distance=true,pre_intent=true,pre_write_marker=true,write=true,post_guard=true,post_response=true,
+    post_inspect=true,post_game=true,post_readback=true,post_log=true,tick_guard=true,post_dispatch=true,identity=true,begin=true,event=true,tick=true}
+   fail('apply_'..(allowed[reason] and reason or 'unknown'))
+  end})
+  if state~='applying' or not writer or not check() then return false end
+  local input={request=p[5],epoch=c.epoch,generation=c.generation,index=bound.index,sequence=bound.sequence,digest=bound.digest,
+   sector_macro=bound.sector,actor_key=bound.actor_key,sector_key=bound.sector_key,zone_key=bound.zone_key,
+   target={x=bound.position[1],y=bound.position[2],z=bound.position[3]}}
+  return writer:begin(input)==true and state=='applying' and check()
+ end
  function api:tick()
-  if busy or (state~='ready' and state~='pending') then return fail('tick')end
+  if busy or (state~='ready' and state~='pending' and state~='applying') then return fail('tick')end
   busy=true;local ok=pcall(function()
    assert(check())
    if state=='pending' then assert(pending.binding:tick() and check())end
+   if state=='applying' then
+    assert(writer:tick() and state=='applying' and check())
+    if writer:state()=='done' then
+     assert(c.net:receive()==nil and check());assert(send(reply('APPLIED',apply_identity)))
+     state='ready';deadline=nil
+    end
+   end
    local packet=c.net:receive()
-   if packet~=nil then assert(state=='ready' and accept(packet))end
+   if packet~=nil then
+    assert(state=='ready' and type(packet)=='string' and #packet<=768)
+    local p=split(packet)
+    if p[4]=='APPLY' then assert(accept_apply(packet)) else assert(not apply_used and accept(packet))end
+   end
   end);busy=false;if not ok then return fail('tick')end;return true
+ end
+ function api:apply_event(value)
+  if busy or state~='applying' or not writer then return fail('apply_event')end
+  busy=true;local ok=pcall(function()assert(check() and writer:event(value)==true and state=='applying' and check())end)
+  busy=false;if not ok then return fail('apply_event')end;return true
  end
  function api:event(value,route)
   route=route or 'replica'
@@ -149,7 +196,13 @@ function M.new(o)
     assert(good and accepted==true and state=='pending' and check() and snapshot_unchanged())
    end
    assert(c.net:receive()==nil and check() and snapshot_unchanged())
-   assert(send(reply('BOUND',pending.identity)));pending=nil;deadline=nil;delivered=nil;state='ready'
+   if apply and pending.route=='saved' then
+    assert(staged and staged.index==pending.index and staged.sequence==pending.sequence)
+    bound={actor_key=staged.actor_key,sector_key=staged.sector_key,zone_key=staged.zone_key,index=pending.index,
+     index_text=pending.identity[4],sequence=pending.sequence,sequence_text=pending.identity[5],sector=pending.sector,
+     digest=pending.identity[7],arrival=pending.arrival,position={pending.position[1],pending.position[2],pending.position[3]}}
+   end
+   assert(send(reply('BOUND',pending.identity)));pending=nil;staged=nil;deadline=nil;delivered=nil;state='ready'
   end);busy=false;if not ok then return fail('event')end;return true
  end
  function api:state()return state end
@@ -177,6 +230,16 @@ function M.new_x4(o)
     opt.enabled=true;opt.baseline=baseline;opt.saved_baseline_guard=baseline_guard
     opt.expected_save_path=c.expected_save_path;opt.guard=c.guard;opt.resolve=c.resolve;opt.replica=c.binding
     return saved_native(opt)
+   end}
+ end
+ if c.saved_apply~=nil then
+  local a=c.saved_apply
+  assert(type(a)=='table' and a.enabled==true and type(a.module)=='table' and type(a.module.new_x4)=='function')
+  local native_apply=a.module.new_x4
+  c.saved_apply={enabled=true,register=function(fn)return register('X4AuthoritySavedMotionApply.Result',fn)~=false end,
+   factory=function(opt)
+    opt.expected_save_path=c.expected_save_path;opt.test_profile='45841';opt.resolve=c.resolve;opt.log=a.log
+    return native_apply(opt)
    end}
  end
  return M.new(c)

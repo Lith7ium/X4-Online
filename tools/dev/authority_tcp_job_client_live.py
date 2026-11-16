@@ -102,11 +102,12 @@ class SyntheticEngine:
     def save(self): self.path.write_bytes(gzip.compress(_XML.encode()));return self.path
 
 
-def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_guard=None,expected_jobs=1,motion_udp=None):
+def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_guard=None,expected_jobs=1,motion_udp=None,allow_motion_apply=False):
     if expected_jobs is not None and (type(expected_jobs) is not int or not 1<=expected_jobs<=8):
         raise ValueError('invalid bounded job count')
     if delivery_action is not None and not callable(delivery_action):raise ValueError('invalid delivery action')
     if extra_guard is not None and not callable(extra_guard):raise ValueError('invalid extra guard')
+    if type(allow_motion_apply) is not bool or (allow_motion_apply and motion_udp is None):raise ValueError('invalid one-shot apply mode')
     job_epoch=event['epoch'] if event is not None else c['job_epoch']
     validate_udp(participant_udp);validate_udp(job_udp)
     sockets=[participant_udp,job_udp]
@@ -180,10 +181,11 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                         motion_bridge=ExperimentalParticipantMotionIPC(motion_udp,enabled=True,
                             lease=c['client_motion_lease'],attempt=c['client_motion_attempt'],epoch=job_epoch,
                             generation=c['generation'],guard=guard,validate_peer=lambda p:peer_guard(p,motion_udp),
-                            timeout=min(20,deadline-time.monotonic()-5))
+                            timeout=min(20,deadline-time.monotonic()-5),allow_apply=allow_motion_apply)
                     adapter=ExperimentalTCPParticipantClient(client,GuardedControl(),enabled=True,epoch=c['epoch'],handle=handle,
                                                               timeout=min(25,deadline-time.monotonic()-1),apply_job=bridge,
-                                                              apply_motion=motion_bridge)
+                                                              apply_motion=motion_bridge,
+                                                              apply_motion_once=motion_bridge.apply_once if allow_motion_apply else None)
                     # Resume is the first command. READY arrives only after X4 resumed.
                     while not adapter.poll(.1): guard()
                     bridge.wait_ready()

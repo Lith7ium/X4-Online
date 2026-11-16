@@ -34,19 +34,22 @@ def config(raw):
     if any(type(v) is not str or not _TOKEN.fullmatch(v) for v in extras.values()):raise ValueError('invalid motion context')
     count=all_values.get('motion_count',1)
     if type(count) is not int or count not in (1,2):raise ValueError('invalid bounded motion count')
+    apply_once=all_values.get('apply_once',False)
+    if type(apply_once) is not bool or ('apply_once' in all_values and apply_once is not True):raise ValueError('invalid apply opt-in')
     saved={k:all_values[k] for k in _SAVED if k in all_values}
     if saved:
         if (set(saved)!=set(_SAVED) or type(saved['saved_baseline']) is not int or
             type(saved['saved_index']) is not int or not 1<=saved['saved_index']<=saved['saved_baseline']<=9007199254740991 or
             type(saved['saved_sector']) is not str or not base._NAME.fullmatch(saved['saved_sector'])):
             raise ValueError('invalid saved baseline context')
-    rest={k:v for k,v in all_values.items() if k not in _EXTRA and k not in _SAVED and k!='motion_count'}
+    if apply_once and (not saved or count!=1):raise ValueError('one-shot apply requires one saved sample')
+    rest={k:v for k,v in all_values.items() if k not in _EXTRA and k not in _SAVED and k not in ('motion_count','apply_once')}
     if 'continuous' in rest or 'max_events' in rest:raise ValueError('single job diagnostic required')
     c=base.config(json.dumps(rest,separators=(',',':'),allow_nan=False).encode())
     names=('epoch','lease','attempt','generation','participant_lease','job_epoch','source_lease','source_attempt','source_control_lease')
     values=[c[k] for k in names]+list(extras.values())
     if len(set(values))!=len(values):raise ValueError('motion tokens overlap session context')
-    c.update(extras);c.update(saved);c['motion_count']=count
+    c.update(extras);c.update(saved);c['motion_count']=count;c['apply_once']=apply_once
     if saved and saved['saved_sector'] not in c['sectors']:raise ValueError('saved sector is not witnessed')
     return c
 
@@ -86,7 +89,7 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
         job=base.SelectedSourceBridge(delivery,source_job,enabled=True,lease=c['source_lease'],attempt=c['source_attempt'],
             epoch=c['job_epoch'],generation=c['generation'],guard=guard,timeout=min(90,c['deadline']-time.monotonic()-1),
             expected_index=c['index'],sectors=c['sectors'])
-        motion=ExperimentalTCPMotion(delivery,enabled=True)
+        motion=ExperimentalTCPMotion(delivery,enabled=True,allow_apply=c['apply_once'])
         event=None;samples=[];saved='saved_index' in c
         def validate_sample(value):
             target=c['saved_index'] if saved else (event['index'] if event is not None else None)
@@ -132,11 +135,13 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
                     raise RuntimeError('motion without completed job or out of sequence')
                 samples.append(value)
         if saved:
+            if c['apply_once']:
+                guard();scheduler.apply_once(samples[0]);guard()
             if c['motion_count']==2:
                 samples=validate_pair(samples,epoch=c['job_epoch'],generation=c['generation'],index=c['saved_index'],sector=c['saved_sector'])
             result={'event':'result','ok':True,'tcp_admitted':True,'synthetic_server_checkpoint_and_admission':True,
                     'saved_baseline_registered':True,'index':c['saved_index'],'sector_macro':c['saved_sector'],
-                    'checkpoint_identity_proven':False,'frame_identity_proven':False,'motion_pose_applied':False,
+                    'checkpoint_identity_proven':False,'frame_identity_proven':False,'motion_pose_applied':c['apply_once'],
                     'motion_client_bound_buffered':True,'motion_velocity_source':'position_difference_per_source_game_second',
                     'motion_frame_identity_proven':False}
             if c['motion_count']==1:result['motion_sample']=samples[0]
@@ -157,7 +162,7 @@ def run(client_control,client_job,client_motion,source_control,source_job,source
         return result
     try:
         return client_worker.run(client_control,client_job,private,c,None,delivery_action=action,
-                                 extra_guard=source_guard,expected_jobs=None,motion_udp=client_motion)
+                                 extra_guard=source_guard,expected_jobs=None,motion_udp=client_motion,allow_motion_apply=c['apply_once'])
     finally:
         if scheduler is not None and scheduler.state=='ready':scheduler.close()
 

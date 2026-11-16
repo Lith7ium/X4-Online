@@ -58,6 +58,11 @@ class SavedMotion(unittest.TestCase):
   _,bridge,motion,_=self.setup_bridge()
   self.assertTrue(bridge.register_saved(42))
   with self.assertRaises(RuntimeError):bridge.register_saved(42)
+ def test_job_registration_cannot_authorize_saved_apply(self):
+  case,bridge,motion,_=self.setup_bridge('timeout')
+  self.assertTrue(bridge.bind_confirmed(10055))
+  with self.assertRaises(ValueError):bridge.apply_once(fixture.MotionTCP.sample())
+  self.assertTrue(case.case.host._failed)
  def make_scheduler(self,bridge,motion):
   a=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);a.bind(('127.0.0.1',0));self.addCleanup(a.close)
   b=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);b.bind(('127.0.0.1',0));self.addCleanup(b.close)

@@ -23,7 +23,7 @@ class ExperimentalTCPParticipantClient:
     The controller must bound its own synchronous pause/resume calls. This
     adapter checks its deadline after a call but cannot interrupt that call.
     """
-    def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None):
+    def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None, apply_motion_once=None):
         if (enabled is not True or type(conn) is not socket.socket or conn.family != socket.AF_INET or
                 conn.proto not in (0, socket.IPPROTO_TCP) or
                 conn.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM or
@@ -46,8 +46,11 @@ class ExperimentalTCPParticipantClient:
             raise ValueError('job application must be callable')
         if apply_motion is not None and not callable(apply_motion):
             raise ValueError('motion consumer must be callable')
+        if apply_motion_once is not None and not callable(apply_motion_once):
+            raise ValueError('one-shot motion writer must be callable')
         self._apply_job=apply_job;self._job_incarnation=None;self._last_job=None
         self._apply_motion=apply_motion;self._motion_incarnation=None;self._motion_tracks={};self._motion_current={}
+        self._apply_motion_once=apply_motion_once;self._motion_write_attempted=False
         self._failed = self._closed = self._busy = False
 
     def _fault(self):
@@ -85,6 +88,8 @@ class ExperimentalTCPParticipantClient:
             return self._job(command)
         if type(command) is dict and command.get('kind') in ('motion_snapshot','motion_despawn'):
             return self._motion(command)
+        if type(command) is dict and command.get('kind')=='motion_apply':
+            return self._motion_apply(command)
         fields = {'version', 'kind', 'epoch', 'connection_handle', 'request_id', 'operation'}
         if (type(command) is not dict or set(command) != fields or
                 type(command['version']) is not int or command['version'] != 1 or
@@ -167,11 +172,33 @@ class ExperimentalTCPParticipantClient:
         if motion_digest(candidate,despawn=despawn)!=digest:raise ValueError('motion callback mutated sample')
         if confirmed is not True:raise RuntimeError('motion sample not accepted')
         self._motion_tracks[key]={'sequence':sample['sequence'],'closed':despawn,
-            'time':None if despawn else sample['source_time'],'frame':None if despawn else sample['sector_macro']}
+            'time':None if despawn else sample['source_time'],'frame':None if despawn else sample['sector_macro'],
+            'digest':None if despawn else digest}
         self._motion_current[(sample['epoch'],sample['index'])]=key
         reply={k:command[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
         reply.update(kind='motion_receipt',status='accepted',sample_sha256=digest)
         self._out=json.dumps(reply,sort_keys=True,separators=(',', ':')).encode()+b'\n'
+
+    def _motion_apply(self,command):
+        from .experimental_tcp_motion import motion_value, motion_digest
+        fields={'version','kind','connection_handle','session_epoch','incarnation','request_id','sample'}
+        if (self._apply_motion_once is None or self._motion_write_attempted or set(command)!=fields or
+            type(command.get('version')) is not int or command['version']!=1 or
+            type(command.get('connection_handle')) is not int or command['connection_handle']!=self._handle or
+            command.get('session_epoch')!=self._epoch or type(command.get('incarnation')) is not str or
+            command['incarnation']!=self._motion_incarnation):raise ValueError('one-shot motion apply unavailable')
+        sample=motion_value(command['sample']);key=(sample['epoch'],sample['generation'],sample['index'])
+        prior=self._motion_tracks.get(key);digest=motion_digest(sample)
+        if (type(command.get('request_id')) is not int or command['request_id']!=sample['sequence'] or
+            prior is None or prior['closed'] or prior['sequence']!=sample['sequence'] or prior['digest']!=digest):
+            raise ValueError('motion apply differs from last confirmed sample')
+        self._quiet();self._motion_write_attempted=True;candidate=copy.deepcopy(sample)
+        accepted=self._apply_motion_once(candidate)
+        self._within();self._quiet()
+        if motion_digest(candidate)!=digest or accepted is not True:raise RuntimeError('motion readback not confirmed')
+        reply={k:command[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
+        reply.update(kind='motion_applied_receipt',status='applied',sample_sha256=digest)
+        self._out=json.dumps(reply,sort_keys=True,separators=(',', ':'),allow_nan=False).encode()+b'\n'
 
     def poll(self, timeout=0):
         """Pump bounded I/O once; True means a receipt was sent to the socket."""

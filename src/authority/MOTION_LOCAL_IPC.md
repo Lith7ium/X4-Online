@@ -65,7 +65,14 @@ does not independently prove X4 execution, position or velocity application,
 visual smoothness or frame equivalence. The buffer stores 3D samples in
 `hold_only` mode: source game time and client real-time arrival are not assumed
 to run at the same rate, and no interpolation or extrapolation is attempted.
-An X4 pose/velocity setter remains a separate integration.
+An independently opt-in `allow_apply=True` enables `apply_once(sample)` on
+this bridge. It accepts only the last successfully BOUND sample, matching its
+epoch, generation, index, sequence and full-sample digest; it sends a fresh
+request and requires the matching APPLIED after the X4 owner reports its later
+local readback. A bridge allows only one attempt, with no automatic retry. A
+missing or invalid reply permanently fences the bridge: the game-side write
+may already have happened and cannot be rolled back. The result is the local
+owner's assertion, not an independent visual, shared-frame or gameplay proof.
 All timeouts must be nested so the X4 IPC deadline is below the enclosing TCP
 operation, and that operation fits in the source bridge deadline. A failed
 callback cannot undo any earlier peer or game-side effect.

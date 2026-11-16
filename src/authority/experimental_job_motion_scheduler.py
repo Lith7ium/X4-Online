@@ -85,6 +85,18 @@ class ExperimentalJobMotionScheduler:
             self._state='ready';return sample
         except BaseException:
             self._fail();raise
+    def apply_once(self,sample):
+        """Apply one already-confirmed sample; failure may follow a side effect."""
+        if self._state!='ready' or threading.get_ident()!=self._owner:
+            self._fail();raise RuntimeError('job/motion scheduler reentered or unavailable')
+        self._state='working'
+        try:
+            self._require_quiet_job()
+            if self._call(self._motion,self._motion.apply_once,sample) is not True:
+                raise RuntimeError('motion write confirmation missing')
+            self._require_quiet_job();self._state='ready';return True
+        except BaseException:
+            self._fail();raise
     def close(self):
         if self._state!='ready' or threading.get_ident()!=self._owner:
             self._fail();raise RuntimeError('job/motion scheduler cannot close')
