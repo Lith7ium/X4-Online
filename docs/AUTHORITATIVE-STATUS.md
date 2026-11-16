@@ -236,6 +236,16 @@ byte-at-a-time guarded result reader was replaced after this failure; the
 recorded artifacts do not establish whether that caused this particular
 timeout. Owned cleanup was reported confirmed. [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md).
 
+A fourth isolated Linux/Linux diagnostic reported success for one confirmed
+job and one read-only source position sample delivered to a client hold buffer.
+The separate X4 logs record source `done` and client `BUFFERED 10055 1`; the
+sample and successful acknowledgements are supported by the saved result and
+worker code, without a packet trace or retained raw worker JSON. Velocity was
+unknown (`null`) and no pose was applied. Admission/checkpoint proof and the
+client seed were synthetic; cross-process frame identity, continuous movement,
+gameplay, Windows and Internet operation remain unproven.
+[Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md#fourth-attempt-one-read-only-sample).
+
 TCP load and participant control have also passed a bounded native Linux/Linux
 loopback diagnostic. They are not yet connected to a playable client or public listener.
 There is no demonstrated Windows or Internet session. The Linux native velocity

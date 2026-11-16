@@ -55,6 +55,38 @@ artifacts do not establish whether result reading was the actual cause of this
 particular timeout. The revision is tested offline only; this is not a native
 successful end-to-end result.
 
+## Fourth attempt: one read-only sample
+
+On 2026-11-16, `.local/authority-source-motion-pair-04` reported `success=true`
+and confirmed cleanup with no owned processes remaining. The source X4 log
+recorded the ordered states `binding → attaching → await_go → observing →
+reading → delivering → done`. The separate client X4 log recorded witness
+1318 accepted in `cluster_115_sector001_macro`, `LOCAL_APPLIED 10055`, and
+`BUFFERED 10055 1 cluster_115_sector001_macro 13.382891193000006`. Both X4
+instances were requested to load the staged checkpoint; the expected marker
+and pause were observed. The result does not establish exact file consumption
+by X4.
+
+The saved result reports one source sample for index 10055, sequence 1, in that
+sector at source game time 13.382891193000006: position
+`(-132216.359375, 6004.388671875, 169077.640625)` and `velocity: null`. It
+also reports a source queue acknowledgement, client binding/buffering and no
+pose application. The source log does not independently list this sample or
+the TCP/UDP acknowledgement frames. The worker and runner code require source
+REARM, local binding, a client reply after its buffer push and a TCP receipt for
+the saved success result; the client marker independently corroborates the
+buffer step, but precedes its reply. No packet trace or separate raw worker
+JSON was retained. PID/socket ownership checks are likewise supported by the
+code and result, without retained raw PID/inode observations. Source and client
+game clocks are independent.
+
+This one local Linux/Linux observation uses synthetic admission/checkpoint
+proof and an artificial client creation seed with approximate loadout. A job
+activation does not prove a birth; the source descriptor is non-atomic. The
+sample does not establish common sector frames, measured or derived velocity,
+continuous movement, a pose or velocity write, a visual flight result, full
+universe coverage, gameplay, Windows or Internet operation.
+
 `authority_source_motion_pair_live.py` is a default-off, single-event diagnostic
 using the existing private two-X4 lifecycle. It stages the pinned census save
 and its historical registry fixture into separate isolated source and client
