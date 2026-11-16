@@ -70,3 +70,42 @@ client sockets with fake client apply functions. It covers ordered success,
 client failure, stale generation, mutation, duplicate messages, socket reuse,
 reentrant guards and missing source receipt. It does not exercise an X4 MD
 callback or actual gameplay.
+
+## Opt-in source peer binding preparation
+
+`experimental_source_job_binding.py` prepares one already-bound loopback UDP
+socket for handoff to `ExperimentalSourceJobBridge`. A paused source owner must
+send one `S|lease|attempt|HELLO|epoch|generation`; the binder checks exact
+context and invokes its caller-supplied peer validator. Only then does it
+connect the socket and send `P|lease|attempt|BOUND|epoch|generation`. It waits
+for the exact `S|lease|attempt|ATTACHED|epoch|generation`, checks peer ownership
+again, and permits a single socket handoff. The supervisor must keep the source
+paused until the handoff and separately controlled resume; those pre-bridge
+messages must not be passed to the source IPC packet handler. Lost, duplicated,
+foreign or uncertain packets, a failed validator or timeout fence the binding;
+there is no retry. A callback or raw descriptor retained by outside code can
+still interfere, and the sampled checks are not atomic.
+
+The binder's `validate_peer(peer)` is an injected assertion, not a PID/inode
+inspection by this component. A real supervisor must independently verify that
+the UDP flow belongs to the owned X4 process and stable start identity, and
+maintain the process, profile, pause and cleanup guards. Local tokens are not
+authentication against another process of the same user. Successful binding is
+not evidence of a job event, source acknowledgment, NPC birth, client delivery,
+Windows or Internet operation. `tests/test_authority_experimental_source_job_binding.py`
+uses local UDP and a simulated source; it does not start X4.
+
+For a Linux diagnostic, `tools/dev/authority_source_job_bind.py` supplies the
+concrete peer validator using the existing `/proc` UDP-flow/socket-inode and
+PID/start-time/executable-identity checks. The supervisor supplies the process
+identity it has independently associated with its owned X4 and the external
+pause/lifetime guard. `tests/test_authority_source_job_bind.py` exercises that
+path against sockets in the test process, including a changed start identity;
+it does not establish X4 ownership or continuous process liveness.
+The handoff returns only the connected socket; it does not install the peer
+validator in `ExperimentalSourceJobBridge`. The supervisor must keep the same
+captured peer/process identity and recheck the UDP flow and socket inode in
+the bridge's guard throughout use. After its deliberate resume, that guard
+must check the expected running context rather than continue requiring pause.
+The existing binding tests cover sampled handshake checks, not later bridge
+lifetime checks.
