@@ -31,7 +31,7 @@ def ident(pid):
 
 @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('luajit') and shutil.which('cc'),'Linux, LuaJIT and C compiler required')
 class WorkerMotion(unittest.TestCase):
-    def run_case(self, *, foreign_peer=False, paused=False, paused_after=False, stop_bound=False, deadline_bound=False, missing_config=False, identity_loss=False):
+    def run_case(self, *, foreign_peer=False, paused=False, paused_after=False, stop_bound=False, deadline_bound=False, missing_config=False, identity_loss=False, refuse_stop=False, resume_after=False, stop_unbound=False, stop_before_resume=False):
         sockets=[];children=[]
         try:
             with tempfile.TemporaryDirectory() as d:
@@ -45,7 +45,7 @@ class WorkerMotion(unittest.TestCase):
                 engine=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sockets.append(engine);engine.bind(('127.0.0.1',0));engine.settimeout(3)
                 motion=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sockets.append(motion);motion.bind(('127.0.0.1',0))
                 parent,child=socket.socketpair();sockets.extend([parent,child]);parent.settimeout(5)
-                env=dict(os.environ,LD_PRELOAD=str(abi),TEST_NET_LIB=str(net),TEST_NET_PORT=str(motion.getsockname()[1]))
+                env=dict(os.environ,LD_PRELOAD=str(abi),TEST_NET_LIB=str(net),TEST_NET_PORT=str(motion.getsockname()[1]),TEST_MOTION_STOP='refuse' if refuse_stop else 'ok')
                 if stop_bound or deadline_bound:env.update(TEST_MOTION_BIND_TRACE='1',TEST_MOTION_BIND_DELAY='4')
                 lua=subprocess.Popen(['luajit','tests/authority_saved_motion_pair_client_fake_x4.lua'],cwd=ROOT,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE);children.append(lua)
                 identity=ident(os.getpid() if foreign_peer else lua.pid)
@@ -73,6 +73,11 @@ class WorkerMotion(unittest.TestCase):
                     engine.sendto(f'RECEIPT|{lease}|{epoch}|{number}|{op}|confirmed'.encode(),peer)
                     self.assertEqual(json.loads(line(server)),dict(command,kind='participant_receipt',status='confirmed'))
                 if not paused:control(1,'resume')
+                if stop_unbound or stop_before_resume:
+                    parent.sendall(b'{"command":"stop"}\n')
+                    self.assertEqual(json.loads(line(parent)),{'event':'failed' if stop_before_resume else 'stopped'})
+                    self.assertEqual(worker.wait(timeout=3),1 if stop_before_resume else 0)
+                    return
                 if identity_loss:
                     lua.terminate();lua.wait(timeout=3)
                     self.assertEqual(json.loads(line(parent)),{'event':'failed'})
@@ -111,7 +116,24 @@ class WorkerMotion(unittest.TestCase):
                     return
                 received=json.loads(line(server));self.assertEqual(received['sample_sha256'],motion_digest(sample));self.assertEqual(received['status'],'accepted')
                 sample=send_sample(2);received=json.loads(line(server));self.assertEqual(received['sample_sha256'],motion_digest(sample))
+                if refuse_stop:
+                    command={'version':1,'kind':'participant_command','epoch':epoch,'connection_handle':1,'request_id':2,'operation':'pause'}
+                    server.sendall(json.dumps(command).encode()+b'\n')
+                    self.assertEqual(json.loads(line(parent)),{'event':'failed'})
+                    self.assertEqual(worker.wait(timeout=3),1)
+                    engine.settimeout(.1)
+                    with self.assertRaises(socket.timeout):engine.recvfrom(1024)
+                    self.assertEqual(server.recv(1),b'')
+                    return
                 control(2,'pause')
+                if resume_after:
+                    command={'version':1,'kind':'participant_command','epoch':epoch,'connection_handle':1,'request_id':3,'operation':'resume'}
+                    server.sendall(json.dumps(command).encode()+b'\n')
+                    self.assertEqual(json.loads(line(parent)),{'event':'failed'})
+                    self.assertEqual(worker.wait(timeout=3),1)
+                    engine.settimeout(.1)
+                    with self.assertRaises(socket.timeout):engine.recvfrom(1024)
+                    return
                 if paused_after:
                     send_sample(3)
                     self.assertEqual(json.loads(line(parent)),{'event':'failed'})
@@ -133,6 +155,10 @@ class WorkerMotion(unittest.TestCase):
     def test_foreign_motion_socket_peer_is_rejected(self):self.run_case(foreign_peer=True)
     def test_motion_before_resume_is_rejected(self):self.run_case(paused=True)
     def test_motion_after_pause_is_rejected(self):self.run_case(paused_after=True)
+    def test_pause_is_not_dispatched_when_stop_refused(self):self.run_case(refuse_stop=True)
+    def test_resume_after_stopped_lease_is_refused(self):self.run_case(resume_after=True)
+    def test_worker_stop_before_first_bind_stops_remote_owner(self):self.run_case(stop_unbound=True)
+    def test_worker_stop_before_first_resume_is_unconfirmed(self):self.run_case(paused=True,stop_before_resume=True)
     def test_stop_while_local_binding_pending(self):self.run_case(stop_bound=True)
     def test_overall_deadline_fences_local_binding(self):self.run_case(deadline_bound=True)
     def test_fourth_fd_without_motion_config_refused(self):self.run_case(missing_config=True)

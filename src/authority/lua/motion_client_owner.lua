@@ -24,6 +24,7 @@ function M.new(o)
  assert(type(c.buffer)=='table' and type(c.buffer.new)=='function')
  local new_buffer=c.buffer.new
  for _,k in ipairs({'clock','guard','register','factory','fault'})do assert(type(c[k])=='function',k)end
+ assert(c.stop==nil or type(c.stop)=='function')
  local saved
  if c.saved_baseline~=nil then
   local s=c.saved_baseline
@@ -164,6 +165,13 @@ function M.new(o)
   return writer:begin(input)==true and state==active and check()
  end
  function api:tick()
+  -- The enclosing update owner must keep ticking while paused. A late
+  -- packet is a fault; stopped owners never revive or inspect an actor.
+  if state=='stopped' and not busy then
+   busy=true;local ok,value=pcall(c.net.receive,c.net);busy=false
+   if not ok or state~='stopped' or value~=nil then return fail('late_packet')end
+   return true
+  end
   if busy or (state~='ready' and state~='pending' and state~='applying' and state~='preflighting') then return fail('tick')end
   busy=true;local ok=pcall(function()
    assert(check())
@@ -188,7 +196,18 @@ function M.new(o)
    if packet~=nil then
     assert(state=='ready' and type(packet)=='string' and #packet<=768)
     local p=split(packet)
-    if p[4]=='APPLY' or p[4]=='OBSERVE' or p[4]=='PREFLIGHT' then assert(accept_operation(packet,p[4])) else assert(not apply_used and accept(packet))end
+    if p[4]=='STOP' then
+     assert(c.stop and #p==7 and p[1]=='M' and p[2]==c.lease and p[3]==c.attempt and
+      token(p[5],32) and p[6]==c.epoch and p[7]==c.generation and check())
+     state='stopping';deadline=last+c.timeout
+     for _,entry in pairs(tracks)do
+      assert(type(entry.binding.close)=='function' and entry.binding:close()==true and state=='stopping' and check())
+     end
+     local ok,closed=pcall(c.stop)
+     assert(ok and closed==true and state=='stopping' and check() and c.net:receive()==nil)
+     assert(send(reply('STOPPED',{p[5],p[6],p[7]})))
+     tracks={};state='stopped';deadline=nil
+    elseif p[4]=='APPLY' or p[4]=='OBSERVE' or p[4]=='PREFLIGHT' then assert(accept_operation(packet,p[4])) else assert(not apply_used and accept(packet))end
    end
   end);busy=false;if not ok then return fail('tick')end;return true
  end

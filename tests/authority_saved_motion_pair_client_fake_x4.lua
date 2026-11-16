@@ -32,7 +32,9 @@ function ConvertIDTo64Bit(v)return v end
 function GetComponentData(ref,...)assert(ref==41);return false,false,false end
 local owner=assert(core.new_x4({enabled=true,lease=('a'):rep(32),attempt=('b'):rep(32),epoch=('c'):rep(32),generation=('d'):rep(32),nonce=('e'):rep(32),
  timeout=2,max_age=2,max_tracks=1,net=net,binding=binding,buffer=buffer,resolve=resolve,expected_save_path='/private/45841/save',
- guard=function()return true end,fault=function()end,saved_baseline={enabled=true,baseline=10054,binding=saved,
+ guard=function()return true end,fault=function()end,
+ stop=os.getenv('TEST_MOTION_STOP') and function()return os.getenv('TEST_MOTION_STOP')=='ok' end or nil,
+ saved_baseline={enabled=true,baseline=10054,binding=saved,
  guard=function(e,n)return e==('c'):rep(32) and n==10054 end}}))
 assert(owner:start())
 while true do

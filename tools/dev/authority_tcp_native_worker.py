@@ -193,9 +193,11 @@ class GuardedParticipant:
         self.guard()
         return result
     def pause(self,handles):
-        if self.motion_gate is not None:self.motion_gate.running=False
+        if self.motion_gate is not None:self.motion_gate.stop()
         return self.call('pause',handles)
     def resume(self,handles):
+        if self.motion_gate is not None and self.motion_gate.stopped:
+            raise RuntimeError('stopped motion lease cannot resume')
         result=self.call('resume',handles)
         if self.motion_gate is not None and result is True:self.motion_gate.running=True
         return result
@@ -206,10 +208,9 @@ class LazyMotion:
     """One participant-thread UDP owner, first bound only after resume."""
     def __init__(self,sock,cfg,guard):
         self.sock,self.cfg,self.guard=sock,cfg,guard
-        self.running=False;self.bridge=None
+        self.running=False;self.stopped=False;self.bridge=None
         self.destination=sock.getsockname()
-    def __call__(self,sample,despawn):
-        if not self.running or despawn is not False:raise RuntimeError('motion while paused or unsupported despawn')
+    def _bind(self):
         self.guard()
         if self.bridge is None:
             # Imported here to avoid a module cycle when this file is __main__.
@@ -222,10 +223,19 @@ class LazyMotion:
                 return self.running and self.sock.getsockname()==self.destination
             m=self.cfg['motion']
             self.bridge=ExperimentalParticipantMotionIPC(self.sock,enabled=True,lease=m['lease'],attempt=m['attempt'],
-                epoch=m['epoch'],generation=m['generation'],guard=context,validate_peer=peer,timeout=m['timeout'])
+                epoch=m['epoch'],generation=m['generation'],guard=context,validate_peer=peer,timeout=m['timeout'],stop_enabled=True)
             self.bridge.wait_ready()
         self.guard()
+    def __call__(self,sample,despawn):
+        if not self.running or self.stopped or despawn is not False:raise RuntimeError('motion while paused or unsupported despawn')
+        self._bind()
         return self.bridge(sample,despawn)
+    def stop(self):
+        if self.stopped:return True
+        if not self.running:raise RuntimeError('motion stop cannot be confirmed before resume')
+        self._bind()
+        if self.bridge.stop_remote() is not True:raise RuntimeError('client motion stop unconfirmed')
+        self.running=False;self.stopped=True;return True
     def close(self):
         if self.bridge is None:self.sock.close()
         elif self.bridge.state not in ('closed','failed'):self.bridge.close()
@@ -283,6 +293,7 @@ def run(tcp,udp,ipc,motion_udp=None):
             if ipc in readable:
                 request=parse_json(read_line(ipc,MAX_IPC,deadline))
                 if request!={'command':'stop'}: raise ValueError('invalid worker command')
+                if motion is not None:motion.stop()
                 cleanup()
                 event(ipc,'stopped',deadline)
                 return

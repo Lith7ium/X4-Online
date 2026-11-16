@@ -25,12 +25,12 @@ class ExperimentalParticipantMotionIPC:
     The separate X4 update owner performs MD/FFI work asynchronously while
     this callback waits. Its deadline must be strictly shorter than TCP's.
     """
-    def __init__(self,sock,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=20,allow_apply=False,observe_limit=None):
+    def __init__(self,sock,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=20,allow_apply=False,observe_limit=None,stop_enabled=False):
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
             any(type(x) is not str or not _TOKEN.fullmatch(x) for x in (lease,attempt,epoch,generation)) or
-            len({lease,attempt,epoch,generation})!=4 or type(allow_apply) is not bool or
+            len({lease,attempt,epoch,generation})!=4 or type(allow_apply) is not bool or type(stop_enabled) is not bool or
             (observe_limit is not None and (type(observe_limit) is not int or not 2<=observe_limit<=8 or allow_apply)) or
             not callable(guard) or not callable(validate_peer) or
             type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=300):
@@ -46,6 +46,7 @@ class ExperimentalParticipantMotionIPC:
         self._owner=threading.get_ident();self._state='new';self._peer=None
         self._prefix=secrets.token_hex(8);self._next=0
         self._allow_apply=allow_apply;self._observe_limit=observe_limit;self._observed=0;self._bound=None;self._apply_attempted=False
+        self._stop_enabled=stop_enabled
         self._preflight_ready=None;self._preflight_seen=set()
     @property
     def state(self):return self._state
@@ -209,8 +210,27 @@ class ExperimentalParticipantMotionIPC:
             if data!=expected:raise ValueError('motion observe response mismatch')
             self._quiet(deadline,'observing');self._observed+=1;self._state='ready';return True
         except BaseException:self._fail();raise
+    def stop_remote(self):
+        """Require correlated cooperative shutdown; later events remain caller-fenced."""
+        if not self._stop_enabled:raise RuntimeError('remote stop not enabled')
+        if self._state!='ready' or threading.get_ident()!=self._owner:
+            self._fail();raise RuntimeError('motion IPC cannot stop')
+        self._state='stopping';deadline=time.monotonic()+self._timeout
+        try:
+            self._quiet(deadline,'stopping')
+            if self._next>=0xffffffffffffffff:raise RuntimeError('motion request capacity')
+            self._next+=1;request=self._prefix+format(self._next,'016x')
+            fields=[request,self._epoch,self._generation]
+            payload='|'.join(['M',self._lease,self._attempt,'STOP',*fields]).encode('ascii')
+            if self._sock.send(payload)!=len(payload):raise RuntimeError('motion stop dispatch failed')
+            self._check(deadline,'stopping');data,_=self._recv(deadline,'stopping')
+            if data!='|'.join(['R',self._lease,self._attempt,'STOPPED',*fields]).encode('ascii'):
+                raise ValueError('foreign motion stop response')
+            self._quiet(deadline,'stopping');self._state='remote_stopped';return True
+        except BaseException:self._fail();raise
     def close(self):
-        if threading.get_ident()!=self._owner or self._state not in ('new','ready'):
+        if (threading.get_ident()!=self._owner or self._state not in ('new','ready','remote_stopped') or
+            (self._stop_enabled and self._state!='remote_stopped')):
             self._fail();raise RuntimeError('motion IPC cannot close')
         self._state='closed'
         with _LOCK:_OWNERS.pop(self._sock,None)
