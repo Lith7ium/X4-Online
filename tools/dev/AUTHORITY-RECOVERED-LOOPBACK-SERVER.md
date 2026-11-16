@@ -598,6 +598,15 @@ different failed predicates, so the specific cause is not yet established.
 The result recorded no motion samples or receipts and reported no remaining
 owned X4 processes.
 
+The sixth attempt, `.local/authority-motion-client-once-06`, passed source
+registration and entered sample collection. It stopped with `saved baseline
+guard failed` after 589.83 s total; its collection phase lasted 306.99 s. The
+progress record counts 231 full guards and 31 saved-checkpoint guard calls
+across the whole diagnostic, not solely the collection phase. It recorded no
+fully confirmed samples, but did not record enough detail to establish whether
+the source produced a sample, TCP delivery started, or a particular deadline
+expired. No owned X4 processes remained according to the result.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
