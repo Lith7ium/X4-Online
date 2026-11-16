@@ -641,6 +641,18 @@ The zero confirmed-receipt count does not exclude a message having reached the
 client before a later failure. The supervisor reported no owned X4 processes
 remaining. This result does not demonstrate visible motion or gameplay.
 
+The eighth attempt, `.local/authority-motion-client-once-08`, enabled the
+longer diagnostic budgets and local guard timing without omitting checks. It
+stopped during source registration, before its first pull: X4 reported
+`router_event_bootstrap_md_unavailable`; a subsequent descriptor recheck
+reported `ship_not_operational`. The recheck is a later observation and does
+not prove which predicate caused the original unavailable response. The
+recorded guard-client pump time was 78.58 s across 81 calls and response-select
+time 0.0165 s across nine calls; send time overlaps pump. These aggregate wall
+times do not measure the helper's internal hash time or prove a general
+performance result. No samples or client receipts were recorded, and the
+supervisor reported no remaining owned X4 processes.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
