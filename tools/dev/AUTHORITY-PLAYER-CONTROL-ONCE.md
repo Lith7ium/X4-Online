@@ -44,9 +44,9 @@ fixture/sector validity, getter results and stable observed owner on both sides.
 An owning supervisor must separately fence Steam identity, exact process,
 protected files and source checkpoint, overall deadline, live callbacks, signal
 handling, and cleanup through the final observation and process stop. These
-are point-in-time checks, not atomic locks. FFI player-container-to-ship mapping,
-owner getter and whether instant teleport finishes while paused are not yet
-validated for this case.
+are point-in-time checks, not atomic locks. Native evidence for the
+player-container-to-ship mapping, owner getter and instant teleport while paused
+is limited to the single recorded case below.
 
 A tick at deadline returns `inconclusive`; a result already being inspected
 that crosses the deadline is also inconclusive, never controlled. A newly
@@ -54,8 +54,9 @@ arriving late or duplicate event faults; there is no automatic retry of Create
 or Teleport. An incomplete but valid post-read is inconclusive, not proof that
 control is impossible. A getter/guard error, a late event, state mismatch, lost
 pause or player/fixture identity change faults and requires discarding the
-world. The caller must continue watching callbacks through cleanup. The current
-component is not a native harness; it has synthetic and fake-FFI evidence only.
+world. The caller must continue watching callbacks through cleanup. The component
+itself is not a native harness; the separate supervisor and bounded native
+observation are described below.
 It cannot establish network propagation, movement/input, two players, Windows,
 Internet, shared economy, combat or a persistent multiplayer session.
 
@@ -81,8 +82,8 @@ inconclusive result is not control. A fault, late event or cleanup failure
 suppresses the control claim. For safety the owner requires
 `GetPlayerContainerID()` itself to equal the target after the first positive
 read; a different valid native container representation would cause a
-conservative failure. Whether teleport can finish while paused, the FFI/MD
-property correspondence and real gameplay remain unproven.
+conservative failure. Correspondence in other contexts and real gameplay remain
+unproven.
 
 ## First native attempt and diagnostic fences
 
@@ -111,3 +112,27 @@ Create or Teleport. A separate explicit arm handshake would be required for a
 pre-mutation log check, with additional analysis of log visibility and process
 fencing; this harness does not implement such a handshake. The copied private
 world remains disposable if any error is detected.
+
+## Second native attempt
+
+The isolated Linux run `.local/authority-player-control-02` completed the
+bounded diagnostic with `outcome=controlled` and `local_control_proven=true`.
+The engine log records the expected marker and paused slot-2 read, followed by
+`START`, `CREATED`, `BEFORE`, `INTENT_TELEPORT`, `LOCAL_CALL_RETURNED`, MD
+`ACTION_BEGIN`, MD `ACTION_RETURNED`, `DISPATCH`, `FIRST`, `CONTROLLED` and
+`DONE` in that order. The reviewed state machine emits `FIRST` only after the
+first post-teleport MD/UI context comparison and `CONTROLLED` after a second
+matching comparison on a subsequent tick. This establishes those guarded,
+paused local readbacks for this one disposable player-owned fixture; it does
+not establish movement, player input, an independently free seat, another
+client, or multiplayer. The action markers alone are not control proof.
+
+The log does not contain the earlier expression parsing/nesting error. It does
+contain startup errors including failed writes to a read-only `config.xml`, so
+it is not an error-free engine log. Source and private staged save each hash to
+`2c6494308424fffe8bd114bd017802e2b6dc1f227a64998aea8a787672846748`;
+the private control MD and two Lua files match their reviewed source bytes.
+The result reports no checkpoint request and no remaining owned processes.
+These file, pause and process observations are sampled checks, not proof of
+byte-exact engine loading or uninterrupted pause. The copied world was not
+retained as a confirmed multiplayer state.

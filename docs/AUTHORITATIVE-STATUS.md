@@ -74,6 +74,10 @@ Native Linux evidence so far:
   completed with an inconclusive outcome. The retained result does not identify
   which search or timeout path occurred and does not establish that no candidate
   exists or that a seat is free.
+* One disposable Linux X4 process created a player-owned fixture, requested a
+  teleport and reported two guarded matching local player-control readbacks
+  while paused. This is a single local case, not demonstrated flight, a free
+  seat, cross-client synchronization, Windows/Internet or gameplay.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
   accepted a trusted client load claim over TCP, and confirmed resume and pause
   through TCP participant control. A second join was simulated. Another run
@@ -123,6 +127,7 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [two-X4 census replica](../tools/dev/AUTHORITY-CENSUS-REPLICA-PAIR.md),
 [player-seat experiment](../tools/dev/AUTHORITY-PLAYER-SEAT-EXPERIMENT.md),
 [positive-seat search](../tools/dev/AUTHORITY-POSITIVE-SEAT-SEARCH.md),
+[local player-control probe](../tools/dev/AUTHORITY-PLAYER-CONTROL-ONCE.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-sector local creation](../tools/dev/AUTHORITY-SECTOR-CREATE-PREPARATION.md),
