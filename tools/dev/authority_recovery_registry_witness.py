@@ -65,6 +65,7 @@ class ErrorWatch:
     """Incrementally fence an owned, append-only X4 log on known failures."""
     TAGS=(b'[X4LAN] AUTH_WORLD_BRIDGE ERROR ',
           b'[X4LAN] AUTH_RECOVERY_WITNESS_ERROR ',
+          b'[X4LAN] AUTH_RECOVERED_SOURCE ERROR ',
           b'Error while executing onEvent script for event: X4AuthorityRegistryWitness.Result.')
     LIMIT=256*1024*1024
     def __init__(self,path):

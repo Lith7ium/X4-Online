@@ -36,6 +36,56 @@ def bind_source(sock, *, process, lease, attempt, epoch, generation, guard, time
     return binding.handoff()
 
 
+def bind_running_source(sock, *, process, lease, attempt, epoch, generation,
+                        world, client_guard, timeout=30):
+    """Private diagnostic only: fence running world and both owned processes.
+
+    The caller's client_guard must check the owned server and admitted client,
+    their original PIDs/start times and all protected session inputs. This is
+    sampled ownership, not proof against a future state change. Any failure
+    closes the socket; the caller must fence the whole session.
+    """
+    if type(process) is not dict or not callable(client_guard):
+        sock.close(); raise ValueError('owned client guard required')
+    try:
+        initial_session=world.session
+        members=tuple(initial_session.players)
+    except BaseException:
+        sock.close();raise
+    def running():
+        s=world.session
+        if (s is not initial_session or s.state!='running' or s.pending is not None or len(members)!=1 or
+                tuple(s.players)!=members or tuple(s.ready_players)!=members):
+            return False
+        if client_guard() is not True:return False
+        return (world.session is initial_session and s.state=='running' and s.pending is None and
+                tuple(s.players)==members and tuple(s.ready_players)==members)
+    try:
+        identity=dict(process)
+        check_process(identity)
+        destination=sock.getsockname()
+        def context():
+            check_process(identity)
+            if running() is not True:return False
+            check_process(identity)
+            return sock.getsockname()==destination
+        def peer(address):
+            if context() is not True:return False
+            return socket_owner(address,destination,identity) is True and context() is True
+        if context() is not True:raise RuntimeError('running source context unavailable')
+        binding=ExperimentalSourceJobBinding(sock,enabled=True,lease=lease,attempt=attempt,
+            epoch=epoch,generation=generation,guard=context,validate_peer=peer,
+            timeout=timeout,running_diagnostic=True)
+        binding.bind()
+        if context() is not True:raise RuntimeError('running source context changed')
+        bound=binding.handoff()
+        if bound is not sock or context() is not True or peer(sock.getpeername()) is not True:
+            raise RuntimeError('running source handoff context changed')
+        return sock
+    except BaseException:
+        sock.close();raise
+
+
 def authorize_source(sock, *, process, lease, attempt, epoch, generation, guard, timeout=30):
     """Send GO on a bound peer and await GO_READY before the supervisor resumes.
 

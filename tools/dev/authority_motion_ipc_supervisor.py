@@ -11,7 +11,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
 from authority.experimental_participant_motion_ipc import ExperimentalParticipantMotionIPC
 from authority.experimental_source_motion_ipc import ExperimentalSourceMotionIPC
-from authority_source_job_bind import bind_source
+from authority_source_job_bind import bind_source, bind_running_source
 from authority_tcp_job_client_live import socket_owner
 from authority_tcp_native_worker import check_process
 
@@ -58,3 +58,36 @@ def bind_source_motion(sock, motion, *, process, lease, attempt, epoch, generati
                     epoch=epoch,generation=generation,guard=context,validate_peer=peer,timeout=timeout,validate_sample=validate_sample,
                     saved_baseline=saved_baseline,saved_guard=saved_guard,latest=latest,select_recipients=select_recipients,
                     saved_lifetime_guard=saved_lifetime_guard,stop_enabled=stop_enabled)
+
+
+def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, generation,
+                               world, client_guard, timeout=30, validate_sample=None,
+                               saved_baseline=None, saved_guard=None, select_recipients=None):
+    """Opt-in single diagnostic source; no assertion of cross-X4 identity."""
+    if not callable(client_guard) or not callable(select_recipients):
+        sock.close();raise ValueError('running client guard and interest selector required')
+    try:
+        if motion._delivery._host._world is not world:
+            raise ValueError('motion owner belongs to another world')
+        initial_session=world.session
+        members=tuple(initial_session.players)
+    except BaseException:
+        sock.close();raise
+    def running():
+        s=world.session
+        return (motion._delivery._host._world is world and s is initial_session and s.state=='running' and s.pending is None and len(members)==1 and
+                tuple(s.players)==members and tuple(s.ready_players)==members and client_guard() is True and
+                motion._delivery._host._world is world and world.session is initial_session and s.state=='running' and s.pending is None and
+                tuple(s.players)==members and tuple(s.ready_players)==members)
+    try:
+        context,peer=_guards(sock,process,running)
+        bind_running_source(sock,process=process,lease=lease,attempt=attempt,epoch=epoch,
+                            generation=generation,world=world,client_guard=client_guard,timeout=timeout)
+        if context() is not True or peer(sock.getpeername()) is not True:
+            raise RuntimeError('running source context changed after handoff')
+        return ExperimentalSourceMotionIPC(sock,motion,enabled=True,lease=lease,attempt=attempt,
+            epoch=epoch,generation=generation,guard=context,validate_peer=peer,timeout=timeout,
+            validate_sample=validate_sample,saved_baseline=saved_baseline,saved_guard=saved_guard,
+            select_recipients=select_recipients,stop_enabled=True)
+    except BaseException:
+        sock.close();raise

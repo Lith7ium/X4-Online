@@ -18,19 +18,23 @@ from .experimental_source_job_bridge import _SOCKET_OWNERS as _OWNED, _SOCKET_LO
 class ExperimentalSourceJobBinding:
     """One loopback source socket, HELLO/BOUND/ATTACHED and one handoff.
 
-    The caller must keep the source X4 paused and not resume it until bind and
-    handoff succeed. `validate_peer` must independently check the sampled peer
+    By default the caller must keep the source X4 paused until bind and handoff
+    succeed. The explicit running_diagnostic mode requires the caller to fence
+    the running world and its owned client through the entire handoff.
+    `validate_peer` must independently check the sampled peer
     against the exact owned X4 PID/start-time and socket inode. The HELLO and
     local UDP are correlation only, not process authentication or encryption.
     """
     def __init__(self, sock, *, enabled=False, lease, attempt, epoch, generation,
-                 guard, validate_peer, timeout=30):
+                 guard, validate_peer, timeout=30, running_diagnostic=False):
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
             any(type(x) is not str or not _TOKEN.fullmatch(x) for x in (lease,attempt,epoch,generation)) or
             len({lease,attempt,epoch,generation})!=4 or not callable(guard) or not callable(validate_peer) or
-            type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=300):
+            type(running_diagnostic) is not bool or
+            type(timeout) not in (int,float) or not math.isfinite(timeout) or
+            not 0<timeout<=(120 if running_diagnostic else 300)):
             raise ValueError('enabled bound loopback source socket and context required')
         try:sock.getpeername()
         except OSError:pass

@@ -101,5 +101,44 @@ class HelperLifecycleTest(unittest.TestCase):
         helper.stop()
         self.assertIsNotNone(helper.proc.poll())
 
+    def test_replaced_pidfd_never_signals_other_owned_child(self):
+        first=self.helper('import time;time.sleep(60)');second=self.helper('import time;time.sleep(60)')
+        first.release();second.release()
+        backup=os.dup(first.pidfd)
+        try:
+            os.dup2(second.pidfd,first.pidfd)
+            with self.assertRaisesRegex(RuntimeError,'pidfd replaced'):
+                first.stop(grace=.05)
+            self.assertIsNone(first.proc.poll());self.assertIsNone(second.proc.poll())
+        finally:
+            os.dup2(backup,first.pidfd);os.close(backup)
+        first.stop();second.stop()
+
+    def test_missing_registered_pidfd_does_not_fall_back_to_pid_signal(self):
+        helper=self.helper('import time;time.sleep(60)');helper.release()
+        original=helper.pidfd;helper.pidfd=None
+        try:
+            with self.assertRaisesRegex(RuntimeError,'pidfd missing'):helper.stop()
+            self.assertIsNone(helper.proc.poll())
+        finally:helper.pidfd=original
+        helper.stop()
+
+    def test_pidfd_replacement_during_wait_is_not_closed(self):
+        first=self.helper('import time;time.sleep(60)');second=self.helper('import time;time.sleep(60)')
+        first.release();second.release();backup=os.dup(first.pidfd)
+        original_wait=first.proc.wait
+        def replace_after_wait(*args,**kwargs):
+            status=original_wait(*args,**kwargs)
+            os.dup2(second.pidfd,first.pidfd)
+            return status
+        try:
+            with patch.object(first.proc,'wait',side_effect=replace_after_wait):
+                with self.assertRaisesRegex(RuntimeError,'pidfd replaced'):first.stop(grace=.05)
+            os.fstat(first.pidfd)
+            self.assertIsNone(second.proc.poll())
+        finally:
+            os.dup2(backup,first.pidfd);os.close(backup)
+        first.stop();second.stop()
+
 
 if __name__ == '__main__': unittest.main()

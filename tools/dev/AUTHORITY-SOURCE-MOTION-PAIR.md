@@ -298,3 +298,12 @@ The local UDP library exposes a nonblocking `pending()` check so the source can
 reject queued empty or oversized datagrams before and after STOP. This check is
 a point-in-time observation, not a guarantee against future arrivals. The C
 implementation has not been tested under Windows.
+
+An explicit running-source bind variant now checks the same world, participant
+and process/socket identities across the handoff; the existing paused-source
+variant remains the default. A private guard-reader mode performs the full
+witness-source validation before READY and supports correlated CHECK and STOP
+requests. Its helper cleanup uses a verified pidfd and requires exclusive
+ownership of the process's descriptor table. These pieces are not yet wired
+into the recovery supervisor. Their timing and sustained throughput with a
+large native save have not been measured.
