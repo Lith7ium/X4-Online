@@ -22,7 +22,7 @@ _MAX=9007199254740991
 
 class ExperimentalSourceMotionIPC:
     """One request at a time; no next pull until TCP recipients confirm."""
-    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None,saved_baseline=None,saved_guard=None,latest=False,saved_lifetime_guard=None):
+    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None,saved_baseline=None,saved_guard=None,latest=False,saved_lifetime_guard=None,stop_enabled=False):
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
@@ -34,7 +34,7 @@ class ExperimentalSourceMotionIPC:
             (saved_lifetime_guard is not None and not callable(saved_lifetime_guard)) or
             (latest and saved_guard is not None and saved_lifetime_guard is None) or
             (saved_lifetime_guard is not None and (not latest or saved_guard is None)) or
-            type(latest) is not bool or (latest and (select_recipients is None or
+            type(latest) is not bool or type(stop_enabled) is not bool or (latest and (select_recipients is None or
                 motion._delivery._host._control._latest_motion is None or motion._delivery._host._control._latest_source is not None or
                 motion._delivery._test_binding is not None)) or
             not ((saved_baseline is None and saved_guard is None) or
@@ -54,6 +54,7 @@ class ExperimentalSourceMotionIPC:
         self._state='ready';self._owner=threading.get_ident();self._next=0;self._indices=set();self._saved_indices=set();self._scheduler_owner=None;self._scheduler_lease=None
         self._last_pull=None;self._observed={};self._latest=latest;self._pending_request=None;self._pending_deadline=None;self._pending_barrier_generation=None
         self._saved_baseline=saved_baseline;self._saved_guard=saved_guard;self._saved_lifetime_guard=saved_lifetime_guard;self._lifetime_only=False
+        self._stop_enabled=stop_enabled
         motion._source_owner=self
         if latest:motion._delivery._host._control._latest_source=self
     @property
@@ -398,10 +399,45 @@ class ExperimentalSourceMotionIPC:
                 raise RuntimeError('motion readback not confirmed')
             self._quiet(deadline,'applying');self._state='ready';return True
         except BaseException:self._fail();raise
+    def stop_remote(self,*,_scheduler=None):
+        """Confirm a cooperative X4-side stop before allowing world pause.
+
+        STOP is opt-in and valid only with no pull or latest-motion work in
+        flight. The X4 caller must close its sampler, bootstrap and event
+        router before acknowledging. Lost or ambiguous receipts fault the host;
+        this method does not prove client identity or game-world consistency.
+        """
+        self._reserved(_scheduler)
+        if not self._stop_enabled:
+            raise RuntimeError('remote source stop is not enabled')
+        if self._state!='ready' or threading.get_ident()!=self._owner:
+            self._fail();raise RuntimeError('source motion cannot stop')
+        if self._latest and not self._motion._delivery._host._control._motion_idle():
+            self._fail();raise RuntimeError('drain latest motion before stopping source')
+        self._state='stopping';deadline=time.monotonic()+self._timeout
+        try:
+            self._quiet(deadline,'stopping')
+            if self._next>=_MAX:raise RuntimeError('source motion request capacity')
+            self._next+=1;request=str(self._next)
+            packet='|'.join(['P',self._lease,self._attempt,'STOP',self._epoch,self._generation,request]).encode('ascii')
+            if self._sock.send(packet)!=len(packet):raise RuntimeError('source motion stop dispatch failed')
+            while True:
+                self._check(deadline,'stopping')
+                readable,_,bad=select.select([self._sock],[],[self._sock],min(.1,max(0,deadline-time.monotonic())))
+                self._check(deadline,'stopping')
+                if bad:raise RuntimeError('source motion socket error')
+                if readable:break
+            data=self._sock.recv(_MAX_PACKET+1)
+            expected='|'.join(['S',self._lease,self._attempt,'STOPPED',self._epoch,self._generation,request]).encode('ascii')
+            if data!=expected:raise ValueError('foreign source motion stop response')
+            self._quiet(deadline,'stopping');self._state='remote_stopped';return True
+        except BaseException:self._fail();raise
+
     def close(self,*,_scheduler=None):
         self._reserved(_scheduler)
-        if self._state!='ready' or threading.get_ident()!=self._owner:
-            self._fail();raise RuntimeError('source motion cannot close')
+        if (self._state not in ('ready','remote_stopped') or threading.get_ident()!=self._owner or
+                (self._stop_enabled and self._state!='remote_stopped')):
+            self._fail();raise RuntimeError('source motion cannot close without confirmed remote stop')
         if self._latest and not self._motion._delivery._host._control._motion_idle():
             raise RuntimeError('drain latest motion before closing source')
         self._state='closed'

@@ -251,3 +251,27 @@ Windows or Internet operation. TCP admission and checkpoint proof in the
 network coordinator are synthetic. The successful rerun is consistent with
 the conversion fix; it does not establish which exact conversion failed in
 the previous run.
+
+### Experimental source-stop protocol
+
+The Lua source-motion IPC can opt into a correlated `STOP`/`STOPPED` exchange
+by supplying a synchronous stop callback. The callback contract requires the
+owner to close its idle saved-registry bootstrap, sampler and event router
+before returning success. The Python source IPC requires `stop_enabled=True`
+for `stop_remote()` and refuses ordinary close until that remote stop succeeds.
+A missing, stale or otherwise invalid reply faults the host. The X4-side UDP
+socket stays bound until process cleanup so the supervisor can still check its
+peer after `STOPPED`.
+
+Offline Lua and real loopback UDP/Python tests exercise the wire sequence with
+a simulated shutdown callback; they do not show an actual X4 bootstrap,
+sampler or event router being stopped. The additive X4 source owner and its
+shutdown callback are not integrated into the recovery supervisor. The outer
+supervisor must fence the world and require successful remote stop before any
+pause, save or disconnect. This protocol does not establish historical ship
+identity, client application or multiplayer gameplay.
+`STOPPED` alone does not prove that the event router stays fault-free after the
+receipt. The eventual owner must continue guarding its session and error log,
+and fence the session if a late event or any shutdown uncertainty occurs. Until
+the real X4 shutdown callback and router are implemented and verified, this
+STOP path is not a demonstrated basis for releasing a world pause or save.

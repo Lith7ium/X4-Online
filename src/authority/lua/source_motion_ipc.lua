@@ -13,6 +13,7 @@ function M.new(c)
  assert(c.lease~=c.attempt and c.lease~=c.epoch and c.lease~=c.generation and c.attempt~=c.epoch and c.attempt~=c.generation and c.epoch~=c.generation)
  assert(finite(c.timeout) and c.timeout>0 and c.timeout<=120)
  assert(type(c.clock)=='function' and type(c.guard)=='function' and type(c.fault)=='function')
+ assert(c.stop==nil or type(c.stop)=='function') -- caller owns sampler, bootstrap and event-router shutdown
  if c.saved_baseline~=nil then
   assert(type(c.saved_baseline)=='table' and integer(c.saved_baseline.limit) and type(c.saved_baseline.guard)=='function')
   c.saved_baseline={limit=c.saved_baseline.limit,guard=c.saved_baseline.guard}
@@ -51,7 +52,7 @@ function M.new(c)
   busy=false;if not ok then return fail('start')end;return true
  end
  function api:tick()
-  if busy or state=='new' or state=='failed' then return fail('tick')end
+  if busy or state=='new' or state=='failed' or state=='stopped' then return fail('tick')end
   busy=true
   local ok=pcall(function()
    assert(check());local packet=c.net:receive();assert(check())
@@ -62,11 +63,20 @@ function M.new(c)
    if state=='binding' then
     assert(#p==6 and p[4]=='BOUND');state='ready';assert(send(context('ATTACHED')));deadline=nil
    elseif state=='ready' then
-    assert((#p==7 and p[4]=='PULL') or (#p==9 and p[4]=='REGISTER_SAVED' and c.saved_baseline))
+    assert((#p==7 and (p[4]=='PULL' or (p[4]=='STOP' and c.stop))) or (#p==9 and p[4]=='REGISTER_SAVED' and c.saved_baseline))
     assert(p[7]:match('^[1-9]%d*$') and #p[7]<=16)
     local n=tonumber(p[7]);assert(integer(n) and string.format('%.0f',n)==p[7] and n==seq+1)
     request=n;deadline=last+c.timeout
-    if p[4]=='PULL' then state='requested' else
+    if p[4]=='STOP' then
+     -- stop() must synchronously close the idle bootstrap, sampler and event
+     -- router, or return false. Keep the UDP socket owned until X4 cleanup so
+     -- the supervisor can still validate its peer after the acknowledgement.
+     state='stopping';assert(check())
+     local invoked,closed=pcall(c.stop)
+     assert(invoked and closed==true and state=='stopping' and check())
+     assert(send({'STOPPED',c.epoch,c.generation,string.format('%.0f',request)}))
+     seq=request;request=nil;deadline=nil;state='stopped'
+    elseif p[4]=='PULL' then state='requested' else
      assert(p[8]:match('^[1-9]%d*$') and #p[8]<=16 and p[9]==string.format('%.0f',c.saved_baseline.limit))
      saved_index=tonumber(p[8]);assert(integer(saved_index) and saved_index<=c.saved_baseline.limit and string.format('%.0f',saved_index)==p[8])
      state='register_saved';assert(check())
