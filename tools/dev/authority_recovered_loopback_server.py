@@ -427,7 +427,7 @@ def run(args):
                     raise ValueError('witness source status changed during initialization')
             verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
             witness_nonce=secrets.token_hex(16)
-            protected.extend(witness_check.install(case,witness_nonce,registry_expected[1],registry_expected[2],witness_phase))
+            protected.extend(witness_check.install(case,witness_nonce,registry_expected[1],registry_expected[2],witness_phase,allow_resume=witness_join))
         clock = None
         if getattr(args, 'diagnostic_overlap', False):
             import authority_overlap_clock

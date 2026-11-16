@@ -9,10 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 HEX = re.compile(r'[0-9a-f]{32}\Z')
 
 
-def install(case, nonce, epoch, count, phase):
+def install(case, nonce, epoch, count, phase, *, allow_resume=False):
     if (not isinstance(nonce,str) or not HEX.fullmatch(nonce) or
             not isinstance(epoch,str) or not HEX.fullmatch(epoch) or nonce == epoch or
-            type(count) is not int or not 1 <= count <= 200000 or phase not in ('create','verify')):
+            type(count) is not int or not 1 <= count <= 200000 or phase not in ('create','verify') or
+            type(allow_resume) is not bool or (allow_resume and phase!='verify')):
         raise ValueError('invalid witness diagnostic setup')
     lab=Path(case)/'extensions/x4_lan_lab'; ui=lab/'ui'; md=lab/'md'
     script=md/'authority_registry_witness.xml'; module=ui/'recovery_registry_witness.lua'
@@ -43,9 +44,19 @@ def install(case, nonce, epoch, count, phase):
    end}))
   assert(registry_witness:start())
  end
- assert(registry_witness:tick())
- if registry_witness:state()~='done' then return end
 ''' % (epoch,nonce,count,phase,nonce)
+    if allow_resume:
+        # Only the private join proceeds after its completed paused check.
+        # A later event changes done to failed and is checked on the next frame.
+        config += ''' if registry_witness:state()~='done' then
+  assert(registry_witness:tick())
+  if registry_witness:state()~='done' then return end
+ end
+'''
+    else:
+        config += ''' assert(registry_witness:tick())
+ if registry_witness:state()~='done' then return end
+'''
     probe.write_text(data.replace(hook,hook+config))
     return [module,script]
 

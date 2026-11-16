@@ -503,6 +503,16 @@ the supervisor was repeatedly validating the source. Owned-process cleanup
 was confirmed. Admission, resume and the final disconnect save were not
 established by this run.
 
+The next isolated Linux run reached the participant worker after loading the
+confirmed checkpoint, but did not complete the session. On resume the X4 log
+reported `AUTH_RECOVERY_WITNESS_ERROR ... not_paused` and a bridge error. The
+completed witness was still being ticked with a pause requirement, so its
+error stopped the bridge; cleanup reported no owned processes remaining. The
+private join now stops ticking that one-time witness after `done`, while a
+failed state or unexpected event still faults. Standalone witness diagnostics
+retain their pause checks. Offline tests cover the generated probe; a successful
+native resume and disconnect save remain to be demonstrated.
+
 The `verify` witness path uses a pinned source guard after its full initial
 validation. Repeated checks hash the compressed source and inspect the
 confirmed pointers, manifest and file identities, without repeatedly parsing
