@@ -10,7 +10,8 @@ function X4LAN_RECOVERED_CLIENT_LOAD_READY()return ready end
 X4LAN_AUTHORITY_X4_CONTROL_ENGINE={new=function()return {}end}
 X4LAN_AUTHORITY_CONTROL_STATE={new=function()return {on_update=function()return true end}end}
 package.loadlib=function()return function()return {open=function()return {
- send=function()return true end,receive=function()return nil end}end}end end
+ send=function()return true end,receive=function()return nil end}end,monotonic=function()return 1 end}end end
+X4LAN_LOCAL_UDP_MODULE=dofile('src/authority/lua/local_udp_module.lua')
 X4LAN_RECOVERED_CLIENT_MOTION={new_x4=function()
  created=created+1;return {tick=function()ticks=ticks+1;return true end}
 end}

@@ -7,7 +7,7 @@ local function frame()
  if not ffi.C.IsPlayerValid() then return end
  if not state then
   engine=assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.new({enabled=true,test_profile='45841'}))
-  local lib=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
+  local lib=X4LAN_LOCAL_UDP_MODULE.load(ffi.os,package.loadlib)
   net=lib.open('127.0.0.1',cfg.authority_participant_port)
   state=assert(X4LAN_AUTHORITY_CONTROL_STATE.new({enabled=true,owner='isolated-client',
     world_epoch=cfg.authority_ticket.world_epoch,timeout_seconds=120},engine,function(row)

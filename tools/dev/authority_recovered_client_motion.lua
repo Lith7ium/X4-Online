@@ -61,7 +61,7 @@ function M.new_x4(c)
   local v=c[key];assert(token(v) and not seen[v]);seen[v]=true
  end
  local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);const char* GetSaveFolderPath(void);]]
- local C=ffi.C;local netlib=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
+ local C=ffi.C;local netlib=X4LAN_LOCAL_UDP_MODULE.load(ffi.os,package.loadlib)
  local net=assert(netlib.open('127.0.0.1',c.port))
  assert(type(net.pending)=='function')
  local function environment()

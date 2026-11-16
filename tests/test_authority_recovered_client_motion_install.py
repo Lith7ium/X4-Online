@@ -18,6 +18,7 @@ import authority_recovered_client_motion_install as subject
 import authority_recovered_client_registry as registry
 import authority_recovered_server_client as recovered_client
 import authority_two_x4_identity_live as identity
+import authority_two_x4_resume_live as participant
 
 class Install(unittest.TestCase):
  def setUp(self):
@@ -37,7 +38,8 @@ class Install(unittest.TestCase):
           'checkpoint_id':'checkpoint-'+'6'*32,'sha256':'7'*64,'attempt_id':'f'*32,'slot':'save_009'}
   config=download.install_probe(self.case,self.profile,ticket)
   cfg=config.read_text();config.write_text(cfg[:-2]+',authority_participant_port=1234,authority_participant_lease="'+'a'*32+'"}\n')
-  (self.lab/'ui.xml').write_text('<ui>\n    <file name="ui/authority_download_load_probe.lua" />\n    <file name="ui/authority_two_x4_participant_probe.lua" />\n</ui>\n')
+  (self.lab/'ui.xml').write_text('<ui>\n    <file name="ui/authority_download_load_probe.lua" />\n    <file name="ui/local_udp_module.lua" />\n    <file name="ui/authority_two_x4_participant_probe.lua" />\n</ui>\n')
+  (self.ui/'local_udp_module.lua').write_bytes(participant.local_udp_loader_bytes())
   (self.ui/'authority_two_x4_participant_probe.lua').write_text((ROOT/'tools/dev/authority_two_x4_participant_probe.lua').read_text())
   code=(ROOT/'tools/dev/authority_download_load_probe.lua').read_text()
   code=code.replace("local state='initial';local failed=false\n", "local state='initial';local failed=false\nlocal registry_status=nil\n")
@@ -55,6 +57,10 @@ class Install(unittest.TestCase):
   self.assertEqual(installed.count("SetScript('onUpdate'"),1);self.assertIn('assert(state:on_update())',installed)
   self.assertIn('assert(state:on_update())',control);self.assertIn('client_motion:tick()',installed)
   self.assertEqual((self.lab/'ui.xml').read_text().count('ui/client_motion_event_router.lua'),1)
+  manifest=(self.lab/'ui.xml').read_text()
+  self.assertEqual(manifest.count('ui/local_udp_module.lua'),1)
+  self.assertLess(manifest.index('ui/local_udp_module.lua'),manifest.index('ui/authority_recovered_client_motion.lua'))
+  self.assertLess(manifest.index('ui/local_udp_module.lua'),manifest.index('ui/authority_two_x4_participant_probe.lua'))
   self.assertIn('state==\'done\' and not failed',(self.ui/'authority_download_load_probe.lua').read_text())
   if shutil.which('luajit'):
    for p in (self.ui/'authority_two_x4_participant_probe.lua',self.ui/'authority_download_load_probe.lua',*(self.ui/name for _,name in subject.MODULES)):
@@ -105,7 +111,33 @@ class Install(unittest.TestCase):
   settings=dict(self.settings,port=motion_socket.getsockname()[1])
   installation=subject.install(case,profile,self.status,settings)
   self.assertTrue(all(path.is_file() for path in installation.paths))
+  self.assertIn(ui/'local_udp_module.lua',participant.protected(case))
   installation.redact();participant.redact()
+ def test_loader_missing_changed_or_misordered_is_rejected_before_mutation(self):
+  loader=self.ui/'local_udp_module.lua';manifest=self.lab/'ui.xml'
+  original_loader=loader.read_bytes();original_manifest=manifest.read_text()
+  inputs=(self.ui/'config.lua',manifest,self.ui/'authority_two_x4_participant_probe.lua',self.ui/'authority_download_load_probe.lua')
+  loader_hook='    <file name="ui/local_udp_module.lua" />\n'
+  control_hook='    <file name="ui/authority_two_x4_participant_probe.lua" />\n'
+  for mode in ('missing','changed','missing_manifest','duplicate_manifest','alternate_duplicate','misordered_manifest'):
+   with self.subTest(mode=mode):
+    loader.write_bytes(original_loader);manifest.write_text(original_manifest)
+    if mode=='missing':loader.unlink()
+    elif mode=='changed':loader.write_bytes(b'changed')
+    elif mode=='missing_manifest':manifest.write_text(original_manifest.replace(loader_hook,''))
+    elif mode=='duplicate_manifest':manifest.write_text(original_manifest.replace(loader_hook,loader_hook+loader_hook))
+    elif mode=='alternate_duplicate':manifest.write_text(original_manifest.replace(loader_hook,loader_hook+"  <file name='ui/local_udp_module.lua'/>\n"))
+    else:manifest.write_text(original_manifest.replace(loader_hook,'').replace(control_hook,control_hook+loader_hook))
+    before=[p.read_bytes() for p in inputs]
+    with self.assertRaises(ValueError):self.install()
+    self.assertEqual([p.read_bytes() for p in inputs],before)
+    self.assertFalse((self.ui/'authority_recovered_client_motion.lua').exists())
+ @unittest.skipUnless(shutil.which('luajit'),'LuaJIT required')
+ def test_both_client_owners_select_only_their_platform_loader(self):
+  for platform in ('Linux','Windows','unsupported'):
+   with self.subTest(platform=platform):
+    subprocess.run(['luajit','tests/authority_recovered_client_udp_loader.lua',platform],
+                   cwd=ROOT,check=True,capture_output=True,text=True,timeout=5)
  def test_redaction_rejects_replaced_config(self):
   result=self.install();config=self.ui/'config.lua';replacement=self.ui/'replacement';replacement.write_bytes(config.read_bytes());os.replace(replacement,config)
   with self.assertRaises(ValueError):result.redact()

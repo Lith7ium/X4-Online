@@ -10,7 +10,9 @@ import os
 from pathlib import Path
 import re
 import stat
+import xml.etree.ElementTree as ET
 import authority_load_live as load
+import authority_two_x4_resume_live as participant
 
 ROOT=Path(__file__).resolve().parents[2]
 HEX=re.compile(r'[0-9a-f]{32}\Z')
@@ -117,10 +119,20 @@ def install(case,profile,status,settings):
         raise ValueError('invalid client extension')
     config,manifest=ui/'config.lua',lab/'ui.xml'
     control,loader=ui/'authority_two_x4_participant_probe.lua',ui/'authority_download_load_probe.lua'
-    required=(config,manifest,control,loader,md/'authority_ship_registry.xml',ui/'recovery_registry_status.lua')
+    udp_loader=ui/'local_udp_module.lua'
+    required=(config,manifest,control,loader,udp_loader,md/'authority_ship_registry.xml',ui/'recovery_registry_status.lua')
     if any(p.is_symlink() or not p.is_file() for p in required):raise ValueError('client load/control/registry owner unavailable')
     cfg=config.read_text(encoding='ascii');mf=manifest.read_text(encoding='utf-8')
     ctl=control.read_text(encoding='utf-8');load_text=loader.read_text(encoding='utf-8')
+    try:
+        manifest_files=[element.get('name') for element in ET.fromstring(mf).iter('file')]
+    except ET.ParseError as error:
+        raise ValueError('invalid client UI manifest') from error
+    if (manifest_files.count('ui/local_udp_module.lua')!=1 or
+        manifest_files.count('ui/authority_two_x4_participant_probe.lua')!=1 or
+        manifest_files.index('ui/local_udp_module.lua')>manifest_files.index('ui/authority_two_x4_participant_probe.lua') or
+        any(name=='ui/authority_recovered_client_motion.lua' for name in manifest_files)):
+        raise ValueError('client UDP loader manifest is ambiguous')
     if not cfg.endswith('}\n') or re.search(r'\bauthority_client_motion_[A-Za-z0-9_]+\s*=',cfg):
         raise ValueError('invalid or already extended client config')
     path='authority_load_save_path='+load.lua_literal(str(profile/'save'))
@@ -137,10 +149,13 @@ def install(case,profile,status,settings):
     if load_text.count(marker)!=1 or load_text.count('if not registry_status:ready() then return end')!=1:
         raise ValueError('client registry status differs')
     manifest_hook='    <file name="ui/authority_two_x4_participant_probe.lua" />\n'
+    udp_loader_hook='    <file name="ui/local_udp_module.lua" />\n'
     control_hook=' assert(state:on_update())\n'
     local_hook='local net,state,engine,next_hello,failed=nil,nil,nil,0,false\n'
     validity_hook=' if not ffi.C.IsPlayerValid() then return end\n'
-    if (mf.count(manifest_hook)!=1 or ctl.count(control_hook)!=1 or ctl.count(local_hook)!=1 or ctl.count(validity_hook)!=1 or
+    if (udp_loader.read_bytes()!=participant.local_udp_loader_bytes() or
+        mf.count(udp_loader_hook)!=1 or mf.count(manifest_hook)!=1 or mf.index(udp_loader_hook)>mf.index(manifest_hook) or
+        ctl.count(control_hook)!=1 or ctl.count(local_hook)!=1 or ctl.count(validity_hook)!=1 or
         ctl.count("SetScript('onUpdate'")!=1 or load_text.count("SetScript('onUpdate'")!=1 or
         'X4LAN_RECOVERED_CLIENT_LOAD_READY' in load_text):
         raise ValueError('client owner hooks missing or ambiguous')

@@ -22,6 +22,14 @@ from lockstep.launcher import extension
 from authority.local_participant_control import LocalParticipantControl
 
 
+def local_udp_loader_bytes():
+    """Expose the existing loader to scripts sharing the extension's UI state."""
+    source = (ROOT/'src/authority/lua/local_udp_module.lua').read_bytes()
+    if source.count(b'return M\n') != 1:
+        raise ValueError('unexpected local UDP loader')
+    return source.replace(b'return M\n', b'X4LAN_LOCAL_UDP_MODULE=M\nreturn M\n')
+
+
 class Participant(LocalParticipantControl):
     """Single serialized loopback diagnostic, fenced on any uncertain receipt."""
     def __init__(self):
@@ -30,10 +38,16 @@ class Participant(LocalParticipantControl):
 
     def install(self, case):
         lab = case/'extensions/x4_lan_lab'; ui = lab/'ui'
+        udp_loader = ui/'local_udp_module.lua'
+        udp_loader_data = local_udp_loader_bytes()
+        if udp_loader.exists() or udp_loader.is_symlink():
+            raise ValueError('local UDP loader already exists')
         for source, name in ((ROOT/'src/authority/lua/control_state.lua', 'authority_control_state.lua'),
                              (ROOT/'src/authority/lua/x4_control_engine.lua', 'x4_control_engine.lua'),
                              (ROOT/'tools/dev/authority_two_x4_participant_probe.lua', 'authority_two_x4_participant_probe.lua')):
             shutil.copyfile(source, ui/name)
+        with udp_loader.open('xb') as output:
+            output.write(udp_loader_data)
         server_lib = getattr(self, 'server_library', case.parent.parent/'server/case/extensions/x4_lan_lab/native/x4lan_net.so')
         shutil.copyfile(server_lib, lab/'native/x4lan_net.so')
         config = ui/'config.lua'; text = config.read_text(encoding='ascii')
@@ -46,6 +60,7 @@ class Participant(LocalParticipantControl):
         files = [*extension.BASE_UI, 'ui/client_load_barrier.lua', 'ui/x4_client_load_engine.lua',
                  'ui/authority_identity_probe.lua', 'ui/authority_download_load_probe.lua',
                  'ui/authority_control_state.lua', 'ui/x4_control_engine.lua',
+                 'ui/local_udp_module.lua',
                  'ui/authority_two_x4_participant_probe.lua']
         (lab/'ui.xml').write_text(extension.ui_xml(files), encoding='utf-8')
 
@@ -72,7 +87,7 @@ class Participant(LocalParticipantControl):
 
     def protected(self, case):
         lab = case/'extensions/x4_lan_lab'
-        return [lab/'ui'/name for name in ('authority_control_state.lua', 'x4_control_engine.lua',
+        return [lab/'ui'/name for name in ('authority_control_state.lua', 'x4_control_engine.lua', 'local_udp_module.lua',
                                            'authority_two_x4_participant_probe.lua')] + [lab/'native/x4lan_net.so']
 
     def on_ready(self, *, world, handle, ticket, target, server_identity, server_proc, server_started,

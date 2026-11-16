@@ -17,7 +17,8 @@ end,receive=function()
  receives=receives+1
  local v=table.remove(input,1);if v=='' or (v and #v>768)then return nil end;return v
 end}
-package.loadlib=function()return function()return {open=function(_,port)assert(port==2345);return net end}end end
+package.loadlib=function()return function()return {open=function(_,port)assert(port==2345);return net end,monotonic=function()return 1 end}end end
+X4LAN_LOCAL_UDP_MODULE=dofile('src/authority/lua/local_udp_module.lua')
 X4LAN_RESOLVE_STRING=dofile('tools/dev/authority_registry_resolve_string.lua')
 X4LAN_REPLICA_MOTION_BINDING=dofile('src/authority/lua/replica_motion_binding.lua')
 X4LAN_SAVED_BASELINE_MOTION_BINDING=dofile('src/authority/lua/saved_baseline_motion_binding.lua')
