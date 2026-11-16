@@ -1,0 +1,213 @@
+"""Supervisor socket-loop coverage only; no native X4 is launched here."""
+import importlib.util
+import gzip
+import json
+from pathlib import Path
+import shutil
+import socket
+import tempfile
+import threading
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location('authority_recovered_loopback_server',
+    ROOT/'tools/dev/authority_recovered_loopback_server.py')
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
+from authority.checkpoints import CheckpointStore
+from authority.experimental_local_host import ExperimentalLocalHost
+from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
+from authority.recovery import stage_confirmed_recovery
+from authority.save_transfer import SaveOffers
+from authority.trusted_load_messages import decode_bound_offer, encode_load_claim
+from authority.trusted_marker_load_session import TrustedMarkerLoadSession
+from authority.world import WorldCoordinator
+from lockstep.launcher.joinfiles import FileService
+from test_authority_experimental_local_host import Engine, Participants
+from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
+
+
+class Control:
+    def __init__(self): self._peers = {}
+
+
+class Host:
+    def __init__(self): self._control=Control(); self.handles=0
+    def adopt(self, conn):
+        self.handles += 1
+        conn.setblocking(False)
+        self._control._peers[conn]={'stage':'attached', 'handle':self.handles}
+    def tick(self, timeout):
+        for conn, peer in tuple(self._control._peers.items()):
+            try: data=conn.recv(1)
+            except BlockingIOError: continue
+            if not data:
+                del self._control._peers[conn]; conn.close()
+            elif data == b'A': peer['stage']='admitted'
+            else: raise ValueError('unexpected fake command')
+        time.sleep(min(timeout, .005))
+
+
+class LoopTests(unittest.TestCase):
+    def setUp(self):
+        self.listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.listener.bind(('127.0.0.1',0)); self.listener.listen(4)
+        self.host=Host(); self.stop=threading.Event(); self.result=[]; self.errors=[]
+        def worker():
+            try:
+                self.result.append(MODULE.serve(self.listener,self.host,deadline=time.monotonic()+2,
+                    check=lambda: None,should_stop=self.stop.is_set,tick_interval=.01))
+            except BaseException as error: self.errors.append(error)
+        self.thread=threading.Thread(target=worker); self.thread.start()
+    def tearDown(self):
+        self.stop.set(); self.thread.join(3); self.listener.close()
+        for conn in tuple(self.host._control._peers): conn.close()
+    def wait_for(self, predicate):
+        deadline=time.monotonic()+1
+        while not predicate():
+            if time.monotonic()>=deadline: self.fail('condition timed out')
+            time.sleep(.005)
+    def test_empty_server_remains_available_after_disconnect(self):
+        for expected in (1,2):
+            client=socket.create_connection(self.listener.getsockname(),timeout=1)
+            client.sendall(b'A')
+            self.wait_for(lambda: self.host.handles == expected and
+                any(p['stage']=='admitted' for p in self.host._control._peers.values()))
+            client.close()
+            self.wait_for(lambda: not self.host._control._peers)
+            self.assertTrue(self.thread.is_alive())
+        self.stop.set(); self.thread.join(2)
+        self.assertFalse(self.errors)
+        self.assertEqual(self.result,[{'accepted_connections':2,'admitted_connections':2}])
+    def test_check_failure_propagates(self):
+        self.stop.set(); self.thread.join(2)
+        with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as listener:
+            listener.bind(('127.0.0.1',0)); listener.listen(1)
+            def failed(): raise RuntimeError('owned X4 disappeared')
+            with self.assertRaisesRegex(RuntimeError,'owned X4 disappeared'):
+                MODULE.serve(listener,Host(),deadline=time.monotonic()+1,check=failed)
+
+
+class PreviousSourceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name); self.origin=self.root/'prior'; self.origin.mkdir()
+        (self.origin/'checkpoints').mkdir()
+        self.store=CheckpointStore(self.origin/'checkpoints')
+        save=self.root/'save.gz'; save.write_bytes(gzip.compress(XML.encode()))
+        self.checkpoint=self.store.publish(save,marker=MARKER); self.store.confirm(self.checkpoint)
+        md=self.origin/'case/extensions/x4_lan_lab/md'; md.mkdir(parents=True)
+        shutil.copyfile(ROOT/'src/authority/md/checkpoint_marker.xml',md/'authority_checkpoint_marker.xml')
+        shutil.copyfile(ROOT/'tools/dev/authority_identity_fixture.xml',md/'authority_identity_fixture.xml')
+        content=self.origin/'case/home/.config/EgoSoft/X4/45841/content.xml'
+        content.parent.mkdir(parents=True); content.write_bytes(b'compatible content')
+        self.profile=self.root/'profile'; self.profile.mkdir(); (self.profile/'content.xml').write_bytes(content.read_bytes())
+        self.result={'supervisor_version':1, 'success':True, 'final_world_state':'paused',
+                     'owned_processes_remaining':[], 'final_checkpoint_id':self.checkpoint.checkpoint_id,
+                     'final_checkpoint_sha256':self.checkpoint.sha256}
+        self.write_result()
+    def write_result(self):
+        (self.origin/'result.json').write_text(json.dumps(self.result))
+    def test_own_confirmed_checkpoint_is_staged_and_compatible(self):
+        stage=self.root/'stage'; stage.mkdir(mode=0o700)
+        checkpoint,path=stage_confirmed_recovery(self.store,stage)
+        self.assertEqual(checkpoint,self.checkpoint)
+        self.assertEqual(path.read_bytes(),self.checkpoint.path.read_bytes())
+        self.assertEqual(MODULE.verify_previous_source(self.store,checkpoint,self.profile),
+                         (ROOT/'tools/dev/authority_identity_fixture.xml').read_bytes())
+    def test_unclean_result_and_incompatible_content_are_refused(self):
+        self.result['owned_processes_remaining']=[123]; self.write_result()
+        with self.assertRaises(ValueError): MODULE.verify_previous_source(self.store,self.checkpoint,self.profile)
+        self.result['owned_processes_remaining']=[]; self.write_result()
+        (self.profile/'content.xml').write_bytes(b'different content')
+        with self.assertRaises(ValueError): MODULE.verify_previous_source(self.store,self.checkpoint,self.profile)
+    def test_unconfirmed_new_generation_is_refused(self):
+        save=self.root/'different.gz'; save.write_bytes(gzip.compress(XML.encode()))
+        self.store.publish(save,marker=MARKER)
+        with self.assertRaises(ValueError): MODULE.verify_previous_source(self.store,self.checkpoint,self.profile)
+
+
+class RecoveryLogTests(unittest.TestCase):
+    def test_final_log_rejects_duplicate_replacement_truncation_and_partial_line(self):
+        content=(b'[X4LAN] AUTH_RECOVERY REQUEST\n[X4LAN] AUTH_MARKER load INSPECTED '+
+                 MARKER.encode()+b'\n[X4LAN] AUTH_RECOVERY PAUSED\n')
+        for change in ('duplicate','replacement','truncation','partial'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temp:
+                path=Path(temp)/'engine-output.log'; path.write_bytes(content)
+                watch=MODULE.recovery.RecoveryWatch(path,MARKER)
+                self.assertTrue(watch.poll()); self.assertEqual(watch.stage,3)
+                if change == 'duplicate':
+                    with path.open('ab') as stream: stream.write(b'[X4LAN] AUTH_RECOVERY PAUSED\n')
+                elif change == 'replacement':
+                    original=path.with_name('old.log'); path.rename(original); path.write_bytes(content)
+                elif change == 'truncation': path.write_bytes(b'')
+                else:
+                    with path.open('ab') as stream: stream.write(b'partial log line')
+                with self.assertRaises(ValueError): MODULE.verify_final_recovery(watch)
+
+
+class IntegratedLoopTest(unittest.TestCase):
+    def test_two_joins_and_last_disconnect_saves_with_real_coordinator(self):
+        # Real control sockets/coordinator and save store, fake X4 and client claims.
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); (root/'store').mkdir(); store=CheckpointStore(root/'store')
+            service=FileService('a'*32, slots=(1,)).start()
+            listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            listener.bind(('127.0.0.1',0)); listener.listen(4)
+            engine=Engine(root); world=WorldCoordinator('a'*32,engine,store,SaveOffers(service,store),participants=Participants())
+            control=ExperimentalTCPControl(TrustedMarkerLoadSession(world,enabled=True),enabled=True)
+            host=ExperimentalLocalHost(world,control,service,enabled=True)
+            stop=threading.Event(); errors=[]
+            def wait_for(predicate):
+                deadline=time.monotonic()+4
+                while not predicate():
+                    if time.monotonic()>=deadline: raise TimeoutError('fake client wait timed out')
+                    time.sleep(.005)
+            def read_frame(conn):
+                out=b''
+                while not out.endswith(b'\n'):
+                    data=conn.recv(1)
+                    if not data: raise RuntimeError('control closed')
+                    out+=data
+                return out[:-1]
+            def client():
+                try:
+                    for n in (1,2):
+                        with socket.create_connection(listener.getsockname(),timeout=2) as conn:
+                            conn.settimeout(2); conn.sendall(offer_request())
+                            while True:
+                                frame=read_frame(conn)
+                                if json.loads(frame).get('kind')!='not_ready': break
+                                time.sleep(.01); conn.sendall(offer_request())
+                            bound=decode_bound_offer(frame)
+                            conn.sendall(encode_load_claim(claim_for(bound.offer))+b'\n')
+                            if json.loads(read_frame(conn))['kind']!='accepted': raise ValueError('claim refused')
+                            wait_for(lambda: engine.calls.count('resume')>=n)
+                            if n == 2:
+                                stop.set()
+                                if conn.recv(1) != b'': raise ValueError('shutdown did not close client')
+                                return
+                        wait_for(lambda: engine.calls.count('save')>=n+1 and world.session.state=='paused')
+                except BaseException as error:
+                    errors.append(error); stop.set()
+            worker=threading.Thread(target=client); worker.start()
+            try:
+                counts=MODULE.serve(listener,host,deadline=time.monotonic()+5,
+                                    check=lambda: None,should_stop=stop.is_set,tick_interval=.01)
+                saved=MODULE.settle_shutdown(control,world,store,lambda: None)
+                worker.join(2)
+                self.assertFalse(worker.is_alive()); self.assertFalse(errors)
+                self.assertEqual(counts,{'accepted_connections':2,'admitted_connections':2})
+                self.assertEqual(engine.calls,['pause','save','resume','pause','save',
+                                               'resume','pause','save'])
+                self.assertEqual(world.session.players,())
+                self.assertEqual(world.session.state,'paused')
+                self.assertEqual(saved,store.latest_marked_confirmed())
+            finally:
+                stop.set(); worker.join(2)
+                if not (control._closed or control._failed): control.close()
+                listener.close(); service.close(); service.thread.join(2)
+
+
+if __name__ == '__main__': unittest.main()

@@ -8,6 +8,16 @@ eventually trade, fight, board and command ships. The simulation may pause
 when nobody is connected and during joins. See the detailed experiment notes
 for evidence and restrictions.
 
+One isolated Linux loopback run exercised a recovered X4 server with two
+sequential TCP save downloads, then restarted a second X4 server from the first
+server's confirmed final checkpoint and downloaded another save. The restart
+log recorded the corresponding saved marker after a load event and a pause;
+the first final checkpoint and second staged file had matching SHA-256 hashes.
+The client load/marker/pause claims and participant controls were simulated,
+and the server operation sequence was recorded by its supervisor. This is not
+evidence of byte-exact X4 file consumption, a real client load, gameplay,
+Windows or Internet operation. See the [recorded run](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#recorded-native-server--simulated-client-run).
+
 The user clarified that clients need ship positions only for what they are
 currently viewing, including a sector viewed on the map. They need not
 continuously receive positions for the entire universe; the server still

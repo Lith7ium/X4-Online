@@ -1,0 +1,145 @@
+# Recovered loopback server experiment
+
+`authority_recovered_loopback_server.py` is an opt-in development entry point.
+It reuses the isolated Linux X4 recovery/marker/control bridge, checkpoint
+store, local TCP control, and participant adapter. It starts no process on
+import. It binds both services to `127.0.0.1`; there is no Internet listener.
+It does not provide a player client, synchronize gameplay, or establish Windows
+compatibility. It must not be used as a playable multiplayer server.
+
+The only allowed initial source is the recorded recovery fixture already
+identified by `authority_recovery_join_source.py`. Once an invocation has
+ended cleanly with its own confirmed final checkpoint, its `checkpoints`
+subdirectory may explicitly be passed as `--store` to a later invocation. Both
+source and output must be under this repository's `.local` directory, in
+separate trees. Start only while all X4 processes and source writers are
+stopped. The later invocation stages a fresh private copy and checks the
+confirmed pointer, save hash and MD marker; it also checks the prior result,
+`CURRENT` against `CONFIRMED`, and the saved profile content and MD scripts
+against the new isolated case. Those checks assume locally controlled files and
+are not an authentication mechanism or an atomic fence against another writer.
+The marker observed after X4's load event does not prove byte-exact file
+consumption or zero simulation before pause.
+
+For an isolated experiment, with a compatible pinned X4 installation,
+Bubblewrap and a local X11 display and readable `XAUTHORITY`, the first command
+has the following shape (replace placeholders; output must not exist):
+
+```sh
+python tools/dev/authority_recovered_loopback_server.py \
+  --game /path/to/X4 --display :DISPLAY --out .local/new-server-run
+```
+
+Once recovery has been observed, the server writes an owner-only
+`endpoint.json` in that private output directory. It contains the loopback
+control host/port and file host/port/token/slot; the token is a secret. It is
+removed during shutdown. Never expose this file or these endpoints to the
+Internet. The controller pumps while connected and while empty: a last
+participant disconnect requests pause and a marked save, after which a later
+local participant may connect. SIGINT, SIGTERM, SIGHUP or the bounded
+`--timeout` end the supervisor. It stops accepting, disconnects tracked
+participants and completes pending pause/save operations before stopping X4;
+those operations can take longer than the requested timeout. An error or
+interruption can instead leave the last operation uncertain, so check
+`result.json`; do not infer successful saving from process exit alone. A run
+without a new checkpoint has a null `final_checkpoint_id` and cannot be used
+as a subsequent source. A valid prior output is selected explicitly:
+
+```sh
+python tools/dev/authority_recovered_loopback_server.py \
+  --game /path/to/X4 --display :DISPLAY --out .local/next-server-run \
+  --store .local/new-server-run/checkpoints
+```
+
+The owner controls and process guards are experimental. Runtime state from
+high-attention clients is not reconciled by this supervisor, and concurrent
+multi-client gameplay, graceful client-side shutdown, reliable HA handover,
+crash recovery after unsaved progress, arbitrary X4 saves/content, Windows and
+WAN remain unsupported. A timeout can remove connected peers before their local
+simulation is incorporated. The source checkpoint remains unchanged; output is
+new and private. Never substitute a normal user profile or save.
+
+Offline tests use fake X4 controls and fake load claims. The combined test uses
+real local TCP sockets and the real coordinator to exercise a last-disconnect
+save, a later second join and a save on controlled shutdown, but it does not
+execute this process launcher or X4.
+
+## Recorded native server / simulated client run
+
+On 2026-11-16 the isolated sequence was run once, with artifacts under
+`.local/authority-restart-orchestration-01`. The first Linux X4 server recovered
+the recorded fixture and served two sequential loopback TCP save downloads.
+The second offer identified a new checkpoint after the first disconnect. The
+supervisor reported the sequence pause, save, resume, pause, save, resume,
+pause, save, with checkpoint publication after each save. Its final marked
+checkpoint was `checkpoint-c0b941883c2544949a56fa0df3454a42`, SHA-256
+`c17d09c5ca4662ef3f765e9e3a59a4f6507b2a9644978effd42c4a73c0f8a8ca`.
+
+A separate Linux X4 server then staged that checkpoint in its private profile.
+Its recovery log recorded a load request, the marker
+`61299c3bc5cbe3e2590cbd16bef55844`, and a pause, in order. That marker matches
+the first server's final checkpoint manifest; an independent SHA-256 read of
+the first checkpoint and the second server's staged `save_008.xml.gz` matched
+the digest above. The second server served one further loopback save download
+and reported pause, save, resume, pause, save. Its final checkpoint was
+`checkpoint-2cf0fd3e281c48f8803b790b59e9d4a0`, SHA-256
+`12570e0eb97c7d1effe318be7f1163c158fd35341d37e932e25c1fa84b21d0f1`.
+Independent SHA-256 reads of all three downloaded files matched their probe
+results. Both supervisor results report a paused final state and no remaining
+owned processes; the orchestration result reports cleanup confirmed. Both
+temporary endpoint files were absent when checked after the run.
+
+The probe performed real file transfers, but its client-side load request,
+loaded-marker observation, pause claim and participant pause/resume controls
+were **simulated**. The reported server engine-operation sequence is recorded
+by the supervisor, not an independent capture of native control packets. The
+marker after the native load event and matching staged bytes do not prove which
+exact bytes X4 consumed or that no simulation occurred before pause. This run
+does not establish a real client load, playable multiplayer, gameplay,
+universe-wide consistency, Windows or Internet operation.
+
+## Internal diagnostic procedure
+
+The following procedure
+requires a dedicated display and the usual owned-process, protected-profile,
+Steam-identity and lock checks from the supervisor. It uses the current
+recorded fixture; it does not use a real player save. Never start a second
+supervisor while the previous owned X4 process or its lock remains.
+
+1. Start the supervisor with a new `.local/server-a` output, a timeout long
+   enough for recovery and three saves, and wait until its private
+   `.local/server-a/endpoint.json` appears. Confirm its process is still owned
+   and alive. Do not print or share the endpoint file: it contains a token.
+2. Run `python tools/dev/authority_loopback_simulated_client.py --endpoint
+   .local/server-a/endpoint.json --out .local/probe-a --count 2`. The probe
+   downloads two saves over actual local TCP and verifies the files and saved
+   markers. Its client-side X4 load, marker, pause and participant commands
+   are all simulated; no client X4 is started. The second offer must identify a
+   newly marked checkpoint, which depends on the first disconnect having been
+   processed and saved.
+3. Signal the exact owned supervisor process to stop gracefully and wait for
+   its owned X4 cleanup. Do not treat a timeout as process termination or start
+   a replacement while it remains live. Check `server-a/result.json` reports
+   success, an empty `owned_processes_remaining`, paused world, and non-null
+   `final_checkpoint_id`/`final_checkpoint_sha256`. An interrupted or failed
+   save is indeterminate and must not be silently retried.
+4. Start a second supervisor with a fresh `.local/server-b` output and
+   `--store .local/server-a/checkpoints`. After its endpoint appears, run the
+   same probe with `--count 1`, using `.local/server-b/endpoint.json` and a
+   fresh `.local/probe-b`. Stop the second supervisor gracefully and check its
+   result and owned-process cleanup in the same way.
+5. Run the read-only artifact checker:
+
+   ```sh
+   python tools/dev/authority_loopback_restart_evidence.py \
+     --first .local/server-a --first-probe .local/probe-a \
+     --second .local/server-b --second-probe .local/probe-b
+   ```
+
+The checker matches the first final checkpoint to the second server's
+recovery source, reads both recovery logs, verifies the transferred and stored
+save bytes and markers, and checks recorded native bridge operation sequences.
+It does not independently establish exactly which bytes X4 loaded, zero
+simulation before pause, any real client X4 load, gameplay, WAN, Windows or
+universe-wide state consistency. Its source archives must remain exclusively
+controlled and unchanged during the check.
