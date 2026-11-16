@@ -198,63 +198,93 @@ class ExperimentalSourceMotionIPC:
             self._motion_call(self._motion.track,self._epoch,self._generation,index)
             self._check(deadline,'registering');self._indices.add(index);self._state='ready';return True
         except BaseException:self._fail();raise
-    def register_saved(self,index,*,_scheduler=None):
+    def register_saved(self, index, *, _scheduler=None):
         """Register a locally resolved saved index, only after correlated X4 confirmation.
 
         The saved guard is a caller assertion; it does not prove checkpoint bytes
         or cross-process identity. Failure after dispatch has an unknown X4 effect.
         """
         self._reserved(_scheduler)
-        if (self._state!='ready' or threading.get_ident()!=self._owner or self._saved_guard is None or
-            type(index) is not int or not 1<=index<=self._saved_baseline or index in self._indices or
-            (self._candidate_indices is not None and index!=self._candidate_selected)):
-            self._fail();raise RuntimeError('saved registration unavailable')
-        self._state='registering';deadline=time.monotonic()+self._timeout
+        if (self._state != 'ready' or threading.get_ident() != self._owner or self._saved_guard is None or
+            type(index) is not int or not 1 <= index <= self._saved_baseline or index in self._indices or
+            (self._candidate_indices is not None and index != self._candidate_selected)):
+            self._fail()
+            raise RuntimeError('saved registration unavailable')
+        self._state = 'registering'
+        deadline = time.monotonic() + self._timeout
         try:
-            self._quiet(deadline,'registering')
-            if self._next>=_MAX:raise RuntimeError('source motion request capacity')
-            self._next+=1;request=str(self._next)
-            packet='|'.join(['P',self._lease,self._attempt,'REGISTER_SAVED',self._epoch,self._generation,request,str(index),str(self._saved_baseline)]).encode('ascii')
-            if self._sock.send(packet)!=len(packet):raise RuntimeError('saved registration dispatch failed')
+            self._quiet(deadline, 'registering')
+            if self._next >= _MAX:
+                raise RuntimeError('source motion request capacity')
+            self._next += 1
+            request_id = str(self._next)
+            packet = '|'.join(['P', self._lease, self._attempt, 'REGISTER_SAVED', self._epoch,
+                               self._generation, request_id, str(index), str(self._saved_baseline)]).encode('ascii')
+            if self._sock.send(packet) != len(packet):
+                raise RuntimeError('saved registration dispatch failed')
             while True:
-                self._check(deadline,'registering')
-                readable,_,bad=select.select([self._sock],[],[self._sock],min(.1,max(0,deadline-time.monotonic())))
-                self._check(deadline,'registering')
-                if bad:raise RuntimeError('saved registration socket error')
-                if readable:break
-            data=self._sock.recv(_MAX_PACKET+1)
-            expected='|'.join(['S',self._lease,self._attempt,'SAVED_REGISTERED',self._epoch,self._generation,request,str(index),str(self._saved_baseline)]).encode('ascii')
-            if data!=expected:raise ValueError('foreign saved registration response')
-            self._quiet(deadline,'registering')
-            self._motion_call(self._motion.track,self._epoch,self._generation,index)
-            self._check(deadline,'registering');self._indices.add(index);self._saved_indices.add(index);self._state='ready';return True
-        except BaseException:self._fail();raise
-    def pull(self,*,_scheduler=None):
+                self._check(deadline, 'registering')
+                readable, _, exceptional = select.select(
+                    [self._sock], [], [self._sock], min(.1, max(0, deadline - time.monotonic())))
+                self._check(deadline, 'registering')
+                if exceptional:
+                    raise RuntimeError('saved registration socket error')
+                if readable:
+                    break
+            response = self._sock.recv(_MAX_PACKET + 1)
+            expected = '|'.join(['S', self._lease, self._attempt, 'SAVED_REGISTERED', self._epoch,
+                                 self._generation, request_id, str(index), str(self._saved_baseline)]).encode('ascii')
+            if response != expected:
+                raise ValueError('foreign saved registration response')
+            self._quiet(deadline, 'registering')
+            self._motion_call(self._motion.track, self._epoch, self._generation, index)
+            self._check(deadline, 'registering')
+            self._indices.add(index)
+            self._saved_indices.add(index)
+            self._state = 'ready'
+            return True
+        except BaseException:
+            self._fail()
+            raise
+
+    def pull(self, *, _scheduler=None):
         self._reserved(_scheduler)
-        if (self._state!='ready' or threading.get_ident()!=self._owner or
+        if (self._state != 'ready' or threading.get_ident() != self._owner or
             (self._candidate_indices is not None and self._candidate_selected is None)):
-            self._fail();raise RuntimeError('source motion reentrant or unavailable')
+            self._fail()
+            raise RuntimeError('source motion reentrant or unavailable')
         self._motion._delivery._host._control._reader_free()
-        self._state='pulling';deadline=time.monotonic()+self._timeout
+        self._state = 'pulling'
+        deadline = time.monotonic() + self._timeout
         try:
             # Respect the maximum per-track TCP send frequency even if the X4
             # sampler returns the same track on two consecutive pulls.
-            while self._last_pull is not None and time.monotonic()-self._last_pull<self._motion._min_interval:
-                self._check(deadline,'pulling')
-                select.select([],[],[],max(0,min(.01,self._motion._min_interval-(time.monotonic()-self._last_pull))))
-            self._quiet(deadline,'pulling')
-            if self._next>=_MAX:raise RuntimeError('source motion request capacity')
-            self._next+=1;request=str(self._next)
-            packet='|'.join(['P',self._lease,self._attempt,'PULL',self._epoch,self._generation,request]).encode('ascii')
-            if self._sock.send(packet)!=len(packet):raise RuntimeError('source motion pull failed')
+            while self._last_pull is not None and time.monotonic() - self._last_pull < self._motion._min_interval:
+                self._check(deadline, 'pulling')
+                select.select([], [], [], max(0, min(.01, self._motion._min_interval -
+                                                    (time.monotonic() - self._last_pull))))
+            self._quiet(deadline, 'pulling')
+            if self._next >= _MAX:
+                raise RuntimeError('source motion request capacity')
+            self._next += 1
+            request_id = str(self._next)
+            packet = '|'.join(['P', self._lease, self._attempt, 'PULL', self._epoch,
+                               self._generation, request_id]).encode('ascii')
+            if self._sock.send(packet) != len(packet):
+                raise RuntimeError('source motion pull failed')
             while True:
-                self._check(deadline,'pulling')
-                r,_,e=select.select([self._sock],[],[self._sock],min(.1,max(0,deadline-time.monotonic())))
-                self._check(deadline,'pulling')
-                if e:raise RuntimeError('source motion socket error')
-                if r:break
-            return self._consume(self._sock.recv(_MAX_PACKET+1),request,deadline,latest=False)
-        except BaseException:self._fail();raise
+                self._check(deadline, 'pulling')
+                readable, _, exceptional = select.select(
+                    [self._sock], [], [self._sock], min(.1, max(0, deadline - time.monotonic())))
+                self._check(deadline, 'pulling')
+                if exceptional:
+                    raise RuntimeError('source motion socket error')
+                if readable:
+                    break
+            return self._consume(self._sock.recv(_MAX_PACKET + 1), request_id, deadline, latest=False)
+        except BaseException:
+            self._fail()
+            raise
 
     def request_candidate(self,*,_scheduler=None):
         """Request one bounded, revalidated index from the same UDP owner.
@@ -445,7 +475,7 @@ class ExperimentalSourceMotionIPC:
                 raise RuntimeError('motion readback not confirmed')
             self._quiet(deadline,'applying');self._state='ready';return True
         except BaseException:self._fail();raise
-    def stop_remote(self,*,_scheduler=None):
+    def stop_remote(self, *, _scheduler=None):
         """Confirm a cooperative X4-side stop before allowing world pause.
 
         STOP is opt-in and valid only with no pull or latest-motion work in
@@ -456,28 +486,44 @@ class ExperimentalSourceMotionIPC:
         self._reserved(_scheduler)
         if not self._stop_enabled:
             raise RuntimeError('remote source stop is not enabled')
-        if self._state!='ready' or threading.get_ident()!=self._owner:
-            self._fail();raise RuntimeError('source motion cannot stop')
+        if self._state != 'ready' or threading.get_ident() != self._owner:
+            self._fail()
+            raise RuntimeError('source motion cannot stop')
         if self._latest and not self._motion._delivery._host._control._motion_idle():
-            self._fail();raise RuntimeError('drain latest motion before stopping source')
-        self._state='stopping';deadline=time.monotonic()+self._timeout
+            self._fail()
+            raise RuntimeError('drain latest motion before stopping source')
+        self._state = 'stopping'
+        deadline = time.monotonic() + self._timeout
         try:
-            self._quiet(deadline,'stopping')
-            if self._next>=_MAX:raise RuntimeError('source motion request capacity')
-            self._next+=1;request=str(self._next)
-            packet='|'.join(['P',self._lease,self._attempt,'STOP',self._epoch,self._generation,request]).encode('ascii')
-            if self._sock.send(packet)!=len(packet):raise RuntimeError('source motion stop dispatch failed')
+            self._quiet(deadline, 'stopping')
+            if self._next >= _MAX:
+                raise RuntimeError('source motion request capacity')
+            self._next += 1
+            request_id = str(self._next)
+            packet = '|'.join(['P', self._lease, self._attempt, 'STOP', self._epoch,
+                               self._generation, request_id]).encode('ascii')
+            if self._sock.send(packet) != len(packet):
+                raise RuntimeError('source motion stop dispatch failed')
             while True:
-                self._check(deadline,'stopping')
-                readable,_,bad=select.select([self._sock],[],[self._sock],min(.1,max(0,deadline-time.monotonic())))
-                self._check(deadline,'stopping')
-                if bad:raise RuntimeError('source motion socket error')
-                if readable:break
-            data=self._sock.recv(_MAX_PACKET+1)
-            expected='|'.join(['S',self._lease,self._attempt,'STOPPED',self._epoch,self._generation,request]).encode('ascii')
-            if data!=expected:raise ValueError('foreign source motion stop response')
-            self._quiet(deadline,'stopping');self._state='remote_stopped';return True
-        except BaseException:self._fail();raise
+                self._check(deadline, 'stopping')
+                readable, _, exceptional = select.select(
+                    [self._sock], [], [self._sock], min(.1, max(0, deadline - time.monotonic())))
+                self._check(deadline, 'stopping')
+                if exceptional:
+                    raise RuntimeError('source motion socket error')
+                if readable:
+                    break
+            response = self._sock.recv(_MAX_PACKET + 1)
+            expected = '|'.join(['S', self._lease, self._attempt, 'STOPPED', self._epoch,
+                                 self._generation, request_id]).encode('ascii')
+            if response != expected:
+                raise ValueError('foreign source motion stop response')
+            self._quiet(deadline, 'stopping')
+            self._state = 'remote_stopped'
+            return True
+        except BaseException:
+            self._fail()
+            raise
 
     def close(self,*,_scheduler=None):
         self._reserved(_scheduler)
