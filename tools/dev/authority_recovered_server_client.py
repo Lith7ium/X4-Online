@@ -26,12 +26,18 @@ REGISTRY_READER = Path(__file__).resolve().with_name('authority_recovered_regist
 
 class ClientMotionErrorWatch(witness.ErrorWatch):
     """Pin one append-only client log and scan incrementally through exit."""
-    TAGS=(b'[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR',b'[X4LAN] AUTH_PARTICIPANT ERROR',
-          b'Error while executing onEvent script for event: X4AuthoritySavedBaselineMotionBind.Result.',
-          b'Error while executing onEvent script for event: X4AuthorityReplicaMotionBind.Result.')
+    TAGS = (
+        b'[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR',
+        b'[X4LAN] AUTH_PARTICIPANT ERROR',
+        b'Error while executing onEvent script for event: X4AuthoritySavedBaselineMotionBind.Result.',
+        b'Error while executing onEvent script for event: X4AuthorityReplicaMotionBind.Result.',
+    )
+
     def poll(self):
-        try:super().poll()
-        except ValueError as error:raise ValueError('client motion log fault or replacement') from error
+        try:
+            super().poll()
+        except ValueError as error:
+            raise ValueError('client motion log fault or replacement') from error
         return True
 
 
@@ -39,40 +45,67 @@ class ServerClient(combined.RecoveredRemoteParticipant):
     """Reuse the paired runner without ever closing the server's control."""
     cancel_check = None
 
-    def prepare_client_motion(self,case,profile,status,request,ticket):
+    def prepare_client_motion(self, case, profile, status, request, ticket):
         """Install one private, bounded candidate probe before protected binds."""
         import authority_recovered_client_motion_install as motion_install
+
         if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
-                type(request) is not dict or set(request)!={'indices','generation','timeout'} or
+                type(request) is not dict or set(request) != {'indices', 'generation', 'timeout'} or
                 type(ticket) is not dict):
             raise ValueError('invalid retained client motion request')
-        excluded={self.lease,ticket['world_epoch'],ticket['attempt_id'],status[1],request['generation']}
-        def fresh():
-            value=secrets.token_hex(16)
-            while value in excluded:value=secrets.token_hex(16)
-            excluded.add(value);return value
-        sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+
+        excluded_tokens = {self.lease, ticket['world_epoch'], ticket['attempt_id'],
+                           status[1], request['generation']}
+
+        def fresh_token():
+            token = secrets.token_hex(16)
+            while token in excluded_tokens:
+                token = secrets.token_hex(16)
+            excluded_tokens.add(token)
+            return token
+
+        motion_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            sock.bind(('127.0.0.1',0))
-            settings={'port':sock.getsockname()[1],'indices':request['indices'],'generation':request['generation'],
-                      'timeout':request['timeout'],'lease':fresh(),'attempt':fresh(),'nonce':fresh(),'router_generation':fresh()}
-            installation=motion_install.install(case,profile,status,settings)
+            motion_socket.bind(('127.0.0.1', 0))
+            settings = {
+                'port': motion_socket.getsockname()[1],
+                'indices': request['indices'],
+                'generation': request['generation'],
+                'timeout': request['timeout'],
+                'lease': fresh_token(),
+                'attempt': fresh_token(),
+                'nonce': fresh_token(),
+                'router_generation': fresh_token(),
+            }
+            installation = motion_install.install(case, profile, status, settings)
         except BaseException:
-            sock.close();raise
-        self.motion_sock=sock;self._pin_motion_socket();self.motion_installation=installation
-        self.motion_worker_config={k:settings[k] for k in ('lease','attempt','generation','timeout')}
-        self.motion_worker_config['epoch']=status[1]
+            motion_socket.close()
+            raise
+        self.motion_sock = motion_socket
+        self._pin_motion_socket()
+        self.motion_installation = installation
+        self.motion_worker_config = {
+            key: settings[key] for key in ('lease', 'attempt', 'generation', 'timeout')
+        }
+        self.motion_worker_config['epoch'] = status[1]
         return list(installation.paths)
 
     def redact(self):
-        errors=[];installation=getattr(self,'motion_installation',None)
+        errors = []
+        installation = getattr(self, 'motion_installation', None)
         if installation is not None:
-            try:installation.redact()
-            except BaseException as error:errors.append(error)
-            else:self.motion_installation=None
-        try:super().redact()
-        except BaseException as error:errors.append(error)
-        if errors:raise BaseExceptionGroup('client config redaction failed',errors)
+            try:
+                installation.redact()
+            except BaseException as error:
+                errors.append(error)
+            else:
+                self.motion_installation = None
+        try:
+            super().redact()
+        except BaseException as error:
+            errors.append(error)
+        if errors:
+            raise BaseExceptionGroup('client config redaction failed', errors)
 
     def pump_loading(self):
         if self.cancel_check is not None: self.cancel_check()
