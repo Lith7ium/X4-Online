@@ -3460,9 +3460,25 @@ def memory_available_gib():
     return 0.0
 
 
+def _steam_process_row(path):
+    """Read one candidate with the same fields and failure handling as processes()."""
+    try:
+        fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+        return {'parent': int(fields[1]), 'start': int(fields[19]),
+                'uid': path.stat().st_uid, 'name': (path / 'comm').read_text().strip()}
+    except (OSError, ValueError):
+        return None
+
+
 def steam_identity(userhome, uid):
+    """Sample the recorded Steam PID each time; this is not a process lock.
+
+    The target may exit or be recycled between reads; callers must compare the
+    returned start time and retain their existing process ownership fences.
+    Unrelated /proc entries are not inspected.
+    """
     pid = int((userhome / '.steam/steam.pid').read_text().strip())
-    row = processes().get(pid)
+    row = _steam_process_row(Path('/proc') / str(pid))
     if not row or row['uid'] != uid or row['name'] != 'steam':
         raise RuntimeError('the running Steam client of the game user is required')
     return {'pid': pid, 'start': row['start'], 'uid': uid}
