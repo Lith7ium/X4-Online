@@ -21,6 +21,12 @@ that alone does not prove delivery. A matching response remains required. A nil
 callback result, exception, overlapping request or unexpected response faults
 the client. It consumes a new request ID for each Initialize,
 Create and MD Inspect. A missing or indeterminate response is never retried.
+A correlated MD refusal includes a fixed phase code for the first checked
+failed group (for example `create_witness`, `create_ship`, `inspect_binding`
+or `inspect_witness`); multiple conditions within that group can fail. The
+client accepts only codes appropriate to the pending operation and still
+accepts legacy empty refusals. These codes describe the executed branch, not
+the exact cause or a guarantee that no mutation preceded the refusal.
 
 For each Create, a new index must be exactly the next one. An index previously
 created by this client instance can be replayed only with the exact original

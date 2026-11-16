@@ -22,6 +22,12 @@ class MultiCreate(unittest.TestCase):
         for event in responses:
             self.assertEqual(event.get('name'),"'X4AuthorityMultiCreateReceiver.Result'")
             self.assertIn('$request_id',event.get('param'))
+        xml=ET.tostring(root,encoding='unicode')
+        for code in ('create_replay','create_pending_clear','create_registry','create_ship',
+                     'create_pending_set','create_input','create_witness','create_index','create_state',
+                     'inspect_binding','inspect_witness','inspect_descriptor'):
+            self.assertIn(code,xml)
+        self.assertEqual(xml.count('|Refused|'),9)
         checks=' '.join(node.get('value','') for node in cues['Inspect'].findall('.//do_if'))
         for part in ('State.$receipts','State.$byship','State.$macros','State.$sectors',
                      'State.$owners','State.$seeds','State.$xs','State.$ys','State.$zs'):

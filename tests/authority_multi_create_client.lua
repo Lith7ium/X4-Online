@@ -86,4 +86,29 @@ end
 do local c,q,done,set=rig();init(c,q);assert(c:create(desc(3)));set(10);assert(not c:tick() and #done==1)end
 do local c=rig('reentrant_issue');assert(not c:initialize() and c:state()=='failed')end
 do local c=rig('dispatch_false');assert(not c:initialize() and c:state()=='failed')end
+for _,phase in ipairs({'create_replay','create_pending_clear','create_registry','create_ship','create_pending_set','create_input','create_witness','create_index','create_state'}) do
+ local c,q,done=rig();init(c,q);assert(c:create(desc(3)));local id=q[#q].args.request_id
+ local ok,reason=c:event(id..'|Refused|'..phase)
+ assert(not ok and reason=='refused_'..phase and #done==1 and c:state()=='failed')
+end
+for _,phase in ipairs({'inspect_binding','inspect_witness','inspect_descriptor'}) do
+ local c,q,done=rig();init(c,q);local i=created(c,q,desc(3),'0x29')
+ local ok,reason=c:event(i.args.request_id..'|Refused|'..phase)
+ assert(not ok and reason=='refused_'..phase and #done==1 and c:state()=='failed')
+end
+for _,phase in ipairs({'inspect_binding','secret/path','unknown'}) do
+ local c,q,done=rig();init(c,q);assert(c:create(desc(3)));local id=q[#q].args.request_id
+ local ok,reason=c:event(id..'|Refused|'..phase)
+ assert(not ok and reason=='refused_unknown' and #done==1)
+end
+do
+ local c,q,done=rig();init(c,q);assert(c:create(desc(3)))
+ local ok,reason=c:event(nonce..'-1|Refused|create_witness')
+ assert(not ok and reason=='correlation' and #done==1)
+end
+do
+ local c,q,done=rig();init(c,q);assert(c:create(desc(3)))
+ local ok,reason=c:event(q[#q].args.request_id..'|Refused|')
+ assert(not ok and reason=='refused' and #done==1)
+end
 print('multi-create client synthetic checks passed')

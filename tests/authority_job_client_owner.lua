@@ -48,4 +48,15 @@ do
  local o,q,out,sent,errors,req,ready=setup(nil,true);ready();q[1]=req()
  assert(not o:tick() and errors[1]=='packet_witness' and #out==1 and o:state()=='failed')
 end
+do
+ local o,q,out,sent,errors,req,ready=setup();ready();q[1]=req();assert(o:tick())
+ local a=sent[#sent];assert(not o:event(a.args.request_id..'|Refused|create_witness'))
+ assert(errors[1]=='event_refused_create_witness' and #out==1 and o:state()=='failed')
+end
+do
+ local o,q,out,sent,errors,req,ready=setup();ready();q[1]=req();assert(o:tick())
+ local a=sent[#sent];assert(o:event(a.args.request_id..'|Created|3|0x29'))
+ local b=sent[#sent];assert(not o:event(b.args.request_id..'|Refused|inspect_binding'))
+ assert(errors[1]=='event_refused_inspect_binding' and #out==1 and o:state()=='failed')
+end
 assert(core.new({enabled=false})==nil)

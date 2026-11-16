@@ -3,6 +3,10 @@ local M={}
 local SCREEN='X4AuthorityMultiCreateReceiver'
 local MAX=9007199254740991
 local fields={'macro','sector','owner','seed','x','y','z'}
+-- Fixed MD-side phase codes; never interpolate arbitrary remote text into logs.
+local refusal_create={create_replay=true,create_pending_clear=true,create_registry=true,create_ship=true,
+ create_pending_set=true,create_input=true,create_witness=true,create_index=true,create_state=true}
+local refusal_inspect={inspect_binding=true,inspect_witness=true,inspect_descriptor=true}
 local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
 local function integer(v,min)return type(v)=='number' and v==v and v>=min and v<=MAX and v%1==0 end
 local function finite(v)return type(v)=='number' and v==v and v~=math.huge and v~=-math.huge end
@@ -93,7 +97,15 @@ function M.new(o)
   if not check() or type(value)~='string' or #value>512 then return fail('invalid_event') end
   local id,kind,rest=value:match('^([0-9a-f]+%-%d+)|([A-Za-z]+)|(.*)$')
   if id~=pending.id then return fail('correlation') end
-  if kind=='Refused' then return fail('refused') end
+  if kind=='Refused' then
+   local operation=pending.kind
+   if rest=='' then return fail('refused') end -- legacy receiver
+   if ((operation=='create' or operation=='replay') and refusal_create[rest]) or
+      ((operation=='inspect_create' or operation=='inspect_replay') and refusal_inspect[rest]) then
+    return fail('refused_'..rest)
+   end
+   return fail('refused_unknown')
+  end
   if pending.kind=='initialize' then
    if kind~='Initialized' or rest~=o.epoch then return fail('initialize_response') end
    local result={epoch=o.epoch};phase='delivering';local ok,done=call(o.complete,'initialize',result)

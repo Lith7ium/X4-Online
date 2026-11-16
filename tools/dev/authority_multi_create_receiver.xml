@@ -66,7 +66,7 @@
       <do_else>
        <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="true"/>
        <set_value name="State.$faulted" exact="true"/>
-       <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|'.[event.param3.$request_id]"/>
+       <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|create_replay'.[event.param3.$request_id]"/>
       </do_else>
      </do_if>
      <do_elseif value="$id == md.X4AuthorityShipRegistry.State.$last + 1 and not @md.X4AuthorityShipRegistry.State.$ships.{$id} and not @State.$receipts.{$id}">
@@ -141,44 +141,46 @@
           <do_else>
            <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="true"/>
            <set_value name="State.$faulted" exact="true"/>
-           <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|'.[event.param3.$request_id]"/>
+           <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|create_pending_clear'.[event.param3.$request_id]"/>
           </do_else>
          </do_if>
          <do_else>
           <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="true"/>
           <set_value name="State.$faulted" exact="true"/>
-          <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|'.[event.param3.$request_id]"/>
+          <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|create_registry'.[event.param3.$request_id]"/>
          </do_else>
         </do_if>
         <do_else>
          <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="true"/>
          <set_value name="State.$faulted" exact="true"/>
-         <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|'.[event.param3.$request_id]"/>
+         <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|create_ship'.[event.param3.$request_id]"/>
         </do_else>
        </do_if>
        <do_else>
         <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="true"/>
         <set_value name="State.$faulted" exact="true"/>
-        <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|'.[event.param3.$request_id]"/>
+        <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|create_pending_set'.[event.param3.$request_id]"/>
        </do_else>
       </do_if>
       <do_else>
        <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="true"/>
        <set_value name="State.$faulted" exact="true"/>
-       <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|'.[event.param3.$request_id]"/>
+       <set_value name="$refusal" exact="'create_input'"/>
+       <do_if value="not $bounded_guard_4"><set_value name="$refusal" exact="'create_witness'"/></do_if>
+       <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|%s'.[event.param3.$request_id,$refusal]"/>
       </do_else>
      </do_elseif>
      <do_else>
       <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="true"/>
       <set_value name="State.$faulted" exact="true"/>
-      <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|'.[event.param3.$request_id]"/>
+      <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|create_index'.[event.param3.$request_id]"/>
      </do_else>
     </do_if>
     <do_else>
      <!-- A state that is not initialized cannot safely accept a fault write. -->
      <do_if value="md.X4AuthorityShipRegistry.State.$faulted?"><set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="true"/></do_if>
      <do_if value="State.$faulted?"><set_value name="State.$faulted" exact="true"/></do_if>
-     <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|'.[event.param3.$request_id]"/>
+     <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|create_state'.[event.param3.$request_id]"/>
     </do_else>
    </actions>
   </cue>
@@ -236,7 +238,10 @@
     <do_else>
      <do_if value="md.X4AuthorityShipRegistry.State.$faulted?"><set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="true"/></do_if>
      <do_if value="State.$faulted?"><set_value name="State.$faulted" exact="true"/></do_if>
-     <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|'.[$v.$request_id]"/>
+     <set_value name="$refusal" exact="'inspect_descriptor'"/>
+     <do_if value="not $binding_ok"><set_value name="$refusal" exact="'inspect_binding'"/></do_if>
+     <do_elseif value="not $witness_ok"><set_value name="$refusal" exact="'inspect_witness'"/></do_elseif>
+     <raise_lua_event name="'X4AuthorityMultiCreateReceiver.Result'" param="'%s|Refused|%s'.[$v.$request_id,$refusal]"/>
     </do_else>
    </actions>
   </cue>
