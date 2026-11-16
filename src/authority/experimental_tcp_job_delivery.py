@@ -115,57 +115,76 @@ class ExperimentalTCPJobDelivery:
                 self._incarnations[h]=secrets.token_hex(16)
         return handles,peers
 
-    def bind_test_incarnation(self,handle,incarnation,*,enabled=False):
+    def bind_test_incarnation(self, handle, incarnation, *, enabled=False):
         """Bind one pre-generated diagnostic token to an admitted connection.
 
         The caller guarantees token freshness, private process/slot fencing and
         exclusive access. This is not authentication or an authority grant.
         Any changed membership requires fencing rather than rebinding.
         """
-        host=self._host
-        if enabled is not True:raise ValueError('explicit test incarnation opt-in required')
+        host = self._host
+        if enabled is not True:
+            raise ValueError('explicit test incarnation opt-in required')
         if self._test_bind_busy or self._active:
-            self._failed=True;host._failed=True;raise RuntimeError('reentrant test incarnation binding')
+            self._failed = True
+            host._failed = True
+            raise RuntimeError('reentrant test incarnation binding')
         host._control._reader_free()
-        self._test_bind_busy=True
-        lease=None
+        self._test_bind_busy = True
+        reader_lease = None
         try:
             host._check()
             if (self._failed or self._test_bind_attempted or self._test_binding is not None or self._incarnations or
                 self._queued is not None or self._last is not None or type(handle) is not int or
-                not 1<=handle<=MAX_INTEGER or type(incarnation) is not str or not _TOKEN.fullmatch(incarnation)):
+                not 1 <= handle <= MAX_INTEGER or type(incarnation) is not str or not _TOKEN.fullmatch(incarnation)):
                 raise ValueError('test incarnation requires fresh delivery and token')
-            self._test_bind_attempted=True;host._control._reader_free()
-            lease=object();host._control._reader_lease=lease;host._busy=True;self._active=True
-            deadline=time.monotonic()+self._timeout;epoch=host._world.session.world_epoch
-            handles,peers=self._admitted_peers()
-            if handles!=(handle,):raise ValueError('exactly one admitted requested handle required')
-            conn,peer=peers[handle]
-            ExperimentalTCPParticipants._quiet(self,peers,deadline)
-            again,current=self._admitted_peers()
-            if (again!=handles or current[handle][0] is not conn or current[handle][1] is not peer or
-                host._world.session.world_epoch!=epoch or self._incarnations or self._failed or host._failed or
-                host._busy is not True or self._active is not True or host._control._reader_lease is not lease):
+            self._test_bind_attempted = True
+            host._control._reader_free()
+            reader_lease = object()
+            host._control._reader_lease = reader_lease
+            host._busy = True
+            self._active = True
+            deadline = time.monotonic() + self._timeout
+            epoch = host._world.session.world_epoch
+            handles, peers = self._admitted_peers()
+            if handles != (handle,):
+                raise ValueError('exactly one admitted requested handle required')
+            connection, peer_state = peers[handle]
+            ExperimentalTCPParticipants._quiet(self, peers, deadline)
+            current_handles, current_peers = self._admitted_peers()
+            if (current_handles != handles or current_peers[handle][0] is not connection or
+                current_peers[handle][1] is not peer_state or host._world.session.world_epoch != epoch or
+                self._incarnations or self._failed or host._failed or host._busy is not True or
+                self._active is not True or host._control._reader_lease is not reader_lease):
                 raise RuntimeError('test binding context changed')
-            ExperimentalTCPParticipants._quiet(self,peers,deadline)
-            again,current=self._admitted_peers()
-            if (again!=handles or current[handle][0] is not conn or current[handle][1] is not peer or
-                host._world.session.world_epoch!=epoch or self._incarnations or self._failed or host._failed or
-                host._busy is not True or self._active is not True or host._control._reader_lease is not lease or
-                time.monotonic()>=deadline):
+            ExperimentalTCPParticipants._quiet(self, peers, deadline)
+            current_handles, current_peers = self._admitted_peers()
+            if (current_handles != handles or current_peers[handle][0] is not connection or
+                current_peers[handle][1] is not peer_state or host._world.session.world_epoch != epoch or
+                self._incarnations or self._failed or host._failed or host._busy is not True or
+                self._active is not True or host._control._reader_lease is not reader_lease or
+                time.monotonic() >= deadline):
                 raise RuntimeError('test binding context changed after quiet check')
-            self._incarnations[handle]=incarnation;self._test_binding=(epoch,handle,conn,peer,incarnation)
+            self._incarnations[handle] = incarnation
+            self._test_binding = (epoch, handle, connection, peer_state, incarnation)
             return True
         except BaseException:
-            self._failed=True;host._failed=True;raise
+            self._failed = True
+            host._failed = True
+            raise
         finally:
-            if lease is not None:
-                changed=host._control._reader_lease is not lease
-                if not changed:host._control._reader_lease=None
-                else:self._failed=True;host._failed=True
-                self._active=False;host._busy=False
-            self._test_bind_busy=False
-            if lease is not None and changed:raise RuntimeError('test binding reader lease changed')
+            if reader_lease is not None:
+                lease_changed = host._control._reader_lease is not reader_lease
+                if not lease_changed:
+                    host._control._reader_lease = None
+                else:
+                    self._failed = True
+                    host._failed = True
+                self._active = False
+                host._busy = False
+            self._test_bind_busy = False
+            if reader_lease is not None and lease_changed:
+                raise RuntimeError('test binding reader lease changed')
 
     def membership(self):
         if self._active:
@@ -214,55 +233,68 @@ class ExperimentalTCPJobDelivery:
             raise
 
     def deliver(self, raw_event, expected_members, on_ack):
-        host=self._host;host._check()
-        motion=host._control._latest_motion
+        host = self._host
+        host._check()
+        motion = host._control._latest_motion
         if motion is not None and (not motion.blocked or not host._control._motion_idle()):
             raise RuntimeError('drained motion barrier required before lifecycle delivery')
-        if self._failed or not callable(on_ack):raise RuntimeError('delivery unavailable')
-        event=job_event(raw_event)
-        if (self._last is not None and (event['epoch'],event['generation'])!=self._last[:2] or
-                self._last is not None and event['sequence']!=self._last[2]+1):
+        if self._failed or not callable(on_ack):
+            raise RuntimeError('delivery unavailable')
+        event = job_event(raw_event)
+        if self._last is not None and (event['epoch'], event['generation']) != self._last[:2] or (self._last is not None and event['sequence'] != self._last[2] + 1):
             raise ValueError('stale or foreign event sequence')
-        handles,peers=self._peers()
-        membership=tuple({'id':'peer_'+str(h),'incarnation':self._incarnations[h]} for h in handles)
-        if type(expected_members) not in (tuple,list) or list(expected_members)!=list(membership):
+        handles, peers = self._peers()
+        membership = tuple(({'id': 'peer_' + str(handle), 'incarnation': self._incarnations[handle]} for handle in handles))
+        if type(expected_members) not in (tuple, list) or list(expected_members) != list(membership):
             raise ValueError('membership differs from gate')
         host._control._reader_free()
-        lease=object();host._control._reader_lease=lease
-        self._host._busy=True;self._active=True
+        reader_lease = object()
+        host._control._reader_lease = reader_lease
+        self._host._busy = True
+        self._active = True
         try:
-            deadline=time.monotonic()+self._timeout
-            ExperimentalTCPParticipants._quiet(self,peers,deadline)
-            for h in handles:
-                peer_id={'id':'peer_'+str(h),'incarnation':self._incarnations[h]}
-                request={'version':1,'kind':'job_delivery','connection_handle':h,
-                         'request_id':event['sequence'], 'session_epoch':host._world.session.world_epoch,
-                         'incarnation':peer_id['incarnation'],'event':event}
-                expected={k:request[k] for k in ('version','connection_handle','request_id','session_epoch','incarnation')}
-                expected.update(kind='job_receipt',status='applied',event_sha256=job_digest(event))
-                data=json.dumps(request,sort_keys=True,separators=(',', ':'),allow_nan=False).encode()+b'\n'
-                if len(data)>MAX_MESSAGE+1:raise ValueError('job frame too large')
-                conn,peer=peers[h]
-                others=[value[0] for k,value in peers.items() if k!=h]
-                ExperimentalTCPParticipants._exchange(self,conn,peer,others,data,expected,deadline)
-                if time.monotonic()>=deadline:raise TimeoutError('delivery callback deadline exceeded')
-                if on_ack(dict(peer_id),copy.deepcopy(event)) is not True:
+            deadline = time.monotonic() + self._timeout
+            ExperimentalTCPParticipants._quiet(self, peers, deadline)
+            for handle in handles:
+                peer_id = {'id': 'peer_' + str(handle), 'incarnation': self._incarnations[handle]}
+                request = {'version': 1, 'kind': 'job_delivery', 'connection_handle': handle,
+                           'request_id': event['sequence'], 'session_epoch': host._world.session.world_epoch,
+                           'incarnation': peer_id['incarnation'], 'event': event}
+                expected = {key: request[key] for key in ('version', 'connection_handle', 'request_id',
+                                                          'session_epoch', 'incarnation')}
+                expected.update(kind='job_receipt', status='applied', event_sha256=job_digest(event))
+                frame = json.dumps(request, sort_keys=True, separators=(',', ':'), allow_nan=False).encode() + b'\n'
+                if len(frame) > MAX_MESSAGE + 1:
+                    raise ValueError('job frame too large')
+                connection, peer_state = peers[handle]
+                others = [peer_entry[0] for key, peer_entry in peers.items() if key != handle]
+                ExperimentalTCPParticipants._exchange(self, connection, peer_state, others, frame, expected, deadline)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('delivery callback deadline exceeded')
+                if on_ack(dict(peer_id), copy.deepcopy(event)) is not True:
                     raise RuntimeError('delivery gate rejected receipt')
-                if time.monotonic()>=deadline:raise TimeoutError('delivery callback deadline exceeded')
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('delivery callback deadline exceeded')
                 if self._failed or host._failed:
                     raise RuntimeError('delivery changed during receipt callback')
-                current,current_peers=self._peers()
-                if current!=handles or any(current_peers[k]!=peers[k] for k in handles):
+                current_handles, current_peers = self._peers()
+                if current_handles != handles or any(current_peers[key] != peers[key] for key in handles):
                     raise RuntimeError('admitted membership changed')
-                ExperimentalTCPParticipants._quiet(self,peers,deadline)
-            self._last=(event['epoch'],event['generation'],event['sequence'])
+                ExperimentalTCPParticipants._quiet(self, peers, deadline)
+            self._last = (event['epoch'], event['generation'], event['sequence'])
             return True
         except BaseException:
-            self._failed=True;host._failed=True
+            self._failed = True
+            host._failed = True
             raise
         finally:
-            changed=host._control._reader_lease is not lease
-            if not changed:host._control._reader_lease=None
-            else:self._failed=True;host._failed=True
-            self._active=False;host._busy=False
-            if changed:raise RuntimeError('exclusive socket lease changed during delivery')
+            lease_changed = host._control._reader_lease is not reader_lease
+            if not lease_changed:
+                host._control._reader_lease = None
+            else:
+                self._failed = True
+                host._failed = True
+            self._active = False
+            host._busy = False
+            if lease_changed:
+                raise RuntimeError('exclusive socket lease changed during delivery')
