@@ -24,6 +24,13 @@ function M.new(o)
  assert(type(c.buffer)=='table' and type(c.buffer.new)=='function')
  local new_buffer=c.buffer.new
  for _,k in ipairs({'clock','guard','register','factory','fault'})do assert(type(c[k])=='function',k)end
+ local saved
+ if c.saved_baseline~=nil then
+  local s=c.saved_baseline
+  assert(type(s)=='table' and s.enabled==true and integer(s.baseline) and type(s.guard)=='function' and
+   type(s.register)=='function' and type(s.factory)=='function','invalid saved baseline route')
+  saved={baseline=s.baseline,guard=s.guard,register=s.register,factory=s.factory}
+ end
  assert(c.audit==nil or type(c.audit)=='function')
  assert((type(c.net)=='table' or type(c.net)=='userdata') and type(c.net.send)=='function' and type(c.net.receive)=='function')
  assert(not owners[c.net],'motion socket already owned');owners[c.net]=true
@@ -35,6 +42,12 @@ function M.new(o)
   local old=state;local ok,t=pcall(c.clock)
   if not ok or state~=old or type(t)~='number' or t~=t or t<0 or t==math.huge or (last and t<last) or (deadline and t>=deadline) then return false end
   last=t;local good,g=pcall(c.guard);if not good or g~=true or state~=old then return false end
+  if saved then
+   local valid,ok=pcall(saved.guard,c.epoch,saved.baseline)
+   if not valid or ok~=true or state~=old then return false end
+   local again,still=pcall(c.guard)
+   if not again or still~=true or state~=old then return false end
+  end
   local yes,u=pcall(c.clock)
   if not yes or state~=old or type(u)~='number' or u~=u or u<t or u==math.huge or (deadline and u>=deadline) then return false end
   last=u;return true
@@ -54,6 +67,7 @@ function M.new(o)
   if busy or state~='new' then return fail('start')end
   busy=true;local ok=pcall(function()
    assert(check());assert(c.register(function(_,v)api:event(v)end)==true and state=='new')
+   if saved then assert(saved.register(function(_,v)api:event(v,'saved')end)==true and state=='new')end
    state='ready';assert(send(reply('READY')))
   end);busy=false;if not ok then return fail('start')end;return true
  end
@@ -79,7 +93,9 @@ function M.new(o)
    if track_count>=c.max_tracks then return false end
    track_count=track_count+1
    local nonce=c.nonce -- full 128-bit owner nonce; binding adds index and request counter
-   local binding=assert(c.factory({epoch=c.epoch,generation=c.generation,index=index,sector_macro=p[10],nonce=nonce,
+   local route=saved and index<=saved.baseline and 'saved' or 'replica'
+   local factory=route=='saved' and saved.factory or c.factory
+   local binding=assert(factory({epoch=c.epoch,generation=c.generation,index=index,sector_macro=p[10],nonce=nonce,
     timeout=c.timeout,max_age=c.max_age,complete=function(result)
      if state~='pending' or delivered or not pending or type(result)~='table' or result.epoch~=c.epoch or
         result.generation~=c.generation or result.index~=pending.index or result.sequence~=pending.sequence or result.sector_macro~=pending.sector then return false end
@@ -88,10 +104,10 @@ function M.new(o)
    if state~='ready' or not check() then return false end
    local buffer=assert(new_buffer({dimensions=3,hold_only=true}))
    if type(buffer)~='table' or type(buffer.push)~='function' or state~='ready' or not check() then return false end
-   entry={sector=p[10],binding=binding,buffer=buffer};tracks[index]=entry
+   entry={sector=p[10],binding=binding,buffer=buffer,route=route};tracks[index]=entry
   end
   pending={identity={p[5],p[6],p[7],p[8],p[9],p[10],p[11]},index=index,sequence=seq,sector=p[10],binding=entry.binding,
-   buffer=entry.buffer,arrival=arrival,source_time=t,position={x,y,z},rate=rate}
+   buffer=entry.buffer,route=entry.route,arrival=arrival,source_time=t,position={x,y,z},rate=rate}
   deadline=last+c.timeout;state='pending'
   local ok,v=pcall(entry.binding.begin,entry.binding,{epoch=c.epoch,generation=c.generation,index=index,sequence=seq,sector_macro=p[10]},arrival)
   return ok and v==true and state=='pending' and check()
@@ -105,8 +121,9 @@ function M.new(o)
    if packet~=nil then assert(state=='ready' and accept(packet))end
   end);busy=false;if not ok then return fail('tick')end;return true
  end
- function api:event(value)
-  if busy or state~='pending' or delivered then return fail('event')end
+ function api:event(value,route)
+  route=route or 'replica'
+  if busy or state~='pending' or delivered or not pending or route~=pending.route then return fail('event')end
   busy=true;local ok=pcall(function()
    assert(check());local accepted=pending.binding:event(value)
    assert(accepted==true and delivered==true and state=='pending' and check())
@@ -148,6 +165,19 @@ function M.new_x4(o)
  c.factory=function(opt)
   opt.enabled=true;opt.expected_save_path=c.expected_save_path;opt.guard=c.guard;opt.resolve=c.resolve
   return native(opt)
+ end
+ if c.saved_baseline~=nil then
+  local s=c.saved_baseline
+  assert(type(s)=='table' and s.enabled==true and integer(s.baseline) and type(s.guard)=='function' and
+   type(s.binding)=='table' and type(s.binding.new_x4)=='function','invalid saved baseline route')
+  local baseline,baseline_guard,saved_native=s.baseline,s.guard,s.binding.new_x4
+  c.saved_baseline={enabled=true,baseline=baseline,guard=baseline_guard,
+   register=function(fn)return register('X4AuthoritySavedBaselineMotionBind.Result',fn)~=false end,
+   factory=function(opt)
+    opt.enabled=true;opt.baseline=baseline;opt.saved_baseline_guard=baseline_guard
+    opt.expected_save_path=c.expected_save_path;opt.guard=c.guard;opt.resolve=c.resolve;opt.replica=c.binding
+    return saved_native(opt)
+   end}
  end
  return M.new(c)
 end

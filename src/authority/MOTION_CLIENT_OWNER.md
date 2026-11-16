@@ -6,8 +6,20 @@ binding to a separately owned loopback UDP socket. The opt-in
 profile alongside the existing participant/job owner and uses the same X4
 `onUpdate`. No actor, sector or zone handle leaves X4. The buffer does not synchronize the source game clock to client real time or
 interpolate. The owner does not set pose or velocity, remove a ship, establish cross-process frame identity, or supply
-full gameplay. The existing checkpoint, MultiCreate receipt table and job
-registry remain prerequisites.
+full gameplay. The default replica route still requires the existing
+MultiCreate receipt table and job registry.
+
+An optional `saved_baseline` configuration on `new_x4` supplies an enabled
+saved-baseline binder, caller-asserted baseline bound and guard. Indices within
+that bound use its separate read-only MD event screen; higher indices continue
+through the existing MultiCreate-receipt route. Each response is accepted only
+on its selected route, and the baseline and ordinary guards are checked around
+work. The baseline guard is an external assertion, not proof of checkpoint,
+loaded-save or cross-process identity. The shared installer/session and
+client sector-interest selection do not yet activate or drive this route.
+`tests/test_authority_motion_client_ipc.py` covers routing using the actual
+local binders with a fake X4 ABI and simulated MD events; native baseline
+motion binding has not been established.
 
 The owner sends one `R|lease|attempt|READY|epoch|generation`; the supervisor
 must pin that socket to the intended X4 PID and process incarnation before

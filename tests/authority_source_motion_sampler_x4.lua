@@ -91,3 +91,38 @@ assert(why[1]=='register_id_roundtrip')
 conversion='good';docked=true;local unavailable,why2=diagnostic()
 assert(not unavailable:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},41))
 assert(why2[1]=='register_dock_values')
+
+-- Existing saved entries have no fabricated job sequence or job receipt.
+-- Their separate caller guard must remain true on every local read.
+conversion='good';docked=false;now=2
+local baseline_ok=true;local baseline_reads=0;local unexpected_job_guard=0
+local function saved_opts()
+ return {enabled=true,epoch=epoch,generation=generation,nonce=nonce,max_tracks=10,scan_budget=2,
+  interval=.1,timeout=5,min_dt=.02,max_dt=1,descriptor=descriptor,resolve=X4LAN_RESOLVE_STRING,
+  expected_save_path='/private/45841/save',guard=function()return true end,
+  binding_guard=function()unexpected_job_guard=unexpected_job_guard+1;return false end,
+  saved_baseline_limit=10054,saved_baseline_guard=function(row,actor)
+   baseline_reads=baseline_reads+1;return baseline_ok and row.classification=='saved_baseline' and row.sequence==nil and row.index==1 and actor==41
+  end,fault=function()end}
+end
+local saved=assert(sampler.new_x4(saved_opts()))
+assert(saved:register({epoch=epoch,index=1,classification='saved_baseline'},41))
+assert(saved:tick());req=sent[#sent].request_id
+ok,result=saved:event(req..'|'..epoch..'|1|ok|0x29|ship_a|argon|0x2b|sector_a')
+assert(ok and result.sequence==1 and result.velocity==nil and result.index==1)
+now=2.2;ffi.C.TestAdvance(.2);assert(saved:tick());req=sent[#sent].request_id
+ok,result=saved:event(req..'|'..epoch..'|1|ok|0x29|ship_a|argon|0x2b|sector_a')
+assert(ok and result.sequence==2 and result.velocity and result.velocity.x==0 and baseline_reads>0 and unexpected_job_guard==0)
+baseline_ok=false;now=2.4;assert(not saved:tick() and saved:state()=='failed')
+for _,bad in ipairs({{epoch=epoch,index=10055,classification='saved_baseline'},
+                     {epoch=epoch,index=1,sequence=1,classification='saved_baseline'}})do
+ local t=assert(sampler.new_x4(saved_opts()));assert(not t:register(bad,41) and t:state()=='failed')
+end
+local no_opt=saved_opts();no_opt.saved_baseline_limit=nil;no_opt.saved_baseline_guard=nil
+local t=assert(sampler.new_x4(no_opt));assert(not t:register({epoch=epoch,index=1,classification='saved_baseline'},41))
+local incomplete=saved_opts();incomplete.saved_baseline_guard=nil;assert(not pcall(sampler.new_x4,incomplete))
+local probe={enabled=true,epoch=epoch,request_id=nonce,timeout=5,actor=41,
+ row={epoch=epoch,index=1,classification='saved_baseline'}}
+assert(not pcall(descriptor.new,probe)) -- no implicit baseline mode
+probe.saved_baseline=1;probe.row.index=2;assert(not pcall(descriptor.new,probe))
+probe.row.index=1;probe.row.sequence=1;assert(not pcall(descriptor.new,probe))

@@ -23,7 +23,7 @@ external binding guard. Call `register(row, actor)` only with a
 confirmed `new_registry_entry` row and that same process-local actor. Actor IDs
 are never present in snapshots. This interface does not yet enumerate or bind
 the existing baseline registry; only explicitly registered confirmed new
-entries can be sampled. A caller must stop/fence on actor loss, despawn, pause,
+entries can be sampled by default. A caller must stop/fence on actor loss, despawn, pause,
 docking or other context changes; the current sampler fails the stream rather
 than silently dropping an invalid track.
 
@@ -58,6 +58,31 @@ and exercises the actual existing descriptor reader and X4 factory against a
 fake C ABI. No native X4 or network delivery is established by those tests;
 no live NPC pose/velocity write, full baseline/world coverage, Windows or
 Internet gameplay is claimed.
+
+## Explicit saved-baseline opt-in
+
+An owner may separately supply `saved_baseline_limit` and
+`saved_baseline_guard(row, actor)` to admit an already locally resolved saved
+registry actor. Register that actor with `{epoch=..., index=...,
+classification='saved_baseline'}` and **no** job `sequence`. The index must
+be within the supplied saved bound. A baseline row is rejected if this pair of
+options is absent; the regular `new_registry_entry` route retains its own
+`binding_guard` and job sequence. The saved guard is called at registration
+and around subsequent reads; it is an external assertion, not proof that X4
+loaded a particular checkpoint, that two processes share an actor, or that the
+saved bound is genuine. The owner must independently establish and fence
+checkpoint/load/process incarnation, the local registry-to-actor reference and
+the requested client's current sector interest. No Create or queue receipt is
+invented. The unchanged read-only MD descriptor checks local epoch, registry
+forward/reverse references and actor/sector; FFI and dock checks still apply.
+The descriptor reader admits a `saved_baseline` row only with its separate
+explicit saved bound; portable sample sequence remains the sampler's own
+per-track sequence, not a fabricated job sequence. A sample still proves no
+cross-process coordinate-frame equivalence or world coverage.
+
+This opt-in is a local building block. Existing source session, baseline
+resolver/bootstrap, client interest subscriptions and network track ownership
+do not automatically connect it to a running X4 session.
 
 ## Opt-in source session
 

@@ -6,9 +6,10 @@ local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f
 local function integer(v)return type(v)=='number' and v==v and v>=1 and v<=MAX and v%1==0 end
 local function finite(v)return type(v)=='number' and v==v and v~=math.huge and v~=-math.huge end
 local function name(v)return type(v)=='string' and #v>=1 and #v<=128 and v:match('^[A-Za-z0-9_]+$')~=nil end
-local function valid_row(r,epoch)
- return type(r)=='table' and getmetatable(r)==nil and r.epoch==epoch and integer(r.index) and integer(r.sequence)
-  and r.classification=='new_registry_entry'
+local function valid_row(r,epoch,baseline)
+ if type(r)~='table' or getmetatable(r)~=nil or r.epoch~=epoch or not integer(r.index) then return false end
+ if r.classification=='new_registry_entry' then return integer(r.sequence) end
+ return r.classification=='saved_baseline' and baseline~=nil and r.index<=baseline and r.sequence==nil
 end
 function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
@@ -16,6 +17,8 @@ function M.new(o)
  assert(token(c.epoch) and token(c.generation) and token(c.nonce))
  assert(c.epoch~=c.generation and c.epoch~=c.nonce and c.generation~=c.nonce)
  for _,k in ipairs({'clock','guard','binding_guard','actor_key','reader_factory','fault'})do assert(type(c[k])=='function',k..' required')end
+ assert((c.saved_baseline_limit==nil and c.saved_baseline_guard==nil) or
+  (integer(c.saved_baseline_limit) and type(c.saved_baseline_guard)=='function'))
  assert(integer(c.max_tracks) and c.max_tracks<=1000000 and integer(c.scan_budget) and c.scan_budget<=1024)
  assert(finite(c.interval) and c.interval>0 and c.interval<=60 and finite(c.timeout) and c.timeout>0 and c.timeout<=120)
  assert(finite(c.min_dt) and finite(c.max_dt) and c.min_dt>0 and c.min_dt<=c.max_dt and c.max_dt<=60)
@@ -40,18 +43,19 @@ function M.new(o)
   last_clock=u;return true
  end
  local function row_ok(e)
-  return valid_row(e.row,c.epoch) and e.row.index==e.index and e.row.sequence==e.source_sequence
+  return valid_row(e.row,c.epoch,c.saved_baseline_limit) and e.row.index==e.index and e.row.sequence==e.source_sequence
  end
  local function checked_binding(entry)
   if not row_ok(entry) then return false end
   local old=state
   local ok,key=pcall(c.actor_key,entry.actor)
   if not ok or state~=old or key~=entry.key then return false end
-  local good,allowed=pcall(c.binding_guard,entry.row,entry.actor)
+  local binding=entry.row.classification=='saved_baseline' and c.saved_baseline_guard or c.binding_guard
+  local good,allowed=pcall(binding,entry.row,entry.actor)
   return good and allowed==true and state==old and row_ok(entry) and check()
  end
  function api:register(row,actor)
-  if busy or state~='ready' or not valid_row(row,c.epoch) or actor==nil or entries[row.index] or #order>=c.max_tracks then return fail('register')end
+  if busy or state~='ready' or not valid_row(row,c.epoch,c.saved_baseline_limit) or actor==nil or entries[row.index] or #order>=c.max_tracks then return fail('register')end
   local copy={epoch=row.epoch,index=row.index,sequence=row.sequence,classification=row.classification}
   busy=true
   local ok=pcall(function()
@@ -166,13 +170,14 @@ function M.new_x4(c)
   return report_fault(reason)
  end
  local resolve_actor,new_descriptor=c.resolve.actor_u64,c.descriptor.new_x4
- local component_data,to_lua_id,to64,external_binding=GetComponentData,ConvertStringToLuaID,ConvertIDTo64Bit,c.binding_guard
+ local component_data,to_lua_id,to64=GetComponentData,ConvertStringToLuaID,ConvertIDTo64Bit
+ local external_binding,external_baseline=c.binding_guard,c.saved_baseline_guard
  opts.clock=GetCurRealTime
  opts.actor_key=function(actor)
   local v=resolve_actor(actor);if not v then return nil end
   local s=tostring(v):gsub('ULL$','');return s:match('^[1-9]%d*$') and s or nil
  end
- opts.binding_guard=function(row,actor)
+ local function guarded_binding(binding,row,actor)
   local function free()
    binding_stage='actor_key'
    local key=opts.actor_key(actor);if not key then return false end
@@ -194,12 +199,17 @@ function M.new_x4(c)
   end
   if not free() then return false end
   binding_stage='external_binding'
-  if external_binding(row,actor)~=true or not free() then return false end
+  if binding(row,actor)~=true or not free() then return false end
   binding_stage='none';return true
+ end
+ opts.binding_guard=function(row,actor)return guarded_binding(external_binding,row,actor)end
+ if external_baseline then
+  opts.saved_baseline_guard=function(row,actor)return guarded_binding(external_baseline,row,actor)end
  end
  opts.reader_factory=function(row,actor,request)
   return new_descriptor({enabled=true,epoch=c.epoch,request_id=request,timeout=c.timeout,
-   row=row,actor=actor,expected_save_path=c.expected_save_path,guard=c.guard,include_local_sector=true})
+   row=row,actor=actor,expected_save_path=c.expected_save_path,guard=c.guard,include_local_sector=true,
+   saved_baseline=row.classification=='saved_baseline' and c.saved_baseline_limit or nil})
  end
  return M.new(opts)
 end

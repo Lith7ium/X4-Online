@@ -12,8 +12,10 @@ function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(token(o.epoch) and token(o.request_id) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
  assert(o.include_local_sector==nil or type(o.include_local_sector)=='boolean')
- assert(type(o.row)=='table' and o.row.epoch==o.epoch and integer(o.row.index) and integer(o.row.sequence)
-  and o.row.classification=='new_registry_entry' and o.actor~=nil)
+ assert(type(o.row)=='table' and o.row.epoch==o.epoch and integer(o.row.index) and o.actor~=nil)
+ if o.saved_baseline~=nil then
+  assert(integer(o.saved_baseline) and o.row.index<=o.saved_baseline and o.row.classification=='saved_baseline' and o.row.sequence==nil)
+ else assert(o.row.classification=='new_registry_entry' and integer(o.row.sequence)) end
  for _,n in ipairs({'issue','clock','game_time','guard','actor_key','hex_key','snapshot'}) do assert(type(o[n])=='function',n..' required') end
  local state='idle';local busy=false;local generation={};local last,deadline,query_game,actor_key
  local api={}

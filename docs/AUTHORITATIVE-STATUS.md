@@ -8,6 +8,20 @@ eventually trade, fight, board and command ships. The simulation may pause
 when nobody is connected and during joins. See the detailed experiment notes
 for evidence and restrictions.
 
+The user clarified that clients need ship positions only for what they are
+currently viewing, including a sector viewed on the map. They need not
+continuously receive positions for the entire universe; the server still
+simulates the whole world. The mechanism for determining a client's visible
+ships and map view remains to be established, as do subscription transitions,
+refresh and missed-update recovery. A sector view must not be assumed to grant
+visibility of every ship in that sector.
+Static inspection of the installed X4 map UI found candidates for detecting
+the open map, its focus and rendered components. The map's `currentsector`
+follows focus/selection and has not been shown to cover everything visible
+after panning or zooming. Deriving interest only from already rendered objects
+could also miss objects that have not yet been replicated. These are code
+inspection findings, not a native visibility or subscription test.
+
 An offline result for the pinned census save groups all 10,054 registry
 indices exactly once by saved sector ancestry: 140 of 152 saved sectors have
 at least one witness. Its reported checkpoint, digest and registry epoch match

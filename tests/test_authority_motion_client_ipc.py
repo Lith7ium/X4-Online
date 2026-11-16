@@ -11,6 +11,14 @@ ROOT=Path(__file__).resolve().parents[1]
 class ClientMotionIPC(unittest.TestCase):
     def test_socket_owner_is_exclusive(self):
         subprocess.run(['luajit','tests/authority_motion_client_owner.lua'],cwd=ROOT,check=True,capture_output=True,text=True,timeout=5)
+    def test_saved_baseline_uses_separate_guarded_event_route(self):
+        subprocess.run(['luajit','tests/authority_motion_client_baseline_route.lua'],cwd=ROOT,check=True,capture_output=True,text=True,timeout=5)
+    def test_saved_baseline_and_replica_use_real_local_binders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            abi=Path(tmp)/'fake.so'
+            subprocess.run(['cc','-O2','-shared','-fPIC','tests/fixtures/replica_motion_binding_abi.c','-o',str(abi)],cwd=ROOT,check=True,capture_output=True)
+            subprocess.run(['luajit','tests/authority_motion_client_baseline_x4.lua'],cwd=ROOT,check=True,capture_output=True,text=True,timeout=5,
+                           env=dict(os.environ,LD_PRELOAD=str(abi)))
     def test_bound_only_after_correlated_md_and_ffi(self):
         with tempfile.TemporaryDirectory() as tmp:
             net=Path(tmp)/'net.so';abi=Path(tmp)/'fake.so'
