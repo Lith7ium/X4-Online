@@ -31,3 +31,54 @@ operations, deduplicate by a validated live object-to-registry binding and
 retain event provenance; a local registry acknowledgment is neither durable
 delivery to a client nor proof of a birth. Other creation paths, including
 script-driven creation, remain unaccounted for until independently tested.
+
+## Additional local evidence and a bounded observer design
+
+The installed base and DLC catalogs were scanned read-only for these event
+names in `md/*.xml`: 44 CAT/DAT pairs and 386 catalog entries, including
+multiple versions where present. Catalog MD5 matched each entry cited below.
+This is a scan of those archived MD entries, not a runtime coverage census or
+proof about uninspected content or enabled DLC. Schema references below are to
+the locally extracted `preparation/game-schemas/libraries/common.xsd`.
+
+| Event | Documented parameters | Concrete local usage and remaining uncertainty |
+| --- | --- | --- |
+| `event_god_created_ship` | `event.object`: containing space; `event.param`: ship. Optional `space` and `group` attributes; no `objecteventsource` requirement in this declaration (14815–14832). | No use found in the scanned MD entries. Unfiltered subscription semantics, overlap with other events and whether it sees ships from other creation mechanisms remain untested. |
+| `event_player_built_ship` | `event.param`: player-owned ship; `event.param2`: build task. No filter attributes in this declaration (15177–15186). | `08.cat/md/notifications.xml:531–537` treats this as an existing, non-operational player-owned object becoming operational; lines 3701–3708 use the task's building object and ship. This does not establish an object-creation instant, NPC-build coverage, or safe repeated notification behavior. |
+| `event_object_built_ship` | `event.object`: builder; `event.param`: operational ship; `event.param2`: build task (12428–12439). An `object` or existing, dynamically mutable `group` is required by `objecteventsource` (7155–7165, 1027–1035). | `ego_dlc_terran/ext_03.cat/md/story_yaki.xml:18430–18445` finds a bounded Xenon shipyard group and listens to it. Completeness and maintenance of a universe-wide shipyard group are not established. |
+| `event_object_entered` | `event.object`: entered space/container; `event.param`: entering object; `event.param2` and `event.param3`: new and old contexts (14879–14897). | `08.cat/md/notifications.xml:542–548` uses `space="player.galaxy"` as one cause of a player-owned operational object's arrival/spawn. `md/rml_locate_object.xml:98–110` uses a sector-scoped listener. The schema says an object can enter *or* be created: **do not classify entry as birth**. Universe-wide event coverage, context-change behavior and event volume remain untested. |
+| `event_job_ship_activated` | `event.param`: job ship; documented for activation after direct space spawn or shipyard completion (17291–17298). | `08.cat/md/encounters.xml:35–42` filters for operational encounter ships. Activation does not establish a new registry or client object, nor cover non-job ship creation. |
+
+In this scan the event-name counts were respectively 0 GoD ship, 2 player
+built ship, 1 object built ship, 7 job activations, and 1 GoD-created object.
+Those counts include archived variants and are not counts of active cues.
+The `event_object_entered` example was inspected separately; no exhaustive
+count of that more general event is claimed. Script-created ships, ships
+created before subscription, other build/ownership paths, listeners' possible
+overlap, and events missed during loading or queue overflow remain open.
+
+A useful next implementation would be an independently enabled, disposable
+observer with one serialized owner. It can record the event kind, ordered local
+sequence and a locally valid ship reference; any exposed transport must use an
+opaque event identity, never an X4 actor handle. At observation time it can
+read the existing registry's epoch and bidirectional `byship`/`ships` entries
+without modifying them: absent entry, consistent existing entry, and invalid or
+inconsistent entry must remain distinct outcomes. A missing entry is **not**
+proof of a birth. `Enroll` is unsuitable for a read-only observation because
+it allocates a new index for an absent ship, changing the later job owner's
+classification. The saved census fixture has the same underlying registry
+fields but must remain byte-identical to the script serialized in its save.
+
+The observer needs a separately bounded queue, explicit overflow/unavailable
+faults, a unique run/queue incarnation, no implicit acknowledgments, and
+exclusive serialized ownership if it ever shares registry mutation or source
+queue consumption with the job host. Preserve every observed event and its
+provenance until examined; deduplication may only follow validated local
+identity and cannot silently discard a possible distinct event. A ship may be
+unavailable or non-operational when sampled, and `player.galaxy` needs a valid
+player context; those conditions must remain failures or explicitly recorded
+inconclusive observations, not negative proof of creation. No such observer is
+implemented or natively validated here. A future native test needs a separate
+agreed plan with a controlled creation path, comparison against independent
+evidence, owned process cleanup and explicit expectations for duplicate,
+missing, late and overflow events.
