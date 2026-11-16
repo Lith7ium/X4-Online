@@ -11,6 +11,7 @@ local function name(s) return type(s)=='string' and #s>=1 and #s<=128 and s:matc
 function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(token(o.epoch) and token(o.request_id) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
+ assert(o.include_local_sector==nil or type(o.include_local_sector)=='boolean')
  assert(type(o.row)=='table' and o.row.epoch==o.epoch and integer(o.row.index) and integer(o.row.sequence)
   and o.row.classification=='new_registry_entry' and o.actor~=nil)
  for _,n in ipairs({'issue','clock','game_time','guard','actor_key','hex_key','snapshot'}) do assert(type(o[n])=='function',n..' required') end
@@ -79,10 +80,13 @@ function M.new(o)
   if current~=actor_key then return fail('actor_changed') end
   if not check() then return false end
   state='done';deadline=nil
-  return true,{epoch=o.epoch,index=o.row.index,sequence=o.row.sequence,macro=macro,owner=owner,
+  local result={epoch=o.epoch,index=o.row.index,sequence=o.row.sequence,macro=macro,owner=owner,
    sector_macro=sector_macro,x=sample.x,y=sample.y,z=sample.z,
    game_before_request=query_game,game_before_pose=sample.game_before,game_after_pose=sample.game_after,
    sector_identity_proven=false,descriptor_atomic=false,birth_confirmed=false,delivery_confirmed=false}
+  -- The key is meaningful only inside this exact X4 process; it must never be sent.
+  if o.include_local_sector then result.local_sector_key=sector_key end
+  return true,result
  end
  function api:tick() if state=='waiting' then return check() end;return fail('not_waiting') end
  function api:abort() return fail('external_fence') end
