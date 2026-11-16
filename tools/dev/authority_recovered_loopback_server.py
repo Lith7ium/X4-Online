@@ -182,6 +182,18 @@ def finish_source_diagnostic(active, active_clients, guard_context, *, verify, p
     return observation,active.finish()
 
 
+def run_source_probe_with_progress(result, probe, **kwargs):
+    """Retain non-secret progress even when the diagnostic raises."""
+    import authority_recovered_source_probe
+    if type(result) is not dict or not callable(probe):
+        raise ValueError('source progress requires a result and probe')
+    diagnostics = authority_recovered_source_probe.SourceProbeDiagnostics()
+    try:
+        return probe(diagnostics=diagnostics, **kwargs)
+    finally:
+        result['source_diagnostic_progress'] = diagnostics.snapshot()
+
+
 def redact_recovery_config(text):
     redacted,count=re.subn(r'authority_control_lease="[0-9a-f]{32}"',
         'authority_control_lease="redacted"',text)
@@ -742,7 +754,7 @@ def run(args):
                         verify();cancel_diagnostic()
                     def run_source(guard,saved,pump,active):
                         source_context=dict(source_settings,epoch=guard.status[1],baseline=guard.status[2])
-                        return authority_recovered_source_probe.run(sock=source_sock,
+                        return run_source_probe_with_progress(result,authority_recovered_source_probe.run,sock=source_sock,
                             settings=source_context,index=source_index,baseline=saved,guard=guard,pump=pump,
                             active=active,host=host,world=world,identity=identity,verify=verify_diagnostic,
                             verify_process=check,candidate_indices=source_candidates,client_motion=client_motion,

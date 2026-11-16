@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
 import authority_recovered_source_probe as subject
 import authority_recovered_server_client as recovered_client
+import authority_recovered_loopback_server as supervisor
 from authority.experimental_tcp_motion import motion_digest
 import linux_gate_live
 
@@ -42,6 +43,7 @@ class Probe(unittest.TestCase):
         return events,kwargs,bind
     def test_two_samples_stop_then_guard_shutdown(self):
         events,kwargs,bind=self.context()
+        diagnostics=subject.SourceProbeDiagnostics();kwargs['diagnostics']=diagnostics
         with patch.object(subject,'ExperimentalTCPJobDelivery'),patch.object(subject,'ExperimentalTCPMotion'), \
              patch.object(subject,'bind_running_source_motion',side_effect=bind),patch.object(subject.os,'stat',return_value=SimpleNamespace(st_dev=1,st_ino=2)),patch.object(subject.time,'sleep'):
             result=subject.run(**kwargs)
@@ -49,6 +51,9 @@ class Probe(unittest.TestCase):
         self.assertEqual(len(result['samples']),2);self.assertFalse(result['client_motion_proven'])
         self.assertFalse(result['cross_process_identity_proven'])
         self.assertNotIn('generation',result['samples'][0]);self.assertNotIn('epoch',result['samples'][0])
+        self.assertEqual(diagnostics.snapshot()['phase'],'complete')
+        self.assertEqual(diagnostics.snapshot()['samples_received'],2)
+        self.assertEqual(diagnostics.snapshot()['saved_checkpoint_guard_calls'],1)
     def test_unconfirmed_source_stop_never_closes_or_authorizes_guard_shutdown(self):
         events,kwargs,bind=self.context(stop=False)
         with patch.object(subject,'ExperimentalTCPJobDelivery'),patch.object(subject,'ExperimentalTCPMotion'), \
@@ -80,6 +85,36 @@ class Probe(unittest.TestCase):
         with patch.object(subject.time,'monotonic',side_effect=lambda:clock[0]):
             with self.assertRaises(TimeoutError):subject.run(**kwargs)
         self.assertNotIn('bind',events);self.assertNotIn('source_stop',events)
+
+    def test_supervisor_retains_timeout_phase_and_guard_cost_without_secrets(self):
+        events, kwargs, _ = self.context()
+        clock = [1.0]
+        kwargs['guard'].deadline = 1000
+        verification_calls = []
+        def verify():
+            verification_calls.append(True)
+            if len(verification_calls) == 2:
+                clock[0] = 92.0
+        def bind(_sock, _motion, **options):
+            options['client_guard']()
+            raise AssertionError('expired guard returned')
+        kwargs['verify'] = verify
+        result = {}
+        with patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(subject, 'ExperimentalTCPJobDelivery'), patch.object(subject, 'ExperimentalTCPMotion'), \
+             patch.object(subject, 'bind_running_source_motion', side_effect=bind), \
+             patch.object(subject.os, 'stat', return_value=SimpleNamespace(st_dev=1, st_ino=2)):
+            with self.assertRaisesRegex(TimeoutError, 'source diagnostic deadline'):
+                supervisor.run_source_probe_with_progress(result, subject.run, **kwargs)
+        progress = result['source_diagnostic_progress']
+        self.assertEqual(progress['phase'], 'bind_source')
+        self.assertEqual(progress['full_guard_calls'], 2)
+        self.assertEqual(progress['full_guard_seconds'], 91.0)
+        self.assertEqual(progress['phase_seconds']['bind_source'], 91.0)
+        self.assertEqual(progress['samples_received'], 0)
+        self.assertEqual(len(verification_calls), 2)
+        self.assertNotIn('source_stop', events)
+        self.assertNotIn('a'*32, str(progress))
 
     @unittest.skipUnless(sys.platform=='linux','Linux process and socket ownership required')
     def test_real_udp_tcp_delivery_with_retained_simulated_client(self):

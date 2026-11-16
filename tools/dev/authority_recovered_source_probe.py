@@ -18,9 +18,45 @@ from authority_tcp_job_client_live import socket_owner
 from authority_tcp_native_worker import check_process
 
 
+class SourceProbeDiagnostics:
+    """Non-secret progress and guard costs; never performs a guard itself."""
+
+    def __init__(self):
+        self.started_at = time.monotonic()
+        self.phase_started_at = self.started_at
+        self.phase = 'initializing'
+        self.phase_seconds = {}
+        self.full_guard_calls = 0
+        self.full_guard_seconds = 0.0
+        self.saved_checkpoint_guard_calls = 0
+        self.saved_checkpoint_guard_seconds = 0.0
+        self.pump_process_guard_calls = 0
+        self.pump_client_guard_calls = 0
+        self.samples_received = 0
+
+    def enter(self, phase):
+        now = time.monotonic()
+        self.phase_seconds[self.phase] = self.phase_seconds.get(self.phase, 0.0) + now - self.phase_started_at
+        self.phase = phase
+        self.phase_started_at = now
+
+    def snapshot(self):
+        now = time.monotonic()
+        phase_seconds = dict(self.phase_seconds)
+        phase_seconds[self.phase] = phase_seconds.get(self.phase, 0.0) + now - self.phase_started_at
+        return {'phase': self.phase, 'elapsed_seconds': now - self.started_at,
+                'phase_seconds': phase_seconds, 'full_guard_calls': self.full_guard_calls,
+                'full_guard_seconds': self.full_guard_seconds,
+                'saved_checkpoint_guard_calls': self.saved_checkpoint_guard_calls,
+                'saved_checkpoint_guard_seconds': self.saved_checkpoint_guard_seconds,
+                'pump_process_guard_calls': self.pump_process_guard_calls,
+                'pump_client_guard_calls': self.pump_client_guard_calls,
+                'samples_received': self.samples_received}
+
+
 def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         identity, verify, verify_process, timeout=90, candidate_indices=None,
-        client_motion=False, verify_stopped=None):
+        client_motion=False, verify_stopped=None, diagnostics=None):
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -40,6 +76,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or not callable(verify) or not callable(verify_process)
             or type(client_motion) is not bool
             or (client_motion and not callable(verify_stopped))
+            or (diagnostics is not None and not isinstance(diagnostics, SourceProbeDiagnostics))
             or type(timeout) not in (int, float) or not math.isfinite(timeout)
             or not 0 < timeout <= 90
             or guard.status[:3] != ('ready', settings['epoch'], settings['baseline'])):
@@ -58,7 +95,15 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
 
     def active_guard():
         check_deadline()
-        verify()
+        if diagnostics is None:
+            verify()
+        else:
+            diagnostics.full_guard_calls += 1
+            started_at = time.monotonic()
+            try:
+                verify()
+            finally:
+                diagnostics.full_guard_seconds += time.monotonic() - started_at
         check_deadline()
         return True
 
@@ -68,12 +113,20 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         # client liveness need pumping; re-hashing source on each IPC byte or
         # wait poll would repeat the same check without adding a boundary.
         check_deadline()
+        if diagnostics is not None:
+            diagnostics.pump_process_guard_calls += 1
         verify_process()
+        if diagnostics is not None:
+            diagnostics.pump_client_guard_calls += 1
         if active.participant.check_active(server_checked=True) is not True:
             raise RuntimeError('retained client unavailable')
+        if diagnostics is not None:
+            diagnostics.pump_process_guard_calls += 1
         verify_process()
         check_deadline()
         return True
+    if diagnostics is not None:
+        diagnostics.enter('initial_verification')
     pump.activate(host=host, guard=pump_guard)
     active_guard()
     executable_stat = os.stat(Path('/proc') / str(identity[0]) / 'exe')
@@ -87,7 +140,14 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         if (world._baseline != pinned_baseline or world.session.state != 'running'
                 or world.session.pending is not None or world.session.baseline_id is not None):
             return False
-        return guard.check() is True
+        if diagnostics is None:
+            return guard.check() is True
+        diagnostics.saved_checkpoint_guard_calls += 1
+        started_at = time.monotonic()
+        try:
+            return guard.check() is True
+        finally:
+            diagnostics.saved_checkpoint_guard_seconds += time.monotonic() - started_at
 
     staged_samples = []
 
@@ -113,6 +173,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             raise RuntimeError('diagnostic motion recipient changed')
         return [copy.deepcopy(selected_recipient)]
 
+    if diagnostics is not None:
+        diagnostics.enter('bind_source')
     source = bind_running_source_motion(
         sock, motion, process=process, lease=settings['lease'], attempt=settings['attempt'],
         epoch=settings['epoch'], generation=settings['generation'], world=world,
@@ -121,8 +183,14 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         validate_sample=capture_sample, candidate_indices=candidate_indices,
     )
     if candidate_indices is not None:
+        if diagnostics is not None:
+            diagnostics.enter('select_candidate')
         index = source.request_candidate()
+    if diagnostics is not None:
+        diagnostics.enter('register_source')
     source.register_saved(index)
+    if diagnostics is not None:
+        diagnostics.enter('collect_samples')
     samples = []
     for _ in range(20):
         previous_count = len(staged_samples)
@@ -141,6 +209,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                 if track is None or track['peer_samples'].get(recipient_key) != expected_receipt:
                     raise RuntimeError('motion receipt digest not recorded for client')
             samples.append(staged_samples[-1])
+            if diagnostics is not None:
+                diagnostics.samples_received = len(samples)
             if len(samples) == 2:
                 break
         elif received is not None:
@@ -148,13 +218,19 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         time.sleep(.1)
     if len(samples) != 2:
         raise RuntimeError('two server source samples unavailable')
+    if diagnostics is not None:
+        diagnostics.enter('stop_source')
     if source.stop_remote() is not True:
         raise RuntimeError('source stop unconfirmed')
     active_guard()
+    if diagnostics is not None:
+        diagnostics.enter('stop_checkpoint_guard')
     if guard.stop() is not True:
         raise RuntimeError('checkpoint guard stop unconfirmed')
     active_guard()
     if client_motion:
+        if diagnostics is not None:
+            diagnostics.enter('stop_client')
         local_address, peer_address = sock.getsockname(), sock.getpeername()
         socket_fd = sock.fileno()
         socket_stat = os.fstat(socket_fd)
@@ -184,9 +260,13 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             raise RuntimeError('client motion worker stop unconfirmed')
         if stopped_source() is not True:
             raise RuntimeError('source fence changed after client stop')
+    if diagnostics is not None:
+        diagnostics.enter('close_source')
     source.close()
     public_fields = ('sequence', 'sector_macro', 'source_time', 'x', 'y', 'z', 'velocity')
     public_samples = [{key: sample[key] for key in public_fields} for sample in samples]
+    if diagnostics is not None:
+        diagnostics.enter('complete')
     return {
         'index': index,
         'candidate_selected': candidate_indices is not None,
