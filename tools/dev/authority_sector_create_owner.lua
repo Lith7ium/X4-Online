@@ -128,8 +128,23 @@ function M.new_x4(cfg)
   for _,ship in ipairs(rows) do
    count_stage='count_candidate';local id=key(ship);assert(not seen[id] and C.IsValidComponent(ship),'invalid or duplicate candidate');seen[id]=true
    if C.IsComponentOperational(ship) and C.IsComponentClass(ship,'ship') then
-    count_stage='count_conversion';local ref=ConvertStringToLuaID(id);assert(ref~=nil and ref~=0)
-    assert(key(ref)==id and key(ConvertIDTo64Bit(ref))==id,'candidate conversion mismatch')
+    -- The fleet ID is independently obtained as an exact uint64. X4's LuaID
+    -- may be opaque userdata: never stringify or treat that value as a number.
+    count_stage='count_conversion_make';local ref=ConvertStringToLuaID(id)
+    count_stage='count_conversion_null';assert(ref~=nil and ref~=0)
+    local kind=type(ref)
+    if kind=='number' then
+     count_stage='count_conversion_input_number';assert(key(ref)==id,'candidate input mismatch')
+    elseif kind=='cdata' then
+     count_stage='count_conversion_input_cdata';assert(key(ref)==id,'candidate input mismatch')
+    elseif kind~='userdata' then
+     -- type() has a fixed finite vocabulary; no supplied value is logged.
+     count_stage='count_conversion_type_'..kind;error('unsupported LuaID type')
+    end
+    count_stage='count_conversion_roundtrip_call_'..kind
+    local roundtrip=ConvertIDTo64Bit(ref)
+    count_stage='count_conversion_roundtrip_check_'..kind
+    assert(key(roundtrip)==id,'candidate conversion mismatch')
     count_stage='count_macro';local macro=GetComponentData(ref,'macro')
     assert(type(macro)=='string' and macro:match('^[%w_%-%.]+$'),'invalid candidate macro')
     if macro=='ship_arg_s_fighter_01_a_macro' then total=total+1 end

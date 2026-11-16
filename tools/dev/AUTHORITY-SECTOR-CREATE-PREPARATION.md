@@ -103,3 +103,27 @@ The diagnostic update is covered by fake-X4 tests for failure before and after
 a Create dispatch, a slow logger on either side, candidate ID conversion,
 pause loss, late callbacks, invalid receipt order and final-log faults. These
 are synthetic checks; no native follow-up is claimed here.
+
+## Second native attempt and LuaID conversion
+
+The isolated `authority-sector-create-02` attempt also failed. Its marker,
+slot-2 read and paused-load receipts preceded `ADAPTER_FAIL count_conversion`,
+`DRIVER_FAIL new callback_failed` and `OWNER_FAIL driver_start`. The installed
+driver reaches that initial faction count before issuing Preflight, and the log
+contains no dispatch receipts; its code therefore did not send Preflight,
+Initialize or Create on that path. The result reports no owned processes
+remaining. The artifacts and failure result remain unchanged.
+
+The diagnostic at that revision did not distinguish the LuaID creation call,
+returned value type, direct check or reverse conversion, so it does not prove
+which substep failed. An X4 LuaID represented as `userdata` is a plausible
+explanation: the old check tried to treat the opaque value as a numeric handle.
+The revised adapter permits `userdata` only as an opaque argument to
+`ConvertIDTo64Bit`, and compares that result against the independently captured
+exact fleet uint64. Numeric or cdata references must also independently pass
+the exact direct check; unsafe numbers and other types fail closed. Value-free
+failure categories distinguish creation, null/unsupported type, direct check,
+and reverse-conversion call or comparison, without logging IDs or exceptions.
+Fake LuaJIT tests cover real userdata, exact uint64 above 2^53, failed and
+rounded reverse conversions, unsupported types and direct checks. They do not
+establish the actual native return type or the cause of the second failure.
