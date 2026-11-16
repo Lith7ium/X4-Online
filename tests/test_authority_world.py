@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+import authority.checkpoints as checkpoints
 from authority.checkpoints import CheckpointStore
 from authority.save_transfer import SaveOffers, receive
 from authority.world import WorldCoordinator
@@ -261,6 +262,44 @@ class WorldTests(unittest.TestCase):
         self.assertIsNone(self.world.session.baseline_id)
         with self.assertRaises(ValueError):
             self.world.offer_load(1)
+
+    def test_directory_sync_failure_after_current_replacement_faults_world(self):
+        self.engine.checkpoint_published = mock.Mock(return_value=True)
+        first_player = self.world.join('a')
+        self.step('pause')
+        self.step('save')
+        previous_confirmed = self.store.latest_confirmed()
+        old_pointer = (self.store_path / 'CURRENT').read_bytes()
+        self.confirm(self.world.offer_load(first_player))
+        self.step('resume')
+        joining_player = self.world.join('b')
+        self.step('pause')
+        self.engine.checkpoint_published.reset_mock()
+
+        sync_directory = checkpoints._sync_dir
+        observed_failed_syncs = []
+
+        def fail_after_current_replace(path):
+            if Path(path) == self.store.directory and (self.store_path / 'CURRENT').read_bytes() != old_pointer:
+                observed_failed_syncs.append(True)
+                raise OSError('directory sync failed after CURRENT replacement')
+            return sync_directory(path)
+
+        with mock.patch.object(checkpoints, '_sync_dir', side_effect=fail_after_current_replace):
+            with self.assertRaisesRegex(OSError, 'directory sync failed after CURRENT replacement'):
+                self.world.step()
+
+        self.assertEqual(observed_failed_syncs, [True])
+        # A replaced pointer is visible in this running process, but its crash
+        # durability is unknown after the failed directory sync.
+        self.assertNotEqual(self.store.latest().checkpoint_id, previous_confirmed.checkpoint_id)
+        self.assertEqual(self.store.latest_confirmed(), previous_confirmed)
+        self.engine.checkpoint_published.assert_not_called()
+        self.assertTrue(self.engine.paused)
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertIsNone(self.world.session.baseline_id)
+        with self.assertRaises(ValueError):
+            self.world.offer_load(joining_player)
 
     def test_native_controller_is_notified_after_checkpoint_publication(self):
         seen=[]
