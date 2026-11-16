@@ -74,9 +74,16 @@ class ExperimentalLocalHost:
         self._check()
         self._busy = True
         try:
+            motion = self._control._latest_motion
+            if motion is not None and self._world.session.pending is not None:
+                motion.barrier(world=True)
             self._control.poll(timeout)
             pending = self._world.session.pending
             if pending is None:
+                if motion is not None and motion.world_blocked:
+                    motion.release(world=True)
+                return None
+            if motion is not None and not motion.barrier(world=True):
                 return None
             if pending.operation == 'resume' and not self._control.ready_for_resume():
                 return None

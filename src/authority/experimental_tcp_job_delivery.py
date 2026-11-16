@@ -119,6 +119,7 @@ class ExperimentalTCPJobDelivery:
         if enabled is not True:raise ValueError('explicit test incarnation opt-in required')
         if self._test_bind_busy or self._active:
             self._failed=True;host._failed=True;raise RuntimeError('reentrant test incarnation binding')
+        host._control._reader_free()
         self._test_bind_busy=True
         lease=None
         try:
@@ -207,6 +208,9 @@ class ExperimentalTCPJobDelivery:
 
     def deliver(self, raw_event, expected_members, on_ack):
         host=self._host;host._check()
+        motion=host._control._latest_motion
+        if motion is not None and (not motion.blocked or not host._control._motion_idle()):
+            raise RuntimeError('drained motion barrier required before lifecycle delivery')
         if self._failed or not callable(on_ack):raise RuntimeError('delivery unavailable')
         event=job_event(raw_event)
         if (self._last is not None and (event['epoch'],event['generation'])!=self._last[:2] or

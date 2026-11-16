@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 from tests import test_authority_experimental_tcp_participants as fixture
 from authority.experimental_tcp_job_delivery import ExperimentalTCPJobDelivery
+from authority.experimental_tcp_motion import ExperimentalTCPMotion
 from authority.experimental_tcp_participants import ExperimentalTCPParticipants
 
 class TestIncarnation(unittest.TestCase):
@@ -53,6 +54,17 @@ class TestIncarnation(unittest.TestCase):
   with patch.object(ExperimentalTCPParticipants,'_quiet',side_effect=attack):
    with self.assertRaises(RuntimeError):delivery.bind_test_incarnation(1,'b'*32,enabled=True)
   self.assertEqual(len(calls),2);self.assertTrue(case.host._failed);self.assertEqual(delivery._incarnations,{})
+ def test_pending_latest_motion_temporarily_blocks_binding_without_fault(self):
+  case,_,delivery=self.pair();case.control.enable_latest_motion(enabled=True)
+  motion=ExperimentalTCPMotion(delivery,enabled=True);motion.track('b'*32,'c'*32,10055)
+  sample={'version':1,'epoch':'b'*32,'generation':'c'*32,'index':10055,'sequence':1,
+          'sector_macro':'sector_a','source_time':1,'x':1,'y':2,'z':3,'velocity':None}
+  motion.enqueue_latest(sample)
+  with self.assertRaises(RuntimeError):delivery.bind_test_incarnation(1,'d'*32,enabled=True)
+  self.assertFalse(delivery._failed);self.assertFalse(case.host._failed)
+  self.assertFalse(delivery._test_bind_attempted)
+  self.assertTrue(case.control.motion_barrier());case.control.release_motion_barrier()
+  self.assertEqual(delivery.membership()[0]['id'],'peer_1')
  def test_replaced_peer_object_fences_without_regeneration(self):
   case,_,delivery=self.pair();delivery.bind_test_incarnation(1,'b'*32,enabled=True)
   conn,peer=next(iter(case.control._peers.items()));case.control._peers[conn]=dict(peer)

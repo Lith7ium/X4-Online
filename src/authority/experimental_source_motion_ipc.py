@@ -198,6 +198,7 @@ class ExperimentalSourceMotionIPC:
         self._reserved(_scheduler)
         if self._state!='ready' or threading.get_ident()!=self._owner:
             self._fail();raise RuntimeError('source motion reentrant or unavailable')
+        self._motion._delivery._host._control._reader_free()
         self._state='pulling';deadline=time.monotonic()+self._timeout
         try:
             # Respect the maximum per-track TCP send frequency even if the X4

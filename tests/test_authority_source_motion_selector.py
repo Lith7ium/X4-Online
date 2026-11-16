@@ -68,6 +68,25 @@ class SourceSelector(unittest.TestCase):
   case,delivery,bridge=self.setup_bridge(select,[(1,1,'sector_a',['-']*3)])
   ref['delivery']=delivery;self.assertEqual(bridge.pull()['sequence'],1)
   self.assertEqual(blocked,[True]);self.assertEqual([v[0] for v in case.received],[1]);bridge.close()
+ def test_swallowed_reentrant_pull_under_reader_lease_fences_host(self):
+  ref={};attempted=[]
+  def select(value,members):
+   try:ref['bridge'].pull()
+   except RuntimeError:attempted.append(True)
+   return [members[0]]
+  case,delivery,bridge=self.setup_bridge(select,[(1,1,'sector_a',['-']*3)])
+  ref['bridge']=bridge
+  with self.assertRaises(RuntimeError):bridge.pull()
+  self.assertEqual(attempted,[True]);self.assertTrue(delivery._failed)
+  self.assertTrue(case.case.host._failed);self.assertEqual(case.received,[])
+ def test_pending_latest_motion_temporarily_blocks_normal_pull_without_fault(self):
+  case,delivery,bridge=self.setup_bridge(lambda _,members:members,[])
+  control=case.case.control;control.enable_latest_motion(enabled=True)
+  bridge._motion_call(bridge._motion.enqueue_latest,case.sample())
+  with self.assertRaises(RuntimeError):bridge.pull()
+  self.assertEqual(bridge.state,'ready');self.assertFalse(delivery._failed)
+  self.assertFalse(case.case.host._failed)
+  self.assertTrue(control.motion_barrier());control.release_motion_barrier();bridge.close()
  def test_incarnation_mutation_during_selector_faults(self):
   ref={}
   def select(value,members):ref['delivery']._incarnations[1]='0'*32;return [members[0]]

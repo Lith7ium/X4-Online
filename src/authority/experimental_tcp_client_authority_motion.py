@@ -55,6 +55,7 @@ class ExperimentalTCPClientAuthorityMotion:
         finally:self._busy=False
     def _pull(self):
         d=self._delivery;host=d._host;host._check()
+        host._control._reader_free()
         try:
             if self._failed or d._failed or self._request>=_MAX:raise RuntimeError('authority pull unavailable')
             members=d.membership();handles,peers=d._peers();incarnations=dict(d._incarnations)

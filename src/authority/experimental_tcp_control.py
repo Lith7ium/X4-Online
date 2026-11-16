@@ -65,10 +65,37 @@ class ExperimentalTCPControl:
         self._closed = False
         self._reader_lease = None
         self._job_delivery_owner = None
+        self._latest_motion = None
 
-    def _reader_free(self):
+    def enable_latest_motion(self, *, enabled=False, per_peer_limit=1024, timeout=30):
+        """Opt in to pumpable motion on this owner's admitted sockets."""
+        self._owner(); self._reader_free()
+        if (enabled is not True or self._latest_motion is not None or
+                type(per_peer_limit) is not int or not 1 <= per_peer_limit <= 100000 or
+                type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300):
+            raise ValueError('invalid latest motion configuration')
+        from .experimental_tcp_latest_motion import LatestMotionPoll
+        self._latest_motion = LatestMotionPoll(self, limit=per_peer_limit, timeout=float(timeout))
+
+    def motion_barrier(self):
+        """Fence new samples and discard unsent samples before lifecycle I/O."""
+        self._owner(); self._reader_free(motion=True)
+        if self._latest_motion is None: raise RuntimeError('latest motion not enabled')
+        return self._latest_motion.barrier()
+
+    def release_motion_barrier(self):
+        self._owner(); self._reader_free(motion=True)
+        if self._latest_motion is None: raise RuntimeError('latest motion not enabled')
+        self._latest_motion.release()
+
+    def _motion_idle(self):
+        return self._latest_motion is None or not self._latest_motion.busy()
+
+    def _reader_free(self, *, motion=False):
         if self._reader_lease is not None:
             raise RuntimeError('control sockets are leased to an exclusive operation')
+        if not motion and not self._motion_idle():
+            raise RuntimeError('latest motion owns pending socket exchanges')
 
     def _owner(self):
         if threading.get_ident() != self._thread:
@@ -87,7 +114,7 @@ class ExperimentalTCPControl:
     def adopt(self, conn):
         """Adopt one connected socket; caller retains listener and transport policy."""
         self._owner()
-        self._reader_free()
+        self._reader_free(motion=True)
         if (type(conn) is not socket.socket or conn.family != socket.AF_INET or conn.proto not in (0, socket.IPPROTO_TCP) or
                 conn.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM):
             raise ValueError('connected IPv4 TCP stream socket required')
@@ -231,25 +258,32 @@ class ExperimentalTCPControl:
     def poll(self, timeout=0):
         """Handle bounded socket I/O and idle expiry once on the owner thread."""
         self._owner()
-        self._reader_free()
+        self._reader_free(motion=True)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 <= timeout <= 1:
             raise ValueError('invalid poll timeout')
         now = time.monotonic()
         for conn, peer in tuple(self._peers.items()):
-            if peer['deadline'] is not None and now >= peer['deadline']:
+            active = peer.get('motion_active')
+            if ((peer['deadline'] is not None and now >= peer['deadline']) or
+                    (active is not None and now >= active['deadline'])):
                 self._drop(conn)
         if not self._peers:
             return
         sockets = tuple(self._peers)
+        if self._latest_motion is not None:
+            for peer in self._peers.values(): self._latest_motion.prepare(peer)
         deadlines = [p['deadline'] for p in self._peers.values() if p['deadline'] is not None]
+        deadlines += [p['motion_active']['deadline'] for p in self._peers.values() if p.get('motion_active')]
         wait = min(timeout, max(0, min(deadlines) - time.monotonic())) if deadlines else timeout
         try:
-            readable, writable, exceptional = select.select(sockets, [c for c in sockets if self._peers[c]['out']], sockets, wait)
+            readable, writable, exceptional = select.select(sockets, [c for c in sockets if self._peers[c]['out'] or (self._peers[c].get('motion_active') and self._peers[c]['motion_active']['sent'] < len(self._peers[c]['motion_active']['data']))], sockets, wait)
         except (OSError, ValueError) as error:
             self._fatal(error)
         now = time.monotonic()
         for conn, peer in tuple(self._peers.items()):
-            if peer['deadline'] is not None and now >= peer['deadline']:
+            active = peer.get('motion_active')
+            if ((peer['deadline'] is not None and now >= peer['deadline']) or
+                    (active is not None and now >= active['deadline'])):
                 self._drop(conn)
         for conn in exceptional:
             if conn in self._peers: self._drop(conn)
@@ -262,6 +296,9 @@ class ExperimentalTCPControl:
             if not chunk:
                 self._drop(conn); continue
             peer = self._peers[conn]
+            if peer.get('motion_active'):
+                self._latest_motion.receive(conn, peer, chunk)
+                continue
             if peer['out']:
                 self._drop(conn); continue
             peer['in'] += chunk
@@ -279,6 +316,10 @@ class ExperimentalTCPControl:
         for conn in writable:
             if conn not in self._peers: continue
             peer = self._peers[conn]
+            if peer.get('motion_active'):
+                try: self._latest_motion.send(conn, peer)
+                except OSError: self._drop(conn)
+                continue
             try: sent = conn.send(peer['out'])
             except BlockingIOError: continue
             except OSError:
@@ -326,7 +367,7 @@ class ExperimentalTCPControl:
     def close(self):
         """Disconnect all adopted sockets, retaining no listener or thread."""
         self._owner()
-        self._reader_free()
+        self._reader_free(motion=True)
         try:
             for conn in tuple(self._peers): self._drop(conn)
         finally:

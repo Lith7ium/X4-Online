@@ -94,6 +94,10 @@ class ExperimentalTCPMotion:
         self._preflight=None
         self._reserved(_source)
         d=self._delivery;host=d._host;host._check()
+        if not host._control._motion_idle():
+            raise RuntimeError('drain latest motion before synchronous exchange')
+        if despawn and host._control._latest_motion is not None and not host._control._latest_motion.blocked:
+            raise RuntimeError('explicit motion barrier required before despawn')
         if self._failed or d._failed:raise RuntimeError('motion owner unavailable')
         if guard is not None and not callable(guard):raise ValueError('invalid motion operation guard')
         try:value=motion_value(raw,despawn=despawn)
@@ -194,12 +198,84 @@ class ExperimentalTCPMotion:
             d._active=False;host._busy=False
             if changed:raise RuntimeError('motion socket lease changed')
 
+    def enqueue_latest(self, raw, *, recipients=None, _source=None):
+        """Queue a replaceable position for the existing control poll owner.
+
+        Queueing is not receipt, delivery, X4 application, or interest discovery.
+        A lifecycle caller must establish and drain control.motion_barrier().
+        """
+        self._reserved(_source)
+        d=self._delivery;host=d._host;host._check();control=host._control
+        latest=control._latest_motion
+        if latest is None or self._failed or d._failed or d._active or d._test_binding is not None:
+            raise RuntimeError('latest motion unavailable')
+        if latest.blocked or latest.world_blocked:
+            raise RuntimeError('motion fenced by lifecycle barrier')
+        value=motion_value(raw);key=(value['epoch'],value['generation'],value['index'])
+        state=self._tracks.get(key)
+        if not state or state['closed'] or value['sequence']<=state['sequence']:
+            raise ValueError('unknown, closed or stale motion track')
+        if state['time'] is not None and value['source_time']<=state['time']:
+            raise ValueError('non-monotone source time')
+        if state['frame'] is not None and value['sector_macro']!=state['frame'] and value['velocity'] is not None:
+            raise ValueError('frame transition requires unknown velocity')
+        handles,peers=d._peers();incarnations=dict(d._incarnations)
+        if not handles: raise RuntimeError('no admitted motion recipients')
+        full={('peer_'+str(h),incarnations[h]):h for h in handles}
+        if recipients is None: selected=handles
+        else:
+            if type(recipients) not in (tuple,list) or not recipients:
+                raise ValueError('nonempty recipients required')
+            wanted=set()
+            for peer in recipients:
+                if type(peer) is not dict or set(peer)!={'id','incarnation'}:
+                    raise ValueError('invalid motion recipient')
+                identity=(peer['id'],peer['incarnation'])
+                if identity not in full or identity in wanted: raise ValueError('foreign or duplicate motion recipient')
+                wanted.add(identity)
+            selected=tuple(h for h in handles if ('peer_'+str(h),incarnations[h]) in wanted)
+        reserved=state.setdefault('latest_frames',{})
+        for h in selected:
+            identity=('peer_'+str(h),incarnations[h])
+            frame=reserved.get(identity,state['peer_frames'].get(identity))
+            if frame is not None and frame!=value['sector_macro']:
+                raise ValueError('recipient motion frame changed without resync')
+        entries=[];digest=motion_digest(value)
+        for h in selected:
+            identity=('peer_'+str(h),incarnations[h]);conn,peer=peers[h]
+            request={'version':1,'kind':'motion_snapshot','connection_handle':h,
+                     'session_epoch':host._world.session.world_epoch,'incarnation':incarnations[h],
+                     'request_id':value['sequence'],'sample':value}
+            expected={k:request[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
+            expected.update(kind='motion_receipt',status='accepted',sample_sha256=digest)
+            data=json.dumps(request,sort_keys=True,separators=(',', ':'),allow_nan=False).encode('ascii')+b'\n'
+            if len(data)>MAX_MESSAGE+1: raise ValueError('motion frame too large')
+            def accepted(identity=identity, h=h, conn=conn, peer=peer):
+                if (control._peers.get(conn) is not peer or d._incarnations.get(h)!=identity[1] or
+                        host._world.session.world_epoch!=request_epoch):
+                    raise RuntimeError('motion receipt context changed')
+                state['peer_frames'][identity]=value['sector_macro']
+                state['peer_samples'][identity]=(value['sequence'],digest)
+            def discarded(identity=identity, peer=peer):
+                active=peer.get('motion_active')
+                if identity not in state['peer_frames'] and not (
+                        active is not None and active['key']==key and active['sent']>0):
+                    reserved.pop(identity,None)
+            request_epoch=request['session_epoch']
+            entries.append((conn,peer,key,data,expected,accepted,discarded))
+        latest.enqueue(entries)
+        state['sequence']=value['sequence'];state['time']=value['source_time'];state['frame']=value['sector_macro']
+        for h in selected: reserved[('peer_'+str(h),incarnations[h])]=value['sector_macro']
+        self._preflight=None
+        return True
+
     def apply_once(self,raw,*,guard=None,_source=None):
         """Opt-in one-peer apply/readback after an exactly confirmed motion sample.
 
         This is a caller assertion; a failure after dispatch cannot undo a write.
         """
         self._reserved(_source);d=self._delivery;host=d._host;host._check()
+        if not host._control._motion_idle(): raise RuntimeError('drain latest motion before apply')
         try:
             if not self._allow_apply or self._apply_attempted or self._failed or d._failed:
                 raise RuntimeError('one-shot motion apply unavailable')
@@ -248,6 +324,7 @@ class ExperimentalTCPMotion:
     def preflight(self,raw,*,guard=None,_source=None):
         """Read-only, correlated preflight for the last confirmed peer sample."""
         self._reserved(_source);d=self._delivery;host=d._host;host._check();self._preflight=None
+        if not host._control._motion_idle(): raise RuntimeError('drain latest motion before preflight')
         try:
             if not self._allow_apply or self._apply_attempted or self._failed or d._failed:
                 raise RuntimeError('motion preflight unavailable')
