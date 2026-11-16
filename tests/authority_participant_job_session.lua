@@ -7,7 +7,11 @@ local sent,queue,order={}, {},{};local opened=0;local event_callback,event_reent
 function RegisterEvent(_,cb)event_callback=cb;return true end
 local participant_net={send=function(_,s)sent[#sent+1]=s;return true end,receive=function()return table.remove(queue,1)end}
 local job_net={};local motion_net={};local authority_net={}
-package.loadlib=function()return function()return {open=function(_,port)opened=opened+1;return port==1234 and participant_net or (port==1235 and job_net or (port==1237 and authority_net or motion_net)) end}end end
+package.loadlib=function(path,symbol)
+ assert(path=='./extensions/x4_lan_lab/native/x4lan_net.so' and symbol=='luaopen_x4lan_net')
+ return function()return {monotonic=function()return 1 end,open=function(_,port)opened=opened+1;return port==1234 and participant_net or (port==1235 and job_net or (port==1237 and authority_net or motion_net)) end}end
+end
+X4LAN_LOCAL_UDP_MODULE=dofile('src/authority/lua/local_udp_module.lua')
 X4LAN_AUTHORITY_X4_CONTROL_ENGINE={new=function()return {}end}
 X4LAN_AUTHORITY_CONTROL_STATE={new=function(_,_,report)return {
  submit=function(_,owner,e,id,op)assert(owner=='isolated-client' and e==epoch and id==1 and op=='resume');order[#order+1]='submit';return true end,

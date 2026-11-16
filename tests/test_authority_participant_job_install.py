@@ -25,7 +25,11 @@ class Install(unittest.TestCase):
             text=(ui/'authority_download_load_probe.lua').read_text();self.assertEqual(text.count("SetScript('onUpdate'"),1)
             self.assertIn('X4LAN_PARTICIPANT_JOB_TICK()',text)
             self.assertIn(ui/'job_client_owner.lua',files);self.assertIn(lab/'native/x4lan_net.so',files)
+            self.assertIn(ui/'local_udp_module.lua',files)
+            self.assertLess((lab/'ui.xml').read_text().index('ui/local_udp_module.lua'),(lab/'ui.xml').read_text().index('ui/authority_participant_job_session.lua'))
             self.assertNotIn('SetScript(', (ui/'authority_participant_job_session.lua').read_text())
+    def test_platform_udp_module_selection(self):
+        subprocess.run(['luajit','tests/authority_local_udp_module.lua'],cwd=ROOT,check=True,capture_output=True,text=True,timeout=5)
     def test_multi_mode_requires_the_complete_pinned_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
             case=Path(tmp)/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'

@@ -19,7 +19,7 @@ function X4LAN_PARTICIPANT_JOB_TICK()
   assert(ffi.C.IsPlayerValid())
   if not participant then
    engine=assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.new({enabled=true,test_profile='45841'}))
-   local lib=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))();netlib=lib
+   local lib=X4LAN_LOCAL_UDP_MODULE.load(ffi.os,package.loadlib);netlib=lib
    participant_net=lib.open('127.0.0.1',cfg.authority_participant_port)
    local job_net=lib.open('127.0.0.1',cfg.authority_job_client_port)
    participant=assert(X4LAN_AUTHORITY_CONTROL_STATE.new({enabled=true,owner='isolated-client',

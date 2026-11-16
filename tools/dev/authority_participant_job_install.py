@@ -20,6 +20,7 @@ MODULES=(('tools/dev/authority_checkpoint_marker_probe.lua','authority_checkpoin
  ('src/authority/lua/control_state.lua','authority_control_state.lua',None),
  ('src/authority/lua/x4_control_engine.lua','x4_control_engine.lua',None),
  ('src/authority/lua/job_client_owner.lua','job_client_owner.lua',None),
+ ('src/authority/lua/local_udp_module.lua','local_udp_module.lua','X4LAN_LOCAL_UDP_MODULE'),
  ('tools/dev/authority_participant_job_session.lua','authority_participant_job_session.lua',None))
 
 def install(case,profile,ticket,settings,witnesses):
