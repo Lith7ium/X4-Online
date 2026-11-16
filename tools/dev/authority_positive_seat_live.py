@@ -24,6 +24,8 @@ UI = ('authority_positive_seat_search.lua', 'authority_positive_seat_live_owner.
 # its stricter combined check in the underlying single-process supervisor.
 _BASE_CHECK = base.check_log_bytes
 _BASE_FAULT = base.fault_log
+_INCONCLUSIVE_REASONS = frozenset(('timeout', 'search_inconclusive', 'getter_or_context_unavailable',
+                                   'assigned_pilot_not_observed'))
 
 
 def install(case, profile, ticket, slot, timeout):
@@ -89,7 +91,8 @@ def validate(raw, ticket, slot, *, partial=False):
     expected_prefix = ('START', None, 'DONE')
     if (len(rows) > 3 or
         any((i != 1 and value != expected_prefix[i]) or
-            (i == 1 and value not in ('CANDIDATE', 'INCONCLUSIVE'))
+            (i == 1 and value not in ('CANDIDATE', 'INCONCLUSIVE') and
+             value not in {'INCONCLUSIVE|' + reason for reason in _INCONCLUSIVE_REASONS})
             for i, (_, value) in enumerate(rows))):
         raise ValueError('invalid, duplicate or reordered diagnostic receipts')
     if rows and (len(pauses) != 1 or rows[0][0] <= pauses[0]):
@@ -101,11 +104,14 @@ def validate(raw, ticket, slot, *, partial=False):
         if partial:
             return None
         raise ValueError('missing diagnostic receipts')
+    outcome_row = rows[1][1]
     observed.update(diagnostic_completed=True,
                     outcome='candidate' if rows[1][1] == 'CANDIDATE' else 'inconclusive',
                     seat_free_proven=False, player_control_proven=False,
                     same_actor_proven=False, coverage_proven=False,
                     save_authorized=False, multiplayer_proven=False)
+    if outcome_row.startswith('INCONCLUSIVE|'):
+        observed['inconclusive_reason'] = outcome_row.split('|', 1)[1]
     return observed
 
 
@@ -142,10 +148,12 @@ def run(args):
         except BaseException:
             result.pop('outcome', None)
             result.pop('diagnostic_completed', None)
+            result.pop('inconclusive_reason', None)
             raise
         if result.get('success') is not True:
             result.pop('outcome', None)
             result.pop('diagnostic_completed', None)
+            result.pop('inconclusive_reason', None)
         result.update(scope='one isolated Linux X4; read-only positive-seat search',
                       checkpoint_requested=False, seat_free_proven=False,
                       player_control_proven=False, same_actor_proven=False,

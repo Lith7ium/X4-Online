@@ -3,6 +3,7 @@ local function rig(kind)
  local t,g,paused=0,3,true;local logs={};local app
  local report={status=kind=='candidate' and 'candidate_observed' or 'inconclusive',seat_free_proven=false,
   player_control_proven=false,same_actor_proven=false,coverage_proven=false}
+ if kind~='candidate' then report.reason=kind=='timeout' and 'timeout' or (kind=='invalid' and 'private value' or 'search_inconclusive') end
  local p={phase='idle'}
  function p:start()self.phase='waiting';return true end
  function p:tick()if kind=='timeout' then self.phase='done';return true,report end;return true end
@@ -15,9 +16,11 @@ local function rig(kind)
 end
 for _,kind in ipairs({'candidate','none','timeout'}) do
  local a,l=rig(kind);assert(a:tick());if kind=='candidate' then assert(a:response('v')) elseif kind=='none' then assert(a:inconclusive('v')) else assert(a:tick()) end
- assert(a:tick() and a:state()=='done');assert(table.concat(l,',')=='START,'..(kind=='candidate' and 'CANDIDATE' or 'INCONCLUSIVE')..',DONE')
+ assert(a:tick() and a:state()=='done');assert(table.concat(l,',')=='START,'..(kind=='candidate' and 'CANDIDATE' or 'INCONCLUSIVE|'..(kind=='timeout' and 'timeout' or 'search_inconclusive'))..',DONE')
  assert(not a:response('late') and l[#l]=='ERROR FAULT')
 end
 local a,l,_,pause=rig('candidate');assert(a:tick());pause(false);assert(not a:response('v') and l[#l]=='ERROR FAULT')
 local b,_,clock=rig('candidate');assert(b:tick());clock(20);assert(not b:tick())
+local invalid,logs=rig('invalid');assert(invalid:tick());assert(not invalid:inconclusive('v'))
+assert(logs[#logs]=='ERROR FAULT' and not table.concat(logs):find('private',1,true))
 print('positive-seat owner state tests passed')

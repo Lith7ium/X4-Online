@@ -55,6 +55,18 @@ class PositiveSeatLiveTests(unittest.TestCase):
             live.validate(self.raw(self.baseline[:3]+[start]), self.ticket, 2, partial=True)
         self.assertIsNone(live.validate(b'incomplete', self.ticket, 2, partial=True))
 
+    def test_inconclusive_reasons_are_allowlisted_and_archives_remain_readable(self):
+        for reason in live._INCONCLUSIVE_REASONS:
+            lines=self.baseline+[live.TAG+'START', live.TAG+'INCONCLUSIVE|'+reason, live.TAG+'DONE']
+            result=live.validate(self.raw(lines), self.ticket, 2)
+            self.assertEqual(result['inconclusive_reason'], reason)
+            self.assertEqual(result['outcome'], 'inconclusive')
+        for reason in ('unknown', 'timeout|extra', '', 'private value'):
+            with self.subTest(reason=reason), self.assertRaises(ValueError):
+                live.validate(self.raw(self.baseline+[live.TAG+'START',live.TAG+'INCONCLUSIVE|'+reason,live.TAG+'DONE']),self.ticket,2)
+        old=live.validate(self.raw(self.baseline+[live.TAG+'START',live.TAG+'INCONCLUSIVE',live.TAG+'DONE']),self.ticket,2)
+        self.assertNotIn('inconclusive_reason',old)
+
     def test_install_private_hooks_and_protection(self):
         with tempfile.TemporaryDirectory() as temp:
             case = Path(temp)/'case'; profile = case/'profile'; lab = case/'extensions/x4_lan_lab'
@@ -111,7 +123,7 @@ class PositiveSeatLiveTests(unittest.TestCase):
             root=Path(temp); store=root/'source'/'checkpoints'; store.mkdir(parents=True); out=root/'output'
             args=SimpleNamespace(slot=2, timeout=120, out=out, store=store)
             def fake_run(_):
-                result={'success':False,'outcome':'inconclusive','diagnostic_completed':True}
+                result={'success':False,'outcome':'inconclusive','diagnostic_completed':True,'inconclusive_reason':'timeout'}
                 live.base.result_finalizer(result)
                 return result
             with patch.object(live.base.snapshot,'output_path',return_value=out), \
@@ -121,6 +133,7 @@ class PositiveSeatLiveTests(unittest.TestCase):
                 result=live.run(args)
             self.assertNotIn('outcome',result)
             self.assertNotIn('diagnostic_completed',result)
+            self.assertNotIn('inconclusive_reason',result)
 
 
 if __name__ == '__main__':

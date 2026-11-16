@@ -61,6 +61,13 @@ remain point-in-time observations, not atomic lifetime guarantees. The owner
 uses no cross-process actor IDs, and its candidate reference is not retained for
 subsequent operations. Neither outcome authorizes saving or gameplay claims.
 
+New diagnostic receipts also retain a bounded `inconclusive_reason`: timeout,
+an inconclusive MD search, a missing Lua assigned-pilot observation, or a Lua
+getter/context failure. The MD search still combines several possible causes,
+and none of these reasons proves seat occupancy or absence. The older receipt
+without a reason remains readable but its cause cannot be reconstructed. A
+failed final supervision removes both the outcome and its reason.
+
 ## Recorded native attempt
 
 The isolated Linux run `.local/authority-positive-seat-01` loaded the pinned

@@ -13,5 +13,5 @@ class PositiveOwnerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             lib=Path(d)/'fake.so'
             subprocess.run(['cc','-shared','-fPIC','tests/lua/authority_positive_seat_fake_x4.c','-o',str(lib)],cwd=ROOT,check=True,capture_output=True,timeout=10)
-            for mode in ('candidate','inconclusive','timeout','getter_error'):
+            for mode in ('candidate','inconclusive','timeout','getter_error','missing'):
                 subprocess.run(['luajit','tests/authority_positive_seat_live_x4.lua',str(lib),mode],cwd=ROOT,check=True,capture_output=True,text=True,timeout=5)

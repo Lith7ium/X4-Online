@@ -5,7 +5,8 @@ function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(finite(o.timeout) and o.timeout>0 and o.timeout<=120)
  for _,n in ipairs({'guard','make','log'}) do assert(type(o[n])=='function') end
- local phase='new';local busy=false;local failed=false;local start,last,game,actor,sector,probe,outcome
+ local phase='new';local busy=false;local failed=false;local start,last,game,actor,sector,probe,outcome,reason
+ local reasons={timeout=true,search_inconclusive=true,getter_or_context_unavailable=true,assigned_pilot_not_observed=true}
  local function fail() if not failed then failed=true;phase='failed';pcall(o.log,'ERROR FAULT') end;return false end
  local function guarded()
   local t,g,a,s=o.guard();assert(finite(t) and finite(g) and t>=0 and g>=0 and type(a)=='string' and a~='' and type(s)=='string' and s~='')
@@ -20,6 +21,8 @@ function M.new(o)
  local function record(value)
   assert(type(value)=='table' and (value.status=='candidate_observed' or value.status=='inconclusive') and
    value.seat_free_proven==false and value.player_control_proven==false and value.same_actor_proven==false and value.coverage_proven==false)
+  if value.status=='inconclusive' then assert(reasons[value.reason]);reason=value.reason
+  else assert(value.reason==nil);reason=nil end
   outcome=value.status;phase='ready_to_report'
  end
  local api={}
@@ -31,7 +34,7 @@ function M.new(o)
     local ok,r=probe:tick();assert(ok and not failed)
     if probe:state()=='done' then record(r) end
    elseif phase=='ready_to_report' then
-    guarded();phase='done';o.log(outcome=='candidate_observed' and 'CANDIDATE' or 'INCONCLUSIVE');o.log('DONE')
+    guarded();phase='done';o.log(outcome=='candidate_observed' and 'CANDIDATE' or 'INCONCLUSIVE|'..reason);o.log('DONE')
    else assert(phase=='done') end
   end)
  end
