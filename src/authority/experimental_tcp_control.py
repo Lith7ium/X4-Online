@@ -46,13 +46,16 @@ class ExperimentalTCPControl:
     This prototype has only been exercised on loopback; it is not a complete
     Internet protocol or a decision about the eventual transport policy.
     """
-    def __init__(self, session, *, enabled=False, idle_timeout=30, max_peers=8):
+    def __init__(self, session, *, enabled=False, idle_timeout=30, max_peers=8, keepalive_enabled=False):
         if enabled is not True or type(session) is not TrustedMarkerLoadSession:
             raise ValueError('explicitly enabled trusted session required')
         if type(idle_timeout) not in (int, float) or not math.isfinite(idle_timeout) or not 0 < idle_timeout <= 300:
             raise ValueError('invalid idle timeout')
         if type(max_peers) is not int or not 1 <= max_peers <= 64:
             raise ValueError('invalid peer limit')
+        if type(keepalive_enabled) is not bool:
+            raise ValueError('invalid keepalive option')
+        self._keepalive_enabled = keepalive_enabled
         self._session = session
         self._timeout = float(idle_timeout)
         self._limit = max_peers
@@ -174,17 +177,44 @@ class ExperimentalTCPControl:
                     if not self._offer_ready():
                         peer['out'] += b'{"version":1,"kind":"not_ready"}\n'
                         return
+                    started = time.monotonic()
                     bound = self._session.begin(conn)
+                    self._account_host_blocked(started, time.monotonic())
                     if not self._current_socket(conn, peer):
                         self._drop(conn)
                         return
                     peer['out'] += encode_bound_offer(bound) + b'\n'
                     peer['stage'] = 'offered'
+                    peer['attempt_id'] = bound.offer.attempt_id
+                    peer['keepalive_sequence'] = 0
                     return
             if peer['stage'] != 'offered':
                 raise ValueError('unexpected control message')
+            if self._keepalive_enabled:
+                try:
+                    value = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs,
+                                       parse_constant=_reject_constant)
+                except (UnicodeError, json.JSONDecodeError, RecursionError):
+                    value = None
+                if type(value) is dict and value.get('kind') == 'keepalive':
+                    if (set(value) != {'version', 'kind', 'attempt_id', 'sequence'} or
+                            type(value['version']) is not int or value['version'] != 1 or
+                            value['attempt_id'] != peer['attempt_id'] or
+                            type(value['sequence']) is not int or
+                            value['sequence'] != peer['keepalive_sequence'] + 1 or
+                            value['sequence'] > 2**53 - 1):
+                        raise ValueError('invalid keepalive')
+                    peer['keepalive_sequence'] = value['sequence']
+                    reply = {'version': 1, 'kind': 'alive', 'attempt_id': peer['attempt_id'],
+                             'sequence': value['sequence']}
+                    peer['out'] += json.dumps(reply, separators=(',', ':'), sort_keys=True).encode('ascii') + b'\n'
+                    return
             claim = decode_load_claim(raw)
-            outcome = self._session.accept(conn, claim, pre_accept=lambda: self._current_socket(conn, peer))
+            started = time.monotonic()
+            def pre_accept():
+                self._account_host_blocked(started, time.monotonic())
+                return self._current_socket(conn, peer)
+            outcome = self._session.accept(conn, claim, pre_accept=pre_accept)
             if not self._current_socket(conn, peer):
                 self._drop(conn)
                 return

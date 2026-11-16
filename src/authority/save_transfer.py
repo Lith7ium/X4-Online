@@ -79,7 +79,7 @@ class SaveOffers:
                 self.names.remove(offer.name)
 
 
-def receive(host, port, token, slot, offer, new_directory, *, retries=5, timeout=60, deadline=None):
+def receive(host, port, token, slot, offer, new_directory, *, retries=5, timeout=60, deadline=None, pump=None, pump_interval=0.25):
     """Receive into a newly created directory owned exclusively by the caller.
 
     The underlying transport resumes interrupted attempts during this call and
@@ -98,14 +98,19 @@ def receive(host, port, token, slot, offer, new_directory, *, retries=5, timeout
         raise ValueError('a validated save offer is required')
     directory = Path(new_directory)
     joinfiles._remaining(deadline)
+    joinfiles._pump_call(pump)
     directory.mkdir(mode=0o700)  # parent must exist; refuse existing paths
     joinfiles._remaining(deadline)
+    joinfiles._pump_call(pump)
     target = directory / 'save.xml.gz'
     joinfiles.fetch(host, port, token, slot, offer.name, target,
                     expect_sha=offer.sha256, expect_size=offer.size,
-                    retries=retries, timeout=timeout, offer_wait_s=0, deadline=deadline)
+                    retries=retries, timeout=timeout, offer_wait_s=0, deadline=deadline,
+                    pump=pump, pump_interval=pump_interval)
     joinfiles._remaining(deadline)
+    joinfiles._pump_call(pump)
     size = target.stat().st_size
+    joinfiles._pump_call(pump)
     joinfiles._remaining(deadline)
     if size != offer.size:
         raise ValueError('received save size differs from offer')

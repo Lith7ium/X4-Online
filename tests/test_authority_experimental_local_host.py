@@ -80,6 +80,119 @@ class HostTest(unittest.TestCase):
         self.assertEqual(self.world.session.players, ())
         self.assertIsNotNone(self.store.latest_marked_confirmed())
 
+    def test_keepalive_during_client_wait_survives_idle_limit(self):
+        # Real loopback sockets and file service; X4 observations are simulated.
+        self.control._keepalive_enabled = True
+        self.control._timeout = .4
+        self.host.tick()
+        remote = socket.create_connection(self.listener.getsockname(), timeout=2)
+        conn, _ = self.listener.accept(); handle = self.host.adopt(conn)
+        done = threading.Event(); release = threading.Event(); results = []; errors = []
+        def run_client():
+            client = accepted = None
+            try:
+                client = ExperimentalRemoteLoadClient(remote, enabled=True, file_host='127.0.0.1',
+                    file_port=self.service.port, file_token='a'*32, file_slot=1,
+                    deadline=time.monotonic()+6, io_timeout=1, keepalive_interval=.05)
+                bound = client.request_offer()
+                path = client.download(Path(self.temp.name)/'keepalive-download')
+                client.verify_staged(path)
+                attempt = bound.offer.attempt_id
+                client.load_requested(attempt)
+                until = time.monotonic() + 1.0
+                while time.monotonic() < until:
+                    time.sleep(.02); client.poll()
+                client.loaded_marker(attempt, bound.marker); client.paused(attempt, True)
+                client.claim(attempt); accepted = client.take_connection()
+                results.append(path.read_bytes())
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                done.set(); release.wait(3)
+                if accepted is not None: accepted.close()
+                if client is not None: client.close()
+                else: remote.close()
+        worker = threading.Thread(target=run_client, daemon=True); worker.start()
+        try:
+            end = time.monotonic() + 5
+            while not done.is_set() and time.monotonic() < end:
+                self.host.tick(.02)
+            self.assertTrue(done.is_set())
+            self.assertFalse(errors, repr(errors))
+            self.assertEqual(len(results), 1)
+            self.assertIn(handle, [player[0] for player in self.world.session.players])
+        finally:
+            release.set(); worker.join(4)
+            self.assertFalse(worker.is_alive())
+
+    def test_keepalive_during_slow_real_file_transfer_then_claim(self):
+        # Delay the file body's first send, after the real FileService has
+        # accepted and answered its request. The control and file sockets and
+        # file bytes are real; X4 observations below are simulated.
+        self.control._keepalive_enabled = True
+        self.control._timeout = .8
+        original_handle = self.service.handle
+        class SlowBody:
+            def __init__(self, conn): self.conn = conn; self.sends = 0
+            def __getattr__(self, name): return getattr(self.conn, name)
+            def sendall(self, data):
+                self.sends += 1
+                if self.sends == 2: time.sleep(2.0)
+                return self.conn.sendall(data)
+        self.service.handle = lambda conn, address: original_handle(SlowBody(conn), address)
+        self.host.tick()
+        remote = socket.create_connection(self.listener.getsockname(), timeout=2)
+        conn, _ = self.listener.accept(); handle = self.host.adopt(conn)
+        done = threading.Event(); release = threading.Event(); downloading = threading.Event()
+        results = []; errors = []; observed_sequences = []
+        def run_client():
+            client = accepted = None
+            try:
+                client = ExperimentalRemoteLoadClient(remote, enabled=True, file_host='127.0.0.1',
+                    file_port=self.service.port, file_token='a'*32, file_slot=1,
+                    deadline=time.monotonic()+10, io_timeout=4, keepalive_interval=.1)
+                bound = client.request_offer()
+                downloading.set(); started = time.monotonic()
+                path = client.download(Path(self.temp.name)/'slow-download')
+                elapsed = time.monotonic()-started; downloading.clear()
+                client.verify_staged(path)
+                attempt = bound.offer.attempt_id
+                client.load_requested(attempt); client.loaded_marker(attempt, bound.marker)
+                client.paused(attempt, True); client.claim(attempt)
+                accepted = client.take_connection()
+                results.append((elapsed, path.read_bytes(), bound.offer.size))
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                downloading.clear(); done.set(); release.wait(5)
+                if accepted is not None: accepted.close()
+                if client is not None: client.close()
+                else: remote.close()
+        worker = threading.Thread(target=run_client, daemon=True); worker.start()
+        try:
+            end = time.monotonic() + 9
+            while not done.is_set() and time.monotonic() < end:
+                self.host.tick(.02)
+                if downloading.is_set() and conn in self.control._peers:
+                    observed_sequences.append(self.control._peers[conn].get('keepalive_sequence', 0))
+            self.assertTrue(done.is_set())
+            self.assertFalse(errors, repr(errors))
+            self.assertEqual(len(results), 1)
+            self.assertGreater(results[0][0], self.control._timeout * 2)
+            self.assertEqual(len(results[0][1]), results[0][2])
+            self.assertGreaterEqual(max(observed_sequences, default=0), 2)
+            self.assertIn(handle, [player[0] for player in self.world.session.players])
+            report_deadline = time.monotonic() + 2
+            while True:
+                with self.service.lock:
+                    reported = bool(self.service.served)
+                if reported or time.monotonic() >= report_deadline: break
+                time.sleep(.01)
+            self.assertTrue(reported)
+        finally:
+            release.set(); worker.join(5)
+            self.assertFalse(worker.is_alive())
+
     def test_uncertain_engine_error_poison_owner(self):
         def fail(): raise TimeoutError('uncertain engine state')
         self.engine.pause = fail

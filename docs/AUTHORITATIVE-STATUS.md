@@ -33,11 +33,15 @@ end-to-end joining remains unproven. A local-socket test combines a fake save
 longer than the idle timeout with the real remote-load client, real file
 transfer and a trusted synthetic load claim through admission and resume. This
 is fake-engine coverage, not a native or Internet test.
-In a separate local-socket, simulated-download reproduction, the control
-connection expired while the client was blocked on the file operation, which
-then returned a path anyway. A complete keepalive must also cover waiting for
-X4 load events and hash verification; the current single-owner remote client
-is not yet wired to a runnable client. No partial keepalive is implied here.
+In a local-socket, simulated-download reproduction, the control connection
+expired while the client was blocked on the file operation. An opt-in
+attempt-bound, sequenced keepalive is now available to the experimental remote
+client and matching server. The client pumps it during transfer and hash
+operations; callers must explicitly poll while waiting for X4 load events.
+The interval must be shorter than the server's configured idle timeout. DNS,
+individual filesystem calls, an unpumped X4 wait, and long synchronous server
+work can still exceed the relevant deadline. The client is not wired to a
+runnable session, and local tests do not establish Windows or Internet joining.
 The native UDP library's build tool now writes only to an explicitly selected
 new directory. A local Windows crossbuild produced a PE DLL with the Lua entry
 point and Windows monotonic clock imports; loading that DLL in Windows X4 and

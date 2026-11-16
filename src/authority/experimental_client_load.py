@@ -29,8 +29,9 @@ def _fingerprint(info):
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def _inspect(path, offer):
+def _inspect(path, offer, pump=None):
     """Hash one staged regular file and reject changes observed while reading."""
+    if pump: pump()
     before_path = os.lstat(path)
     if not stat.S_ISREG(before_path.st_mode):
         raise ValueError('staged save is not a regular file')
@@ -42,7 +43,9 @@ def _inspect(path, offer):
             raise ValueError('staged save changed before reading')
         digest = hashlib.sha256(); size = 0
         while True:
+            if pump: pump()
             chunk = os.read(fd, 1024 * 1024)
+            if pump: pump()
             if not chunk: break
             size += len(chunk)
             if size > offer.size: raise ValueError('staged save too large')
@@ -82,12 +85,12 @@ class ExperimentalClientLoad:
             self._state = 'failed'
             raise ValueError('out-of-order or stale client load event')
 
-    def verify_staged(self, path):
+    def verify_staged(self, path, *, pump=None):
         """Verify staged bytes before the caller requests the load."""
         self._expect('new', self._offer.attempt_id)
         try:
             self._path = Path(path).absolute()
-            self._staged = _inspect(self._path, self._offer)
+            self._staged = _inspect(self._path, self._offer, pump)
         except BaseException:
             self._state = 'failed'
             raise
@@ -114,11 +117,11 @@ class ExperimentalClientLoad:
             raise ValueError('pause not observed')
         self._state = 'paused'
 
-    def make_claim(self, attempt):
+    def make_claim(self, attempt, *, pump=None):
         """Return one self-reported claim after rechecking staged file bytes."""
         self._expect('paused', attempt)
         try:
-            if _inspect(self._path, self._offer) != self._staged:
+            if _inspect(self._path, self._offer, pump) != self._staged:
                 raise ValueError('staged save changed during load attempt')
             receipt = Receipt(**{name: getattr(self._offer, name) for name in Receipt.__dataclass_fields__})
             result = HonestClientLoadClaim(receipt, self._marker, True, True)

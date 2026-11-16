@@ -35,9 +35,13 @@ class ExperimentalRemoteLoadClient:
     checked after each returns. The caller must keep the download and staged paths
     exclusive, and establish that reported observations belong to the still-live
     X4 process. No native file consumption or peer authenticity is proven.
+    Optional keepalive requires a matching enabled server. Its interval must be
+    chosen below the server idle timeout with room for network and scheduling
+    delays. While awaiting X4 events the owner must call poll() often enough;
+    there is no background thread. DNS and filesystem calls may still block.
     """
     def __init__(self, conn, *, enabled=False, file_host, file_port, file_token,
-                 file_slot, deadline, io_timeout=30):
+                 file_slot, deadline, io_timeout=30, keepalive_interval=None):
         if (enabled is not True or type(conn) is not socket.socket or conn.family != socket.AF_INET or
                 conn.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM or
                 conn.proto not in (0, socket.IPPROTO_TCP) or type(file_host) is not str or
@@ -45,7 +49,9 @@ class ExperimentalRemoteLoadClient:
                 type(file_token) is not str or not re.fullmatch(r'[0-9a-f]{32}', file_token) or
                 type(file_slot) is not int or not 1 <= file_slot <= 8 or
                 type(deadline) not in (int,float) or not math.isfinite(deadline) or deadline <= time.monotonic() or
-                type(io_timeout) not in (int,float) or not math.isfinite(io_timeout) or not 0 < io_timeout <= 300):
+                type(io_timeout) not in (int,float) or not math.isfinite(io_timeout) or not 0 < io_timeout <= 300 or
+                (keepalive_interval is not None and (type(keepalive_interval) not in (int,float) or
+                 not math.isfinite(keepalive_interval) or not 0 < keepalive_interval <= 300))):
             raise ValueError('invalid enabled client, endpoint or deadline')
         conn.getpeername()
         conn.setblocking(False)
@@ -53,6 +59,9 @@ class ExperimentalRemoteLoadClient:
         self._deadline = float(deadline); self._io_timeout = float(io_timeout)
         self._thread = threading.get_ident(); self._state = 'new'; self._busy = False
         self._bound = self._load = None
+        self._keepalive_interval = keepalive_interval
+        self._next_keepalive = None
+        self._keepalive_sequence = 1
 
     def _remaining(self):
         value = self._deadline-time.monotonic()
@@ -107,6 +116,45 @@ class ExperimentalRemoteLoadClient:
             data.extend(chunk)
         raise ValueError('control frame exceeds limit')
 
+    def _pump(self):
+        """Pump only on the owner thread, with no other frame in flight."""
+        self._remaining()
+        readable, _, exceptional = select.select([self._conn], [], [self._conn], 0)
+        if readable or exceptional:
+            raise ConnectionError('unexpected input during load')
+        if time.monotonic() < self._next_keepalive:
+            return
+        started = time.monotonic()
+        seq = self._keepalive_sequence
+        request = {'version': 1, 'kind': 'keepalive',
+                   'attempt_id': self._bound.offer.attempt_id, 'sequence': seq}
+        self._send(json.dumps(request, separators=(',', ':'), sort_keys=True).encode('ascii') + b'\n')
+        try:
+            response = json.loads(self._read_frame().decode('utf-8'), object_pairs_hook=_pairs,
+                                  parse_constant=_reject_constant)
+        except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
+            raise ValueError('invalid keepalive response') from error
+        if (type(response) is not dict or set(response) != {'version', 'kind', 'attempt_id', 'sequence'} or
+                type(response['version']) is not int or response['version'] != 1 or response['kind'] != 'alive' or
+                response['attempt_id'] != self._bound.offer.attempt_id or
+                type(response['sequence']) is not int or response['sequence'] != seq):
+            raise ValueError('keepalive response differs from current attempt')
+        self._keepalive_sequence += 1
+        self._next_keepalive = started + self._keepalive_interval
+
+    def poll(self):
+        """Maintain an enabled offer while the owner waits for local X4 events.
+
+        This synchronously waits for a keepalive response. Each socket wait is
+        capped by io_timeout; a fragmented response can take longer in total,
+        but cannot extend the absolute load deadline.
+        """
+        with self._operation(self._state):
+            if self._keepalive_interval is None or self._state not in (
+                    'offered', 'downloaded', 'staged', 'requested', 'loaded', 'paused'):
+                raise RuntimeError('no enabled active load to pump')
+            self._pump()
+
     def request_offer(self):
         """Wait for a baseline within the existing overall load deadline.
 
@@ -139,6 +187,8 @@ class ExperimentalRemoteLoadClient:
                     continue
                 self._bound = decode_bound_offer(raw)
                 self._load = ExperimentalClientLoad(enabled=True,offer=self._bound.offer,expected_marker=self._bound.marker)
+                if self._keepalive_interval is not None:
+                    self._next_keepalive = time.monotonic() + self._keepalive_interval
                 self._state = 'offered'
                 return self._bound
 
@@ -148,15 +198,19 @@ class ExperimentalRemoteLoadClient:
             offer = self._bound.offer
             save = SaveOffer(offer.name, offer.sha256, offer.size, offer.checkpoint_id)
             host, port, token, slot = self._endpoint
+            options = {}
+            if self._keepalive_interval is not None:
+                options = {'pump': self._pump, 'pump_interval': min(.25, self._keepalive_interval / 2)}
             path = receive(host,port,token,slot,save,Path(new_directory),retries=0,
-                           timeout=min(self._io_timeout,self._remaining()),deadline=self._deadline)
+                           timeout=min(self._io_timeout,self._remaining()),deadline=self._deadline, **options)
             self._state = 'downloaded'
             return path
 
     def verify_staged(self, path):
         """Check a caller-staged copy before its X4 load is requested."""
         with self._operation('downloaded'):
-            self._load.verify_staged(path); self._state = 'staged'
+            self._load.verify_staged(path, pump=self._pump if self._keepalive_interval is not None else None)
+            self._state = 'staged'
 
     def load_requested(self, attempt):
         with self._operation('staged'):
@@ -175,7 +229,7 @@ class ExperimentalRemoteLoadClient:
             # Refuse an already queued response, EOF, or exceptional socket.
             readable, _, exceptional = select.select([self._conn], [], [self._conn], 0)
             if readable or exceptional: raise ConnectionError('unexpected input before claim')
-            payload = encode_load_claim(self._load.make_claim(attempt))
+            payload = encode_load_claim(self._load.make_claim(attempt, pump=self._pump if self._keepalive_interval is not None else None))
             self._send(payload+b'\n')
             try: ack = json.loads(self._read_frame().decode('utf-8'), object_pairs_hook=_pairs, parse_constant=_reject_constant)
             except (UnicodeError,json.JSONDecodeError,RecursionError) as error: raise ValueError('invalid accepted frame') from error

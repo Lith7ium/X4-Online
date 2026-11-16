@@ -14,6 +14,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 import authority.experimental_remote_load_client as subject
+import authority.experimental_client_load as client_load
 from authority.experimental_tcp_control import offer_request
 from authority.load_messages import Offer
 from authority.trusted_load_messages import decode_load_claim, encode_bound_offer
@@ -33,10 +34,10 @@ class RemoteLoadClientTests(unittest.TestCase):
             size=len(self.data),name='j1.xml.gz')
         self.bound=MarkerBoundOffer(self.offer,self.marker)
 
-    def connect(self, *, ack_attempt=None, after_ack=b'', offer=None, after_offer=b'', not_ready_count=0, offer_delay=0, io_timeout=2):
+    def connect(self, *, ack_attempt=None, after_ack=b'', offer=None, after_offer=b'', not_ready_count=0, offer_delay=0, io_timeout=2, keepalive_interval=None, wrong_alive=False):
         listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM);listener.bind(('127.0.0.1',0));listener.listen(1)
         listener.settimeout(3);client=socket.create_connection(listener.getsockname(),timeout=3)
-        errors=[]; claims=[]
+        errors=[]; claims=[]; self.keepalives=[]
         def serve():
             try:
                 conn,_=listener.accept();conn.settimeout(3)
@@ -49,6 +50,14 @@ class RemoteLoadClientTests(unittest.TestCase):
                     if offer_delay: time.sleep(offer_delay)
                     conn.sendall(encode_bound_offer(offer or self.bound)+b'\n'+after_offer)
                     line=stream.readline()
+                    while line:
+                        msg = json.loads(line)
+                        if msg.get('kind') != 'keepalive': break
+                        self.keepalives.append(msg)
+                        reply = {'version': 1, 'kind': 'alive', 'attempt_id': msg['attempt_id'],
+                                 'sequence': msg['sequence'] + (1 if wrong_alive else 0)}
+                        conn.sendall(json.dumps(reply).encode()+b'\n')
+                        line = stream.readline()
                     if not line: return
                     claims.append(decode_load_claim(line.rstrip(b'\n')))
                     msg={'version':1,'kind':'accepted','attempt_id':ack_attempt or self.offer.attempt_id}
@@ -58,7 +67,8 @@ class RemoteLoadClientTests(unittest.TestCase):
         thread=threading.Thread(target=serve,daemon=True);thread.start()
         self.addCleanup(lambda:thread.join(4))
         obj=ExperimentalRemoteLoadClient(client,enabled=True,file_host='127.0.0.1',file_port=self.service.port,
-            file_token=self.token,file_slot=1,deadline=time.monotonic()+5,io_timeout=io_timeout)
+            file_token=self.token,file_slot=1,deadline=time.monotonic()+5,io_timeout=io_timeout,
+            keepalive_interval=keepalive_interval)
         self.addCleanup(obj.close)
         return obj,claims,errors
 
@@ -180,6 +190,32 @@ class RemoteLoadClientTests(unittest.TestCase):
         with patch.object(subject,'receive',side_effect=slow_receive):
             with self.assertRaises(TimeoutError): obj.download(self.root/'unused')
         with self.assertRaises(RuntimeError): obj.verify_staged(self.root/'synthetic-result')
+
+    def test_opt_in_pumps_hash_and_local_event_wait_then_claims(self):
+        obj,claims,errors=self.connect(keepalive_interval=.02)
+        obj.request_offer()
+        path=obj.download(self.root/'download')
+        real_read=client_load.os.read
+        def slow_read(fd, size):
+            time.sleep(.03)
+            return real_read(fd, size)
+        with patch.object(client_load.os, 'read', side_effect=slow_read):
+            obj.verify_staged(path)
+            obj.load_requested(self.offer.attempt_id)
+            time.sleep(.03); obj.poll()
+            obj.loaded_marker(self.offer.attempt_id,self.marker); obj.paused(self.offer.attempt_id,True)
+            obj.claim(self.offer.attempt_id)
+        self.assertGreaterEqual(len(self.keepalives), 3)
+        self.assertEqual([item['sequence'] for item in self.keepalives], list(range(1,len(self.keepalives)+1)))
+        self.assertTrue(all(item['attempt_id']==self.offer.attempt_id for item in self.keepalives))
+        self.assertEqual(len(claims),1); self.assertFalse(errors)
+
+    def test_wrong_keepalive_ack_faults_attempt(self):
+        obj,claims,_=self.connect(keepalive_interval=.01,wrong_alive=True)
+        obj.request_offer(); time.sleep(.02)
+        with self.assertRaises(ValueError): obj.poll()
+        with self.assertRaises(RuntimeError): obj.download(self.root/'download')
+        self.assertEqual(claims,[])
 
 
 if __name__=='__main__': unittest.main()

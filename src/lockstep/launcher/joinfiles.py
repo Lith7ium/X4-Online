@@ -16,6 +16,8 @@ import hmac
 import math
 from pathlib import Path
 import re
+import errno
+import select
 import secrets
 import socket
 import socketserver
@@ -52,21 +54,73 @@ def _remaining(deadline):
     return remaining
 
 
-def _connect(host, port, timeout, deadline):
-    if deadline is None:
+def _pump_call(pump):
+    if pump is not None:
+        try:
+            pump()
+        except Exception as error:
+            # Never mistake a control-channel failure for a retryable file error.
+            raise RuntimeError('transfer control pump failed') from error
+
+
+def _wait_socket(conn, write, timeout, deadline, pump, interval):
+    end = time.monotonic() + timeout
+    while True:
+        _pump_call(pump)
+        left = _remaining(deadline)
+        idle = end - time.monotonic()
+        if idle <= 0:
+            raise socket.timeout('join-file socket timed out')
+        wait = min(idle, interval, left if left is not None else idle)
+        readable, writable, errors = select.select([] if write else [conn], [conn] if write else [], [conn], wait)
+        _remaining(deadline)
+        if errors:
+            raise OSError('join-file socket error')
+        if writable if write else readable:
+            return
+
+
+def _pump_sleep(delay, deadline, pump, interval):
+    left = _remaining(deadline)
+    end = time.monotonic() + (delay if left is None else min(delay, left))
+    while time.monotonic() < end:
+        _pump_call(pump)
+        _remaining(deadline)
+        left = end - time.monotonic()
+        if left > 0:
+            time.sleep(min(left, interval) if pump else left)
+    _remaining(deadline)
+
+
+def _connect(host, port, timeout, deadline, pump=None, pump_interval=0.25):
+    if deadline is None and pump is None:
         return socket.create_connection((host, port), timeout=timeout)
     # getaddrinfo may block outside Python's control. Once it returns, each
     # candidate gets only the time still available to the entire transfer.
     _remaining(deadline)
+    _pump_call(pump)
     addresses = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    _pump_call(pump)
     last = None
     for family, socktype, proto, _, address in addresses:
         _remaining(deadline)
         conn = None
         try:
             conn = socket.socket(family, socktype, proto)
-            conn.settimeout(min(timeout, _remaining(deadline)))
-            conn.connect(address)
+            if pump is None:
+                left = _remaining(deadline)
+                conn.settimeout(timeout if left is None else min(timeout, left))
+                conn.connect(address)
+            else:
+                conn.setblocking(False)
+                code = conn.connect_ex(address)
+                if code not in (0, errno.EISCONN):
+                    if code not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, 10035, 10036, 10037):
+                        raise OSError(code, 'join-file connect failed')
+                    _wait_socket(conn, True, timeout, deadline, pump, pump_interval)
+                    code = conn.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                    if code:
+                        raise OSError(code, 'join-file connect failed')
             _remaining(deadline)
             return conn
         except BaseException as error:
@@ -91,12 +145,14 @@ def request_line(token, slot, name, offset=0, nonce=None):
     return f'X4JF|{PROTOCOL}|{slot}|{nonce}|{name}|{offset}|{mac(token, slot, nonce, name, offset)}\n'.encode('ascii')
 
 
-def sha256_file(path, *, deadline=None):
+def sha256_file(path, *, deadline=None, pump=None):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
         while True:
             _remaining(deadline)
+            _pump_call(pump)
             block = f.read(CHUNK)
+            _pump_call(pump)
             _remaining(deadline)
             if not block:
                 break
@@ -262,7 +318,7 @@ class FileService:
 OFFER_WAIT_S = 180   # the relay answers saved before the host has read the notice and hashed the files: 'name' is retried this long
 
 
-def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progress=None, timeout=TIMEOUT_S, offer_wait_s=OFFER_WAIT_S, expect_size=None, *, deadline=None):
+def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progress=None, timeout=TIMEOUT_S, offer_wait_s=OFFER_WAIT_S, expect_size=None, *, deadline=None, pump=None, pump_interval=0.25):
     """Download and verify, optionally bounded by an absolute monotonic deadline.
 
     DNS resolution, filesystem calls and user callbacks cannot be interrupted;
@@ -273,37 +329,60 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
     """
     if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
         raise ValueError('invalid transfer deadline')
+    if pump is not None and (not callable(pump) or type(pump_interval) not in (int, float) or
+                             not math.isfinite(pump_interval) or not 0 < pump_interval <= 1):
+        raise ValueError('invalid transfer pump')
     def budget():
         left = _remaining(deadline)
         return timeout if left is None else min(timeout, left)
     def sleep_bounded(delay):
-        left = _remaining(deadline)
-        time.sleep(delay if left is None else min(delay, left))
-        _remaining(deadline)
+        _pump_sleep(delay, deadline, pump, pump_interval)
     if not NAME.fullmatch(name):
         raise FetchError(f'not a join file name: {name}')
     if expect_size is not None and (type(expect_size) is not int or expect_size <= 0):
         raise FetchError('invalid expected file size')
     dest = Path(dest)
     part = dest.with_name(dest.name + '.part')
+    _pump_call(pump)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    _pump_call(pump)
     last, attempt, offer_deadline = None, 0, time.monotonic() + offer_wait_s
     while attempt <= retries:
         _remaining(deadline)
         if attempt:
             sleep_bounded(min(2 ** attempt, 20))
         attempt += 1
+        _pump_call(pump)
         offset = part.stat().st_size if part.is_file() else 0
+        _pump_call(pump)
         try:
-            with _connect(host, port, timeout, deadline) as conn:
+            with _connect(host, port, timeout, deadline, pump, pump_interval) as conn:
                 request = request_line(token, slot, name, offset)
-                conn.settimeout(budget())
-                conn.sendall(request)
+                if pump is None:
+                    conn.settimeout(budget())
+                    conn.sendall(request)
+                else:
+                    pending = memoryview(request)
+                    while pending:
+                        _wait_socket(conn, True, timeout, deadline, pump, pump_interval)
+                        try:
+                            sent = conn.send(pending)
+                        except BlockingIOError:
+                            continue
+                        if sent <= 0:
+                            raise OSError('join-file connection closed')
+                        pending = pending[sent:]
                 _remaining(deadline)
                 head = b''
                 while not head.endswith(b'\n'):
-                    conn.settimeout(budget())
-                    data = conn.recv(1)
+                    if pump is None:
+                        conn.settimeout(budget())
+                    else:
+                        _wait_socket(conn, False, timeout, deadline, pump, pump_interval)
+                    try:
+                        data = conn.recv(1)
+                    except BlockingIOError:
+                        continue
                     _remaining(deadline)
                     if not data or len(head) > LINE_MAX:
                         raise FetchError('the host closed the connection before its answer')
@@ -341,12 +420,20 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
                 with open(part, 'ab') as out:
                     got = offset
                     while got < size:
-                        conn.settimeout(budget())
-                        data = conn.recv(min(CHUNK, size - got))
+                        if pump is None:
+                            conn.settimeout(budget())
+                        else:
+                            _wait_socket(conn, False, timeout, deadline, pump, pump_interval)
+                        try:
+                            data = conn.recv(min(CHUNK, size - got))
+                        except BlockingIOError:
+                            continue
                         _remaining(deadline)
                         if not data:
                             break
+                        _pump_call(pump)
                         out.write(data)
+                        _pump_call(pump)
                         _remaining(deadline)
                         got += len(data)
                         if progress:
@@ -355,12 +442,14 @@ def fetch(host, port, token, slot, name, dest, expect_sha=None, retries=5, progr
                 if got < size:
                     last = FetchError(f'{name}: connection lost at {got} of {size} bytes')
                     continue
-            if sha256_file(part, deadline=deadline) != digest:
+            if sha256_file(part, deadline=deadline, pump=pump) != digest:
                 part.unlink()
                 last = FetchError(f'{name}: the downloaded bytes do not match SHA-256 {digest[:16]}..')
                 continue
             _remaining(deadline)
+            _pump_call(pump)
             part.replace(dest)
+            _pump_call(pump)
             _remaining(deadline)
             return digest
         except FetchError:

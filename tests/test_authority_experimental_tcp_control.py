@@ -63,6 +63,57 @@ class TCPControlTest(unittest.TestCase):
         self.deliver(peer, offer_request())
         return decode_bound_offer(self.output(peer))
 
+    def test_opt_in_keepalive_ack_is_bound_to_attempt_and_sequence(self):
+        self.owner._keepalive_enabled = True
+        peer = self.connect(); self.ready_world(); bound = self.offer(peer)
+        record = next(iter(self.owner._peers.values()))
+        record['deadline'] = time.monotonic() + .05
+        frame = lambda seq, attempt: json.dumps({'version': 1, 'kind': 'keepalive',
+            'attempt_id': attempt, 'sequence': seq}).encode() + b'\n'
+        self.deliver(peer, frame(1, bound.offer.attempt_id))
+        self.assertEqual(json.loads(self.output(peer)), {'version': 1, 'kind': 'alive',
+            'attempt_id': bound.offer.attempt_id, 'sequence': 1})
+        self.assertGreater(record['deadline'], time.monotonic() + 1)
+        self.deliver(peer, frame(2, bound.offer.attempt_id))
+        self.assertEqual(json.loads(self.output(peer))['sequence'], 2)
+        self.deliver(peer, frame(2, bound.offer.attempt_id))
+        self.assertEqual(peer.recv(1), b'')
+        self.assertEqual(self.world.session.players, ())
+
+    def test_keepalive_wrong_stage_attempt_and_default_disabled_disconnect(self):
+        frame = lambda attempt: json.dumps({'version': 1, 'kind': 'keepalive',
+            'attempt_id': attempt, 'sequence': 1}).encode() + b'\n'
+        self.owner._keepalive_enabled = True
+        peer = self.connect(); self.deliver(peer, frame('old'))
+        self.assertEqual(peer.recv(1), b'')
+        peer = self.connect(); self.ready_world(); self.offer(peer)
+        self.deliver(peer, frame('old')); self.assertEqual(peer.recv(1), b'')
+        self.owner._keepalive_enabled = False
+        peer = self.connect(); bound = self.offer(peer)
+        self.deliver(peer, frame(bound.offer.attempt_id)); self.assertEqual(peer.recv(1), b'')
+
+    def test_host_owned_offer_and_accept_checks_receive_bounded_credit(self):
+        peer = self.connect(); self.ready_world()
+        record = next(iter(self.owner._peers.values()))
+        begin = self.session.begin
+        def delayed_begin(conn):
+            time.sleep(.06)
+            return begin(conn)
+        record['deadline'] = time.monotonic() + .04
+        with patch.object(self.session, 'begin', side_effect=delayed_begin):
+            bound = self.offer(peer)
+        self.assertGreater(record['host_blocked_grace'], .05)
+        self.assertGreater(record['deadline'], time.monotonic())
+        accept = self.session.accept
+        def delayed_accept(conn, claim, *, pre_accept):
+            time.sleep(.06)
+            return accept(conn, claim, pre_accept=pre_accept)
+        record['deadline'] = time.monotonic() + .04
+        with patch.object(self.session, 'accept', side_effect=delayed_accept):
+            self.deliver(peer, encode_load_claim(claim_for(bound.offer)) + b'\n')
+        self.assertEqual(json.loads(self.output(peer))['kind'], 'accepted')
+        self.assertGreater(record['host_blocked_grace'], .11)
+
     def test_fragmented_request_claim_and_disconnect_are_socket_bound(self):
         peer = self.connect(); self.ready_world()
         request = offer_request(); self.deliver(peer, request[:9]); self.deliver(peer, request[9:])
