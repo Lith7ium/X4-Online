@@ -22,6 +22,17 @@ The client logged `AUTH_PARTICIPANT_MOTION BUFFERED 1318 1` for
 `AUTH_PARTICIPANT_JOB ERROR apply`. The retained X4 logs contain no
 `AUTH_MOTION_APPLY INTENT`, `WRITE_ENTERED` or `READBACK` marker.
 
+In the installed client owner, the exact `ERROR apply` label originates from
+the writer's fault callback. The recorded error and installed control flow
+therefore indicate that the owner accepted an APPLY matching its last bound
+sample, constructed the writer, and invoked its `begin`, `event` or `tick`
+path. A rejected mismatched APPLY would instead have produced the outer `tick`
+fault. The client log advances from 3.57 to 3.79 game seconds between BUFFERED
+and the error, but this is not a measurement of elapsed real time and cannot
+confirm or exclude the configured 15-second real-time deadline. The failed
+result retains neither sample coordinates nor worker/socket frames, so the
+5–50 m displacement condition cannot be reconstructed.
+
 The installed writer's control flow logs INTENT and WRITE_ENTERED before
 calling `SetObjectSectorPos`; therefore the retained log and code are
 consistent with a failure before that setter call. There is no independent
