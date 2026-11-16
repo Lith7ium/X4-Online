@@ -580,6 +580,16 @@ do not independently identify a single offending guard or prove candidate
 identity. No samples or receipts were recorded, and the result reports no
 owned X4 processes remaining.
 
+The fourth isolated attempt, `.local/authority-motion-client-once-04`, used
+separate diagnostic timeouts and reached candidate selection and source
+registration. It then stopped on the server's `AUTH_RECOVERED_SOURCE ERROR
+router_event`; the subsequent world-bridge update also reported an assertion
+failure. The result recorded 195.94 s, including 57.29 s binding and 102.90 s
+candidate selection, with no confirmed samples. The log does not identify
+which registry-descriptor validation or callback failed. The supervisor
+reported no remaining owned X4 processes. This is not evidence of client
+motion, common ship identity, visible movement or gameplay.
+
 An isolated offline benchmark used the Source IPC lifecycle over local UDP/TCP
 with a simulated source and client, real pidfd guard transport and the four
 existing `authority-witness-join-once-06` compressed saves (26,183,913 and
