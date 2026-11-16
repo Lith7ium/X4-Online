@@ -113,26 +113,32 @@ class ExperimentalSourceMotionIPC:
                 host._busy=False;d._active=False
             if changed:raise RuntimeError('callback reader fence changed')
 
-    def _check(self,deadline,phase):
-        if (self._state!=phase or self._motion._failed or self._motion._delivery._failed or
-            self._motion._delivery._host._failed or threading.get_ident()!=self._owner or time.monotonic()>=deadline):
+    def _check(self, deadline, phase):
+        if (self._state != phase or self._motion._failed or self._motion._delivery._failed or
+                self._motion._delivery._host._failed or threading.get_ident() != self._owner or
+                time.monotonic() >= deadline):
             raise RuntimeError('source motion state or deadline failed')
-        good=self._call_fenced(self._guard)
-        if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
-            self._motion._delivery._host._failed or threading.get_ident()!=self._owner or
-            time.monotonic()>=deadline or self._sock.getsockname()!=self._local or self._sock.getpeername()!=self._peer):
+
+        guard_confirmed = self._call_fenced(self._guard)
+        if (guard_confirmed is not True or self._state != phase or self._motion._failed or
+                self._motion._delivery._failed or self._motion._delivery._host._failed or
+                threading.get_ident() != self._owner or time.monotonic() >= deadline or
+                self._sock.getsockname() != self._local or self._sock.getpeername() != self._peer):
             raise RuntimeError('source motion guard failed')
-        good=self._call_fenced(self._validate,self._peer)
-        if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
-            self._motion._delivery._host._failed or threading.get_ident()!=self._owner or time.monotonic()>=deadline):
+
+        peer_confirmed = self._call_fenced(self._validate, self._peer)
+        if (peer_confirmed is not True or self._state != phase or self._motion._failed or
+                self._motion._delivery._failed or self._motion._delivery._host._failed or
+                threading.get_ident() != self._owner or time.monotonic() >= deadline):
             raise RuntimeError('source motion X4 peer ownership changed')
+
         if self._saved_guard is not None:
-            good=self._saved_fence()
+            baseline_confirmed = self._saved_fence()
             # Evaluate the existing conditions in the same short-circuit order.
             # The fixed suffix distinguishes the observed failure without
             # printing checkpoint data, socket addresses, or callback errors.
             reason = None
-            if good is not True:
+            if baseline_confirmed is not True:
                 reason = 'guard_false'
             elif self._state != phase:
                 reason = 'phase_changed'
@@ -152,19 +158,27 @@ class ExperimentalSourceMotionIPC:
                 reason = 'peer_socket_changed'
             if reason is not None:
                 raise RuntimeError('saved baseline guard failed: ' + reason)
-            good=self._call_fenced(self._guard)
-            if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
-                self._motion._delivery._host._failed or time.monotonic()>=deadline):
+
+            guard_confirmed = self._call_fenced(self._guard)
+            if (guard_confirmed is not True or self._state != phase or self._motion._failed or
+                    self._motion._delivery._failed or self._motion._delivery._host._failed or
+                    time.monotonic() >= deadline):
                 raise RuntimeError('source guard changed during baseline check')
-            good=self._call_fenced(self._validate,self._peer)
-            if (good is not True or self._state!=phase or self._motion._failed or self._motion._delivery._failed or
-                self._motion._delivery._host._failed or threading.get_ident()!=self._owner or time.monotonic()>=deadline or
-                self._sock.getsockname()!=self._local or self._sock.getpeername()!=self._peer):
+
+            peer_confirmed = self._call_fenced(self._validate, self._peer)
+            if (peer_confirmed is not True or self._state != phase or self._motion._failed or
+                    self._motion._delivery._failed or self._motion._delivery._host._failed or
+                    threading.get_ident() != self._owner or time.monotonic() >= deadline or
+                    self._sock.getsockname() != self._local or self._sock.getpeername() != self._peer):
                 raise RuntimeError('source peer changed during baseline check')
-    def _quiet(self,deadline,phase):
-        self._check(deadline,phase);r,_,e=select.select([self._sock],[],[self._sock],0)
-        if r or e:raise RuntimeError('unexpected queued source motion packet')
-        self._check(deadline,phase)
+
+    def _quiet(self, deadline, phase):
+        self._check(deadline, phase)
+        readable, _, exceptional = select.select([self._sock], [], [self._sock], 0)
+        if readable or exceptional:
+            raise RuntimeError('unexpected queued source motion packet')
+        self._check(deadline, phase)
+
     def _reserved(self,owner):
         if self._scheduler_owner is not None and (owner is None or owner is not self._scheduler_lease):
             self._fail();raise RuntimeError('source motion bridge is reserved by its scheduler')
