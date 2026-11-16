@@ -51,30 +51,49 @@ class ExperimentalClientAuthorityMotionIPC:
         self._state='failed'
         try:self._sock.close()
         except OSError:pass
-    def _check(self,deadline,phase):
-        sock,guard,validate,grant=self._sock,self._guard,self._validate,self._grant
-        original=(self._peer,self._local,self._lease,self._attempt,self._epoch,self._generation,
-                  self._incarnation,self._timeout,self._owner,self._next,self._sequence,self._last_time)
-        def stable():
-            current=(self._peer,self._local,self._lease,self._attempt,self._epoch,self._generation,
-                     self._incarnation,self._timeout,self._owner,self._next,self._sequence,self._last_time)
-            return (self._sock is sock and self._guard is guard and self._validate is validate and self._grant is grant and
-                    current==original and all(type(a) is type(b) for a,b in zip(current,original)) and
-                    self._state==phase and threading.get_ident()==self._owner and time.monotonic()<deadline and
-                    self._sock.getsockname()==self._local and self._sock.getpeername()==self._peer)
-        if not stable():raise RuntimeError('client motion state or deadline changed')
-        if self._guard() is not True or not stable():raise RuntimeError('client process guard failed')
-        if self._validate(self._peer) is not True or not stable():raise RuntimeError('client UDP peer changed')
-        if self._grant(self._epoch,self._generation,self._incarnation,_INDEX) is not True or not stable():
+    def _check(self, deadline, phase):
+        original_socket = self._sock
+        original_guard = self._guard
+        original_peer_validator = self._validate
+        original_grant = self._grant
+        original_context = (self._peer, self._local, self._lease, self._attempt, self._epoch,
+                            self._generation, self._incarnation, self._timeout, self._owner,
+                            self._next, self._sequence, self._last_time)
+
+        def context_unchanged():
+            current_context = (self._peer, self._local, self._lease, self._attempt, self._epoch,
+                               self._generation, self._incarnation, self._timeout, self._owner,
+                               self._next, self._sequence, self._last_time)
+            return (self._sock is original_socket and self._guard is original_guard and
+                    self._validate is original_peer_validator and self._grant is original_grant and
+                    current_context == original_context and
+                    all(type(current) is type(original) for current, original in zip(current_context, original_context)) and
+                    self._state == phase and threading.get_ident() == self._owner and
+                    time.monotonic() < deadline and self._sock.getsockname() == self._local and
+                    self._sock.getpeername() == self._peer)
+
+        if not context_unchanged():
+            raise RuntimeError('client motion state or deadline changed')
+        if self._guard() is not True or not context_unchanged():
+            raise RuntimeError('client process guard failed')
+        if self._validate(self._peer) is not True or not context_unchanged():
+            raise RuntimeError('client UDP peer changed')
+        if self._grant(self._epoch, self._generation, self._incarnation, _INDEX) is not True or not context_unchanged():
             raise RuntimeError('client test grant unavailable')
-        if self._guard() is not True or not stable():raise RuntimeError('client process guard changed')
-        if self._validate(self._peer) is not True or not stable():raise RuntimeError('client UDP peer changed')
-        if self._grant(self._epoch,self._generation,self._incarnation,_INDEX) is not True or not stable():
+        if self._guard() is not True or not context_unchanged():
+            raise RuntimeError('client process guard changed')
+        if self._validate(self._peer) is not True or not context_unchanged():
+            raise RuntimeError('client UDP peer changed')
+        if self._grant(self._epoch, self._generation, self._incarnation, _INDEX) is not True or not context_unchanged():
             raise RuntimeError('client test grant changed')
-    def _quiet(self,deadline,phase):
-        self._check(deadline,phase);r,_,bad=select.select([self._sock],[],[self._sock],0)
-        if r or bad:raise RuntimeError('unexpected queued client motion packet')
-        self._check(deadline,phase)
+
+    def _quiet(self, deadline, phase):
+        self._check(deadline, phase)
+        readable, _, exceptional = select.select([self._sock], [], [self._sock], 0)
+        if readable or exceptional:
+            raise RuntimeError('unexpected queued client motion packet')
+        self._check(deadline, phase)
+
     def _request(self,kind,fields,deadline,phase):
         self._quiet(deadline,phase)
         if self._next>=_MAX:raise RuntimeError('client motion request capacity')
