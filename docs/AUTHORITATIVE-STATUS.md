@@ -70,6 +70,10 @@ Native Linux evidence so far:
   reservation lookup reported empty. The positive control failed before the
   two test ships' seats were assessed. This does not establish an empty or
   usable physical seat, player control, or the cause of the differing readings.
+* A separate isolated read-only search for a positive seat-control candidate
+  completed with an inconclusive outcome. The retained result does not identify
+  which search or timeout path occurred and does not establish that no candidate
+  exists or that a seat is free.
 * Two isolated Linux X4 processes transferred a marked checkpoint locally,
   accepted a trusted client load claim over TCP, and confirmed resume and pause
   through TCP participant control. A second join was simulated. Another run
@@ -114,6 +118,7 @@ Detailed results: [census read](../tools/dev/AUTHORITY-CENSUS-RUNTIME-READ.md),
 [two-X4 census descriptor](../tools/dev/AUTHORITY-CENSUS-PAIR-READ.md),
 [two-X4 census replica](../tools/dev/AUTHORITY-CENSUS-REPLICA-PAIR.md),
 [player-seat experiment](../tools/dev/AUTHORITY-PLAYER-SEAT-EXPERIMENT.md),
+[positive-seat search](../tools/dev/AUTHORITY-POSITIVE-SEAT-SEARCH.md),
 [two-sector source read](../tools/dev/AUTHORITY-MULTI-SECTOR-READ.md),
 [sector lookup calibration](../tools/dev/AUTHORITY-SECTOR-FIND-CALIBRATION.md),
 [two-sector local creation](../tools/dev/AUTHORITY-SECTOR-CREATE-PREPARATION.md),

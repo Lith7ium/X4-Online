@@ -34,9 +34,9 @@ observed pause. It does not prove that the reservation and assignment identify
 the same person, that a person physically occupies a chair, high attention,
 coverage of nearby ships, or that a player's seat is free or controllable. It
 does not authorize saving or integration with the disabled fixture save bridge.
-This module has no real X4, Windows, Internet or gameplay evidence. Synthetic
-Lua and fake-FFI tests include an actor ID above 2^53 but do not establish
-native ID, getter or event-serialization behavior.
+The synthetic Lua and fake-FFI tests include an actor ID above 2^53 but do not
+establish native ID, getter or event-serialization behavior. The bounded native
+attempt below does not establish Windows, Internet or gameplay behavior.
 
 ## Private native harness
 
@@ -60,3 +60,23 @@ unsuccessful and suppresses the diagnostic outcome. Process and file checks
 remain point-in-time observations, not atomic lifetime guarantees. The owner
 uses no cross-process actor IDs, and its candidate reference is not retained for
 subsequent operations. Neither outcome authorizes saving or gameplay claims.
+
+## Recorded native attempt
+
+The isolated Linux run `.local/authority-positive-seat-01` loaded the pinned
+checkpoint, reported the expected marker, a paused slot-2 NPC read, and then
+logged `START`, `INCONCLUSIVE`, `DONE` in order. Its result records
+`success=true`, meaning the diagnostic and its final checks completed, with
+`outcome=inconclusive`; it reports no owned processes remaining and no requested
+checkpoint. The retained log does not identify the cause of the inconclusive
+outcome. A missing or invalid context or slot, no qualifying result in the
+bounded selection, an unavailable getter or a timeout are among the possible
+paths; it does not establish that no candidate exists.
+
+The archived source and private staged save both hash to
+`2c6494308424fffe8bd114bd017802e2b6dc1f227a64998aea8a787672846748`.
+The private search MD, Lua module and owner match their reviewed source bytes.
+These file and process observations are point-in-time checks: they do not prove
+byte-exact engine loading or continuous pause. This attempt proves neither a
+usable seat nor player control, candidate coverage, same-person identity,
+Windows/Internet operation or gameplay.
