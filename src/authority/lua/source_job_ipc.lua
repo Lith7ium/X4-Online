@@ -61,55 +61,128 @@ function M.new(o)
   if not sent then return fail('candidate_send')end;return true
  end
  function api:packet(raw)
-  if busy or (phase~='await_bind' and phase~='waiting' and phase~='await_rearm')then return fail('unexpected_packet')end
+  if busy or (phase~='await_bind' and phase~='waiting' and phase~='await_rearm') then
+   return fail('unexpected_packet')
+  end
   busy=true
-  if type(raw)~='string' or #raw>4096 or not check()then busy=false;return fail('invalid_packet')end
-  local p=split(raw);local id=identity()
-  if p[1]~='P' or p[2]~=o.lease or p[3]~=o.attempt or p[5]~=id[1] or p[6]~=id[2] or p[7]~=id[3] or p[8]~=id[4] then busy=false;return fail('foreign_packet')end
-  if phase=='await_rearm' and p[4]=='REARM' and #p==8 then
-   if not emit({'REARMED',id[1],id[2],id[3],id[4]})then busy=false;return fail('rearm_send')end
-   last_seq=event.sequence;event,members,gate,deadline,next_peer=nil,nil,nil,nil,nil;phase='idle';busy=false;return true
-  elseif phase=='await_bind' and p[4]=='BIND' then
-   local n=tonumber(p[9]);if not natural(n) or n>16 or p[9]~=string.format('%.0f',n) or #p~=9+2*n then busy=false;return fail('invalid_members')end
-   members={};local seen,incs={},{}
-   for i=1,n do
-    local peer,inc=p[8+2*i],p[9+2*i]
-    if not peer:match('^peer_[1-9]%d*$') or #peer>48 or not token(inc) or seen[peer] or incs[inc]then busy=false;return fail('invalid_members')end
-    members[i]={id=peer,incarnation=inc};seen[peer]=true;incs[inc]=true
+  if type(raw)~='string' or #raw>4096 or not check() then
+   busy=false
+   return fail('invalid_packet')
+  end
+  local parts=split(raw)
+  local event_identity=identity()
+  if parts[1]~='P' or parts[2]~=o.lease or parts[3]~=o.attempt or
+     parts[5]~=event_identity[1] or parts[6]~=event_identity[2] or
+     parts[7]~=event_identity[3] or parts[8]~=event_identity[4] then
+   busy=false
+   return fail('foreign_packet')
+  end
+  if phase=='await_rearm' and parts[4]=='REARM' and #parts==8 then
+   if not emit({'REARMED',event_identity[1],event_identity[2],event_identity[3],event_identity[4]}) then
+    busy=false
+    return fail('rearm_send')
+   end
+   last_seq=event.sequence
+   event,members,gate,deadline,next_peer=nil,nil,nil,nil,nil
+   phase='idle'
+   busy=false
+   return true
+  elseif phase=='await_bind' and parts[4]=='BIND' then
+   local member_count=tonumber(parts[9])
+   if not natural(member_count) or member_count>16 or parts[9]~=string.format('%.0f',member_count) or
+      #parts~=9+2*member_count then
+    busy=false
+    return fail('invalid_members')
+   end
+   members={}
+   local seen,incarnations={},{}
+   for index=1,member_count do
+    local peer,incarnation=parts[8+2*index],parts[9+2*index]
+    if not peer:match('^peer_[1-9]%d*$') or #peer>48 or not token(incarnation) or
+       seen[peer] or incarnations[incarnation] then
+     busy=false
+     return fail('invalid_members')
+    end
+    members[index]={id=peer,incarnation=incarnation}
+    seen[peer]=true
+    incarnations[incarnation]=true
    end
    local announced=0
-   local created,built=pcall(o.gate.new,{enabled=true,generation=o.generation,timeout=o.timeout,clock=o.clock,membership=function()return members end,
+   local created,built=pcall(o.gate.new,{
+    enabled=true,generation=o.generation,timeout=o.timeout,clock=o.clock,
+    membership=function()return members end,
     send=function(peer)
-     announced=announced+1;return members[announced] and peer.id==members[announced].id and peer.incarnation==members[announced].incarnation
+     announced=announced+1
+     return members[announced] and peer.id==members[announced].id and
+      peer.incarnation==members[announced].incarnation
     end,
-    release=function(epoch,seq,index)return o.release(epoch,seq,index)end})
-   if not created or type(built)~='table' or phase~='await_bind' then busy=false;return fail('gate_create')end
-   gate=built;local called,started=pcall(gate.begin,gate,event)
-   if not called or not started or announced~=#members or phase~='await_bind' then busy=false;return fail('gate_begin')end
-   next_peer=1;phase='waiting';local sent=emit({'READY',unpack(id)});busy=false
-   if not sent then return fail('ready_send')end;return true
-  elseif phase=='waiting' and p[4]=='RECEIPT' and #p==10 then
+    release=function(epoch,sequence,index)return o.release(epoch,sequence,index)end,
+   })
+   if not created or type(built)~='table' or phase~='await_bind' then
+    busy=false
+    return fail('gate_create')
+   end
+   gate=built
+   local called,started=pcall(gate.begin,gate,event)
+   if not called or not started or announced~=#members or phase~='await_bind' then
+    busy=false
+    return fail('gate_begin')
+   end
+   next_peer=1
+   phase='waiting'
+   local sent=emit({'READY',unpack(event_identity)})
+   busy=false
+   if not sent then return fail('ready_send') end
+   return true
+  elseif phase=='waiting' and parts[4]=='RECEIPT' and #parts==10 then
    local peer=members[next_peer]
-   if not peer or p[9]~=peer.id or p[10]~=peer.incarnation then busy=false;return fail('foreign_receipt')end
-   local called,ok,status=pcall(gate.ack,gate,peer,event)
-   if not called or not ok or not check()then busy=false;return fail('gate_ack')end
+   if not peer or parts[9]~=peer.id or parts[10]~=peer.incarnation then
+    busy=false
+    return fail('foreign_receipt')
+   end
+   local called,accepted,status=pcall(gate.ack,gate,peer,event)
+   if not called or not accepted or not check() then
+    busy=false
+    return fail('gate_ack')
+   end
    next_peer=next_peer+1
    if status=='pending' and next_peer<=#members then
-    local sent=emit({'PARTIAL',id[1],id[2],id[3],id[4],peer.id,peer.incarnation});busy=false
-    if not sent then return fail('partial_send')end;return true
+    local sent=emit({'PARTIAL',event_identity[1],event_identity[2],event_identity[3],event_identity[4],peer.id,peer.incarnation})
+    busy=false
+    if not sent then return fail('partial_send') end
+    return true
    end
-   if status~='released' or next_peer~=#members+1 then busy=false;return fail('gate_release')end
-   phase='await_source_ack';busy=false;return true
+   if status~='released' or next_peer~=#members+1 then
+    busy=false
+    return fail('gate_release')
+   end
+   phase='await_source_ack'
+   busy=false
+   return true
   end
-  busy=false;return fail('unexpected_packet')
+  busy=false
+  return fail('unexpected_packet')
  end
- function api:source_acked(epoch,seq,index)
-  if busy or phase~='await_source_ack' or not check() or epoch~=event.epoch or seq~=event.sequence or index~=event.index then return fail('invalid_source_ack')end
-  busy=true;local id=identity();local peer=members[#members]
-  local called,ok=pcall(gate.source_acked,gate,epoch,seq,index)
-  if not called or not ok or not check() then busy=false;return fail('gate_source_ack')end
-  if not emit({'SOURCE_ACKED',id[1],id[2],id[3],id[4],peer.id,peer.incarnation})then busy=false;return fail('source_ack_send')end
-  phase='await_rearm';busy=false;return true
+ function api:source_acked(epoch,sequence,index)
+  if busy or phase~='await_source_ack' or not check() or epoch~=event.epoch or
+     sequence~=event.sequence or index~=event.index then
+   return fail('invalid_source_ack')
+  end
+  busy=true
+  local event_identity=identity()
+  local peer=members[#members]
+  local called,accepted=pcall(gate.source_acked,gate,epoch,sequence,index)
+  if not called or not accepted or not check() then
+   busy=false
+   return fail('gate_source_ack')
+  end
+  if not emit({'SOURCE_ACKED',event_identity[1],event_identity[2],event_identity[3],event_identity[4],peer.id,peer.incarnation}) then
+   busy=false
+   return fail('source_ack_send')
+  end
+  phase='await_rearm'
+  busy=false
+  return true
  end
  function api:tick()
   if busy or phase=='idle' or phase=='failed' then return fail('unexpected_tick')end
