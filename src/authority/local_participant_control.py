@@ -14,6 +14,7 @@ import time
 
 _HEX = re.compile(r'[0-9a-f]{32}\Z')
 _MAX_ID = 9007199254740991
+_MAX_QUEUED_PACKETS = 4096
 
 
 class LocalParticipantControl:
@@ -61,18 +62,42 @@ class LocalParticipantControl:
             self.fault = True
             raise RuntimeError('participant request IDs exhausted')
         self.fault = True
+        deadline = time.monotonic() + self.timeout
         number = self.next_id
         self.next_id += 1
         prefix = f'{self.lease}|{self.epoch}|{number}'
-        self.sock.sendto(f'CMD|{prefix}|{operation}'.encode('ascii'), self.peer)
         expected = f'RECEIPT|{prefix}|{operation}|confirmed'.encode('ascii')
         hello = f'HELLO|{self.lease}|{self.epoch}'.encode('ascii')
-        deadline = time.monotonic() + self.timeout
+        # The client repeats HELLO even after enrollment. A long idle period
+        # can fill the queue and cause the next command's receipt to be lost.
+        # This point check rejects non-HELLO traffic already queued from the
+        # peer; it cannot prevent a packet arriving after the queue is drained.
+        previous_timeout = self.sock.gettimeout()
+        try:
+            self.sock.setblocking(False)
+            for _ in range(_MAX_QUEUED_PACKETS):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('participant deadline expired before command')
+                try:
+                    data, peer = self.sock.recvfrom(769)
+                except BlockingIOError:
+                    break
+                if peer == self.peer and data != hello:
+                    raise RuntimeError('unexpected participant receipt before command')
+            else:
+                raise RuntimeError('participant receive queue did not drain')
+        finally:
+            self.sock.settimeout(previous_timeout)
+        if time.monotonic() >= deadline:
+            raise TimeoutError('participant deadline expired before command')
+        self.sock.sendto(f'CMD|{prefix}|{operation}'.encode('ascii'), self.peer)
         while time.monotonic() < deadline:
             try:
                 data, peer = self.sock.recvfrom(769)
             except socket.timeout:
                 continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError('participant state indeterminate')
             if peer != self.peer:
                 continue
             if data == hello:
