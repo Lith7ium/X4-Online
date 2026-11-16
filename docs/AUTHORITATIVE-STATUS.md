@@ -270,6 +270,14 @@ no ship pose or velocity was applied. Admission/checkpoint proof and client
 seed remain synthetic; the samples do not prove cross-process frame identity,
 visible movement or Internet gameplay. [Details](../tools/dev/AUTHORITY-SOURCE-MOTION-PAIR.md#fifth-attempt-two-source-samples).
 
+One separate paused Linux/Linux diagnostic compared saved ship index 1318 and
+eleven common station codes in `cluster_115_sector001_macro`. Both processes
+reported identical positions for all twelve sampled anchors; at least three
+stations met the declared noncollinearity threshold. The runner reported
+confirmed cleanup. This is bounded evidence for those paused local readings,
+not proof of cross-process actor identity, universal frame equality or frame
+compatibility after resume. [Details](../tools/dev/AUTHORITY-SAVED-FRAME-PAIR.md).
+
 The current motion diagnostic is not a full-fleet synchronization design. Its
 pair runner configures at most 1,024 client tracks, and its source bridge pulls
 one sample at a time with a default global minimum interval of 1/60 real second.
