@@ -275,3 +275,10 @@ receipt. The eventual owner must continue guarding its session and error log,
 and fence the session if a late event or any shutdown uncertainty occurs. Until
 the real X4 shutdown callback and router are implemented and verified, this
 STOP path is not a demonstrated basis for releasing a world pause or save.
+
+A separate offline `source_motion_shutdown.lua` gate now requires an idle
+bootstrap, ready sampler and caller-confirmed quiescence before closing both.
+It seals the event route and faults late or reentrant events. This gate is not
+installed in an X4 session: a future owner must actually route the unique MD
+event through it and keep checking its status and error log after stop. An
+in-flight saved-baseline bootstrap can no longer be closed as if it completed.
