@@ -23,18 +23,24 @@ class PlayerControlLiveTests(unittest.TestCase):
                          '[X4LAN] AUTH_MARKER load INSPECTED '+live.base.archive.MARKER,
                          '[X4LAN] AUTH_SECTOR_READ DONE slot=2 pilot=present order=Patrol state=started game=3 x=1 y=2 z=3',
                          tag+'pause_observed|'+fields]
-        self.controlled = ('START', 'CREATED', 'BEFORE', 'DISPATCH', 'FIRST', 'CONTROLLED', 'DONE')
+        self.controlled = ('START', 'CREATED', 'BEFORE', 'INTENT_TELEPORT',
+                           'LOCAL_CALL_RETURNED', 'DISPATCH', 'FIRST', 'CONTROLLED', 'DONE')
 
     @staticmethod
     def raw(lines):
         return ('\n'.join(lines)+'\n').encode()
 
     def check(self, steps, *, partial=False):
-        return live.validate(self.raw(self.baseline+[live.TAG+s for s in steps]), self.ticket, 2, partial=partial)
+        lines = []
+        for step in steps:
+            if step == 'DISPATCH':
+                lines += [live.MD_TAG+'ACTION_BEGIN', live.MD_TAG+'ACTION_RETURNED']
+            lines.append(live.TAG+step)
+        return live.validate(self.raw(self.baseline+lines), self.ticket, 2, partial=partial)
 
     def test_controlled_and_all_inconclusive_prefixes(self):
         outcomes = [(self.controlled, 'controlled')]
-        outcomes += [(self.controlled[:n]+('INCONCLUSIVE', 'DONE'), 'inconclusive') for n in range(1, 6)]
+        outcomes += [(self.controlled[:n]+('INCONCLUSIVE', 'DONE'), 'inconclusive') for n in range(1, 8)]
         for steps, expected in outcomes:
             with self.subTest(steps=steps):
                 for end in range(len(steps)):
@@ -50,7 +56,7 @@ class PlayerControlLiveTests(unittest.TestCase):
         cases = [('START',), ('CREATED',), ('START','BEFORE'), ('START','START'),
                  ('START','CREATED','INCONCLUSIVE','DONE','DONE'),
                  ('START','CREATED','INCONCLUSIVE','CONTROLLED','DONE'),
-                 ('START','CREATED','BEFORE','DISPATCH','FIRST','CONTROLLED','INCONCLUSIVE','DONE'),
+                 self.controlled[:-1]+('INCONCLUSIVE','DONE'),
                  self.controlled+('CREATED',), ('START extra',), ('START','ERROR FAULT')]
         for steps in cases:
             with self.subTest(steps=steps), self.assertRaises(ValueError):
@@ -60,6 +66,35 @@ class PlayerControlLiveTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             live.validate(self.raw(self.baseline+[live.TAG+'START', '[X4LAN] AUTH_PLAYER_CONTROL_LIVE ERROR FAULT']), self.ticket, 2, partial=True)
         self.assertIsNone(live.validate(b'incomplete', self.ticket, 2, partial=True))
+
+    def test_expression_parse_error_before_start_or_after_done_is_rejected(self):
+        parse = (r'[=ERROR=] 3.01 extensions\x4_lan_lab\md\authority_player_control_once.xml(36): '
+                 'Error while parsing expression: Maximum operator nesting level reached')
+        valid = self.baseline + [live.TAG+s for s in self.controlled[:5]] + [
+            live.MD_TAG+'ACTION_BEGIN', live.MD_TAG+'ACTION_RETURNED'] + [live.TAG+s for s in self.controlled[5:]]
+        for lines in ([parse] + self.baseline, valid + [parse],
+                      self.baseline + ['[=ERROR=] Maximum operator nesting level reached']):
+            with self.subTest(lines=lines), self.assertRaises(ValueError):
+                live.validate(self.raw(lines), self.ticket, 2, partial=True)
+        # Normal mention of expression parsing is not an engine parse error.
+        benign = valid + ['[General] Expression parser available for player control']
+        self.assertEqual(live.validate(self.raw(benign), self.ticket, 2)['outcome'], 'controlled')
+
+    def test_md_markers_must_follow_intent_and_precede_dispatch(self):
+        owner = lambda s: live.TAG+s
+        begin, returned = live.MD_TAG+'ACTION_BEGIN', live.MD_TAG+'ACTION_RETURNED'
+        prefix = [owner(s) for s in self.controlled[:5]]
+        suffix = [owner(s) for s in self.controlled[5:]]
+        # MD execution can finish while the Lua call is still returning.
+        interleaved = prefix[:4] + [begin, returned] + prefix[4:] + suffix
+        self.assertEqual(live.validate(self.raw(self.baseline+interleaved), self.ticket, 2)['outcome'], 'controlled')
+        bad = [prefix+suffix, [begin]+prefix+[returned]+suffix,
+               prefix+[returned,begin]+suffix, prefix+[begin,begin,returned]+suffix,
+               prefix+[begin]+suffix+[returned],
+               prefix+[owner('INCONCLUSIVE'),begin,owner('DONE')]]
+        for lines in bad:
+            with self.subTest(lines=lines), self.assertRaises(ValueError):
+                live.validate(self.raw(self.baseline+lines), self.ticket, 2)
 
     def test_install_private_hooks_and_protection(self):
         with tempfile.TemporaryDirectory() as temp:

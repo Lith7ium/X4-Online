@@ -115,7 +115,8 @@ end
 local app=M.new{enabled=true,timeout=cfg.authority_player_control_timeout,guard=guard,target=target,
  make=function(pre,post)return X4LAN_AUTHORITY_PLAYER_CONTROL_ONCE.new_x4{enabled=true,epoch=cfg.authority_sector_epoch,
   nonce=cfg.authority_player_control_nonce,timeout=math.min(10,cfg.authority_player_control_timeout/2),
-  expected_save_path=cfg.authority_read_save_path,pre_guard=pre,post_guard=post}end,
+  expected_save_path=cfg.authority_read_save_path,pre_guard=pre,post_guard=post,
+  teleport_phase=function(s)assert(s=='INTENT_TELEPORT' or s=='LOCAL_CALL_RETURNED');DebugError('[X4LAN] AUTH_PLAYER_CONTROL_LIVE '..s)end}end,
  log=function(s)DebugError('[X4LAN] AUTH_PLAYER_CONTROL_LIVE '..s)end}
 RegisterEvent('X4AuthorityPlayerControlOnce.Created',function(_,v)app:created(v)end)
 RegisterEvent('X4AuthorityPlayerControlOnce.Dispatched',function(_,v)app:dispatched(v)end)

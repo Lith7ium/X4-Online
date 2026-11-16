@@ -18,6 +18,7 @@ import authority_sector_read_live as base
 import authority_job_attach_live as readonly
 
 TAG = '[X4LAN] AUTH_PLAYER_CONTROL_LIVE '
+MD_TAG = '[X4LAN] AUTH_PLAYER_CONTROL_MD '
 MD = ('authority_player_control_once.xml',)
 UI = ('authority_player_control_once.lua', 'authority_player_control_live_owner.lua')
 # Preserve the original check even while the private runner temporarily installs
@@ -72,7 +73,9 @@ def fault(raw):
     lower = raw.lower()
     return (_BASE_FAULT(raw) or (TAG + 'ERROR').lower().encode() in lower or
             b'could not find suitable data type for conversion!' in lower or
-            b'invalid data types for arithmetic operation!' in lower)
+            b'invalid data types for arithmetic operation!' in lower or
+            b'error while parsing expression:' in lower or
+            b'maximum operator nesting level reached' in lower)
 
 
 def validate(raw, ticket, slot, *, partial=False):
@@ -88,13 +91,29 @@ def validate(raw, ticket, slot, *, partial=False):
     rows = [(i, line.split(TAG, 1)[1].strip()) for i, line in enumerate(lines) if TAG in line]
     # INCONCLUSIVE may terminate any valid prefix, including START alone.
     # A controlled result requires every receipt in the exact order.
-    controlled = ('START', 'CREATED', 'BEFORE', 'DISPATCH', 'FIRST', 'CONTROLLED', 'DONE')
-    valid = [controlled[:n] + ('INCONCLUSIVE', 'DONE') for n in range(1, 6)] + [controlled]
+    controlled = ('START', 'CREATED', 'BEFORE', 'INTENT_TELEPORT',
+                  'LOCAL_CALL_RETURNED', 'DISPATCH', 'FIRST', 'CONTROLLED', 'DONE')
+    valid = [controlled[:n] + ('INCONCLUSIVE', 'DONE') for n in range(1, 8)] + [controlled]
     values = tuple(value for _, value in rows)
     if not any(candidate[:len(values)] == values for candidate in valid):
         raise ValueError('invalid, duplicate or reordered diagnostic receipts')
     if rows and (len(pauses) != 1 or rows[0][0] <= pauses[0]):
         raise ValueError('diagnostic started before confirmed pause')
+    markers = [(i, line.split(MD_TAG, 1)[1].strip())
+               for i, line in enumerate(lines) if MD_TAG in line]
+    if tuple(value for _, value in markers) not in ((), ('ACTION_BEGIN',), ('ACTION_BEGIN', 'ACTION_RETURNED')):
+        raise ValueError('invalid, duplicate or reordered MD action markers')
+    indexes = {value: i for i, value in rows}
+    if markers:
+        if 'INTENT_TELEPORT' not in indexes or markers[0][0] <= indexes['INTENT_TELEPORT']:
+            raise ValueError('MD action before teleport intent')
+        if 'INCONCLUSIVE' in indexes and markers[-1][0] >= indexes['INCONCLUSIVE']:
+            raise ValueError('late MD action after inconclusive result')
+        if 'DONE' in indexes and markers[-1][0] >= indexes['DONE']:
+            raise ValueError('late MD action after completion')
+    if 'DISPATCH' in indexes:
+        if len(markers) != 2 or markers[1][0] >= indexes['DISPATCH']:
+            raise ValueError('dispatch lacks ordered MD action markers')
     observed = _BASE_CHECK(raw, ticket, slot, partial=partial)
     if observed is None:
         return None

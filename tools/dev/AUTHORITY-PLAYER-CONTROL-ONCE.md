@@ -83,3 +83,31 @@ suppresses the control claim. For safety the owner requires
 read; a different valid native container representation would cause a
 conservative failure. Whether teleport can finish while paused, the FFI/MD
 property correspondence and real gameplay remain unproven.
+
+## First native attempt and diagnostic fences
+
+The isolated Linux run `.local/authority-player-control-01` observed the
+expected marked load, pause, fixture creation and before-control read, then
+failed before any `DISPATCH` marker. The X4 engine log reported
+`Error while parsing expression: Maximum operator nesting level reached` for
+the Teleport guard while loading. Its effect on the later generic fault is not
+established, and the absence of `DISPATCH` does not establish whether the local
+UI request or MD action was attempted. `success=false`, no checkpoint was
+requested, and the supervisor reported no remaining owned processes.
+
+The MD conditions are now decomposed into shorter nested guards while retaining
+the same checks; XML schema validity alone does not validate X4 expression
+execution. The Lua owner logs fixed `INTENT_TELEPORT` before calling the local
+UI dispatch function and `LOCAL_CALL_RETURNED` when that function returns. The
+MD cue logs fixed `ACTION_BEGIN` and `ACTION_RETURNED` around its action.
+These markers identify execution points only: none is proof of delivery,
+completion, a seat change or player control. Engine expression-parsing/nesting
+errors and malformed, duplicate, late or missing required markers fail the
+live and final-log validation.
+
+The supervisor's external log polling is asynchronous with the X4 update owner:
+it cannot guarantee detecting an engine parsing error before that owner issues
+Create or Teleport. A separate explicit arm handshake would be required for a
+pre-mutation log check, with additional analysis of log visibility and process
+fencing; this harness does not implement such a handshake. The copied private
+world remains disposable if any error is detected.

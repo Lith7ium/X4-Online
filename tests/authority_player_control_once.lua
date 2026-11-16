@@ -5,6 +5,7 @@ local function rig(which)
  local o={enabled=true,epoch=epoch,nonce=nonce,timeout=10,
   guard=function(mode)assert(paused);calls[#calls+1]=mode;return t,(which=='jump' and mode=='post') and g+1 or g end,
   issue=function(s,op,a)issued[#issued+1]={s,op,a};if which=='reentrant' then app:refused() end;return true end,
+  teleport_phase=function(stage) if which=='phase_slow' and stage=='INTENT_TELEPORT' then t=11 end;if which=='phase_reentrant' and stage=='INTENT_TELEPORT' then app:refused() end end,
   validate=function()if which=='slow_validate' then t=11 end;return which~='invalid' end,inspect=function(_,_,flags) inspections=inspections+1;if which=='slow_final' and inspections==3 then t=11 end;if which=='inspect_error' then error('secret') end;return true end}
  app=M.new(o);return app,issued,calls,function(x)t=x end,function(x)paused=x end,function(x)g=x end
 end
@@ -30,3 +31,5 @@ local slow=ready('slow_final');assert(slow:tick());assert(slow:dispatched(nonce.
 local overdue,_,_,advance=rig();assert(overdue:tick());advance(11);assert(not overdue:created(created) and overdue:state()=='failed')
 local sv=rig('slow_validate');assert(sv:tick());local vok,vr=sv:created(created);assert(vok and vr.status=='inconclusive' and not vr.local_control_proven);assert(not sv:created(created))
 local jump,ij=ready('jump');assert(not jump:tick() and jump:state()=='failed');assert(ij[#ij][2]~='Teleport')
+local ps,ips=ready('phase_slow');local psok,psr=ps:tick();assert(psok and psr.status=='inconclusive' and ips[#ips][2]~='Teleport')
+local pr,ipr=ready('phase_reentrant');assert(not pr:tick() and pr:state()=='failed' and ipr[#ipr][2]~='Teleport')

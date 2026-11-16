@@ -3,7 +3,7 @@ local epoch,nonce=string.rep('a',32),string.rep('b',32);local events,requests,lo
 function RegisterEvent(n,f)assert(not events[n]);events[n]=f end
 function DebugError(s)logs[#logs+1]=s end
 function GetCurRealTime()return t end
-function AddUITriggeredEvent(s,o,a)requests[#requests+1]={s,o,a}end
+function AddUITriggeredEvent(s,o,a)if o=='Teleport' then assert(logs[#logs]:match(' INTENT_TELEPORT$')) end;requests[#requests+1]={s,o,a}end
 function ConvertStringToLuaID(s)local v=ffi.new('uint64_t',0);for d in s:gmatch('%d')do v=v*10+tonumber(d)end;return v end
 function ConvertIDTo64Bit(v)return ffi.new('uint64_t',v)end
 function GetComponentData(_,a,b,c)if a=='owner'then return 'player'end;assert(a=='isdocked' and b=='isdocking' and c=='isinternallystored');return false,false,false end
@@ -18,7 +18,7 @@ X4LAN_PLAYER_CONTROL_LIVE_TICK();assert(requests[#requests][2]=='Create')
 if arg[2]=='timeout' then t=11;X4LAN_PLAYER_CONTROL_LIVE_TICK();X4LAN_PLAYER_CONTROL_LIVE_TICK();assert(logs[#logs-1]:match(' INCONCLUSIVE$'));send('Created',nonce..'|'..epoch..'|0x20000000000001|0xb');assert(logs[#logs]:match(' ERROR FAULT$'));return end
 if arg[2]=='bad_nonce' then send('Created',string.rep('c',32)..'|'..epoch..'|0x20000000000001|0xb');assert(logs[#logs]:match(' ERROR FAULT$'));return end
 send('Created',nonce..'|'..epoch..'|0x20000000000001|0xb');X4LAN_PLAYER_CONTROL_LIVE_TICK()
-send('ReadResult',row(0,'0|0|0|1'));if arg[2]=='npc_lost' then fake.TestDropNPC();assert(not pcall(X4LAN_PLAYER_CONTROL_LIVE_TICK));assert(logs[#logs]:match(' ERROR FAULT$'));assert(requests[#requests][2]~='Teleport');return end;X4LAN_PLAYER_CONTROL_LIVE_TICK();assert(requests[#requests][2]=='Teleport')
+send('ReadResult',row(0,'0|0|0|1'));if arg[2]=='npc_lost' then fake.TestDropNPC();assert(not pcall(X4LAN_PLAYER_CONTROL_LIVE_TICK));assert(logs[#logs]:match(' ERROR FAULT$'));assert(requests[#requests][2]~='Teleport');return end;X4LAN_PLAYER_CONTROL_LIVE_TICK();assert(requests[#requests][2]=='Teleport' and logs[#logs]:match(' LOCAL_CALL_RETURNED$'))
 if arg[2]=='rogue' then fake.TestRogue();send('Dispatched',nonce..'|'..epoch);assert(logs[#logs]:match(' ERROR FAULT$'));return end
 if arg[2]~='inconclusive' then fake.TestMove() end
 send('Dispatched',nonce..'|'..epoch);X4LAN_PLAYER_CONTROL_LIVE_TICK()

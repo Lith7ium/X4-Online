@@ -7,6 +7,8 @@ function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(token(o.epoch) and token(o.nonce) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
  for _,n in ipairs({'guard','issue','validate','inspect'}) do assert(type(o[n])=='function') end
+ assert(o.teleport_phase==nil or type(o.teleport_phase)=='function')
+ local teleport_phase=o.teleport_phase or function() end
  local phase='new';local mode='pre';local failed=false;local busy=false;local t0,last,pre_game,post_game,target,sector,owner
  local api={};local expired=false;local done
  local function fault() failed=true;phase='failed';return false,'fault' end
@@ -49,7 +51,11 @@ function M.new(o)
    elseif phase=='teleport' then
     -- Before issue: deliberately leave the old player-context guard; retain the
     -- global paused/process guard and establish a new post-teleport time baseline.
-    mode='post';phase='dispatching';check(true);if not expired then issue('Teleport') end
+    mode='post';phase='dispatching';check(true)
+    if not expired then
+     teleport_phase('INTENT_TELEPORT');assert(not failed);check(true)
+     if not expired then issue('Teleport');assert(not failed);teleport_phase('LOCAL_CALL_RETURNED') end
+    end
    elseif phase=='read_one' then phase='waiting_one';issue('Read',1)
    elseif phase=='read_two' then phase='waiting_two';issue('Read',2)
    else assert(phase=='creating' or phase=='waiting_pre' or phase=='dispatching' or phase=='waiting_one' or phase=='waiting_two') end
