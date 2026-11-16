@@ -62,9 +62,9 @@ were not retained as independent evidence.
 The diagnostic used a real local TCP host/participant delivery path and local
 UDP to the isolated X4 owner. The server engine, its admission claim and
 checkpoint, and the submitted ship descriptor were synthetic; the checkpoint
-offered by that synthetic coordinator was not supplied to X4. X4 separately
-loaded the pinned census checkpoint under the isolated load/marker guard,
-without independent proof of exact X4 file consumption. The test descriptor
+offered by that synthetic coordinator was not supplied to X4. X4 was separately requested to load the staged census checkpoint; the
+expected marker and pause were observed. Exact X4 file consumption was not
+independently proven. The test descriptor
 used macro `ship_gen_m_tugboat_01_a_macro`, faction `pioneers`, artificial
 seed 7183, synthetic local coordinates `(-400, 100000, 500)` and an approximate
 level-1 loadout. It did not originate from a live server NPC event.
