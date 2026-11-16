@@ -52,6 +52,7 @@ function M.new(o)
   end);busy=false;if not ok then return fail('response')end;return true
  end
  function api:tick()if busy or not check()then return fail('guard')end;return true end
+ function api:expected_request()return state=='pending' and pending.id or nil end
  function api:state()return state end
  function api:close()if busy then return fail('close')end;state='closed';pending=nil;deadline=nil;return true end
  return api

@@ -5,6 +5,10 @@ local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(vo
 local C=ffi.C
 local failed=false;local resume_used=false;local source,control,control_net,next_hello,previous=nil,nil,nil,0,nil
 local motion,sampler,source_descriptor;local pending_confirmed,confirmed={},{}
+-- Optional caller-supplied baseline fence and candidates; never infer a shared
+-- checkpoint from a local marker. Actor references remain in this process.
+local saved,bootstrap,staged;local saved_bindings={}
+local session_busy,router_busy=false,false
 local stage='initial'
 local components={job=true,motion_ipc=true,sampler=true,router=true,session=true}
 local stages={initial=true,control_update=true,job_tick=true,motion_tick=true,sampler_register=true,
@@ -36,9 +40,21 @@ local function mark(state)
 end
 function X4LAN_SOURCE_SINGLE_JOB_TICK()
  if failed then return end
+ if saved and (session_busy or router_busy) then fail('session','event');return end
+ session_busy=true
  local ok=pcall(function()
   assert(C.IsPlayerValid())
   if not source then
+   if cfg.authority_source_saved_baseline~=nil then
+    local s=cfg.authority_source_saved_baseline
+    assert(cfg.authority_source_motion_enabled==true and type(s)=='table' and s.enabled==true and
+     type(s.guard)=='function' and type(s.next_index)=='function' and type(s.nonce)=='string' and
+     #s.nonce==32 and s.nonce:match('^[0-9a-f]+$') and
+     s.nonce:sub(1,16)~=cfg.authority_source_descriptor_request:sub(1,16) and
+     s.nonce:sub(1,16)~=cfg.authority_source_motion_nonce:sub(1,16))
+    saved={guard=s.guard,next_index=s.next_index,nonce=s.nonce,
+     epoch=cfg.authority_source_epoch,baseline=cfg.authority_source_baseline}
+   end
    local engine=assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.new({enabled=true,test_profile='45841'}))
    local lib=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
    control_net=assert(lib.open('127.0.0.1',cfg.authority_source_control_port))
@@ -74,7 +90,22 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
      binding_guard=function(row,actor)
       local known=confirmed[row.index]
       return known~=nil and known.sequence==row.sequence and known.actor==actor
-     end,fault=fault('sampler')}))
+     end,
+     saved_baseline_limit=saved and saved.baseline or nil,
+     saved_baseline_guard=saved and function(row,actor)
+      local known=saved_bindings[row.index]
+      return not failed and row.epoch==saved.epoch and known~=nil and known.actor==actor and saved.guard(saved.epoch,saved.baseline)==true and not failed
+     end or nil,fault=fault('sampler')}))
+    if saved then
+     bootstrap=assert(X4LAN_SAVED_BASELINE_SOURCE_BOOTSTRAP.new_x4({enabled=true,
+      epoch=saved.epoch,baseline=saved.baseline,nonce=saved.nonce,
+      timeout=cfg.authority_source_host_timeout,expected_save_path=cfg.authority_load_save_path,
+      resolve=X4LAN_RESOLVE_STRING,guard=function()return not failed end,baseline_guard=saved.guard,
+      complete=function(index,actor,sector)
+       if failed or staged or saved_bindings[index] then return false end
+       staged={index=index,actor=actor,sector=sector};return true
+      end}))
+    end
     owner_cfg.on_confirmed=function(row,actor)
      if failed or #pending_confirmed>=1024 or confirmed[row.index] then return false end
      confirmed[row.index]={sequence=row.sequence,actor=actor}
@@ -85,16 +116,27 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
     end
     assert(RegisterEvent('X4AuthorityJobDescriptorProbe.Result',function(_,value)
      if failed then return end
+     if saved and (session_busy or router_busy) then fail('router','event');return end
+     router_busy=true
      local ok=pcall(function()
       assert(type(value)=='string');local id=value:match('^([0-9a-f]+)|')
       if sampler:expected_request()==id and id~=nil then
        assert(motion:requested());local accepted,snapshot=sampler:event(value);assert(accepted)
        assert(motion:complete(snapshot))
+      elseif bootstrap and bootstrap:expected_request()==id and id~=nil then
+       assert(not staged and bootstrap:event(value)==true and bootstrap:state()=='idle' and not failed)
+       local item=assert(staged);staged=nil
+       assert(not saved_bindings[item.index] and #pending_confirmed<1024 and
+        saved.guard(saved.epoch,saved.baseline)==true and not failed)
+       saved_bindings[item.index]={actor=item.actor}
+       pending_confirmed[#pending_confirmed+1]={row={epoch=saved.epoch,index=item.index,
+        classification='saved_baseline'},actor=item.actor}
       elseif source and source:expected_descriptor()==id and id~=nil then
        assert(source_descriptor);source_descriptor(nil,value)
        assert(not failed and source:state()~='failed')
       else error('unexpected descriptor response')end
      end)
+     router_busy=false
      if not ok then fail('router','event')end
     end)~=false)
     assert(motion:start())
@@ -119,6 +161,14 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
   if source:state()~='done' then stage='job_tick';assert(source:tick()) end
   if motion then
    stage='motion_tick';assert(motion:tick())
+   if bootstrap and not C.IsGamePaused() then
+    assert(bootstrap:tick() and not failed)
+    if bootstrap:state()=='idle' and #pending_confirmed==0 then
+     local index=saved.next_index()
+     assert(not failed)
+     if index~=nil then assert(bootstrap:begin(index) and not failed) end
+    end
+   end
    if sampler:state()=='ready' and #pending_confirmed>0 and not C.IsGamePaused() then
     stage='sampler_register';local item=table.remove(pending_confirmed,1);assert(sampler:register(item.row,item.actor))
    end
@@ -132,5 +182,6 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
   local current=source:state()
   if current~=previous then previous=current;mark(current) end
  end)
+ session_busy=false
  if not ok then fail('session','assertion') end
 end

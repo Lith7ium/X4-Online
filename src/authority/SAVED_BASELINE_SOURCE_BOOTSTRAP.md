@@ -32,3 +32,19 @@ the saved bound. The owner must establish and fence those separately. This
 module neither enumerates the whole universe nor connects a session, transport,
 interest subscription or existing client. Its focused tests simulate MD and
 X4 ABI calls; there has been no native bootstrap run.
+
+The experimental source session now has a default-off **local** adapter. An
+owner that supplies the bootstrap module and a trusted
+`authority_source_saved_baseline` configuration table can pass `enabled=true`,
+a fresh `nonce`, a `guard(epoch, baseline)`, and a nonblocking `next_index()`
+that returns one selected index or nil. The session freezes these functions and
+baseline values, requires a distinct descriptor nonce prefix, routes replies by
+outstanding request ID and stages the callback. Only after `event` succeeds and
+the baseline guard passes again does the next session update register that
+local actor with the existing saved-baseline sampler. A failure fences the
+session; the adapter does not retry or invent a job confirmation. Candidates,
+the true checkpoint identity and its ongoing fence remain caller duties. The
+private installer does not configure this route. It does not connect the
+registered index to the TCP tracker or implement player/map interest selection.
+The coupled offline test uses the real session, bootstrap and sampler with a
+fake X4 ABI and simulated MD; no native game behavior is established.
