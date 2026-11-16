@@ -556,6 +556,20 @@ This option is off by default and is not a multiplayer gameplay path. Its
 component tests use simulated X4 behavior; a native result must be recorded
 separately.
 
+Two isolated Linux runs attempted this delivery experiment on 2026-11-16.
+`.local/authority-motion-client-once-01` stopped before launching client X4:
+the motion installer rejected ticket identifiers encoded with Lua decimal
+byte escapes. The installer now accepts and validates those identifiers; a
+focused offline test uses the actual recovery-client installation sequence.
+`.local/authority-motion-client-once-02` passed client installation and logged
+the client's marked load, registry startup and pause. It later failed with
+`source diagnostic deadline` after server resume. Its result contains no
+confirmed motion samples or receipts. The server log also reports X4 rejecting
+an incorrectly passed argument count in candidate inspection; that path was
+therefore reached, but the log alone does not prove it caused the timeout.
+Both results report no owned X4 processes remaining. Neither run proves
+delivery, visible movement, Windows or Internet gameplay.
+
 An isolated offline benchmark used the Source IPC lifecycle over local UDP/TCP
 with a simulated source and client, real pidfd guard transport and the four
 existing `authority-witness-join-once-06` compressed saves (26,183,913 and

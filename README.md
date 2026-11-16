@@ -10,10 +10,12 @@ one player faction and one company account; separate factions and accounts are
 deferred.
 
 **Experimental status:** the new components are prototypes and are not a
-playable authoritative multiplayer implementation. Position replication,
-client-side high-attention authority, native server saving/recovery, and
-Windows/Linux sessions have not been demonstrated. The original lockstep work
-below remains the historical base of this branch. See
+playable authoritative multiplayer implementation. An isolated Linux test has
+exercised a marked server save, recovery, one local client join and a later
+save; it is not a gameplay or cross-platform acceptance test. Position
+replication, client-side high-attention authority and Windows/Linux sessions
+remain unproven. The original lockstep work below remains the historical base
+of this branch. See
 [the investigation](docs/AUTHORITY-INVESTIGATION.md) for evidence and limits.
 
 ## Original lockstep project
@@ -80,6 +82,8 @@ test harness; the Windows player and UI feature set has not been ported by that 
 
 | Path | What |
 |---|---|
+| `src/authority/` | Experimental world coordination, checkpoints and motion/identity prototypes |
+| `tools/dev/authority_*` | Internal authority experiments and isolated Linux diagnostics; see `AUTHORITY-RECOVERED-LOOPBACK-SERVER.md` for the current recovery probe |
 | `src/native/engine/` | The native gate (`lockstep_gate.c` plus headers), its C tests, and the Linux gate port in `linux/` |
 | `src/native/portable_math/` | Bit-exact math shared by the Windows and Linux gates |
 | `src/lockstep/launcher/` | `x4ls`: sessions, snapshots, game views, profiles |

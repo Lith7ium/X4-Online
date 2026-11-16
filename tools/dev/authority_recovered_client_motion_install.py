@@ -2,7 +2,8 @@
 
 No game, helper, listener or socket is started. The caller owns the fourth UDP
 FD handoff, all process/checkpoint/STOP fences, final log checks and redaction.
-This is not yet wired into the recovered-server supervisor.
+The recovered-server supervisor uses this only in its opt-in private diagnostic;
+it is not a gameplay or cross-platform client.
 """
 import math
 import os

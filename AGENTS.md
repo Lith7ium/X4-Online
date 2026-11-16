@@ -1,7 +1,9 @@
 # Working on this repository
 
-- The project is deterministic lockstep for X4 9.00. Read README.md, then
-  docs/ARCHITECTURE.md; read docs/LAUNCHER.md before running X4.
+- This branch explores an authoritative-world alternative for X4 9.00 on top
+  of the existing lockstep project. Read README.md and
+  docs/AUTHORITY-INVESTIGATION.md; docs/ARCHITECTURE.md describes the original
+  lockstep design. Read docs/LAUNCHER.md before running X4.
 - Never load, write or delete the player's normal X4 profile, saves or settings.
   Use the launcher's disposable profiles. Never modify or redistribute Egosoft
   files; the gate patches memory only and must keep failing closed on any other
