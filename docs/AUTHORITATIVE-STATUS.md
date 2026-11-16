@@ -20,6 +20,12 @@ leaves or disconnects, another player present in that area should take over;
 if none is present, responsibility returns to the server. The handover
 protocol, last-confirmed-state recovery and conflict fencing are not yet
 implemented or proven.
+An opt-in reverse-direction diagnostic now pulls a locally sampled ship from a
+designated test client over the existing TCP/UDP owners. A coupled offline test
+uses the actual Lua reader and local sockets, with a LuaJIT test process in
+place of X4 and simulated admission, game state and test grant. It does not
+implement a real authority assignment, server-world write or handover. See
+[the diagnostic notes](../src/authority/CLIENT_AUTHORITY_TCP_MOTION.md).
 Static inspection of the installed X4 map UI found candidates for detecting
 the open map, its focus and rendered components. The map's `currentsector`
 follows focus/selection and has not been shown to cover everything visible

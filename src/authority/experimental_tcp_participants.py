@@ -83,7 +83,7 @@ class ExperimentalTCPParticipants:
         finally:
             self._busy = False
 
-    def _exchange(self, conn, peer, others, raw, expected, deadline, check=None):
+    def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None):
         control = self._host._control
         waiting = [conn, *others]
         sent = 0; data = b''
@@ -116,11 +116,20 @@ class ExperimentalTCPParticipants:
                         except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
                             raise ValueError('invalid participant receipt') from error
                         choices=expected if type(expected) is tuple else (expected,)
-                        if (not choices or any(type(x) is not dict for x in choices) or type(answer) is not dict or set(answer) != set(choices[0]) or
+                        if (type(answer) is not dict or
                                 type(answer.get('version')) is not int or
                                 type(answer.get('request_id')) is not int or
-                                type(answer.get('connection_handle')) is not int or not any(answer==choice for choice in choices)):
+                                type(answer.get('connection_handle')) is not int):
                             raise ValueError('unexpected participant receipt')
+                        if validate_answer is None:
+                            if not choices or any(type(x) is not dict for x in choices) or set(answer)!=set(choices[0]) or not any(answer==choice for choice in choices):
+                                raise ValueError('unexpected participant receipt')
+                        else:
+                            if expected is not None or not callable(validate_answer):raise ValueError('invalid dynamic receipt validator')
+                            frozen=json.dumps(answer,sort_keys=True,separators=(',',':'),allow_nan=False)
+                            if validate_answer(answer) is not True or json.dumps(answer,sort_keys=True,separators=(',',':'),allow_nan=False)!=frozen:
+                                raise ValueError('unexpected participant receipt')
+                            if check is not None:check()
                         if time.monotonic() >= deadline:
                             raise TimeoutError('participant receipt arrived after deadline')
                         if select.select(waiting, [], waiting, 0)[::2] != ([], []):

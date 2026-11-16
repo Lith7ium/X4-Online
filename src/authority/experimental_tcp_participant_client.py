@@ -23,7 +23,7 @@ class ExperimentalTCPParticipantClient:
     The controller must bound its own synchronous pause/resume calls. This
     adapter checks its deadline after a call but cannot interrupt that call.
     """
-    def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None, apply_motion_once=None, preflight_motion=None):
+    def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None, apply_motion_once=None, preflight_motion=None, authority_grant=None, authority_guard=None, pull_authority_motion=None):
         if (enabled is not True or type(conn) is not socket.socket or conn.family != socket.AF_INET or
                 conn.proto not in (0, socket.IPPROTO_TCP) or
                 conn.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM or
@@ -49,9 +49,17 @@ class ExperimentalTCPParticipantClient:
         if apply_motion_once is not None and not callable(apply_motion_once):
             raise ValueError('one-shot motion writer must be callable')
         if preflight_motion is not None and not callable(preflight_motion):raise ValueError('motion preflight must be callable')
+        if any(v is not None for v in (authority_grant,authority_guard,pull_authority_motion)):
+            from .experimental_tcp_client_authority_motion import grant_value
+            if not callable(authority_guard) or not callable(pull_authority_motion):raise ValueError('authority pull needs guard and callback')
+            authority_grant=grant_value(authority_grant)
+            if authority_grant['session_epoch']!=epoch:raise ValueError('authority grant session differs')
         self._apply_job=apply_job;self._job_incarnation=None;self._last_job=None
         self._apply_motion=apply_motion;self._motion_incarnation=None;self._motion_tracks={};self._motion_current={}
         self._apply_motion_once=apply_motion_once;self._preflight_motion=preflight_motion;self._motion_preflight=None;self._motion_write_attempted=False
+        self._authority_grant=authority_grant;self._authority_guard=authority_guard;self._pull_authority_motion=pull_authority_motion
+        self._authority_grant_wire=None if authority_grant is None else json.dumps(authority_grant,sort_keys=True,separators=(',',':'))
+        self._authority_request=0;self._authority_sequence=0;self._authority_time=None
         self._failed = self._closed = self._busy = False
 
     def _fault(self):
@@ -93,6 +101,8 @@ class ExperimentalTCPParticipantClient:
             return self._motion_apply(command)
         if type(command) is dict and command.get('kind')=='motion_preflight':
             return self._motion_preflight_command(command)
+        if type(command) is dict and command.get('kind')=='authority_motion_pull':
+            return self._authority_motion_pull(command)
         fields = {'version', 'kind', 'epoch', 'connection_handle', 'request_id', 'operation'}
         if (type(command) is not dict or set(command) != fields or
                 type(command['version']) is not int or command['version'] != 1 or
@@ -121,6 +131,7 @@ class ExperimentalTCPParticipantClient:
             raise ValueError('invalid job command')
         event=job_event(command['event'])
         if (command['request_id']!=event['sequence'] or
+                self._authority_grant is not None and self._authority_grant['incarnation']!=command['incarnation'] or
                 self._motion_incarnation is not None and self._motion_incarnation!=command['incarnation'] or
                 self._job_incarnation is not None and self._job_incarnation!=command['incarnation'] or
                 self._last_job is not None and (event['epoch'],event['generation'])!=self._last_job[:2] or
@@ -149,7 +160,8 @@ class ExperimentalTCPParticipantClient:
             command['connection_handle']!=self._handle or command.get('session_epoch')!=self._epoch or
             type(command.get('incarnation')) is not str or not re.fullmatch(r'[0-9a-f]{32}',command['incarnation']) or
             self._motion_incarnation is not None and self._motion_incarnation!=command['incarnation'] or
-            self._job_incarnation is not None and self._job_incarnation!=command['incarnation']):
+            self._job_incarnation is not None and self._job_incarnation!=command['incarnation'] or
+            self._authority_grant is not None and self._authority_grant['incarnation']!=command['incarnation']):
             raise ValueError('invalid motion command')
         despawn=command['kind']=='motion_despawn'
         sample=motion_value(command['sample'],despawn=despawn)
@@ -225,6 +237,42 @@ class ExperimentalTCPParticipantClient:
         if status=='READY':self._motion_preflight=(key,sample['sequence'],digest)
         reply={k:command[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
         reply.update(kind='motion_preflight_receipt',status=status.lower(),sample_sha256=digest)
+        self._out=json.dumps(reply,sort_keys=True,separators=(',', ':'),allow_nan=False).encode()+b'\n'
+
+    def _authority_motion_pull(self,command):
+        from .experimental_tcp_client_authority_motion import grant_value
+        from .experimental_tcp_motion import motion_value, motion_digest
+        fields={'version','kind','connection_handle','session_epoch','incarnation','request_id','grant'}
+        if (self._authority_grant is None or set(command)!=fields or type(command.get('version')) is not int or command['version']!=1 or
+            json.dumps(self._authority_grant,sort_keys=True,separators=(',',':'))!=self._authority_grant_wire or
+            type(command.get('connection_handle')) is not int or command['connection_handle']!=self._handle or
+            command.get('session_epoch')!=self._epoch or command.get('incarnation')!=self._authority_grant['incarnation'] or
+            self._job_incarnation is not None and self._job_incarnation!=command['incarnation'] or
+            self._motion_incarnation is not None and self._motion_incarnation!=command['incarnation'] or
+            type(command.get('request_id')) is not int or command['request_id']!=self._authority_request+1 or
+            command['request_id']>MAX_INTEGER or grant_value(command.get('grant'))!=self._authority_grant):
+            raise ValueError('invalid authority pull command')
+        def guard():
+            probe=copy.deepcopy(self._authority_grant);state=(self._authority_request,self._authority_sequence,self._authority_time)
+            if (self._authority_guard(probe) is not True or json.dumps(probe,sort_keys=True,separators=(',',':'))!=self._authority_grant_wire or
+                json.dumps(self._authority_grant,sort_keys=True,separators=(',',':'))!=self._authority_grant_wire or
+                state!=(self._authority_request,self._authority_sequence,self._authority_time)):
+                raise RuntimeError('authority grant guard changed')
+            self._within()
+        self._quiet();guard();self._authority_request=command['request_id']
+        raw=self._pull_authority_motion();sample=None if raw is None else motion_value(raw)
+        digest=None if sample is None else motion_digest(sample);guard();self._quiet()
+        if sample is not None:
+            if motion_digest(raw)!=digest:raise ValueError('authority sample changed during guard')
+            if (sample['epoch']!=self._authority_grant['epoch'] or sample['generation']!=self._authority_grant['generation'] or
+                sample['index']!=self._authority_grant['index'] or sample['sector_macro']!=self._authority_grant['sector_macro'] or
+                sample['sequence']!=self._authority_sequence+1 or
+                (self._authority_time is None and sample['velocity'] is not None) or
+                (self._authority_time is not None and sample['source_time']<=self._authority_time)):
+                raise ValueError('foreign or stale authority sample')
+            self._authority_sequence=sample['sequence'];self._authority_time=sample['source_time']
+        reply={k:command[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id','grant')}
+        reply.update(kind='authority_motion_result',sample=sample,sample_sha256=digest)
         self._out=json.dumps(reply,sort_keys=True,separators=(',', ':'),allow_nan=False).encode()+b'\n'
 
     def poll(self, timeout=0):
