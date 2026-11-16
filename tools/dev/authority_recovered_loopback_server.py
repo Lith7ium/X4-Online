@@ -151,16 +151,33 @@ def diagnostic_source_candidates(args, witness_join, index):
     return tuple(values)
 
 
-def finish_source_diagnostic(active, active_clients, guard_context, *, verify, probe):
+def diagnostic_client_motion(args, source_enabled):
+    enabled = getattr(args, 'diagnostic_client_motion', False)
+    if type(enabled) is not bool or (enabled and source_enabled is not True):
+        raise ValueError('client motion requires a private source diagnostic')
+    return enabled
+
+
+def finish_source_diagnostic(active, active_clients, guard_context, *, verify, probe,
+                             verify_after=None, require_client_receipts=False):
     """Fence a retained client until the source probe has cooperatively stopped."""
-    if active_clients or len(guard_context)!=1 or not callable(verify) or not callable(probe):
+    if (active_clients or len(guard_context)!=1 or not callable(verify) or not callable(probe) or
+            (verify_after is not None and not callable(verify_after)) or type(require_client_receipts) is not bool):
         raise ValueError('single source diagnostic context required')
     active_clients.append(active)
     verify()
-    observation=probe(*guard_context[0],active)
+    observation = probe(*guard_context[0], active)
     if (type(observation) is not dict or observation.get('source_stopped_before_disconnect') is not True):
         raise RuntimeError('source stop not confirmed before client finish')
-    verify()
+    if require_client_receipts:
+        receipts = observation.get('client_receipt_sample_sha256')
+        if (observation.get('client_motion_receipts_confirmed') is not True
+                or observation.get('client_worker_stop_confirmed') is not True
+                or type(receipts) is not list or len(receipts) != 2
+                or any(type(value) is not str or not re.fullmatch(r'[0-9a-f]{64}', value)
+                       for value in receipts)):
+            raise RuntimeError('two client receipts and worker stop required')
+    (verify if verify_after is None else verify_after)()
     active_clients.remove(active)
     return observation,active.finish()
 
@@ -431,6 +448,7 @@ def run(args):
         source_index=diagnostic_source_index(args,witness_join)
         source_candidates=diagnostic_source_candidates(args,witness_join,source_index)
         source_enabled=source_index is not None or source_candidates is not None
+        client_motion=diagnostic_client_motion(args,source_enabled)
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage)
@@ -709,17 +727,30 @@ def run(args):
                     expected_baseline=baseline, cancel_check=cancel_diagnostic,
                     check_base=base_diagnostic if source_enabled else None,
                     check_server_base=verify if source_enabled else None,
-                    witness_guard_ready=guard_ready if source_enabled else None)
+                    witness_guard_ready=guard_ready if source_enabled else None,
+                    client_motion={'indices':list(source_candidates or (source_index,)),
+                        'generation':source_settings['generation'],'timeout':25} if client_motion else None)
                 if source_enabled:
                     import authority_recovered_source_probe
+                    expected_members=tuple(world.session.ready_players)
+                    def verify_motion_stopped():
+                        cancel_diagnostic();verify()
+                        if (diagnostic.check_motion_stopped() is not True or world.session.state!='running' or
+                                world.session.pending is not None or tuple(world.session.ready_players)!=expected_members or
+                                tuple(world.session.players)!=expected_members):
+                            raise RuntimeError('stopped client or membership changed')
+                        verify();cancel_diagnostic()
                     def run_source(guard,saved,pump,active):
                         source_context=dict(source_settings,epoch=guard.status[1],baseline=guard.status[2])
                         return authority_recovered_source_probe.run(sock=source_sock,
                             settings=source_context,index=source_index,baseline=saved,guard=guard,pump=pump,
                             active=active,host=host,world=world,identity=identity,verify=verify_diagnostic,
-                            verify_process=check,candidate_indices=source_candidates)
+                            verify_process=check,candidate_indices=source_candidates,client_motion=client_motion,
+                            verify_stopped=verify if client_motion else None)
                     result['source_diagnostic'],diagnostic_result=finish_source_diagnostic(
-                        diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source)
+                        diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source,
+                        verify_after=verify_motion_stopped if client_motion else None,
+                        require_client_receipts=client_motion)
                 if count != 1:
                     baseline = diagnostic_client.settle_departure(host, world, control, diagnostic.server_tcp, deadline, verify_diagnostic,
                         diagnostic_result['client_ticket'], diagnostic_result['client_loaded_marker'])
@@ -849,8 +880,9 @@ def main():
     parser.add_argument('--registry-witness',choices=('create','verify'),help='isolated paused diagnostic; never admit clients')
     parser.add_argument('--registry-witness-join',action='store_true',help='private one-client witness join experiment; not identity proof')
     source_options=parser.add_mutually_exclusive_group()
-    source_options.add_argument('--diagnostic-source-index',type=int,help='private saved-registry index to sample on the server only')
+    source_options.add_argument('--diagnostic-source-index',type=int,help='private saved-registry index to sample')
     source_options.add_argument('--diagnostic-source-candidates',type=int,nargs='+',help='bounded explicit indices to inspect for a private source sample')
+    parser.add_argument('--diagnostic-client-motion',action='store_true',help='also require two confirmed motion receipts by one private Linux client')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

@@ -16,6 +16,7 @@ import time
 
 import authority_recovered_remote_load_pair_live as combined
 import authority_recovery_tcp_join_live as recovery
+import authority_recovery_registry_witness as witness
 from authority.marker_evidence import verify_saved_marker
 from authority_helper_lifecycle import OwnedHelper
 from authority_tcp_native_worker import parse_json, read_line, send_frame
@@ -23,9 +24,55 @@ from authority_tcp_native_worker import parse_json, read_line, send_frame
 REGISTRY_READER = Path(__file__).resolve().with_name('authority_recovered_registry_reader.py')
 
 
+class ClientMotionErrorWatch(witness.ErrorWatch):
+    """Pin one append-only client log and scan incrementally through exit."""
+    TAGS=(b'[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR',b'[X4LAN] AUTH_PARTICIPANT ERROR',
+          b'Error while executing onEvent script for event: X4AuthoritySavedBaselineMotionBind.Result.',
+          b'Error while executing onEvent script for event: X4AuthorityReplicaMotionBind.Result.')
+    def poll(self):
+        try:super().poll()
+        except ValueError as error:raise ValueError('client motion log fault or replacement') from error
+        return True
+
+
 class ServerClient(combined.RecoveredRemoteParticipant):
     """Reuse the paired runner without ever closing the server's control."""
     cancel_check = None
+
+    def prepare_client_motion(self,case,profile,status,request,ticket):
+        """Install one private, bounded candidate probe before protected binds."""
+        import authority_recovered_client_motion_install as motion_install
+        if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
+                type(request) is not dict or set(request)!={'indices','generation','timeout'} or
+                type(ticket) is not dict):
+            raise ValueError('invalid retained client motion request')
+        excluded={self.lease,ticket['world_epoch'],ticket['attempt_id'],status[1],request['generation']}
+        def fresh():
+            value=secrets.token_hex(16)
+            while value in excluded:value=secrets.token_hex(16)
+            excluded.add(value);return value
+        sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        try:
+            sock.bind(('127.0.0.1',0))
+            settings={'port':sock.getsockname()[1],'indices':request['indices'],'generation':request['generation'],
+                      'timeout':request['timeout'],'lease':fresh(),'attempt':fresh(),'nonce':fresh(),'router_generation':fresh()}
+            installation=motion_install.install(case,profile,status,settings)
+        except BaseException:
+            sock.close();raise
+        self.motion_sock=sock;self._pin_motion_socket();self.motion_installation=installation
+        self.motion_worker_config={k:settings[k] for k in ('lease','attempt','generation','timeout')}
+        self.motion_worker_config['epoch']=status[1]
+        return list(installation.paths)
+
+    def redact(self):
+        errors=[];installation=getattr(self,'motion_installation',None)
+        if installation is not None:
+            try:installation.redact()
+            except BaseException as error:errors.append(error)
+            else:self.motion_installation=None
+        try:super().redact()
+        except BaseException as error:errors.append(error)
+        if errors:raise BaseExceptionGroup('client config redaction failed',errors)
 
     def pump_loading(self):
         if self.cancel_check is not None: self.cancel_check()
@@ -66,10 +113,13 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         for helper in reversed(self.helpers):
             try: helper.stop()
             except BaseException as error: errors.append(error)
-        for name in ('remote_ipc', 'ipc', 'client_tcp', 'second', 'sock'):
+        for name in ('remote_ipc', 'ipc', 'client_tcp', 'second', 'sock', 'motion_sock'):
             obj = getattr(self, name, None)
             if obj is not None:
-                try: obj.close()
+                try:
+                    if name=='ipc':self._close_owned_motion_ipc()
+                    elif name=='motion_sock':self._close_owned_motion_socket()
+                    else:obj.close()
                 except BaseException as error: errors.append(error)
                 else: setattr(self, name, None)
         self.fault = True
@@ -290,7 +340,7 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             processes, server_proc, server_started, server_identity, checkpoint,
             recovery_target, server_expected, recovery_watch, listener, host, service,
             world, session, control, check_server, server_out=None, expected_baseline=None, cancel_check=None,
-            check_base=None, check_server_base=None, witness_guard_ready=None):
+            check_base=None, check_server_base=None, witness_guard_ready=None, client_motion=None):
     """Load one genuine local client, confirm admission/resume and disconnect.
 
     Must run on the server's owner/main thread; it registers its X4 in the
@@ -305,6 +355,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     if witness_guard_ready is not None and (not callable(witness_guard_ready) or
             not participant.keep_worker or getattr(args,'registry_witness_join',False) is not True):
         raise ValueError('witness guard requires retained witness join')
+    if client_motion is not None and (not participant.keep_worker or witness_guard_ready is None):
+        raise ValueError('client motion requires retained witness join')
     participant.cancel_check = cancel_check
     deadline = participant.run_deadline
     participant.checkpoint = checkpoint
@@ -363,7 +415,12 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             if witness_script.exists() or witness_script.is_symlink(): raise ValueError('client witness script already present')
             shutil.copyfile(Path(__file__).resolve().with_name('authority_registry_witness.xml'), witness_script)
             protected.append(witness_script)
+        if client_motion is not None:
+            for path in participant.prepare_client_motion(case,profile,status,client_motion,ticket):
+                if path not in protected:protected.append(path)
     expected = {path:base.live.sha(path) for path in protected}
+    motion_watch=ClientMotionErrorWatch(profile/'engine-output.log') if client_motion is not None else None
+    if motion_watch is not None:motion_watch.poll()
     command = base.load.readonly_save_command(case, game, binds, lock, args.display, auth, user, args.seed, target)
     pos = command.index('--die-with-parent')
     for path in protected:
@@ -383,6 +440,7 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
         if base.live.steam_identity(home, uid) != steam: raise RuntimeError('Steam identity changed')
         if any(base.live.sha(path) != digest for path, digest in expected.items()):
             raise ValueError('client protected configuration changed')
+        if motion_watch is not None:motion_watch.poll()
         participant.pump_loading()
         caught_up = watch.poll()
         if watch.stage and client_identity is None: raise RuntimeError('receipt without owned client X4')
@@ -397,7 +455,10 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             def registry_context(check):
                 verify = (lambda: client_registry.verify_log(profile/'engine-output.log', nonce, status, ticket,
                                                              participant.marker)) if registry_observation is not None else None
-                return guarded_registry_observation(lambda: client_context(check), verify)
+                value=guarded_registry_observation(lambda: client_context(check), verify)
+                if motion_watch is not None:
+                    motion_watch.poll();client_context(check)
+                return value
             def check_protected(): return registry_context(check_server)
             def active_protected(): return registry_context(check_base)
             if registry_observation is not None:
@@ -430,6 +491,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             def finish():
                 # The supervisor removes this client from its aggregate first.
                 # Reap helpers before X4 and keep the X4 registered on uncertainty.
+                if client_motion is not None and not participant.motion_stop_confirmed:
+                    raise RuntimeError('client motion STOP was not confirmed')
                 participant.cleanup_diagnostic()
                 remaining = base.snapshot.stop_owned(proc, started)
                 if remaining: raise RuntimeError('diagnostic client X4 stop unconfirmed')
@@ -445,6 +508,9 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                 participant.verify_logs(out/'server'/relative_log, out/'client'/relative_log, ticket, participant.marker)
                 if registry_observation is not None:
                     client_registry.verify_log(out/'client'/relative_log, nonce, status, ticket, participant.marker)
+                if motion_watch is not None:
+                    motion_watch.poll()
+                    if motion_watch.identity is None:raise ValueError('client motion log missing')
                 check_server()
                 participant.redact()
                 participant.config = None

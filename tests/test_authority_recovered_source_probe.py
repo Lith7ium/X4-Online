@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
 import authority_recovered_source_probe as subject
 import authority_recovered_server_client as recovered_client
+from authority.experimental_tcp_motion import motion_digest
 import linux_gate_live
 
 class Probe(unittest.TestCase):
@@ -44,7 +45,7 @@ class Probe(unittest.TestCase):
         with patch.object(subject,'ExperimentalTCPJobDelivery'),patch.object(subject,'ExperimentalTCPMotion'), \
              patch.object(subject,'bind_running_source_motion',side_effect=bind),patch.object(subject.os,'stat',return_value=SimpleNamespace(st_dev=1,st_ino=2)),patch.object(subject.time,'sleep'):
             result=subject.run(**kwargs)
-        self.assertEqual(events,['pump_active','bind',('register',1),'pull','pull','source_stop','close','guard_stop'])
+        self.assertEqual(events,['pump_active','bind',('register',1),'pull','pull','source_stop','guard_stop','close'])
         self.assertEqual(len(result['samples']),2);self.assertFalse(result['client_motion_proven'])
         self.assertFalse(result['cross_process_identity_proven'])
         self.assertNotIn('generation',result['samples'][0]);self.assertNotIn('epoch',result['samples'][0])
@@ -81,7 +82,7 @@ class Probe(unittest.TestCase):
         self.assertNotIn('bind',events);self.assertNotIn('source_stop',events)
 
     @unittest.skipUnless(sys.platform=='linux','Linux process and socket ownership required')
-    def test_real_udp_tcp_source_lifecycle_with_retained_simulated_client(self):
+    def test_real_udp_tcp_delivery_with_retained_simulated_client(self):
         from tests import test_authority_experimental_tcp_motion as fixture
         case=fixture.MotionTCP('test_invalid_values_and_no_fake_velocity');case.setUp()
         sock=source=None;thread=None;errors=[]
@@ -111,16 +112,82 @@ class Probe(unittest.TestCase):
             guard=SimpleNamespace(status=('ready',settings['epoch'],100,'d'*64),deadline=time.monotonic()+10,
                 check=Mock(return_value=True),stop=Mock(return_value=True))
             active=SimpleNamespace(participant=SimpleNamespace(check_active=Mock(return_value=True)))
+            def stop_worker(*,source_stopped):
+                self.assertTrue(source_stopped());self.assertTrue(source_stopped());return True
+            active.participant.stop_motion_worker=Mock(side_effect=stop_worker)
             pump=recovered_client.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()),time.monotonic()+10)
             identity=(os.getpid(),linux_gate_live.start_ticks(os.getpid()))
             result=subject.run(sock=sock,settings=settings,index=42,baseline=baseline,guard=guard,pump=pump,
-                active=active,host=case.case.host,world=world,identity=identity,verify=lambda:None,verify_process=lambda:None)
+                active=active,host=case.case.host,world=world,identity=identity,verify=lambda:None,verify_process=lambda:None,
+                client_motion=True,verify_stopped=lambda:None)
             self.assertEqual(len(result['samples']),2);self.assertTrue(result['source_stopped_before_disconnect'])
             self.assertFalse(result['client_motion_proven']);self.assertGreater(guard.check.call_count,0)
-            self.assertEqual(case.received,[]);guard.stop.assert_called_once()
+            self.assertEqual(len(case.received),2);self.assertTrue(result['client_motion_receipts_confirmed'])
+            self.assertEqual(result['client_receipt_sample_sha256'],[motion_digest(item[1]) for item in case.received])
+            self.assertFalse(result['client_motion_visible_proven']);guard.stop.assert_called_once()
+            active.participant.stop_motion_worker.assert_called_once()
         finally:
             if thread:thread.join(5)
             if sock:sock.close()
             if source:source.close()
             case.doCleanups()
         self.assertFalse(thread.is_alive());self.assertEqual(errors,[])
+
+    def test_receipt_digest_and_client_stop_fences_fail_closed(self):
+        for mode in ('ok','wrong_sample','wrong_digest','no_receipt','worker_failure','bad_socket'):
+            with self.subTest(mode=mode):
+                events,kwargs,_=self.context();kwargs['client_motion']=True;kwargs['verify_stopped']=Mock()
+                kwargs['world'].session.players=kwargs['world'].session.ready_players=((1,'one'),)
+                selected={'id':'peer_1','incarnation':'f'*32}
+                class Delivery:
+                    def __init__(self,*a,**kw):pass
+                    def membership(self):return (selected,)
+                class Motion:
+                    def __init__(self,*a,**kw):self._tracks={}
+                class Sock:
+                    def getsockname(self):return ('127.0.0.1',1)
+                    def getpeername(self):return ('127.0.0.1',2)
+                    def fileno(self):return 99
+                kwargs['sock']=Sock()
+                class Source:
+                    state='ready';seq=0
+                    def register_saved(self,index):events.append('register')
+                    def pull(self):
+                        self.seq+=1
+                        sample={'version':1,'epoch':'a'*32,'generation':'d'*32,'index':1,'sequence':self.seq,
+                            'sector_macro':'test','source_time':self.seq,'x':0,'y':0,'z':0,'velocity':None}
+                        self.capture(sample)
+                        digest='0'*64 if mode=='wrong_digest' else motion_digest(sample)
+                        self.motion._tracks[('a'*32,'d'*32,1)]={'peer_samples':{('peer_1','f'*32):(self.seq,digest)}}
+                        if mode=='no_receipt':return None
+                        if mode=='wrong_sample':return dict(sample,x=1)
+                        return sample
+                    def stop_remote(self):events.append('source_stop');self.state='remote_stopped';return True
+                    def close(self):events.append('source_close')
+                source=Source()
+                def bind(sock,motion,**kw):
+                    self.assertEqual(kw['select_recipients']({},(selected,)),[selected])
+                    source.capture=kw['validate_sample'];source.motion=motion;return source
+                def stop_worker(*,source_stopped):
+                    events.append('client_stop')
+                    kwargs['active'].participant.check_active.side_effect=AssertionError('reentrant active guard')
+                    if mode=='worker_failure':return False
+                    if not source_stopped():raise RuntimeError('source fence')
+                    return True
+                kwargs['active'].participant.stop_motion_worker=Mock(side_effect=stop_worker)
+                with patch.object(subject,'ExperimentalTCPJobDelivery',Delivery),patch.object(subject,'ExperimentalTCPMotion',Motion), \
+                     patch.object(subject,'bind_running_source_motion',side_effect=bind), \
+                     patch.object(subject.os,'stat',return_value=SimpleNamespace(st_dev=1,st_ino=2)), \
+                     patch.object(subject.os,'fstat',return_value=SimpleNamespace(st_dev=3,st_ino=4)), \
+                     patch.object(subject,'check_process'),patch.object(subject,'socket_owner',return_value=mode!='bad_socket'), \
+                     patch.object(subject.time,'sleep'):
+                    if mode=='ok':
+                        result=subject.run(**kwargs)
+                        self.assertTrue(result['client_motion_receipts_confirmed'])
+                        self.assertEqual(len(result['client_receipt_sample_sha256']),2)
+                        self.assertFalse(result['second_sample_velocity_present'])
+                        self.assertLess(events.index('source_stop'),events.index('client_stop'))
+                        self.assertLess(events.index('client_stop'),events.index('source_close'))
+                    else:
+                        with self.assertRaises(RuntimeError):subject.run(**kwargs)
+                        self.assertNotIn('source_close',events)

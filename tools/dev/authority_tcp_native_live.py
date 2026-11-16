@@ -6,10 +6,12 @@ consumption; loopback results do not establish Windows, Internet or gameplay.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import select
 import socket
 import sys
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -123,6 +125,46 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         self.helpers = []
         self.client_tcp = self.server_tcp = self.ipc = self.second = None
         self.control = self.host = self.participants = None
+        self.motion_sock = self.motion_worker_config = None
+        self.motion_stop_confirmed = False
+
+    def _pin_motion_ipc(self):
+        connection=self.ipc
+        if connection is None:raise RuntimeError('motion IPC unavailable')
+        descriptor=connection.fileno();info=os.fstat(descriptor)
+        self._motion_ipc_identity=(connection,descriptor,(info.st_dev,info.st_ino))
+
+    def _pin_motion_socket(self):
+        connection=self.motion_sock
+        if connection is None:raise RuntimeError('motion UDP unavailable')
+        descriptor=connection.fileno();info=os.fstat(descriptor)
+        self._motion_socket_identity=(connection,descriptor,(info.st_dev,info.st_ino))
+
+    def _check_motion_socket(self):
+        expected=getattr(self,'_motion_socket_identity',None)
+        if expected is None:raise RuntimeError('motion UDP identity unavailable')
+        connection,descriptor,identity=expected
+        if self.motion_sock is not connection or connection.fileno()!=descriptor:
+            raise RuntimeError('motion UDP ownership changed')
+        info=os.fstat(descriptor)
+        if (info.st_dev,info.st_ino)!=identity:raise RuntimeError('motion UDP descriptor changed')
+        return True
+
+    def _close_owned_motion_socket(self):
+        self._check_motion_socket();self.motion_sock.close();self.motion_sock=None
+
+    def _close_owned_motion_ipc(self):
+        # Exclusive ownership of the descriptor table is required: checking
+        # an FD and closing it cannot be atomic against concurrent dup2/close.
+        expected=getattr(self,'_motion_ipc_identity',None)
+        if expected is None:
+            self.ipc.close();self.ipc=None;return
+        connection,descriptor,identity=expected
+        if self.ipc is not connection or connection.fileno()!=descriptor:
+            raise RuntimeError('motion IPC cleanup ownership changed')
+        info=os.fstat(descriptor)
+        if (info.st_dev,info.st_ino)!=identity:raise RuntimeError('motion IPC cleanup descriptor changed')
+        connection.close();self.ipc=None
 
     def check_active(self, *, server_checked=False):
         """Check a retained client; server_checked requires an enclosing server guard."""
@@ -130,6 +172,83 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         if self._active_check is None:
             raise RuntimeError('no retained active worker')
         return self._active_check(server_checked=server_checked)
+
+    def _pin_motion_stop(self,helper,context,deadline):
+        ipc=self.ipc;proc=helper.proc;pidfd=helper.pidfd
+        if ipc is None or proc is None or pidfd is None or not callable(context):
+            raise RuntimeError('motion stop identity unavailable')
+        st=os.fstat(ipc.fileno());ps=os.fstat(pidfd)
+        if getattr(self,'_motion_ipc_identity',None)!=(ipc,ipc.fileno(),(st.st_dev,st.st_ino)):
+            raise RuntimeError('motion IPC changed before stop fence')
+        identity=(ps.st_dev,ps.st_ino)
+        if identity!=helper._pidfd_identity:raise RuntimeError('motion helper pidfd changed')
+        self._motion_helper=helper;self._motion_stop_context=context;self._motion_stop_deadline=deadline
+        self._motion_stop_fence=(ipc,ipc.fileno(),(st.st_dev,st.st_ino),helper,proc,pidfd,identity,threading.get_ident(),context,deadline,proc.pid)
+
+    def _check_motion_stop_fence(self):
+        fence=getattr(self,'_motion_stop_fence',None)
+        if not isinstance(fence,tuple) or len(fence)!=11:raise RuntimeError('motion stop identity unavailable')
+        ipc,fd,identity,helper,proc,pidfd,pid_identity,owner,context,deadline,pid=fence
+        if (threading.get_ident()!=owner or self.ipc is not ipc or ipc.fileno()!=fd or
+                self._motion_helper is not helper or helper.proc is not proc or helper.pidfd!=pidfd or
+                helper._pidfd_identity!=pid_identity or proc.pid!=pid or self._motion_stop_context is not context or
+                self._motion_stop_deadline!=deadline):raise RuntimeError('motion stop ownership changed')
+        st=os.fstat(fd);ps=os.fstat(pidfd)
+        if (st.st_dev,st.st_ino)!=identity or (ps.st_dev,ps.st_ino)!=pid_identity:
+            raise RuntimeError('motion stop descriptor changed')
+        return True
+
+    def stop_motion_worker(self, source_stopped):
+        """Stop this once-only lease after caller confirmed source shutdown.
+
+        The caller's guard must remain true and must not call check_active:
+        this method owns the private IPC until the worker is reaped.
+        """
+        from authority_tcp_native_worker import read_line as worker_read, send_frame, parse_json
+        helper=getattr(self,'_motion_helper',None);context=getattr(self,'_motion_stop_context',None)
+        deadline=getattr(self,'_motion_stop_deadline',None)
+        if (self.motion_worker_config is None or self.motion_stop_confirmed or helper is None or
+                not callable(context) or not callable(source_stopped) or self.ipc is None or deadline is None):
+            raise RuntimeError('motion worker stop unavailable')
+        self.check_active()
+        def check():
+            self._check_motion_stop_fence()
+            if (time.monotonic()>=deadline or self.motion_stop_confirmed is not False or
+                    source_stopped() is not True or context() is not True or self.motion_stop_confirmed is not False or
+                    self._motion_stop_context is not context or self._motion_stop_deadline!=deadline):
+                raise RuntimeError('motion stop context changed')
+            self._check_motion_stop_fence()
+        check()
+        if helper.proc.poll() is not None:raise RuntimeError('motion worker exited before stop')
+        self._active_check=None
+        self.ipc.setblocking(False)
+        send_frame(self.ipc,b'{"command":"stop"}',deadline,check)
+        if parse_json(worker_read(self.ipc,512,deadline,check))!={'event':'stopped'}:
+            raise RuntimeError('motion worker stop unconfirmed')
+        while helper.proc.poll() is None:
+            check();select.select([],[],[],min(.05,marked.remaining(deadline)))
+        check()
+        if helper.proc.returncode!=0:raise RuntimeError('motion worker cleanup failed')
+        while True:
+            check()
+            readable,_,bad=select.select([self.ipc],[],[self.ipc],min(.05,marked.remaining(deadline)))
+            if bad:raise RuntimeError('motion worker IPC exception after stop')
+            if readable:
+                if self.ipc.recv(1,socket.MSG_PEEK)!=b'':raise RuntimeError('unexpected data after motion worker stop')
+                break
+        check();self.motion_stop_confirmed=True
+        return True
+
+    def check_motion_stopped(self):
+        """Check client process/files after STOP, without reading IPC or TCP."""
+        helper=getattr(self,'_motion_helper',None);context=getattr(self,'_motion_stop_context',None)
+        self._check_motion_stop_fence()
+        if (self.motion_stop_confirmed is not True or helper is None or not callable(context) or
+                helper.proc.poll()!=0 or context() is not True or self.motion_stop_confirmed is not True or helper.proc.poll()!=0):
+            raise RuntimeError('stopped motion client context changed')
+        if self._motion_stop_context is not context:raise RuntimeError('stopped motion guard changed')
+        self._check_motion_stop_fence()
+        return True
 
     def join(self, world):
         marked.remaining(self.run_deadline)
@@ -184,10 +303,13 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         for helper in reversed(self.helpers):
             try: helper.stop()
             except BaseException as error: errors.append(error)
-        for name in ('ipc', 'client_tcp', 'second'):
+        for name in ('ipc', 'client_tcp', 'second', 'motion_sock'):
             conn = getattr(self, name, None)
             if conn is not None:
-                try: conn.close()
+                try:
+                    if name=='ipc':self._close_owned_motion_ipc()
+                    elif name=='motion_sock':self._close_owned_motion_socket()
+                    else:conn.close()
                 except BaseException as error: errors.append(error)
                 else: setattr(self, name, None)
         if self.control is not None and not (self.control._closed or self.control._failed):
@@ -263,6 +385,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         self.ipc = ipc_parent
         retained = False
         try:
+            if self.motion_worker_config is not None:self._pin_motion_ipc()
             st = (game/'X4').stat()
             config = {'version':1, 'claim':encode_load_claim(claim).decode('ascii'),
                       'epoch':ticket['world_epoch'], 'handle':handle, 'lease':self.lease,
@@ -272,15 +395,25 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                                         'exe_dev':st.st_dev, 'exe_ino':st.st_ino}}
             if remote_finish is not None:
                 config['already_admitted'] = True
+            motion_sock=self.motion_sock
+            if (motion_sock is None)!=(self.motion_worker_config is None):
+                raise ValueError('motion socket/config mismatch')
+            if motion_sock is not None:
+                if not self.keep_worker: raise ValueError('motion requires retained worker')
+                self._check_motion_socket()
+                config['motion']=dict(self.motion_worker_config)
             encoded = json.dumps(config, separators=(',', ':')).encode('ascii')+b'\n'
             if len(encoded)>4096: raise ValueError('helper configuration too large')
+            fds=[self.client_tcp.fileno(),self.sock.fileno(),ipc_child.fileno()]
+            if motion_sock is not None:fds.append(motion_sock.fileno())
             helper = OwnedHelper([sys.executable, str(ROOT/'tools/dev/authority_tcp_native_worker.py'),
-                                  str(self.client_tcp.fileno()), str(self.sock.fileno()), str(ipc_child.fileno())],
-                                 registry=self.helpers, pass_fds=(self.client_tcp.fileno(), self.sock.fileno(), ipc_child.fileno()))
+                                  *(str(fd) for fd in fds)],registry=self.helpers, pass_fds=tuple(fds))
             ipc_child.close()
             # Parent must relinquish both transferred descriptions before exec.
             self.client_tcp.close(); self.client_tcp = None
             self.sock.close()
+            if motion_sock is not None:
+                self._close_owned_motion_socket()
             self.ipc.settimeout(min(1, marked.remaining(deadline))); self.ipc.sendall(encoded)
             guard(); helper.release(); guard()
             while True:
@@ -319,6 +452,8 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                             return True
                         active_check()
                         self._active_check = active_check
+                        if self.motion_worker_config is not None:
+                            self._pin_motion_stop(helper,active_context,deadline)
                         result.update(tcp_claim_used=True, tcp_participant_commands_used=True,
                                       helper_active=True)
                         retained = True

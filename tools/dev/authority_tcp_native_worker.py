@@ -293,9 +293,15 @@ def run(tcp,udp,ipc,motion_udp=None):
             if ipc in readable:
                 request=parse_json(read_line(ipc,MAX_IPC,deadline))
                 if request!={'command':'stop'}: raise ValueError('invalid worker command')
-                if motion is not None:motion.stop()
-                cleanup()
-                event(ipc,'stopped',deadline)
+                if motion is not None:
+                    # Motion STOPPED is confirmed while TCP still belongs to
+                    # this worker. Supervisor also requires clean process exit.
+                    motion.stop()
+                    event(ipc,'stopped',deadline)
+                    cleanup()
+                else:
+                    cleanup()
+                    event(ipc,'stopped',deadline)
                 return
             context()
             adapter.poll(0)

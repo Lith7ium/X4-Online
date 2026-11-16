@@ -86,6 +86,32 @@ class WitnessJoinModeTests(unittest.TestCase):
                     MODULE.finish_source_diagnostic(active,clients,context,verify=verify,probe=probe)
                 self.assertNotIn('finish',events);self.assertEqual(clients,[active])
 
+    def test_post_stop_guard_replaces_live_guard_only_after_probe(self):
+        events=[];active=SimpleNamespace(finish=lambda:events.append('finish') or True);clients=[]
+        def verify():events.append('active')
+        def verify_after():events.append('stopped')
+        def probe(*_):events.append('source_and_client_stop');return {'source_stopped_before_disconnect':True}
+        MODULE.finish_source_diagnostic(active,clients,[('guard','baseline','pump')],
+            verify=verify,verify_after=verify_after,probe=probe)
+        self.assertEqual(events,['active','source_and_client_stop','stopped','finish'])
+
+    def test_client_motion_requires_explicit_source(self):
+        self.assertFalse(MODULE.diagnostic_client_motion(SimpleNamespace(),False))
+        self.assertTrue(MODULE.diagnostic_client_motion(SimpleNamespace(diagnostic_client_motion=True),True))
+        for value,enabled in ((True,False),(1,True)):
+            with self.assertRaises(ValueError):MODULE.diagnostic_client_motion(SimpleNamespace(diagnostic_client_motion=value),enabled)
+
+    def test_client_finish_refuses_missing_receipts_or_worker_stop(self):
+        valid={'source_stopped_before_disconnect':True,'client_motion_receipts_confirmed':True,
+               'client_worker_stop_confirmed':True,'client_receipt_sample_sha256':['a'*64,'b'*64]}
+        for change in ({'client_motion_receipts_confirmed':False},{'client_worker_stop_confirmed':False},
+                       {'client_receipt_sample_sha256':['a'*64]},{'client_receipt_sample_sha256':['a'*64,'bad']}):
+            active=SimpleNamespace(finish=Mock());clients=[];observation=dict(valid,**change)
+            with self.subTest(change=change),self.assertRaises(RuntimeError):
+                MODULE.finish_source_diagnostic(active,clients,[('guard','baseline','pump')],verify=lambda:None,
+                    probe=lambda *_:observation,verify_after=lambda:None,require_client_receipts=True)
+            active.finish.assert_not_called();self.assertEqual(clients,[active])
+
     def test_join_requires_explicit_single_client_and_preserves_other_modes(self):
         self.assertEqual(MODULE.witness_mode(SimpleNamespace()), (False, None))
         self.assertEqual(MODULE.witness_mode(SimpleNamespace(registry_witness='verify')), (False, 'verify'))

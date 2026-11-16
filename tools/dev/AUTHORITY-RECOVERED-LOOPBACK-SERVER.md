@@ -545,6 +545,17 @@ not pump the control connection. The historical join checkpoint is pinned for
 this diagnostic only and is not a current recoverable running-world snapshot.
 The source result proves neither cross-process ship identity nor gameplay.
 
+The additional `--diagnostic-client-motion` option enables a private,
+one-client delivery experiment alongside either source-selection option. The
+server requires two matching participant receipts and then confirms source
+and client-worker shutdown before continuing to the disconnect save. The
+client receipt follows its local binding and read-only buffer insertion; it
+does not demonstrate that a ship visibly moves, that references identify the
+same ship in both X4 processes, or that a nonzero velocity was transmitted.
+This option is off by default and is not a multiplayer gameplay path. Its
+component tests use simulated X4 behavior; a native result must be recorded
+separately.
+
 An isolated offline benchmark used the Source IPC lifecycle over local UDP/TCP
 with a simulated source and client, real pidfd guard transport and the four
 existing `authority-witness-join-once-06` compressed saves (26,183,913 and
