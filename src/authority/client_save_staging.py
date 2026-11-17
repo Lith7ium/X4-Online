@@ -12,13 +12,10 @@ import re
 import stat
 
 from .load_messages import Offer
+from .file_fingerprints import fingerprint, same_path_and_descriptor
 
 _SLOT = re.compile(r'save_[0-9]{3}\.xml\.gz\Z')
 _CHUNK_SIZE = 1024 * 1024
-
-
-def _fingerprint(info):
-    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 def _write_all(outgoing, block, pump):
@@ -67,7 +64,7 @@ def copy_offered_save(source, target, offer, *, pump):
             pump()
             before = os.fstat(incoming.fileno())
             pump()
-            if not stat.S_ISREG(before.st_mode) or _fingerprint(before) != _fingerprint(before_path):
+            if not stat.S_ISREG(before.st_mode) or not same_path_and_descriptor(before_path, before):
                 raise ValueError('downloaded save changed before copying')
             pump()
             target_flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0)
@@ -95,8 +92,10 @@ def copy_offered_save(source, target, offer, *, pump):
                     pump()
                     after_path = os.lstat(source)
                     pump()
-                    if (_fingerprint(before) != _fingerprint(after) or
-                            _fingerprint(after) != _fingerprint(after_path) or
+                    if (not stat.S_ISREG(after.st_mode) or not stat.S_ISREG(after_path.st_mode) or
+                            fingerprint(before) != fingerprint(after) or
+                            fingerprint(before_path) != fingerprint(after_path) or
+                            not same_path_and_descriptor(after_path, after) or
                             size != offer.size or digest.hexdigest() != offer.sha256):
                         raise ValueError('downloaded save changed or differs from offer')
                     outgoing.flush()

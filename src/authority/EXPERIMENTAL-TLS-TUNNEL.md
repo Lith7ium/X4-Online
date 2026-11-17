@@ -63,12 +63,39 @@ owned-process cleanup and removal of the temporary private key. The observations
 do not prove the exact file X4 read. This run did not test motion, gameplay,
 Windows, the Internet, or recovery after a server restart.
 
+Another internal loopback diagnostic exercised the experimental client owner
+using Windows Python 3.14.8 under Wine against Linux. Its first run,
+`.local/authority-windows-owner-wine-once-01/`, downloaded the synthetic save
+but failed before admission when the staging code compared path and descriptor
+fingerprints. The separate read-only diagnostic
+`.local/authority-wine-stat-once-01/wine-stat.log` found a 2 ms difference
+between their `st_ctime_ns` values for that file; the other recorded fields
+matched, and each API's before and after observations were stable.
+
+The staging and load checks now compare full path fingerprints across path
+observations and full descriptor fingerprints across descriptor observations;
+on Windows, only the cross-API comparison excludes `ctime`. Linux retains the
+full cross-API comparison. A single follow-up run,
+`.local/authority-windows-owner-wine-once-02/`, reported success: the synthetic
+182-byte source, downloaded file and staged file matched byte for byte and by
+SHA-256, and the simulated engine recorded pause, save, resume, pause, save.
+The control and file paths used the real owner, TLS tunnel, coordinator and
+FileService; X4 load observations and participant control were simulated.
+The loopback routing follows from the configured test path, without a packet
+capture. The final and offered checkpoints had identical synthetic contents and
+markers. This does not establish native Windows, Internet connectivity, X4
+loading or gameplay, or persistence of a real progressing world.
+
 The offline full check for these changes ran 4,593 tests: one failure in
 `test_duplicate_finished_fences_host` and 56 skips. The failure reported that an
 expected `RuntimeError` was not raised in the existing UDP job-bridge test. Its
 exact cause is unconfirmed. A race in that test was subsequently fixed and the
 targeted test passed; the full check was not repeated, so it is not a passing
-validation of the final tree.
+validation of that tree. A later full check of the single-thread owner changes
+ran 4,603 tests without a test failure, but remained incomplete because 56
+checks were skipped. These results do not validate the later fingerprint fix.
+A subsequent full check including the fingerprint fix ran 4,608 tests without
+a test failure; 56 skipped checks still made the run incomplete.
 
 The server listens on an explicitly chosen IPv4 address. Each connection uses
 TLS 1.2 or later, then a shared 32-byte random key and a fixed service selector.

@@ -12,6 +12,7 @@ import re
 import stat
 
 from .load_messages import Offer, Receipt
+from .file_fingerprints import fingerprint, same_path_and_descriptor
 
 _MARKER = re.compile(r'[0-9a-f]{32}\Z')
 
@@ -25,10 +26,6 @@ class HonestClientLoadClaim:
     paused_observed: bool
 
 
-def _fingerprint(info):
-    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-
-
 def _inspect(path, offer, pump=None):
     """Hash one staged regular file and reject changes observed while reading."""
     if pump: pump()
@@ -40,7 +37,7 @@ def _inspect(path, offer, pump=None):
     fd = os.open(path, flags)
     try:
         before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode) or _fingerprint(before) != _fingerprint(before_path):
+        if not stat.S_ISREG(before.st_mode) or not same_path_and_descriptor(before_path, before):
             raise ValueError('staged save changed before reading')
         digest = hashlib.sha256(); size = 0
         while True:
@@ -53,11 +50,13 @@ def _inspect(path, offer, pump=None):
             digest.update(chunk)
         after = os.fstat(fd)
         after_path = os.lstat(path)
-        if (_fingerprint(before) != _fingerprint(after) or
-                _fingerprint(after) != _fingerprint(after_path) or
+        if (not stat.S_ISREG(after.st_mode) or not stat.S_ISREG(after_path.st_mode) or
+                fingerprint(before) != fingerprint(after) or
+                fingerprint(before_path) != fingerprint(after_path) or
+                not same_path_and_descriptor(after_path, after) or
                 size != offer.size or digest.hexdigest() != offer.sha256):
             raise ValueError('staged save changed or differs from offer')
-        return _fingerprint(after), digest.hexdigest()
+        return fingerprint(after_path), fingerprint(after), digest.hexdigest()
     finally:
         os.close(fd)
 
