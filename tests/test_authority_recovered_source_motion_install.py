@@ -130,4 +130,20 @@ class RecoveredMotionTests(unittest.TestCase):
   with self.assertRaises(ValueError):self.install()
   self.assertEqual(before,[p.read_bytes() for p in (config,manifest,owner)])
 
+ def test_pair_delivery_requires_explicit_true_and_adds_owner_option(self):
+  self.settings['local_pair']={'nonce':'6'*32,'index':1,'delivery':True}
+  self.install()
+  owner=(self.ui/'authority_world_bridge_probe.lua').read_text()
+  self.assertIn('index=cfg.authority_motion_pair_index,delivery=true',owner)
+  subprocess.run(['luajit','-b',str(self.ui/'authority_world_bridge_probe.lua'),'/dev/null'],
+                 check=True,capture_output=True)
+
+ def test_pair_delivery_rejects_ambiguous_opt_in(self):
+  config=self.ui/'config.lua';before=config.read_bytes()
+  for value in (False,1,None,'true'):
+   with self.subTest(value=value):
+    self.settings['local_pair']={'nonce':'6'*32,'index':1,'delivery':value}
+    with self.assertRaises(ValueError):self.install()
+    self.assertEqual(before,config.read_bytes())
+
 if __name__=='__main__':unittest.main()

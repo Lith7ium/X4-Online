@@ -35,7 +35,7 @@ class Integration(unittest.TestCase):
         self.assertFalse(any(t.is_alive() for t in self.threads));self.assertEqual(self.errors,[])
     def start(self,fn):
         t=threading.Thread(target=fn);self.threads.append(t);t.start()
-    def run_bridge(self,validate_sample=None):
+    def run_bridge(self,validate_sample=None,*,pair_sample=False):
         tcp=self.case.connect();self.case.offer_and_claim(tcp)
         client_udp,x4_udp=udp(),udp();self.addCleanup(client_udp.close);self.addCleanup(x4_udp.close)
         src_udp,x4_src=udp(),udp();self.addCleanup(src_udp.close);self.addCleanup(x4_src.close)
@@ -76,7 +76,9 @@ class Integration(unittest.TestCase):
                     except socket.timeout:continue
                     parts=data.decode().split('|');assert parts[:6]==['P','3'*32,'4'*32,'PULL',E,G]
                     count+=1;response=['S','3'*32,'4'*32]
-                    if count==1:response+=['SAMPLE',E,G,parts[6],'10055','1','sector_a','10','1','2','3','-','-','-']
+                    if count==1 and pair_sample:
+                        response+=['SAMPLE',E,G,parts[6],'10055','2','sector_a','1.2','12','2','3','10','0','0']
+                    elif count==1:response+=['SAMPLE',E,G,parts[6],'10055','1','sector_a','10','1','2','3','-','-','-']
                     else:response+=['NO_SAMPLE',E,G,parts[6]]
                     x4_src.send('|'.join(response).encode())
             except BaseException as e:
@@ -94,10 +96,16 @@ class Integration(unittest.TestCase):
             self.assertEqual(self.bound,[]);return
         before=time.monotonic();result=source.pull();after=time.monotonic()
         self.assertGreaterEqual(after-before,.04);self.assertEqual(len(self.bound),1)
-        self.assertEqual((result['index'],result['sequence'],result['velocity']),(10055,1,None))
+        if pair_sample:
+            self.assertEqual((result['index'],result['sequence'],result['source_time'],result['x'],result['velocity']),
+                             (10055,2,1.2,12.0,{'x':10.0,'y':0.0,'z':0.0}))
+            self.assertEqual(self.bound[0][3:5],['10055','2'])
+        else:
+            self.assertEqual((result['index'],result['sequence'],result['velocity']),(10055,1,None))
         self.assertIsNone(source.pull());source.close()
 
     def test_real_tcp_and_udp_wait_for_correlated_readback(self):self.run_bridge()
+    def test_second_pair_sample_is_accepted_through_source_udp_and_tcp(self):self.run_bridge(pair_sample=True)
     def test_mutated_validator_copy_fails_before_tcp(self):
         def mutate(value):value['x']=int(value['x']);return True
         self.run_bridge(mutate)

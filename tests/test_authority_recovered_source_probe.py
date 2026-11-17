@@ -16,11 +16,40 @@ import authority_recovered_loopback_server as supervisor
 from authority.experimental_tcp_motion import motion_digest
 import linux_gate_live
 
+
+def cleanup_motion_fixture(case):
+    """Propagate nested unittest cleanup and client-thread failures outward."""
+    errors = []
+    for name, action, returns_status in (
+            ('client threads', case.finish, False),
+            ('participant fixture', case.case.doCleanups, True),
+            ('motion fixture', case.doCleanups, True)):
+        try:
+            result = action()
+            if returns_status and result is not True:
+                raise AssertionError(name + ' cleanup failed')
+        except BaseException as error:
+            errors.append(error)
+    if errors:
+        raise BaseExceptionGroup('nested motion fixture cleanup failed', errors)
+
+
 class Probe(unittest.TestCase):
+    def test_nested_fixture_cleanup_failures_propagate(self):
+        inner = SimpleNamespace(doCleanups=Mock(return_value=False))
+        case = SimpleNamespace(case=inner, finish=Mock(side_effect=AssertionError('client thread failed')),
+                               doCleanups=Mock(return_value=True))
+        with self.assertRaises(BaseExceptionGroup) as caught:
+            cleanup_motion_fixture(case)
+        self.assertEqual(len(caught.exception.exceptions), 2)
+        case.finish.assert_called_once();inner.doCleanups.assert_called_once();case.doCleanups.assert_called_once()
+
     def test_local_pair_must_match_the_explicit_source_before_binding(self):
         for pair in ({'nonce': 'f' * 32, 'index': 2},
                      {'nonce': 'invalid', 'index': 1},
-                     {'nonce': 'f' * 32, 'index': True}):
+                     {'nonce': 'f' * 32, 'index': True},
+                     {'nonce': 'f' * 32, 'index': 1, 'delivery': False},
+                     {'nonce': 'f' * 32, 'index': 1, 'delivery': True}):
             with self.subTest(pair=pair):
                 events, kwargs, _ = self.context()
                 kwargs['settings']['local_pair'] = pair
@@ -308,6 +337,55 @@ class Probe(unittest.TestCase):
                         self.assertNotIn('source_stop', events)
 
     @unittest.skipUnless(sys.platform=='linux','Linux process and socket ownership required')
+    def test_invalid_pair_source_udp_is_rejected_before_tcp_dispatch(self):
+        from tests import test_authority_experimental_tcp_motion as fixture
+        for sequence, velocity in ((1, ('0','0','0')), (2, ('-','-','-'))):
+            with self.subTest(sequence=sequence, velocity=velocity):
+                case=fixture.MotionTCP('test_invalid_values_and_no_fake_velocity');case.setUp()
+                sock=source=None;thread=None;errors=[]
+                try:
+                    conn=case.case.connect();case.case.offer_and_claim(conn);case.client(conn,1);case.case.host.tick(.1)
+                    world=case.case.world;baseline=object();world._baseline=(7,baseline)
+                    sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.bind(('127.0.0.1',0))
+                    source=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);source.bind(('127.0.0.1',0))
+                    source.connect(sock.getsockname());source.settimeout(4)
+                    settings={'epoch':'b'*32,'baseline':100,'lease':'1'*32,'attempt':'2'*32,'generation':'c'*32,
+                              'local_pair':{'nonce':'f'*32,'index':42,'delivery':True}}
+                    def source_peer():
+                        try:
+                            prefix=['S',settings['lease'],settings['attempt']]
+                            source.send('|'.join(prefix+['HELLO',settings['epoch'],settings['generation']]).encode())
+                            packet=source.recv(769).decode().split('|');assert packet[3]=='BOUND'
+                            source.send('|'.join(prefix+['ATTACHED',settings['epoch'],settings['generation']]).encode())
+                            packet=source.recv(769).decode().split('|');assert packet[3]=='REGISTER_SAVED'
+                            source.send('|'.join(prefix+['SAVED_REGISTERED',settings['epoch'],settings['generation'],
+                                packet[6],packet[7],packet[8]]).encode())
+                            packet=source.recv(769).decode().split('|');assert packet[3]=='PULL'
+                            source.send('|'.join(prefix+['SAMPLE',settings['epoch'],settings['generation'],packet[6],
+                                '42',str(sequence),'sector_a','1','1','2','3',*velocity]).encode())
+                        except BaseException as error:errors.append(error)
+                    thread=threading.Thread(target=source_peer);thread.start()
+                    guard=SimpleNamespace(status=('ready',settings['epoch'],100,'d'*64),deadline=time.monotonic()+10,
+                        check=Mock(return_value=True),stop=Mock(return_value=True))
+                    active=SimpleNamespace(participant=SimpleNamespace(check_active=Mock(return_value=True)))
+                    pump=recovered_client.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()),time.monotonic()+10)
+                    identity=(os.getpid(),linux_gate_live.start_ticks(os.getpid()))
+                    with patch.object(subject.ExperimentalTCPMotion,'send',side_effect=AssertionError('TCP dispatch attempted')) as send:
+                        with self.assertRaisesRegex(RuntimeError,'pair delivery lacks'):
+                            subject.run(sock=sock,settings=settings,index=42,baseline=baseline,guard=guard,pump=pump,
+                                active=active,host=case.case.host,world=world,identity=identity,verify=lambda:None,
+                                verify_process=lambda:None,client_motion=True,verify_stopped=lambda:None)
+                        send.assert_not_called()
+                    self.assertEqual(case.received,[])
+                    guard.stop.assert_not_called()
+                finally:
+                    if thread:thread.join(5)
+                    if sock:sock.close()
+                    if source:source.close()
+                    cleanup_motion_fixture(case)
+                self.assertFalse(thread.is_alive());self.assertEqual(errors,[])
+
+    @unittest.skipUnless(sys.platform=='linux','Linux process and socket ownership required')
     def test_real_udp_tcp_delivery_with_retained_simulated_client(self):
         from tests import test_authority_experimental_tcp_motion as fixture
         case=fixture.MotionTCP('test_invalid_values_and_no_fake_velocity');case.setUp()
@@ -360,9 +438,17 @@ class Probe(unittest.TestCase):
         self.assertFalse(thread.is_alive());self.assertEqual(errors,[])
 
     def test_receipt_digest_and_client_stop_fences_fail_closed(self):
-        for mode in ('ok','wrong_sample','wrong_digest','no_receipt','worker_failure','bad_socket'):
+        for mode in ('ok','wrong_sample','wrong_digest','no_receipt','worker_failure','bad_socket',
+                     'pair_zero','pair_nonzero','pair_no_sample','pair_unknown_rate','pair_wrong_index',
+                     'pair_wrong_sequence','pair_wrong_digest','pair_worker_failure','pair_source_stop',
+                     'pair_guard_stop','pair_bad_socket'):
             with self.subTest(mode=mode):
                 events,kwargs,_=self.context();kwargs['client_motion']=True;kwargs['verify_stopped']=Mock()
+                pair_delivery = mode.startswith('pair_')
+                if pair_delivery:
+                    kwargs['settings']['local_pair']={'nonce':'e'*32,'index':1,'delivery':True}
+                if mode=='pair_guard_stop':
+                    kwargs['guard'].stop=Mock(side_effect=lambda: events.append('guard_stop') or False)
                 diagnostics = subject.SourceProbeDiagnostics()
                 kwargs['diagnostics'] = diagnostics
                 kwargs['world'].session.players=kwargs['world'].session.ready_players=((1,'one'),)
@@ -381,16 +467,26 @@ class Probe(unittest.TestCase):
                     state='ready';seq=0
                     def register_saved(self,index):events.append('register')
                     def pull(self):
+                        events.append('pull')
                         self.seq+=1
+                        if mode=='pair_no_sample':return None
                         sample={'version':1,'epoch':'a'*32,'generation':'d'*32,'index':1,'sequence':self.seq,
                             'sector_macro':'test','source_time':self.seq,'x':0,'y':0,'z':0,'velocity':None}
+                        if pair_delivery and mode!='pair_unknown_rate':
+                            sample['velocity']={'x':1 if mode=='pair_nonzero' else 0,'y':0,'z':0}
+                        if pair_delivery:sample['sequence']=2
+                        if mode=='pair_wrong_index':sample['index']=2
+                        if mode=='pair_wrong_sequence':sample['sequence']=1
                         self.capture(sample)
-                        digest='0'*64 if mode=='wrong_digest' else motion_digest(sample)
-                        self.motion._tracks[('a'*32,'d'*32,1)]={'peer_samples':{('peer_1','f'*32):(self.seq,digest)}}
+                        events.append('tcp_send')
+                        digest='0'*64 if mode in ('wrong_digest','pair_wrong_digest') else motion_digest(sample)
+                        self.motion._tracks[('a'*32,'d'*32,1)]={'peer_samples':{('peer_1','f'*32):(sample['sequence'],digest)}}
                         if mode=='no_receipt':return None
                         if mode=='wrong_sample':return dict(sample,x=1)
                         return sample
-                    def stop_remote(self):events.append('source_stop');self.state='remote_stopped';return True
+                    def stop_remote(self):
+                        events.append('source_stop');self.state='remote_stopped'
+                        return mode!='pair_source_stop'
                     def close(self):events.append('source_close')
                 source=Source()
                 def bind(sock,motion,**kw):
@@ -399,7 +495,7 @@ class Probe(unittest.TestCase):
                 def stop_worker(*,source_stopped):
                     events.append('client_stop')
                     kwargs['active'].participant.check_active.side_effect=AssertionError('reentrant active guard')
-                    if mode=='worker_failure':return False
+                    if mode in ('worker_failure','pair_worker_failure'):return False
                     if not source_stopped():raise RuntimeError('source fence')
                     return True
                 kwargs['active'].participant.stop_motion_worker=Mock(side_effect=stop_worker)
@@ -407,19 +503,32 @@ class Probe(unittest.TestCase):
                      patch.object(subject,'bind_running_source_motion',side_effect=bind), \
                      patch.object(subject.os,'stat',return_value=SimpleNamespace(st_dev=1,st_ino=2)), \
                      patch.object(subject.os,'fstat',return_value=SimpleNamespace(st_dev=3,st_ino=4)), \
-                     patch.object(subject,'check_process'),patch.object(subject,'socket_owner',return_value=mode!='bad_socket'), \
+                     patch.object(subject,'check_process'),patch.object(subject,'socket_owner',return_value=mode not in ('bad_socket','pair_bad_socket')), \
                      patch.object(subject.time,'sleep'):
-                    if mode=='ok':
+                    if mode in ('ok','pair_zero','pair_nonzero'):
                         result=subject.run(**kwargs)
                         self.assertTrue(result['client_motion_receipts_confirmed'])
-                        self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'], 2)
-                        self.assertEqual(len(result['client_receipt_sample_sha256']),2)
-                        self.assertFalse(result['second_sample_velocity_present'])
+                        self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'], 1 if pair_delivery else 2)
+                        self.assertEqual(len(result['client_receipt_sample_sha256']),1 if pair_delivery else 2)
+                        if pair_delivery:
+                            self.assertTrue(result['pair_delivery'])
+                            self.assertTrue(result['pair_sample_velocity_present'])
+                            self.assertEqual(result['samples'][0]['sequence'],2)
+                            self.assertNotIn('second_sample_velocity_present',result)
+                            self.assertEqual(events.count('pull'),1)
+                            self.assertLess(events.index('source_stop'),events.index('guard_stop'))
+                            self.assertLess(events.index('guard_stop'),events.index('client_stop'))
+                        else:
+                            self.assertFalse(result['second_sample_velocity_present'])
                         self.assertLess(events.index('source_stop'),events.index('client_stop'))
                         self.assertLess(events.index('client_stop'),events.index('source_close'))
                     else:
                         with self.assertRaises(RuntimeError):subject.run(**kwargs)
                         self.assertNotIn('source_close',events)
+                        if pair_delivery:self.assertEqual(events.count('pull'),1)
+                        if mode in ('pair_unknown_rate','pair_wrong_index','pair_wrong_sequence'):
+                            self.assertNotIn('tcp_send',events)
+                        if mode=='pair_wrong_digest':self.assertIn('tcp_send',events)
                         if mode in ('wrong_sample', 'wrong_digest', 'no_receipt'):
                             self.assertEqual(diagnostics.snapshot()['prevalidated_samples'], 1)
                             self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'], 0)

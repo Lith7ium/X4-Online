@@ -81,12 +81,15 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or any(not valid_index(candidate) for candidate in candidate_indices)
             or len(set(candidate_indices)) != len(candidate_indices)
         )
+    pair_delivery = False
     if 'local_pair' in settings:
         pair = settings['local_pair']
-        if (type(pair) is not dict or set(pair) != {'nonce', 'index'} or
+        if (type(pair) is not dict or set(pair) not in ({'nonce', 'index'}, {'nonce', 'index', 'delivery'}) or
                 type(pair['index']) is not int or pair['index'] != index or candidate_indices is not None or
-                type(pair['nonce']) is not str or not re.fullmatch(r'[0-9a-f]{32}', pair['nonce'])):
+                type(pair['nonce']) is not str or not re.fullmatch(r'[0-9a-f]{32}', pair['nonce']) or
+                ('delivery' in pair and (pair['delivery'] is not True or client_motion is not True))):
             raise ValueError('local pair differs from the explicit source index')
+        pair_delivery = pair.get('delivery') is True
     if (invalid_selection
             or type(identity) is not tuple or len(identity) != 2
             or any(type(value) is not int or value < 1 for value in identity)
@@ -225,6 +228,13 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     staged_samples = []
 
     def capture_sample(value):
+        # Source IPC calls this before initiating TCP delivery. Rejection
+        # after pull() returns would be too late to prevent a client effect.
+        if pair_delivery:
+            if (type(value) is not dict or value.get('index') != index or value.get('sequence') != 2 or
+                    value.get('velocity') is None):
+                raise RuntimeError('pair delivery lacks the correlated known-rate sample')
+            motion_digest(value)
         staged_samples.append(copy.deepcopy(value))
         if diagnostics is not None:
             # Parsed source sample staged locally; not a delivered receipt.
@@ -272,7 +282,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     if diagnostics is not None:
         diagnostics.enter('collect_samples')
     samples = []
-    for _ in range(20):
+    for _ in range(1 if pair_delivery else 20):
         previous_count = len(staged_samples)
         if diagnostics is not None:
             diagnostics.pull_attempts += 1
@@ -289,6 +299,9 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                 if (received is None or received != staged_samples[-1]
                         or motion_digest(received) != motion_digest(staged_samples[-1])):
                     raise RuntimeError('motion receipt differs from source sample')
+                if pair_delivery and (received['index'] != index or received['sequence'] != 2 or
+                                      received['velocity'] is None):
+                    raise RuntimeError('pair delivery lacks the correlated known-rate sample')
                 track_key = (settings['epoch'], settings['generation'], index)
                 track = motion._tracks.get(track_key)
                 recipient_key = (selected_recipient['id'], selected_recipient['incarnation'])
@@ -300,15 +313,15 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             samples.append(staged_samples[-1])
             if diagnostics is not None:
                 diagnostics.samples_received = len(samples)
-            if len(samples) == 2:
+            if len(samples) == (1 if pair_delivery else 2):
                 break
         elif received is not None:
             raise RuntimeError('uncaptured motion receipt')
         elif diagnostics is not None:
             diagnostics.empty_pulls += 1
         time.sleep(.1)
-    if len(samples) != 2:
-        raise RuntimeError('two server source samples unavailable')
+    if len(samples) != (1 if pair_delivery else 2):
+        raise RuntimeError('pair sample unavailable' if pair_delivery else 'two server source samples unavailable')
     if diagnostics is not None:
         diagnostics.enter('stop_source')
     if checked_operation(source.stop_remote) is not True:
@@ -358,7 +371,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     public_samples = [{key: sample[key] for key in public_fields} for sample in samples]
     if diagnostics is not None:
         diagnostics.enter('complete')
-    return {
+    result = {
         'index': index,
         'candidate_selected': candidate_indices is not None,
         'candidate_is_reservation': False,
@@ -368,9 +381,14 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         'client_motion_receipts_confirmed': client_motion,
         'client_worker_stop_confirmed': client_motion,
         'client_receipt_sample_sha256': [motion_digest(sample) for sample in samples] if client_motion else [],
-        'second_sample_velocity_present': public_samples[1]['velocity'] is not None,
         'client_motion_proven': False,
         'client_motion_visible_proven': False,
         'smooth_motion_proven': False,
         'cross_process_identity_proven': False,
     }
+    if pair_delivery:
+        result['pair_delivery'] = True
+        result['pair_sample_velocity_present'] = public_samples[0]['velocity'] is not None
+    else:
+        result['second_sample_velocity_present'] = public_samples[1]['velocity'] is not None
+    return result

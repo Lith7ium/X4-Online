@@ -548,8 +548,9 @@ The source result proves neither cross-process ship identity nor gameplay.
 The default-off `--diagnostic-local-pair` additionally requires the explicit
 `--diagnostic-source-index N` and the private witness join; it cannot be used
 with candidate selection. For one source PULL it takes two local positions
-and reports their time-derived velocity estimate to the private X4 log; the
-PULL still returns one ordinary fresh sample. After the owned X4 process stops,
+and reports their time-derived velocity estimate to the private X4 log. Without
+the pair-delivery option, the PULL returns one subsequent ordinary sample. After the
+owned X4 process stops,
 the supervisor records the bounded parsed log result under
 `local_pair_diagnostic`, or records that it was unavailable, missing, invalid,
 or could not be checked after cleanup. A failed overall run remains failed.
@@ -558,14 +559,25 @@ movement, shared identity, Windows behavior, or playable networking.
 
 The additional `--diagnostic-client-motion` option enables a private,
 one-client delivery experiment alongside either source-selection option. The
-server requires two matching participant receipts and then confirms source
-and client-worker shutdown before continuing to the disconnect save. The
+server normally requires two regular samples with matching participant
+receipts, then confirms source and client-worker shutdown before continuing
+to the disconnect save. The
 client receipt follows its local binding and read-only buffer insertion; it
 does not demonstrate that a ship visibly moves, that references identify the
 same ship in both X4 processes, or that a nonzero velocity was transmitted.
 This option is off by default and is not a multiplayer gameplay path. Its
 component tests use simulated X4 behavior; a native result must be recorded
 separately.
+
+The additional, default-off `--diagnostic-local-pair-delivery` requires both
+`--diagnostic-local-pair` and `--diagnostic-client-motion`, including their
+private witness-join and explicit-index requirements. It sends the second
+local pair sample, with its position-derived rate, and requires exactly one
+matching participant receipt before the same shutdown and save sequence. A
+zero rate is accepted; an unavailable rate fails this diagnostic. The pair
+sample is not a separately refreshed position at delivery time. This does not
+prove native velocity, visible movement, cross-process ship identity, or
+gameplay.
 
 The optional `--diagnostic-guard-timing` flag is available only with a source
 diagnostic. Once its witness guard is ready, the result records local elapsed

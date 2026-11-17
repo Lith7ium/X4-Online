@@ -48,7 +48,9 @@ def install(case,profile,status,settings):
             raise ValueError('invalid bounded candidate selection')
         tokens.append(selection['nonce'])
     local_pair=settings.get('local_pair')
-    if 'local_pair' in settings and (type(local_pair) is not dict or set(local_pair)!={'nonce','index'} or
+    if 'local_pair' in settings and (type(local_pair) is not dict or
+        set(local_pair) not in ({'nonce','index'}, {'nonce','index','delivery'}) or
+        ('delivery' in local_pair and local_pair['delivery'] is not True) or
         type(local_pair['nonce']) is not str or not HEX.fullmatch(local_pair['nonce']) or
         type(local_pair['index']) is not int or not 1<=local_pair['index']<=status[2] or
         local_pair['nonce'][:16] in (settings['nonce'][:16],settings['saved_nonce'][:16])):
@@ -126,8 +128,9 @@ def install(case,profile,status,settings):
         owner_add=owner_add.replace('expected_save_path=cfg.authority_load_save_path}))',
             'expected_save_path=cfg.authority_load_save_path,selection={nonce=cfg.authority_motion_candidate_nonce,candidates=cfg.authority_motion_candidate_indices}}))')
     if local_pair is not None:
+        delivery=',delivery=true' if local_pair.get('delivery') is True else ''
         owner_add=owner_add.replace('expected_save_path=cfg.authority_load_save_path}))',
-            'expected_save_path=cfg.authority_load_save_path,local_pair={nonce=cfg.authority_motion_pair_nonce,index=cfg.authority_motion_pair_index}}))')
+            'expected_save_path=cfg.authority_load_save_path,local_pair={nonce=cfg.authority_motion_pair_nonce,index=cfg.authority_motion_pair_index'+delivery+'}}))')
     owner=owner.replace(state_hook,state_hook+'local recovered_motion=nil\n')
     probe.write_text(owner.replace(owner_hook,owner_hook+owner_add),encoding='utf-8')
     return [config,manifest,probe,*files]

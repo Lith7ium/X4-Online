@@ -36,10 +36,11 @@ function M.new(c)
   local p=c.local_pair
   assert(type(p)=='table' and token(p.nonce) and type(p.index)=='number' and p.index%1==0 and
    p.index>=1 and p.index<=c.baseline and type(p.factory)=='function' and type(p.report)=='function')
+  assert(p.delivery==nil or type(p.delivery)=='boolean')
   assert(type(c.clock)=='function' and type(c.timeout)=='number' and c.timeout>0 and c.timeout<=120)
   assert(p.nonce~=c.epoch and p.nonce~=c.generation and p.nonce~=c.nonce and p.nonce~=c.saved_nonce and
    p.nonce:sub(1,16)~=c.nonce:sub(1,16) and p.nonce:sub(1,16)~=c.saved_nonce:sub(1,16))
-  pair_settings={nonce=p.nonce,index=p.index,factory=p.factory,report=p.report}
+  pair_settings={nonce=p.nonce,index=p.index,factory=p.factory,report=p.report,delivery=p.delivery==true}
  end
  local route_failure
  local selection=c.selection;local selected,reported=nil,false;local allowed={}
@@ -205,6 +206,7 @@ function M.new(c)
     assert(bootstrap:begin(ipc:saved_request())==true)
    end
    if ipc:requested() then
+    assert(not (pair_settings and pair_settings.delivery and pair_done), 'pair delivery already completed')
     if pair_settings and not pair_done then
      if not pair then
       local count=0;for _ in pairs(bound)do count=count+1 end
@@ -218,7 +220,8 @@ function M.new(c)
       assert(pair_sampler~=sampler)
       pair=assert(pair_settings.factory({enabled=true,sampler=pair_sampler,epoch=c.epoch,
        generation=c.generation,index=pair_settings.index,actor=actor,timeout=c.timeout,
-       clock=c.clock,guard=pair_guard,fault=function(reason)fail('local_pair_'..tostring(reason))end}))
+       clock=c.clock,guard=pair_guard,delivery=pair_settings.delivery,
+       fault=function(reason)fail('local_pair_'..tostring(reason))end}))
       assert(pair:start()==true)
      end
      if pair:state()=='reading' then assert(pair:tick()==true)end
@@ -226,10 +229,23 @@ function M.new(c)
       local result=assert(pair:result());local expected=copy_result(result,4)
       assert(pair_settings.report(result)==true and equal_result(result,expected,4) and
        pair:state()=='done' and active() and ipc:requested())
+      local delivery_sample
+      if pair_settings.delivery then
+       assert(result.status=='estimated' and type(pair.delivery_sample)=='function')
+       delivery_sample=assert(pair:delivery_sample())
+       local point=result.second;local velocity=result.velocity
+       assert(delivery_sample.version==1 and delivery_sample.epoch==c.epoch and
+        delivery_sample.generation==c.generation and delivery_sample.index==pair_settings.index and
+        delivery_sample.sequence==2 and delivery_sample.sector_macro==point.sector_macro and
+        delivery_sample.source_time==point.source_time and delivery_sample.x==point.x and
+        delivery_sample.y==point.y and delivery_sample.z==point.z and
+        exact(delivery_sample.velocity,velocity) and active() and ipc:requested())
+      end
       assert(pair:stop()==true and pair:state()=='stopped');pair_done=true
+      if delivery_sample then assert(ipc:complete(delivery_sample)==true)end
      end
     end
-    if not pair_settings or pair_done then
+    if (not pair_settings or pair_done) and not (pair_settings and pair_settings.delivery) then
      assert(sampler:tick()==true)
      if sampler:state()=='ready' then assert(ipc:complete(nil)==true)end
     end
@@ -282,10 +298,11 @@ function M.new_x4(c)
   local p=c.local_pair
   assert(type(p)=='table' and token(p.nonce) and type(p.index)=='number' and p.index%1==0 and
    p.index>=1 and p.index<=c.baseline and p.nonce~=c.lease and p.nonce~=c.attempt)
-  for k in pairs(p)do assert(k=='nonce' or k=='index')end
+  for k in pairs(p)do assert(k=='nonce' or k=='index' or k=='delivery')end
+  assert(p.delivery==nil or type(p.delivery)=='boolean')
   assert(type(X4LAN_AUTHORITY_SOURCE_MOTION_LOCAL_PAIR)=='table' and
    type(X4LAN_AUTHORITY_SOURCE_MOTION_LOCAL_PAIR.new)=='function')
-  local_pair={nonce=p.nonce,index=p.index,factory=X4LAN_AUTHORITY_SOURCE_MOTION_LOCAL_PAIR.new,
+  local_pair={nonce=p.nonce,index=p.index,delivery=p.delivery,factory=X4LAN_AUTHORITY_SOURCE_MOTION_LOCAL_PAIR.new,
    report=function(result)
     if result.status=='unavailable' and result.reason=='frame_interval_or_rate' then
      DebugError('[X4LAN] AUTH_LOCAL_PAIR unavailable')

@@ -168,6 +168,14 @@ def diagnostic_local_pair(args, witness_join, source_index, source_candidates):
     return enabled
 
 
+def diagnostic_local_pair_delivery(args, local_pair, client_motion):
+    """A single pair delivery requires both existing private opt-ins."""
+    enabled = getattr(args, 'diagnostic_local_pair_delivery', False)
+    if type(enabled) is not bool or (enabled and (local_pair is not True or client_motion is not True)):
+        raise ValueError('local pair delivery requires local pair and client motion')
+    return enabled
+
+
 def record_local_pair_result(result, profile, source_index, remaining):
     """Record only final private-log evidence after owned processes have stopped."""
     evidence = {'index': source_index, 'native_velocity_proven': False,
@@ -203,10 +211,11 @@ def diagnostic_guard_timing(args, source_enabled):
 
 
 def finish_source_diagnostic(active, active_clients, guard_context, *, verify, probe,
-                             verify_after=None, require_client_receipts=False):
+                             verify_after=None, require_client_receipts=False, pair_delivery=False):
     """Fence a retained client until the source probe has cooperatively stopped."""
     if (active_clients or len(guard_context)!=1 or not callable(verify) or not callable(probe) or
-            (verify_after is not None and not callable(verify_after)) or type(require_client_receipts) is not bool):
+            (verify_after is not None and not callable(verify_after)) or type(require_client_receipts) is not bool or
+            type(pair_delivery) is not bool or (pair_delivery and not require_client_receipts)):
         raise ValueError('single source diagnostic context required')
     active_clients.append(active)
     verify()
@@ -217,10 +226,13 @@ def finish_source_diagnostic(active, active_clients, guard_context, *, verify, p
         receipts = observation.get('client_receipt_sample_sha256')
         if (observation.get('client_motion_receipts_confirmed') is not True
                 or observation.get('client_worker_stop_confirmed') is not True
-                or type(receipts) is not list or len(receipts) != 2
+                or type(receipts) is not list or len(receipts) != (1 if pair_delivery else 2)
+                or (pair_delivery and (observation.get('pair_delivery') is not True or
+                    observation.get('pair_sample_velocity_present') is not True))
                 or any(type(value) is not str or not re.fullmatch(r'[0-9a-f]{64}', value)
                        for value in receipts)):
-            raise RuntimeError('two client receipts and worker stop required')
+            raise RuntimeError('one pair client receipt and worker stop required' if pair_delivery else
+                               'two client receipts and worker stop required')
     (verify if verify_after is None else verify_after)()
     active_clients.remove(active)
     return observation,active.finish()
@@ -522,6 +534,7 @@ def run(args):
         local_pair=diagnostic_local_pair(args,witness_join,source_index,source_candidates)
         source_enabled=source_index is not None or source_candidates is not None
         client_motion=diagnostic_client_motion(args,source_enabled)
+        pair_delivery=diagnostic_local_pair_delivery(args,local_pair,client_motion)
         guard_timing=diagnostic_guard_timing(args,source_enabled)
         long_motion=diagnostic_long_motion(args,witness_join,source_enabled,client_motion)
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
@@ -594,6 +607,8 @@ def run(args):
                 source_settings['selection']={'nonce':fresh(),'candidates':source_candidates}
             if local_pair:
                 source_settings['local_pair']={'nonce':fresh(),'index':source_index}
+                if pair_delivery:
+                    source_settings['local_pair']['delivery']=True
             protected.extend(authority_recovered_source_motion_install.install(case,profile,registry_expected,source_settings))
         clock = None
         if getattr(args, 'diagnostic_overlap', False):
@@ -837,7 +852,7 @@ def run(args):
                     result['source_diagnostic'],diagnostic_result=finish_source_diagnostic(
                         diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source,
                         verify_after=verify_motion_stopped if client_motion else None,
-                        require_client_receipts=client_motion)
+                        require_client_receipts=client_motion,pair_delivery=pair_delivery)
                 if count != 1:
                     baseline = diagnostic_client.settle_departure(host, world, control, diagnostic.server_tcp, deadline, verify_diagnostic,
                         diagnostic_result['client_ticket'], diagnostic_result['client_loaded_marker'])
@@ -968,8 +983,9 @@ def main():
     source_options=parser.add_mutually_exclusive_group()
     source_options.add_argument('--diagnostic-source-index',type=int,help='private saved-registry index to sample')
     source_options.add_argument('--diagnostic-source-candidates',type=int,nargs='+',help='bounded explicit indices to inspect for a private source sample')
-    parser.add_argument('--diagnostic-client-motion',action='store_true',help='also require two confirmed motion receipts by one private Linux client')
+    parser.add_argument('--diagnostic-client-motion',action='store_true',help='require private Linux client motion receipts: two normally, one with local pair delivery')
     parser.add_argument('--diagnostic-local-pair',action='store_true',help='estimate one local source pair for an explicit private source index')
+    parser.add_argument('--diagnostic-local-pair-delivery',action='store_true',help='deliver exactly one known-rate local pair sample to the private client')
     parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     diagnostic_options = parser.add_mutually_exclusive_group()

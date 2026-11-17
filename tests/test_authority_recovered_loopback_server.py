@@ -35,6 +35,16 @@ from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
 
 
 class WitnessJoinModeTests(unittest.TestCase):
+    def test_pair_delivery_requires_both_existing_opt_ins(self):
+        self.assertFalse(MODULE.diagnostic_local_pair_delivery(SimpleNamespace(), False, False))
+        args = SimpleNamespace(diagnostic_local_pair_delivery=True)
+        self.assertTrue(MODULE.diagnostic_local_pair_delivery(args, True, True))
+        for pair, motion in ((False, True), (True, False), (False, False)):
+            with self.subTest(pair=pair, motion=motion), self.assertRaises(ValueError):
+                MODULE.diagnostic_local_pair_delivery(args, pair, motion)
+        with self.assertRaises(ValueError):
+            MODULE.diagnostic_local_pair_delivery(SimpleNamespace(diagnostic_local_pair_delivery=1), True, True)
+
     def test_local_pair_requires_explicit_single_index(self):
         self.assertFalse(MODULE.diagnostic_local_pair(SimpleNamespace(), False, None, None))
         args = SimpleNamespace(diagnostic_local_pair=True)
@@ -169,6 +179,30 @@ class WitnessJoinModeTests(unittest.TestCase):
                 MODULE.finish_source_diagnostic(active,clients,[('guard','baseline','pump')],verify=lambda:None,
                     probe=lambda *_:observation,verify_after=lambda:None,require_client_receipts=True)
             active.finish.assert_not_called();self.assertEqual(clients,[active])
+
+    def test_pair_finish_requires_exactly_one_confirmed_receipt_and_stops(self):
+        valid={'source_stopped_before_disconnect':True,'client_motion_receipts_confirmed':True,
+               'client_worker_stop_confirmed':True,'client_receipt_sample_sha256':['a'*64],
+               'pair_delivery':True,'pair_sample_velocity_present':True}
+        for change in ({}, {'client_receipt_sample_sha256':[]},
+                       {'client_receipt_sample_sha256':['a'*64,'b'*64]},
+                       {'client_receipt_sample_sha256':['bad']}, {'pair_delivery':False},
+                       {'pair_sample_velocity_present':False}, {'client_worker_stop_confirmed':False}):
+            events=[];active=SimpleNamespace(finish=lambda:events.append('finish') or True);clients=[]
+            observation=dict(valid,**change)
+            with self.subTest(change=change):
+                if not change:
+                    MODULE.finish_source_diagnostic(active,clients,[('guard','baseline','pump')],
+                        verify=lambda:events.append('verify'),probe=lambda *_:observation,
+                        verify_after=lambda:events.append('stopped'),require_client_receipts=True,pair_delivery=True)
+                    self.assertEqual(events,['verify','stopped','finish'])
+                    self.assertEqual(clients,[])
+                else:
+                    with self.assertRaises(RuntimeError):
+                        MODULE.finish_source_diagnostic(active,clients,[('guard','baseline','pump')],
+                            verify=lambda:events.append('verify'),probe=lambda *_:observation,
+                            verify_after=lambda:events.append('stopped'),require_client_receipts=True,pair_delivery=True)
+                    self.assertEqual(events,['verify']);self.assertEqual(clients,[active])
 
     def test_join_requires_explicit_single_client_and_preserves_other_modes(self):
         self.assertEqual(MODULE.witness_mode(SimpleNamespace()), (False, None))

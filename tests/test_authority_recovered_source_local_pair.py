@@ -18,6 +18,14 @@ class SourceLocalPairIntegrationTest(unittest.TestCase):
                                            cwd=ROOT, capture_output=True, text=True, timeout=5)
                 self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_opt_in_pair_delivery_uses_the_second_sample_only(self):
+        for mode in ('delivery_ok', 'delivery_duplicate', 'delivery_unavailable',
+                     'delivery_frame', 'delivery_actor', 'delivery_late'):
+            with self.subTest(mode=mode):
+                completed = subprocess.run([LUAJIT, 'tests/authority_recovered_source_local_pair.lua', mode],
+                                           cwd=ROOT, capture_output=True, text=True, timeout=5)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

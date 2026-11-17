@@ -16,6 +16,8 @@ function M.new(config)
         config.generation:match('^[0-9a-f]+$') and config.generation ~= config.epoch)
  assert(type(config.index) == 'number' and config.index % 1 == 0 and config.index >= 1)
  assert(config.actor ~= nil)
+ assert(config.delivery == nil or type(config.delivery) == 'boolean')
+ local delivery = config.delivery == true
  local sampler, clock, guard, fault = config.sampler, config.clock, config.guard, config.fault
  local epoch, generation, index, actor, timeout = config.epoch, config.generation, config.index, config.actor, config.timeout
  for _, name in ipairs({'register', 'tick', 'event', 'state', 'expected_request', 'close'}) do
@@ -24,7 +26,7 @@ function M.new(config)
  local sampler_register, sampler_tick, sampler_event = sampler.register, sampler.tick, sampler.event
  local sampler_request, sampler_close = sampler.expected_request, sampler.close
  local state, busy, previous_clock, deadline = 'new', false, nil, nil
- local first, result, requests = nil, nil, 0
+ local first, result, delivery_sample, requests = nil, nil, nil, 0
  local api = {}
 
  local function fail(reason)
@@ -141,6 +143,12 @@ function M.new(config)
     if not plain_sample(sample, 2) then busy=false; return fail('second_sample') end
     result = build_result(first, sample)
     if not result then busy=false; return fail('invalid_rate') end
+    if delivery and result.status == 'estimated' then
+     delivery_sample = {version=sample.version, epoch=sample.epoch, generation=sample.generation,
+      index=sample.index, sequence=sample.sequence, sector_macro=sample.sector_macro,
+      source_time=sample.source_time, x=sample.x, y=sample.y, z=sample.z,
+      velocity={x=sample.velocity.x, y=sample.velocity.y, z=sample.velocity.z}}
+    end
     state = 'done'
    end
   end
@@ -153,6 +161,16 @@ function M.new(config)
    copy.first = point(result.first); copy.second = point(result.second); copy.unit = result.unit
    copy.velocity = {x=result.velocity.x, y=result.velocity.y, z=result.velocity.z}
   else copy.reason = result.reason end
+  if not leave() then return nil end
+  return copy
+ end
+ -- This is the checked second sample itself, not a rate for a later pose.
+ function api:delivery_sample()
+  if not delivery or state ~= 'done' or not enter() then return nil end
+  local s = delivery_sample
+  local copy = s and {version=s.version, epoch=s.epoch, generation=s.generation, index=s.index,
+   sequence=s.sequence, sector_macro=s.sector_macro, source_time=s.source_time,
+   x=s.x, y=s.y, z=s.z, velocity={x=s.velocity.x, y=s.velocity.y, z=s.velocity.z}} or nil
   if not leave() then return nil end
   return copy
  end

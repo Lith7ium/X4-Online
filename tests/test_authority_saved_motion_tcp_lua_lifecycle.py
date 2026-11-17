@@ -14,7 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tests'), str(ROOT/'tools/dev')]
 from authority.experimental_tcp_job_delivery import ExperimentalTCPJobDelivery
-from authority.experimental_tcp_motion import ExperimentalTCPMotion
+from authority.experimental_tcp_motion import ExperimentalTCPMotion, motion_digest
 from authority.experimental_tcp_participant_client import ExperimentalTCPParticipantClient
 from authority.experimental_participant_motion_ipc import ExperimentalParticipantMotionIPC
 from authority_tcp_native_worker import check_process
@@ -31,6 +31,12 @@ class Controller:
                      'Linux, LuaJIT and a C compiler required')
 class SavedMotionLifecycle(unittest.TestCase):
     def test_two_saved_samples_then_join_pauses_and_saves(self):
+        self.exercise_saved_motion(first_pair_sample_only=False)
+
+    def test_second_pair_sample_is_accepted_as_first_client_sample(self):
+        self.exercise_saved_motion(first_pair_sample_only=True)
+
+    def exercise_saved_motion(self, *, first_pair_sample_only):
         case = fixture.ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
         case.setUp()
         stop, ready, errors = threading.Event(), threading.Event(), []
@@ -85,11 +91,15 @@ class SavedMotionLifecycle(unittest.TestCase):
                 first={'version':1,'epoch':'c'*32,'generation':'d'*32,'index':42,'sequence':1,'sector_macro':'sector_a',
                     'source_time':1,'x':1,'y':2,'z':3,'velocity':None}
                 second={**first,'sequence':2,'source_time':1.5,'x':2,'velocity':{'x':2,'y':0,'z':0}}
-                self.assertTrue(motion.send(first))
-                deadline=time.monotonic()+1/60
-                while time.monotonic()<deadline:
-                    time.sleep(max(0,deadline-time.monotonic()))
+                if not first_pair_sample_only:
+                    self.assertTrue(motion.send(first))
+                    deadline=time.monotonic()+1/60
+                    while time.monotonic()<deadline:
+                        time.sleep(max(0,deadline-time.monotonic()))
                 self.assertTrue(motion.send(second))
+                if first_pair_sample_only:
+                    track = motion._tracks[('c'*32, 'd'*32, 42)]
+                    self.assertIn((2, motion_digest(second)), track['peer_samples'].values())
                 # No competing TCP reader is introduced: the same adapter then
                 # processes a real participant pause for a joining connection.
                 owner_alive(); joining=case.connect()
