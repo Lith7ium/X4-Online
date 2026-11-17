@@ -715,6 +715,19 @@ not prove the cause of the 22 missing entries in run 09 or generalize to all
 destruction and despawn paths. The diagnostic save was not confirmed as a
 recovery checkpoint, and the runner reported no owned X4 processes remaining.
 
+The opt-in local-pair path was subsequently exercised in
+`.local/authority-local-pair-once-01` with registry index 687. Two local reads
+about 0.1114 source game seconds apart produced a position-derived estimate of
+zero on all axes. This is a single pair, not a sustained update rate or native
+X4 velocity. Two normal source samples reached the client buffer with matching
+receipts; both still had `velocity=null`, and the second normal pull took about
+196.4 seconds. The source and client worker confirmed STOP before disconnect.
+After the final pause and save, registry validation reported missing components;
+CURRENT differed from the still-confirmed checkpoint. No
+owned X4 processes remained according to the result. This Linux loopback run
+does not establish visible movement, cross-process identity, smoothness,
+Windows or Internet operation, or successful world recovery.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
