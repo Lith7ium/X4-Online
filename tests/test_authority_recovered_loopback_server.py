@@ -35,6 +35,28 @@ from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
 
 
 class WitnessJoinModeTests(unittest.TestCase):
+    def test_saved_apply_only_for_explicit_fixture_and_pair_delivery(self):
+        self.assertIsNone(MODULE.diagnostic_saved_apply(SimpleNamespace(),False,None,False))
+        args=SimpleNamespace(diagnostic_saved_apply=True)
+        self.assertEqual(MODULE.diagnostic_saved_apply(args,True,1318,True),'recovery_enh_870')
+        for join,index,pair in ((False,1318,True),(True,687,True),(True,1318,False)):
+            with self.subTest(join=join,index=index,pair=pair),self.assertRaises(ValueError):
+                MODULE.diagnostic_saved_apply(args,join,index,pair)
+        with self.assertRaises(ValueError):
+            MODULE.diagnostic_saved_apply(SimpleNamespace(diagnostic_saved_apply=1),True,1318,True)
+
+    def test_saved_apply_intent_is_exclusive_and_fsynced(self):
+        sample={'version':1,'epoch':'4ba7be438ebb04ec5bb85fdb95b5a488','generation':'b'*32,'index':1318,'sequence':2,
+                'sector_macro':'test','source_time':1,'x':1,'y':2,'z':3,'velocity':None}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(MODULE.os,'fsync',wraps=os.fsync) as fsync:
+                self.assertTrue(MODULE.record_saved_apply_intent(Path(directory),sample))
+                self.assertEqual(fsync.call_count,2)
+            intent=json.loads((Path(directory)/'saved-apply-intent.json').read_text())
+            self.assertEqual(intent['index'],1318)
+            self.assertIn('may',intent['meaning'])
+            with self.assertRaises(FileExistsError): MODULE.record_saved_apply_intent(Path(directory),sample)
+
     def test_finalized_sector_survives_later_save_failure_without_implying_success(self):
         sector = {
             'sector_macro': 'sector_a',

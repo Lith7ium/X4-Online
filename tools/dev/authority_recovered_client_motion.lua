@@ -1,4 +1,5 @@
--- Private once-only read-only client motion probe. The existing participant
+-- Private once-only client motion probe, with a separately opted-in setter.
+-- The existing participant
 -- update owner calls tick; process, FD, checkpoint and STOPPED are external.
 local M={}
 local player_sector_event_claimed=false
@@ -123,6 +124,12 @@ function M.new_x4(c)
    local key=string.format('%.0f',n);assert(not allowed[key]);allowed[key]=true
   end
  end
+ local saved_apply_fixture=c.saved_apply_fixture
+ assert(saved_apply_fixture==nil or (saved_apply_fixture=='recovery_enh_870' and
+  c.epoch=='4ba7be438ebb04ec5bb85fdb95b5a488' and c.index==1318 and c.indices==nil))
+ if saved_apply_fixture then
+  assert(type(X4LAN_SAVED_MOTION_APPLY)=='table' and type(X4LAN_SAVED_MOTION_APPLY.new_x4)=='function')
+ end
  local seen={}
  for _,key in ipairs({'lease','attempt','epoch','generation','nonce','router_generation'})do
   local v=c[key];assert(token(v) and not seen[v]);seen[v]=true
@@ -151,14 +158,33 @@ function M.new_x4(c)
  -- This one-shot diagnostic accepts one BIND. Ordinary motion is unchanged.
  local bound_phase=sector_config and sector_config.after_bound and 'waiting_bind' or nil
  local expected_bound
+ local apply_phase=saved_apply_fixture and 'waiting_bind' or nil
+ local apply_identity,apply_request
  local checked_net={send=function(_,value)
-  if bound_phase and type(value)=='string' and value:sub(1,2)=='R|' then
+  if type(value)=='string' and value:sub(1,2)=='R|' then
    local fields={};for item in (value..'|'):gmatch('(.-)|')do fields[#fields+1]=item end
-   if fields[4]=='BOUND' then
-    assert(bound_phase=='waiting_ack' and value==expected_bound)
+   if fields[4]=='BOUND' and (bound_phase or apply_phase) then
+    if bound_phase then assert(bound_phase=='waiting_ack' and value==expected_bound) end
+    if apply_phase then assert(apply_phase=='binding' and value==apply_identity.bound_reply) end
     local sent=net:send(value)
-    if sent==true then bound_phase='sent' end
+    if sent==true then
+     if bound_phase then bound_phase='sent' end
+     if apply_phase then apply_phase='bound' end
+    end
     return sent
+   elseif apply_phase and fields[4]=='PREFLIGHTED' then
+    assert(apply_phase=='preflighting' and #fields==11 and fields[5]==apply_request and
+     fields[6]==c.epoch and fields[7]==c.generation and fields[8]=='1318' and
+     fields[9]==apply_identity.sequence and fields[10]==apply_identity.digest and
+     (fields[11]=='READY' or fields[11]=='NEAR'))
+    local sent=net:send(value)
+    if sent==true then apply_phase=fields[11]=='READY' and 'ready' or 'near' end
+    return sent
+   elseif apply_phase and fields[4]=='APPLIED' then
+    assert(apply_phase=='applying' and #fields==10 and fields[5]==apply_request and
+     fields[6]==c.epoch and fields[7]==c.generation and fields[8]=='1318' and
+     fields[9]==apply_identity.sequence and fields[10]==apply_identity.digest)
+    local sent=net:send(value);if sent==true then apply_phase='applied' end;return sent
    end
   end
   return net:send(value)
@@ -174,6 +200,12 @@ function M.new_x4(c)
   assert(fields[1]=='M' and fields[2]==c.lease and fields[3]==c.attempt)
   if fields[4]=='BIND' then
    assert(#fields==18 and token(fields[5]) and fields[6]==c.epoch and fields[7]==c.generation and allowed[fields[8]])
+   if saved_apply_fixture then
+    assert(apply_phase=='waiting_bind' and fields[10]=='cluster_06_sector001_macro')
+    apply_identity={sequence=fields[9],digest=fields[11],
+     bound_reply=table.concat({'R',c.lease,c.attempt,'BOUND',unpack(fields,5,11)},'|')}
+    apply_phase='binding'
+   end
    if locked==nil then locked=fields[8]end
    assert(fields[8]==locked)
    if bound_phase then
@@ -181,6 +213,12 @@ function M.new_x4(c)
     expected_bound=table.concat({'R',c.lease,c.attempt,'BOUND',unpack(fields,5,11)},'|')
     bound_phase='waiting_ack'
    end
+  elseif saved_apply_fixture and (fields[4]=='PREFLIGHT' or fields[4]=='APPLY') then
+   assert(#fields==10 and token(fields[5]) and fields[6]==c.epoch and fields[7]==c.generation and
+    fields[8]=='1318' and apply_identity and fields[9]==apply_identity.sequence and fields[10]==apply_identity.digest)
+   if fields[4]=='PREFLIGHT' then assert(apply_phase=='bound');apply_phase='preflighting'
+   else assert(apply_phase=='ready');apply_phase='applying' end
+   apply_request=fields[5]
   else assert(fields[4]=='STOP' and #fields==7)end
   return value
  end}
@@ -207,17 +245,26 @@ function M.new_x4(c)
  return M.new({enabled=true,epoch=c.epoch,nonce=c.nonce,router_generation=c.router_generation,player_sector=player_sector,
   guard=environment,running=function()return not C.IsGamePaused()end,
   router_factory=function(o)
-   return X4LAN_CLIENT_MOTION_EVENT_ROUTER.new_x4({enabled=true,max_generations=1,max_tracks=1,
-    guard=o.guard,retire_guard=function()return false end,fault=o.fault})
+   local options={enabled=true,max_generations=1,max_tracks=1,
+    guard=o.guard,retire_guard=function()return false end,fault=o.fault}
+   if saved_apply_fixture then
+    options.saved_apply=true;options.saved_apply_fixture=saved_apply_fixture;options.max_apply_requests=2
+   end
+   return X4LAN_CLIENT_MOTION_EVENT_ROUTER.new_x4(options)
   end,
   owner_factory=function(o)
-   return X4LAN_MOTION_CLIENT_OWNER.new_x4({enabled=true,net=checked_net,lease=c.lease,attempt=c.attempt,
+   local options={enabled=true,net=checked_net,lease=c.lease,attempt=c.attempt,
     epoch=c.epoch,generation=c.generation,nonce=c.nonce,router_generation=c.router_generation,event_router=o.router,
     timeout=c.timeout,max_age=c.timeout,max_tracks=1,expected_save_path=c.expected_save_path,
     resolve=X4LAN_RESOLVE_STRING,binding=X4LAN_REPLICA_MOTION_BINDING,buffer=X4LAN_MOTION_BUFFER,
     saved_baseline={enabled=true,baseline=c.baseline,binding=X4LAN_SAVED_BASELINE_MOTION_BINDING,
      guard=function(e,n)return environment() and not C.IsGamePaused() and e==c.epoch and n==c.baseline end},
-    guard=o.guard,stop=o.stop,fault=o.fault})
+    guard=o.guard,stop=o.stop,fault=o.fault}
+   if saved_apply_fixture then
+    options.saved_apply={enabled=true,fixture=saved_apply_fixture,module=X4LAN_SAVED_MOTION_APPLY,
+     log=function(line)DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_APPLY '..line);return true end}
+   end
+   return X4LAN_MOTION_CLIENT_OWNER.new_x4(options)
   end,
   fault=function()DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR')end})
 end

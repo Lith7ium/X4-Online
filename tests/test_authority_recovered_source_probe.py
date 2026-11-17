@@ -35,6 +35,46 @@ def cleanup_motion_fixture(case):
 
 
 class Probe(unittest.TestCase):
+    def test_saved_apply_preflight_and_durable_intent_order(self):
+        for outcome in ('near', 'ready', 'far', 'intent_error', 'apply_error'):
+            with self.subTest(outcome=outcome):
+                events=[]
+                def preflight(sample):
+                    events.append('preflight')
+                    return 'ready' if outcome in ('ready','intent_error','apply_error') else outcome
+                def intent(sample):
+                    events.append('intent')
+                    if outcome=='intent_error': raise OSError('fsync failed')
+                    return True
+                def apply(sample):
+                    events.append('apply')
+                    if outcome=='apply_error': raise RuntimeError('receipt lost')
+                    return True
+                source=SimpleNamespace(preflight=preflight,apply_once=apply)
+                with patch.object(subject.time,'monotonic',return_value=15):
+                    call=lambda: subject.perform_saved_apply(source,{'index':1318},10,
+                        active_guard=lambda: events.append('guard'),
+                        checked_operation=lambda f,*a: f(*a),record_apply_intent=intent)
+                    if outcome in ('far','intent_error','apply_error'):
+                        with self.assertRaises((RuntimeError,OSError)): call()
+                    else:
+                        result=call()
+                        self.assertEqual(result['apply_requested'],outcome=='ready')
+                        if outcome=='ready': self.assertEqual(result['host_receipt_to_apply_seconds_lower_bound'],5)
+                self.assertEqual(events.count('preflight'),1)
+                self.assertEqual(events.count('intent'),int(outcome in ('ready','intent_error','apply_error')))
+                self.assertEqual(events.count('apply'),int(outcome in ('ready','apply_error')))
+                if 'apply' in events: self.assertLess(events.index('intent'),events.index('apply'))
+
+    def test_saved_apply_refuses_unpinned_context_before_binding(self):
+        for fixture, callback in (('recovery_enh_870', lambda _: True),
+                                  ('unknown', lambda _: True), (None, lambda _: True)):
+            with self.subTest(fixture=fixture):
+                events, kwargs, _ = self.context()
+                kwargs.update(saved_apply_fixture=fixture,record_apply_intent=callback)
+                with self.assertRaises(ValueError): subject.run(**kwargs)
+                self.assertEqual(events,[])
+
     def test_nested_fixture_cleanup_failures_propagate(self):
         inner = SimpleNamespace(doCleanups=Mock(return_value=False))
         case = SimpleNamespace(case=inner, finish=Mock(side_effect=AssertionError('client thread failed')),

@@ -39,6 +39,9 @@ from authority.experimental_participant_motion_ipc import ExperimentalParticipan
 MAX_CONFIG=16384
 MAX_IPC=256
 _HEX=re.compile(r'[0-9a-f]{32}\Z')
+RECOVERY_SETTER_FIXTURE = 'recovery_enh_870'
+RECOVERY_SETTER_EPOCH = '4ba7be438ebb04ec5bb85fdb95b5a488'
+RECOVERY_SETTER_INDEX = 1318
 
 
 def parse_json(raw):
@@ -88,13 +91,18 @@ def config_value(raw):
         raise ValueError('invalid loopback participant peer')
     if 'motion' in obj:
         motion=obj['motion']
-        if (type(motion) is not dict or set(motion)!={'lease','attempt','epoch','generation','timeout'} or
+        if (type(motion) is not dict or set(motion)-{'saved_apply_fixture'}!={'lease','attempt','epoch','generation','timeout'} or
             any(type(motion[k]) is not str or not _HEX.fullmatch(motion[k]) for k in ('lease','attempt','epoch','generation')) or
             len({motion[k] for k in ('lease','attempt','epoch','generation')})!=4 or
             motion['lease'] in (obj['lease'],obj['epoch']) or motion['attempt'] in (obj['lease'],obj['epoch']) or
             not finite(motion['timeout']) or not 0<motion['timeout']<=30 or
             2*motion['timeout']>=obj['controller_timeout']):
             raise ValueError('invalid motion context or timeout')
+        if 'saved_apply_fixture' in motion and (
+                type(motion['saved_apply_fixture']) is not str or
+                motion['saved_apply_fixture'] != RECOVERY_SETTER_FIXTURE or
+                motion['epoch'] != RECOVERY_SETTER_EPOCH):
+            raise ValueError('invalid recovery setter fixture')
     try: raw_claim=obj['claim'].encode('ascii')
     except UnicodeError as error: raise ValueError('invalid claim encoding') from error
     claim=decode_load_claim(raw_claim)
@@ -223,13 +231,30 @@ class LazyMotion:
                 return self.running and self.sock.getsockname()==self.destination
             m=self.cfg['motion']
             self.bridge=ExperimentalParticipantMotionIPC(self.sock,enabled=True,lease=m['lease'],attempt=m['attempt'],
-                epoch=m['epoch'],generation=m['generation'],guard=context,validate_peer=peer,timeout=m['timeout'],stop_enabled=True)
+                epoch=m['epoch'],generation=m['generation'],guard=context,validate_peer=peer,timeout=m['timeout'],
+                allow_apply=m.get('saved_apply_fixture') == RECOVERY_SETTER_FIXTURE,stop_enabled=True)
             self.bridge.wait_ready()
         self.guard()
     def __call__(self,sample,despawn):
         if not self.running or self.stopped or despawn is not False:raise RuntimeError('motion while paused or unsupported despawn')
         self._bind()
         return self.bridge(sample,despawn)
+    def _check_setter_sample(self, sample):
+        """Fence the only permitted recovery fixture before any setter IPC."""
+        if not self.running or self.stopped or self.cfg['motion'].get('saved_apply_fixture') != RECOVERY_SETTER_FIXTURE:
+            raise RuntimeError('recovery setter unavailable')
+        if (type(sample) is not dict or sample.get('epoch') != RECOVERY_SETTER_EPOCH or
+                type(sample.get('index')) is not int or sample['index'] != RECOVERY_SETTER_INDEX or
+                sample.get('generation') != self.cfg['motion']['generation']):
+            raise ValueError('recovery setter sample mismatch')
+    def preflight(self, sample):
+        self._check_setter_sample(sample)
+        self._bind()
+        return self.bridge.preflight(sample)
+    def apply_once(self, sample):
+        self._check_setter_sample(sample)
+        self._bind()
+        return self.bridge.apply_once(sample)
     def stop(self):
         if self.stopped:return True
         if not self.running:raise RuntimeError('motion stop cannot be confirmed before resume')
@@ -270,7 +295,9 @@ def run(tcp,udp,ipc,motion_udp=None):
     motion=LazyMotion(motion_udp,cfg,guard) if motion_udp is not None else None
     controller=GuardedParticipant(udp,cfg,guard,motion)
     adapter=ExperimentalTCPParticipantClient(tcp,controller,enabled=True,epoch=cfg['epoch'],
-        handle=cfg['handle'],timeout=min(cfg['controller_timeout'],max(.001,deadline-time.monotonic())),apply_motion=motion)
+        handle=cfg['handle'],timeout=min(cfg['controller_timeout'],max(.001,deadline-time.monotonic())),apply_motion=motion,
+        preflight_motion=motion.preflight if motion is not None and cfg['motion'].get('saved_apply_fixture') == RECOVERY_SETTER_FIXTURE else None,
+        apply_motion_once=motion.apply_once if motion is not None and cfg['motion'].get('saved_apply_fixture') == RECOVERY_SETTER_FIXTURE else None)
     cleaned=False
     def cleanup():
         nonlocal cleaned

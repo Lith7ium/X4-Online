@@ -22,6 +22,9 @@ from authority_helper_lifecycle import OwnedHelper
 from authority_tcp_native_worker import parse_json, read_line, send_frame
 
 REGISTRY_READER = Path(__file__).resolve().with_name('authority_recovered_registry_reader.py')
+RECOVERY_SETTER_FIXTURE = 'recovery_enh_870'
+RECOVERY_SETTER_EPOCH = '4ba7be438ebb04ec5bb85fdb95b5a488'
+RECOVERY_SETTER_INDEX = 1318
 
 
 class ClientMotionErrorWatch(witness.ErrorWatch):
@@ -135,12 +138,19 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         import authority_recovered_client_motion_install as motion_install
 
         if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
-                type(request) is not dict or set(request) not in (
-                    {'indices', 'generation', 'timeout'},
-                    {'indices', 'generation', 'timeout', 'player_sector'}) or
+                type(request) is not dict or
+                set(request) - {'player_sector', 'saved_apply_fixture'} != {'indices', 'generation', 'timeout'} or
                 ('player_sector' in request and request['player_sector'] is not True) or
                 type(ticket) is not dict):
             raise ValueError('invalid retained client motion request')
+
+        if 'saved_apply_fixture' in request and (
+                request['saved_apply_fixture'] != RECOVERY_SETTER_FIXTURE or
+                type(request['saved_apply_fixture']) is not str or
+                type(status) is not tuple or len(status) != 4 or status[1] != RECOVERY_SETTER_EPOCH or
+                type(request['indices']) is not list or request['indices'] != [RECOVERY_SETTER_INDEX] or
+                type(request['indices'][0]) is not int):
+            raise ValueError('invalid recovery setter fixture')
 
         excluded_tokens = {self.lease, ticket['world_epoch'], ticket['attempt_id'],
                            status[1], request['generation']}
@@ -170,6 +180,10 @@ class ServerClient(combined.RecoveredRemoteParticipant):
                     raise ValueError('client sector requires the confirmed marker')
                 excluded_tokens.add(self.marker)
                 settings['player_sector'] = {'incarnation': fresh_token(), 'nonce': fresh_token(), 'after_bound': True}
+            if 'saved_apply_fixture' in request:
+                # The saved setter uses the installer's single-index contract.
+                settings['index'] = settings.pop('indices')[0]
+                settings['saved_apply_fixture'] = request['saved_apply_fixture']
             installation = motion_install.install(case, profile, status, settings)
         except BaseException:
             motion_socket.close()
@@ -183,6 +197,8 @@ class ServerClient(combined.RecoveredRemoteParticipant):
             key: settings[key] for key in ('lease', 'attempt', 'generation', 'timeout')
         }
         self.motion_worker_config['epoch'] = status[1]
+        if 'saved_apply_fixture' in request:
+            self.motion_worker_config['saved_apply_fixture'] = request['saved_apply_fixture']
         return list(installation.paths)
 
     def redact(self):

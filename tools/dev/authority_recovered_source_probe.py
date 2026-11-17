@@ -64,11 +64,42 @@ class SourceProbeDiagnostics:
                 'confirmed_client_receipts': self.confirmed_client_receipts}
 
 
+def perform_saved_apply(source, sample, received_at, *, active_guard, checked_operation,
+                        record_apply_intent, diagnostics=None):
+    """Exactly one read-only preflight and, only if ready, one possible write."""
+    if diagnostics is not None:
+        diagnostics.enter('saved_apply_preflight')
+    active_guard()
+    status = checked_operation(source.preflight, sample)
+    if status not in ('near', 'ready'):
+        raise RuntimeError('saved apply preflight unconfirmed')
+    result = {'preflight': status, 'apply_requested': False, 'full_sample_age_proven': False}
+    if status == 'near':
+        return result
+    if diagnostics is not None:
+        diagnostics.enter('saved_apply_intent')
+    active_guard()
+    # This durable record is intentionally ambiguous: an interruption after
+    # it exists may have happened before or after the client received APPLY.
+    if checked_operation(record_apply_intent, copy.deepcopy(sample)) is not True:
+        raise RuntimeError('saved apply intent not durably recorded')
+    active_guard()
+    elapsed = time.monotonic() - received_at
+    if elapsed < 0 or not math.isfinite(elapsed):
+        raise RuntimeError('invalid sample receipt timing')
+    if diagnostics is not None:
+        diagnostics.enter('saved_apply_once')
+    if checked_operation(source.apply_once, sample) is not True:
+        raise RuntimeError('saved apply unconfirmed')
+    result.update(apply_requested=True, host_receipt_to_apply_seconds_lower_bound=elapsed)
+    return result
+
+
 def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         identity, verify, verify_process, timeout=90, candidate_indices=None,
         client_motion=False, verify_stopped=None, diagnostics=None,
         diagnostic_timeouts=None, private_long_diagnostic=False, sector_poll=None, sector_stop=None,
-        sector_arm=None, sector_incarnation=None):
+        sector_arm=None, sector_incarnation=None, saved_apply_fixture=None, record_apply_intent=None):
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -97,6 +128,11 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or not callable(verify) or not callable(verify_process)
             or type(client_motion) is not bool
             or type(private_long_diagnostic) is not bool
+            or (saved_apply_fixture is None and record_apply_intent is not None)
+            or (saved_apply_fixture is not None and
+                (saved_apply_fixture != 'recovery_enh_870' or index != 1318 or
+                 settings['epoch'] != '4ba7be438ebb04ec5bb85fdb95b5a488' or
+                 not pair_delivery or not callable(record_apply_intent)))
             or (sector_poll is None and any(value is not None for value in (sector_stop, sector_arm, sector_incarnation)))
             or (sector_poll is not None and (not callable(sector_poll) or not callable(sector_stop) or
                 not callable(sector_arm) or type(sector_incarnation) is not str or
@@ -231,6 +267,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             diagnostics.saved_checkpoint_guard_seconds += time.monotonic() - started_at
 
     staged_samples = []
+    sample_received_at = []
 
     def capture_sample(value):
         # Source IPC calls this before initiating TCP delivery. Rejection
@@ -244,13 +281,15 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             if staged_samples or sector_arm() is not True:
                 raise RuntimeError('client sector pre-send fence unavailable')
         staged_samples.append(copy.deepcopy(value))
+        sample_received_at.append(time.monotonic())
         if diagnostics is not None:
             # Parsed source sample staged locally; not a delivered receipt.
             diagnostics.prevalidated_samples += 1
         return True
     delivery_options = {'private_long_diagnostic': True} if private_long_diagnostic else {}
     delivery = ExperimentalTCPJobDelivery(host, enabled=True, timeout=delivery_timeout, **delivery_options)
-    motion = ExperimentalTCPMotion(delivery, enabled=True)
+    motion_options = {'allow_apply': True} if saved_apply_fixture is not None else {}
+    motion = ExperimentalTCPMotion(delivery, enabled=True, **motion_options)
     selected_recipient = None
     if client_motion:
         if sector_poll is not None:
@@ -360,6 +399,11 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                     raise ValueError('invalid client sector observation')
                 break
             time.sleep(.05)
+    apply_observation = None
+    if saved_apply_fixture is not None:
+        apply_observation = perform_saved_apply(source, samples[0], sample_received_at[0],
+            active_guard=active_guard, checked_operation=checked_operation,
+            record_apply_intent=record_apply_intent, diagnostics=diagnostics)
     if diagnostics is not None:
         diagnostics.enter('stop_source')
     if checked_operation(source.stop_remote) is not True:
@@ -431,4 +475,6 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         result['pair_sample_velocity_present'] = public_samples[0]['velocity'] is not None
     else:
         result['second_sample_velocity_present'] = public_samples[1]['velocity'] is not None
+    if apply_observation is not None:
+        result['saved_apply'] = apply_observation
     return result

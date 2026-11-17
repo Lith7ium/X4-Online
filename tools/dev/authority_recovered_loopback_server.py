@@ -184,6 +184,45 @@ def diagnostic_client_sector(args, pair_delivery):
     return enabled
 
 
+def diagnostic_saved_apply(args, witness_join, source_index, pair_delivery):
+    """Allow only the pinned one-client recovery fixture to request a write."""
+    enabled = getattr(args, 'diagnostic_saved_apply', False)
+    if type(enabled) is not bool or (enabled and
+            (witness_join is not True or source_index != 1318 or pair_delivery is not True)):
+        raise ValueError('saved apply requires the pinned private pair-delivery witness join')
+    return 'recovery_enh_870' if enabled else None
+
+
+def record_saved_apply_intent(out, sample):
+    """Durably mark a possible effect before dispatch; never overwrite a marker."""
+    from authority.experimental_tcp_motion import motion_digest
+    digest = motion_digest(sample)
+    if (sample['epoch'] != '4ba7be438ebb04ec5bb85fdb95b5a488' or
+            sample['index'] != 1318 or sample['sequence'] != 2):
+        raise ValueError('saved apply intent sample differs from pinned fixture')
+    data = (json.dumps({'fixture': 'recovery_enh_870', 'index': sample['index'],
+                       'sequence': sample['sequence'], 'sample_sha256': digest,
+                       'meaning': 'a client write may be requested after this record'},
+                      sort_keys=True, separators=(',', ':')) + '\n').encode('ascii')
+    directory = os.open(out, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        fd = os.open('saved-apply-intent.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                     os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=directory)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                fd = -1
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return True
+
+
 def record_local_pair_result(result, profile, source_index, remaining):
     """Record only final private-log evidence after owned processes have stopped."""
     evidence = {'index': source_index, 'native_velocity_proven': False,
@@ -559,6 +598,7 @@ def run(args):
         source_enabled=source_index is not None or source_candidates is not None
         client_motion=diagnostic_client_motion(args,source_enabled)
         pair_delivery=diagnostic_local_pair_delivery(args,local_pair,client_motion)
+        saved_apply_fixture=diagnostic_saved_apply(args,witness_join,source_index,pair_delivery)
         client_sector=diagnostic_client_sector(args,pair_delivery)
         guard_timing=diagnostic_guard_timing(args,source_enabled)
         long_motion=diagnostic_long_motion(args,witness_join,source_enabled,client_motion)
@@ -583,6 +623,9 @@ def run(args):
         if getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or witness_phase:
             import authority_recovery_registry_status as registry_check
             registry_expected=registry_check.saved_status(checkpoint)
+            if saved_apply_fixture is not None and (registry_expected[0] != 'ready' or
+                    registry_expected[1] != '4ba7be438ebb04ec5bb85fdb95b5a488'):
+                raise ValueError('saved apply registry epoch differs from pinned fixture')
             if registry_expected[0]=='ready':
                 old_registry=source_store.directory.parent/'case/extensions/x4_lan_lab/md/authority_ship_registry.xml'
                 if read_evidence(old_registry)!=read_evidence(ROOT/'tools/dev/authority_ship_registry.xml'):
@@ -848,6 +891,7 @@ def run(args):
                     witness_guard_ready=guard_ready if source_enabled else None,
                     client_motion=({'indices':list(source_candidates or (source_index,)),
                         'generation':source_settings['generation'],'timeout':client_motion_timeout,
+                        **({'saved_apply_fixture':saved_apply_fixture} if saved_apply_fixture else {}),
                         **({'player_sector':True} if client_sector else {})} if client_motion else None))
                 if source_enabled:
                     import authority_recovered_source_probe
@@ -875,6 +919,9 @@ def run(args):
                             verify_process=check,candidate_indices=source_candidates,client_motion=client_motion,
                             verify_stopped=verify if client_motion else None, diagnostic_timeouts=budgets,
                             private_long_diagnostic=long_motion,
+                            **({'saved_apply_fixture':saved_apply_fixture,
+                                'record_apply_intent':lambda sample: record_saved_apply_intent(out, sample)}
+                               if saved_apply_fixture else {}),
                             **({'sector_poll':active.sector_poll,'sector_stop':active.sector_stop,
                                 'sector_arm':active.sector_arm,
                                 'sector_incarnation':active.participant._sector_incarnation} if client_sector else {}))
@@ -1017,6 +1064,7 @@ def main():
     parser.add_argument('--diagnostic-local-pair',action='store_true',help='estimate one local source pair for an explicit private source index')
     parser.add_argument('--diagnostic-local-pair-delivery',action='store_true',help='deliver exactly one known-rate local pair sample to the private client')
     parser.add_argument('--diagnostic-client-sector',action='store_true',help='observe one private client sector after its pair receipt')
+    parser.add_argument('--diagnostic-saved-apply',action='store_true',help='private one-shot ENH-870 preflight and possible write; not gameplay')
     parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     diagnostic_options = parser.add_mutually_exclusive_group()

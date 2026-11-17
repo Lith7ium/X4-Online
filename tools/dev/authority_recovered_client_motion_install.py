@@ -29,6 +29,10 @@ MD=('authority_saved_baseline_motion_bind.xml','authority_replica_motion_bind.xm
 SECRET_FIELDS=('lease','attempt','generation','nonce','router_generation')
 PLAYER_SECTOR_MODULE=('src/authority/lua/player_sector_interest.lua','player_sector_interest.lua')
 PLAYER_SECTOR_MD='authority_player_sector_interest.xml'
+RECOVERY_APPLY_FIXTURE='recovery_enh_870'
+RECOVERY_APPLY_EPOCH='4ba7be438ebb04ec5bb85fdb95b5a488'
+RECOVERY_APPLY_MODULE=('src/authority/lua/saved_motion_apply.lua','saved_motion_apply.lua')
+RECOVERY_APPLY_MD='authority_saved_motion_apply.xml'
 
 
 def read_ticket_token(config, field, *, prefix=''):
@@ -103,8 +107,13 @@ def install(case,profile,status,settings):
         raise ValueError('observed saved registry required')
     fields={'port','lease','attempt','generation','nonce','router_generation','timeout'}
     if (type(settings) is not dict or
-        set(settings)-{'player_sector'} not in (fields|{'index'},fields|{'indices'})):
+        set(settings)-{'player_sector','saved_apply_fixture'} not in (fields|{'index'},fields|{'indices'})):
         raise ValueError('invalid client motion settings')
+    saved_apply_fixture=settings.get('saved_apply_fixture')
+    if 'saved_apply_fixture' in settings and (
+        saved_apply_fixture != RECOVERY_APPLY_FIXTURE or status[1] != RECOVERY_APPLY_EPOCH or
+        settings.get('index') != 1318 or 'indices' in settings):
+        raise ValueError('invalid recovery saved-apply fixture')
     player_sector=settings.get('player_sector')
     if 'player_sector' in settings:
         if (type(player_sector) is not dict or set(player_sector) not in
@@ -183,6 +192,13 @@ def install(case,profile,status,settings):
         raise ValueError('client owner hooks missing or ambiguous')
     modules=MODULES if player_sector is None else (*MODULES[:-1],PLAYER_SECTOR_MODULE,MODULES[-1])
     md_names=MD if player_sector is None else (*MD,PLAYER_SECTOR_MD)
+    if saved_apply_fixture is not None:
+        modules=(*modules[:-1],RECOVERY_APPLY_MODULE,modules[-1])
+        md_names=(*md_names,RECOVERY_APPLY_MD)
+        apply_sources=(ROOT/RECOVERY_APPLY_MODULE[0],ROOT/'tools/dev'/RECOVERY_APPLY_MD)
+        if (any(path.is_symlink() or not path.is_file() for path in apply_sources) or
+            'ui/'+RECOVERY_APPLY_MODULE[1] in manifest_files):
+            raise ValueError('saved apply overlay source or manifest is invalid')
     if player_sector is not None:
         sector_sources=(ROOT/PLAYER_SECTOR_MODULE[0],ROOT/'tools/dev'/PLAYER_SECTOR_MD)
         if (any(path.is_symlink() or not path.is_file() for path in sector_sources) or
@@ -205,6 +221,8 @@ def install(case,profile,status,settings):
     else:config_add+=',authority_client_motion_indices={'+','.join(map(str,indices))+'}'
     config_add+=',authority_client_motion_timeout='+format(settings['timeout'],'.17g')
     for name in SECRET_FIELDS:config_add+=',authority_client_motion_'+name+'="'+settings[name]+'"'
+    if saved_apply_fixture is not None:
+        config_add+=',authority_client_motion_saved_apply_fixture="'+saved_apply_fixture+'"'
     if player_sector is not None:
         for name in ('incarnation','nonce'):
             config_add+=',authority_client_motion_player_sector_'+name+'="'+player_sector[name]+'"'
@@ -222,6 +240,10 @@ def install(case,profile,status,settings):
   if client_motion then assert(client_motion:tick())end
  end
 '''
+    if saved_apply_fixture is not None:
+        code=code.replace('    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
+                          '    saved_apply_fixture=cfg.authority_client_motion_saved_apply_fixture,\n'
+                          '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
     if player_sector is not None:
         after_bound=',after_bound=true' if player_sector.get('after_bound') is True else ''
         code=code.replace('    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',

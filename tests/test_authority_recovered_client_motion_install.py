@@ -61,6 +61,8 @@ class Install(unittest.TestCase):
   self.assertEqual(manifest.count('ui/local_udp_module.lua'),1)
   self.assertLess(manifest.index('ui/local_udp_module.lua'),manifest.index('ui/authority_recovered_client_motion.lua'))
   self.assertLess(manifest.index('ui/local_udp_module.lua'),manifest.index('ui/authority_two_x4_participant_probe.lua'))
+  self.assertNotIn('ui/saved_motion_apply.lua',manifest)
+  self.assertFalse((self.md/'authority_saved_motion_apply.xml').exists())
   self.assertNotIn('ui/player_sector_interest.lua',manifest)
   self.assertFalse((self.md/'authority_player_sector_interest.xml').exists())
   self.assertNotIn('player_sector=',installed)
@@ -72,6 +74,54 @@ class Install(unittest.TestCase):
   for key in subject.SECRET_FIELDS:
    self.assertNotIn(self.settings[key],redacted);self.assertIn('authority_client_motion_'+key+'="redacted"',redacted)
   with self.assertRaises(ValueError):result.redact()
+ def test_opt_in_recovery_saved_apply_overlay(self):
+  self.status=('ready',subject.RECOVERY_APPLY_EPOCH,10082,'d'*64)
+  loader=self.ui/'authority_download_load_probe.lua'
+  loader.write_text(loader.read_text().replace("expected='"+'c'*32+'|100',"expected='"+self.status[1]+'|10082'))
+  self.settings.update(index=1318,saved_apply_fixture=subject.RECOVERY_APPLY_FIXTURE)
+  result=self.install()
+  self.assertIn(self.ui/'saved_motion_apply.lua',result.paths)
+  self.assertIn(self.md/'authority_saved_motion_apply.xml',result.paths)
+  self.assertEqual((self.ui/'saved_motion_apply.lua').read_bytes(),(ROOT/subject.RECOVERY_APPLY_MODULE[0]).read_bytes())
+  self.assertEqual((self.md/'authority_saved_motion_apply.xml').read_bytes(),(ROOT/'tools/dev'/subject.RECOVERY_APPLY_MD).read_bytes())
+  ET.parse(self.md/'authority_saved_motion_apply.xml')
+  manifest=(self.lab/'ui.xml').read_text()
+  self.assertLess(manifest.index('ui/saved_motion_apply.lua'),manifest.index('ui/authority_recovered_client_motion.lua'))
+  self.assertIn('saved_apply_fixture=cfg.authority_client_motion_saved_apply_fixture',
+                (self.ui/'authority_two_x4_participant_probe.lua').read_text())
+  self.assertIn('authority_client_motion_saved_apply_fixture="recovery_enh_870"',(self.ui/'config.lua').read_text())
+ def test_saved_apply_combines_with_player_sector_after_bound(self):
+  self.status=('ready',subject.RECOVERY_APPLY_EPOCH,10082,'d'*64)
+  loader=self.ui/'authority_download_load_probe.lua'
+  text=loader.read_text().replace("expected='"+'c'*32+'|100',"expected='"+self.status[1]+'|10082')
+  marker='  local check={'
+  registry="  registry_status=assert(X4LAN_RECOVERY_REGISTRY_STATUS.new({nonce='"+'8'*32+"',expected='example'}))\n"
+  self.assertEqual(text.count(marker),1);loader.write_text(text.replace(marker,registry+marker))
+  self.settings.update(index=1318,saved_apply_fixture=subject.RECOVERY_APPLY_FIXTURE,
+                       player_sector={'incarnation':'9'*32,'nonce':'0'*32,'after_bound':True})
+  result=self.install()
+  control=(self.ui/'authority_two_x4_participant_probe.lua').read_text()
+  self.assertIn('saved_apply_fixture=cfg.authority_client_motion_saved_apply_fixture',control)
+  self.assertIn('nonce=cfg.authority_client_motion_player_sector_nonce,after_bound=true',control)
+  self.assertIn(self.ui/'saved_motion_apply.lua',result.paths)
+  self.assertIn(self.ui/'player_sector_interest.lua',result.paths)
+ def test_saved_apply_refuses_wrong_identity_before_mutation(self):
+  paths=(self.ui/'config.lua',self.lab/'ui.xml',self.ui/'authority_two_x4_participant_probe.lua',self.ui/'authority_download_load_probe.lua')
+  before=[p.read_bytes() for p in paths]
+  self.settings['saved_apply_fixture']=subject.RECOVERY_APPLY_FIXTURE
+  for value in (None,False,'unknown',subject.RECOVERY_APPLY_FIXTURE):
+   self.settings['saved_apply_fixture']=value
+   with self.subTest(value=value),self.assertRaises(ValueError):self.install()
+   self.assertEqual([p.read_bytes() for p in paths],before)
+  self.assertFalse((self.ui/'saved_motion_apply.lua').exists())
+ @unittest.skipUnless(os.name=='posix' and shutil.which('luajit') and shutil.which('cc'),'LuaJIT and C compiler required')
+ def test_recovery_saved_apply_lua_composition(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   lib=Path(tmp)/'abi.so'
+   subprocess.run(['cc','-O2','-shared','-fPIC','tests/fixtures/saved_motion_apply_abi.c','-o',str(lib)],cwd=ROOT,check=True,capture_output=True)
+   for mode in ('good','sector','apply_first','wrong_sequence','repeat_preflight','repeat_apply'):
+    with self.subTest(mode=mode):
+     subprocess.run(['luajit','tests/authority_recovered_client_saved_apply.lua',mode],cwd=ROOT,check=True,capture_output=True,timeout=5,env=dict(os.environ,LD_PRELOAD=str(lib)))
  def test_refusals_do_not_mutate_input_files(self):
   files=(self.ui/'config.lua',self.lab/'ui.xml',self.ui/'authority_two_x4_participant_probe.lua',self.ui/'authority_download_load_probe.lua')
   original=[p.read_bytes() for p in files]

@@ -21,11 +21,12 @@ checks and matching pre/post Inspect arguments remain in force. The writer and
 MD inspect repeat local identity and existing safety checks. The epoch alone
 does not prove checkpoint provenance or cross-process identity.
 
-Offline tests compose the actual saved binder, motion owner, event router and
-writer with simulated MD responses and a fake X4 ABI. They do not execute the
-MD file in X4. The recovery installer and active recovery probe do not yet
-connect this option, and no recovery-specific two-process frame fence or native
-setter effect has been established. This fixture is not gameplay evidence.
+Offline tests compose the actual recovery client wrapper, saved binder, motion
+owner, event router and writer with simulated MD responses and a fake X4 ABI.
+They do not execute the MD file in X4. The recovery installer and active probe
+now connect this option only when explicitly requested. No recovery-specific
+two-process frame fence or native setter effect has been established. This
+fixture is not gameplay evidence.
 
 ## First attempt
 
@@ -139,3 +140,31 @@ installed code does not authorize APPLY for FAR and no setter is expected;
 there is no independent setter-call trace, and the failure result retains
 `setter_outcome_uncertain=true`. The result does not prove a write, receipt,
 frame identity, collision clearance or gameplay.
+
+## Private recovery join one-shot
+
+The recovered loopback supervisor has a default-off `--diagnostic-saved-apply`
+option. It requires `--registry-witness-join`, `--diagnostic-client`,
+`--diagnostic-source-index 1318`, `--diagnostic-client-motion`,
+`--diagnostic-local-pair`, and `--diagnostic-local-pair-delivery`, as well as
+the pinned registry epoch above. Existing recovery, process, membership,
+checkpoint, deadline and STOP guards remain in force. This is one client and
+one selected saved actor in disposable local Linux profiles.
+
+After the exact pair sample and its client receipt are confirmed, the probe
+performs at most one preflight. NEAR causes no write; FAR, invalid results or
+errors abort. READY allows one APPLY only after `saved-apply-intent.json` is
+created exclusively and its file and directory are fsynced. That marker means
+that an effect may follow; it does not mean a write actually happened. A lost
+or ambiguous response is never retried automatically. The marker survives a
+normal process interruption, but power-loss durability of all newly created
+ancestor directories has not been established. The recorded host receipt to
+apply time is a lower bound; the sample's complete age is unknown.
+
+`test_authority_recovered_apply_worker_chain.py` exercises the source probe,
+TCP, worker, recovered client wrapper and actual Lua writer using simulated MD
+and a fake X4 ABI. In that test the fake client checks the intent digest before
+its one simulated write and explicitly reports one write after STOP. It is not a
+native X4 run. No common running frame, collision clearance, continuous motion
+or gameplay is established by this option. In particular, a local preflight
+cannot prove that the independently running worlds have equivalent frames.
