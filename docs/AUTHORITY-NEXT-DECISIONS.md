@@ -160,4 +160,22 @@ checks and pumping are now included in the redacted uncertainty report.
 Pump time includes its nested guard work; these counters do not cover every
 part of the receiver or measure CPU time. Protocol, deadlines and ownership
 checks are unchanged. All 16 tests in the impacted module passed; no full-suite
-or X4 rerun was performed. The earlier full-suite failure remains open.
+or X4 rerun was performed.
+
+The retained full-suite run failed at the apply worker's **initial participant
+HELLO ownership check**, before sample selection or a server resume. Both
+stand-ins independently expired after 20 seconds, while the worker's 18-second
+deadline started after process setup. A single diagnostic rerun of
+`test_fourth_real_sample_is_selected` passed in 0.616 seconds without an
+ownership rejection, so the historical failure's cause remains unproven.
+
+The apply-worker tests now explicitly keep both stand-ins alive until their
+parent closes a control pipe. Other users of the shared fixture retain their
+existing lifetime unless they opt in. A regression leaves actual UDP HELLOs
+queued for 21 seconds, checks the live processes and their socket ownership
+through the production `/proc` checks, receives resume receipts, and verifies
+clean exits on EOF. This removes a demonstrated fixture lifetime hazard without
+changing production guards or deadlines. All 24 selected tests passed in
+32.241 seconds using `python -m unittest discover -s tests -p
+'test_authority_client*worker.py' -v` in the isolated worktree. The complete
+suite has not been rerun and remains unverified.
