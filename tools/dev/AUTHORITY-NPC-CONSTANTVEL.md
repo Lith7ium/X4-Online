@@ -46,6 +46,9 @@ each component of the requested zero vector. The physical effect of the setter
 and its intended zero vector are therefore **not established**, even though
 the historical `result.json` says `success: true`: that result did not reject
 these engine errors. Treat the intervention and release outcome as inconclusive.
+The MD now uses the stock `vector.[0m, 0m, 0m]` expression for the zero linear
+velocity. This syntax correction has **not** been rerun natively; the prior
+evidence remains inconclusive and does not establish setter or release behavior.
 
 The selected ship moved between the three pre-intervention samples. Its sampled
 position was unchanged through the three samples after the setter request and

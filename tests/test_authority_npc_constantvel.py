@@ -21,7 +21,7 @@ class ConstantVelocityTests(unittest.TestCase):
         root=ET.parse(ROOT/'tools/dev/authority_npc_constantvel.xml').getroot()
         setters=root.findall('.//set_object_velocity');self.assertEqual(len(setters),2)
         self.assertEqual(setters[0].get('constantvel'),'true')
-        self.assertEqual(setters[0].find('linear').attrib,{'x':'0m / 1s','y':'0m / 1s','z':'0m / 1s'})
+        self.assertEqual(setters[0].find('linear').attrib,{'value':'vector.[0m, 0m, 0m]'})
         self.assertEqual(setters[1].get('constantvel'),'false');self.assertEqual(len(setters[1]),0)
         self.assertFalse(root.findall('.//create_ship'));self.assertFalse(root.findall('.//create_order'))
         guard=root.find('.//library[@name="Guard"]/actions/set_value').get('exact')

@@ -32,7 +32,7 @@
    <conditions><event_ui_triggered screen="'X4AuthorityNPCConstantVelocity'" control="'Apply'"/></conditions>
    <actions><include_actions ref="Guard"/>
     <do_if value="$valid and State.$phase == 'before' and @State.$ship.order.exists and State.$ship.order.id == State.$orderid and (@State.$ship.order.state == orderstate.started or @State.$ship.order.state == orderstate.critical)">
-     <set_object_velocity object="State.$ship" constantvel="true"><linear x="0m / 1s" y="0m / 1s" z="0m / 1s"/></set_object_velocity>
+     <set_object_velocity object="State.$ship" constantvel="true"><linear value="vector.[0m, 0m, 0m]"/></set_object_velocity>
      <set_value name="State.$phase" exact="'during'"/>
      <raise_lua_event name="'X4AuthorityNPCConstantVelocity.Applied'" param="'%s|%s'.[event.param3.$request_id,State.$ship]"/>
     </do_if><do_else><raise_lua_event name="'X4AuthorityNPCConstantVelocity.Refused'"/></do_else>
