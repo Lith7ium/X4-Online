@@ -186,6 +186,22 @@ fault does not distinguish a local age failure from a transport, MD, router
 or other failure; the cause remains unknown. The result does not establish a
 common frame, visible movement, Windows, Internet or gameplay.
 
+The instrumented follow-up `.local/authority-recovered-apply-once-02` also
+failed after one confirmed client receipt. The client logged
+`owner_preflight_begin_guard` and a local BOUND-to-PREFLIGHT lower bound of
+95.123 seconds; the installed local `max_age` was 25 seconds. Assuming the
+client's local `GetCurRealTime` clock was monotonic over this interval, that
+lower bound alone exceeds the limit and explains why the age check could not
+pass. The same
+guard includes other checks, so the log does not isolate their individual
+outcomes. The full sample age from source observation is still unknown.
+
+The client log has no completed preflight or `WRITE_ENTERED`, and the private
+apply-intent file is absent. No application is established. The result reports
+no remaining owned processes; normal source/client STOP receipts and a final
+departure checkpoint are not established. This finding is specific to the
+instrumented private run and is not evidence of a working multiplayer session.
+
 For a subsequent private run, the client wrapper records a local timing
 observation after successfully sending BOUND and after receiving the matching
 PREFLIGHT. It logs their difference, rounded down to milliseconds, only after
