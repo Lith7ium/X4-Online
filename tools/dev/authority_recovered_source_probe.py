@@ -8,6 +8,7 @@ fence, log watching, and global failure cleanup.
 import copy
 import math
 import os
+import re
 import time
 from pathlib import Path
 
@@ -80,6 +81,12 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or any(not valid_index(candidate) for candidate in candidate_indices)
             or len(set(candidate_indices)) != len(candidate_indices)
         )
+    if 'local_pair' in settings:
+        pair = settings['local_pair']
+        if (type(pair) is not dict or set(pair) != {'nonce', 'index'} or
+                type(pair['index']) is not int or pair['index'] != index or candidate_indices is not None or
+                type(pair['nonce']) is not str or not re.fullmatch(r'[0-9a-f]{32}', pair['nonce'])):
+            raise ValueError('local pair differs from the explicit source index')
     if (invalid_selection
             or type(identity) is not tuple or len(identity) != 2
             or any(type(value) is not int or value < 1 for value in identity)

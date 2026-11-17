@@ -17,6 +17,17 @@ from authority.experimental_tcp_motion import motion_digest
 import linux_gate_live
 
 class Probe(unittest.TestCase):
+    def test_local_pair_must_match_the_explicit_source_before_binding(self):
+        for pair in ({'nonce': 'f' * 32, 'index': 2},
+                     {'nonce': 'invalid', 'index': 1},
+                     {'nonce': 'f' * 32, 'index': True}):
+            with self.subTest(pair=pair):
+                events, kwargs, _ = self.context()
+                kwargs['settings']['local_pair'] = pair
+                with self.assertRaisesRegex(ValueError, 'local pair'):
+                    subject.run(**kwargs)
+                self.assertEqual(events, [])
+
     def context(self, stop=True):
         events=[];baseline=object();settings={'epoch':'a'*32,'baseline':2,'lease':'b'*32,'attempt':'c'*32,'generation':'d'*32}
         world=SimpleNamespace(session=SimpleNamespace(state='running',pending=None,baseline_id=None),_baseline=(7,baseline))

@@ -1,6 +1,7 @@
 """Supervisor socket-loop coverage only; no native X4 is launched here."""
 import importlib.util
 import gzip
+import inspect
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,62 @@ from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
 
 
 class WitnessJoinModeTests(unittest.TestCase):
+    def test_local_pair_requires_explicit_single_index(self):
+        self.assertFalse(MODULE.diagnostic_local_pair(SimpleNamespace(), False, None, None))
+        args = SimpleNamespace(diagnostic_local_pair=True)
+        self.assertTrue(MODULE.diagnostic_local_pair(args, True, 1, None))
+        for join, index, candidates in ((False, 1, None), (True, None, None),
+                                        (True, True, None), (True, 1, (1,))):
+            with self.subTest(join=join, index=index, candidates=candidates):
+                with self.assertRaises(ValueError):
+                    MODULE.diagnostic_local_pair(args, join, index, candidates)
+        with self.assertRaises(ValueError):
+            MODULE.diagnostic_local_pair(SimpleNamespace(diagnostic_local_pair=1), True, 1, None)
+
+    def test_pair_nonce_redaction_rejects_ambiguity(self):
+        token = 'c' * 32
+        config = 'authority_control_lease="' + 'a' * 32 + '",authority_motion_pair_nonce="' + token + '"'
+        self.assertNotIn(token, MODULE.redact_recovery_config(config))
+        with self.assertRaises(ValueError):
+            MODULE.redact_recovery_config(config + ',authority_motion_pair_nonce="' + token + '"')
+        with self.assertRaises(ValueError):
+            MODULE.redact_recovery_config(config.replace(token, 'bad'))
+
+    def test_pair_evidence_requires_stopped_process_and_preserves_prior_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory)
+            log = profile / 'engine-output.log'
+            log.write_text('[X4LAN] AUTH_LOCAL_PAIR estimated dt=0.1 vx=1 vy=2 vz=3\n')
+            result = {'success': True}
+            MODULE.record_local_pair_result(result, profile, 7, [])
+            self.assertTrue(result['success'])
+            self.assertEqual(result['local_pair_diagnostic']['vx'], 1)
+            self.assertFalse(result['local_pair_diagnostic']['native_velocity_proven'])
+            result = {'success': True}
+            MODULE.record_local_pair_result(result, profile, 7, [123])
+            self.assertFalse(result['success'])
+            self.assertEqual(result['local_pair_diagnostic']['status'], 'not_verified_cleanup')
+            log.write_text('[X4LAN] AUTH_LOCAL_PAIR invalid\n')
+            result = {'success': True}
+            MODULE.record_local_pair_result(result, profile, 7, [])
+            self.assertFalse(result['success'])
+            self.assertEqual(result['local_pair_diagnostic']['status'], 'invalid')
+            result = {'success': False, 'error': 'prior failure'}
+            MODULE.record_local_pair_result(result, profile, 7, [])
+            self.assertEqual(result['error'], 'prior failure')
+            self.assertEqual(result['local_pair_diagnostic']['status'], 'invalid')
+
+    def test_pair_log_failure_is_checked_after_existing_final_fences(self):
+        # Pin the supervisor's order; the preceding test exercises failure semantics.
+        source = inspect.getsource(MODULE.run)
+        final_checks = source.index('verify_final_recovery(watch)')
+        protected = source.index("raise ValueError('final protected recovery inputs changed')", final_checks)
+        pair = source.index('record_local_pair_result(result, profile, source_index, remaining)', protected)
+        lock = source.index('finish_recovery_lock(lockbox, remaining, services_stopped, errors)', pair)
+        self.assertLess(final_checks, protected)
+        self.assertLess(protected, pair)
+        self.assertLess(pair, lock)
+
     def test_redaction_requires_confirmed_process_cleanup(self):
         with tempfile.TemporaryDirectory() as d:
             path=Path(d)/'config.lua';original='authority_control_lease="'+('a'*32)+'"'

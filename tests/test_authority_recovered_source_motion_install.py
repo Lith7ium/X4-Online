@@ -100,4 +100,34 @@ class RecoveredMotionTests(unittest.TestCase):
     with self.assertRaises(ValueError):self.install()
     self.assertEqual(before,cfg.read_bytes())
 
+ def test_local_pair_is_explicit_and_additive(self):
+  self.settings['local_pair']={'nonce':'6'*32,'index':1}
+  protected=self.install()
+  pair=self.ui/'source_motion_local_pair.lua'
+  config=(self.ui/'config.lua').read_text()
+  owner=(self.ui/'authority_world_bridge_probe.lua').read_text()
+  manifest=(self.lab/'ui.xml').read_text()
+  self.assertIn(pair,protected)
+  self.assertLess(manifest.index('ui/source_motion_local_pair.lua'),
+                  manifest.index('ui/authority_recovered_source_motion.lua'))
+  self.assertIn('authority_motion_pair_nonce="'+'6'*32+'"',config)
+  self.assertIn('authority_motion_pair_index=1',config)
+  self.assertIn('local_pair={nonce=cfg.authority_motion_pair_nonce,index=cfg.authority_motion_pair_index}',owner)
+  for path in (pair,self.ui/'authority_world_bridge_probe.lua'):
+   subprocess.run(['luajit','-b',str(path),'/dev/null'],check=True,capture_output=True)
+
+ def test_bad_local_pair_rejected_before_mutation(self):
+  config=self.ui/'config.lua';manifest=self.lab/'ui.xml';owner=self.ui/'authority_world_bridge_probe.lua'
+  before=[p.read_bytes() for p in (config,manifest,owner)]
+  for pair in (None,{'nonce':'6'*32,'index':True},{'nonce':'6'*32,'index':3},
+               {'nonce':'4'*32,'index':1},{'nonce':'4'*16+'6'*16,'index':1}):
+   with self.subTest(pair=pair):
+    self.settings['local_pair']=pair
+    with self.assertRaises(ValueError):self.install()
+    self.assertEqual(before,[p.read_bytes() for p in (config,manifest,owner)])
+  self.settings['local_pair']={'nonce':'6'*32,'index':1}
+  self.settings['selection']={'nonce':'7'*32,'candidates':(1,)}
+  with self.assertRaises(ValueError):self.install()
+  self.assertEqual(before,[p.read_bytes() for p in (config,manifest,owner)])
+
 if __name__=='__main__':unittest.main()

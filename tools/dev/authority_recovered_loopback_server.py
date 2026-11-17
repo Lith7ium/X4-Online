@@ -158,6 +158,36 @@ def diagnostic_client_motion(args, source_enabled):
     return enabled
 
 
+def diagnostic_local_pair(args, witness_join, source_index, source_candidates):
+    """Enable one local source pair only for an explicitly pinned index."""
+    enabled = getattr(args, 'diagnostic_local_pair', False)
+    if type(enabled) is not bool or (enabled and
+            (witness_join is not True or type(source_index) is not int or not 1 <= source_index <= 200000
+             or source_candidates is not None)):
+        raise ValueError('local pair requires one explicit private witness-join source index')
+    return enabled
+
+
+def record_local_pair_result(result, profile, source_index, remaining):
+    """Record only final private-log evidence after owned processes have stopped."""
+    evidence = {'index': source_index, 'native_velocity_proven': False,
+                'client_velocity_proven': False}
+    result['local_pair_diagnostic'] = evidence
+    try:
+        if remaining != []:
+            evidence['status'] = 'not_verified_cleanup'
+        elif profile is None or not os.path.lexists(profile / 'engine-output.log'):
+            evidence['status'] = 'not_observed'
+        else:
+            from authority_source_pair_log import read_source_pair_log
+            evidence.update(read_source_pair_log(profile / 'engine-output.log'))
+    except BaseException as error:
+        # The diagnostic must not interrupt the supervisor's remaining cleanup.
+        evidence.update(status='invalid', error_type=type(error).__name__)
+    if result['success'] and evidence['status'] not in ('estimated', 'unavailable'):
+        result.update(success=False, error='final local pair evidence unavailable or invalid')
+
+
 def diagnostic_long_motion(args, witness_join, source_enabled, client_motion):
     enabled = getattr(args, 'diagnostic_long_motion', False)
     if type(enabled) is not bool or (enabled and not (witness_join and source_enabled and client_motion)):
@@ -212,7 +242,7 @@ def redact_recovery_config(text):
     redacted,count=re.subn(r'authority_control_lease="[0-9a-f]{32}"',
         'authority_control_lease="redacted"',text)
     if count!=1:raise ValueError('invalid lease')
-    for name in ('lease','attempt','generation','nonce','saved_nonce','candidate_nonce'):
+    for name in ('lease','attempt','generation','nonce','saved_nonce','candidate_nonce','pair_nonce'):
         key='authority_motion_'+name+'='
         if key in redacted:
             redacted,count=re.subn(key+r'"[0-9a-f]{32}"',key+'"redacted"',redacted)
@@ -479,7 +509,8 @@ def run(args):
               'engine_operations':operations}
     processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=clock_sock=source_sock=None
     endpoint=out/'endpoint.json'; deadline=time.monotonic()+args.timeout
-    watch=target=checkpoint=expected=None
+    watch=target=checkpoint=expected=profile=None
+    local_pair=False;source_index=None
     witness_pending=None
     diagnostics = []
     active_clients = []
@@ -488,6 +519,7 @@ def run(args):
         witness_join, witness_phase = witness_mode(args)
         source_index=diagnostic_source_index(args,witness_join)
         source_candidates=diagnostic_source_candidates(args,witness_join,source_index)
+        local_pair=diagnostic_local_pair(args,witness_join,source_index,source_candidates)
         source_enabled=source_index is not None or source_candidates is not None
         client_motion=diagnostic_client_motion(args,source_enabled)
         guard_timing=diagnostic_guard_timing(args,source_enabled)
@@ -560,6 +592,8 @@ def run(args):
                 'generation':fresh(),'nonce':fresh(),'saved_nonce':fresh(),'timeout':120}
             if source_candidates is not None:
                 source_settings['selection']={'nonce':fresh(),'candidates':source_candidates}
+            if local_pair:
+                source_settings['local_pair']={'nonce':fresh(),'index':source_index}
             protected.extend(authority_recovered_source_motion_install.install(case,profile,registry_expected,source_settings))
         clock = None
         if getattr(args, 'diagnostic_overlap', False):
@@ -892,6 +926,8 @@ def run(args):
                     verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
             except BaseException as error:
                 result.update(success=False, error='final recovery evidence invalid: '+str(error))
+        if local_pair:
+            record_local_pair_result(result, profile, source_index, remaining)
         finish_recovery_lock(lockbox, remaining, services_stopped, errors)
         try:
             if live.steam_identity(home,user.pw_uid) != steam: errors.append('Steam identity changed')
@@ -933,6 +969,7 @@ def main():
     source_options.add_argument('--diagnostic-source-index',type=int,help='private saved-registry index to sample')
     source_options.add_argument('--diagnostic-source-candidates',type=int,nargs='+',help='bounded explicit indices to inspect for a private source sample')
     parser.add_argument('--diagnostic-client-motion',action='store_true',help='also require two confirmed motion receipts by one private Linux client')
+    parser.add_argument('--diagnostic-local-pair',action='store_true',help='estimate one local source pair for an explicit private source index')
     parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     diagnostic_options = parser.add_mutually_exclusive_group()

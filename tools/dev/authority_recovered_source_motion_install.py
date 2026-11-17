@@ -29,7 +29,8 @@ def install(case,profile,status,settings):
         type(status[3]) is not str or not re.fullmatch(r'[0-9a-f]{64}',status[3])):
         raise ValueError('confirmed registry status required')
     fields={'port','lease','attempt','generation','nonce','saved_nonce','timeout'}
-    if type(settings) is not dict or set(settings) not in (fields,fields|{'selection'}):raise ValueError('invalid motion settings')
+    if type(settings) is not dict or set(settings) not in (fields,fields|{'selection'},fields|{'local_pair'}):
+        raise ValueError('invalid motion settings')
     if type(settings['port']) is not int or not 1<=settings['port']<=65535:
         raise ValueError('invalid motion port')
     if (type(settings['timeout']) not in (int,float) or not math.isfinite(settings['timeout']) or
@@ -46,6 +47,13 @@ def install(case,profile,status,settings):
             selection['nonce'][:16] in (settings['nonce'][:16],settings['saved_nonce'][:16])):
             raise ValueError('invalid bounded candidate selection')
         tokens.append(selection['nonce'])
+    local_pair=settings.get('local_pair')
+    if 'local_pair' in settings and (type(local_pair) is not dict or set(local_pair)!={'nonce','index'} or
+        type(local_pair['nonce']) is not str or not HEX.fullmatch(local_pair['nonce']) or
+        type(local_pair['index']) is not int or not 1<=local_pair['index']<=status[2] or
+        local_pair['nonce'][:16] in (settings['nonce'][:16],settings['saved_nonce'][:16])):
+        raise ValueError('invalid local pair context')
+    if local_pair is not None:tokens.append(local_pair['nonce'])
     if (any(type(t) is not str or not HEX.fullmatch(t) for t in tokens) or
         len(set(tokens+[status[1]]))!=len(tokens)+1 or settings['nonce'][:16]==settings['saved_nonce'][:16]):
         raise ValueError('invalid or colliding motion context')
@@ -81,6 +89,7 @@ def install(case,profile,status,settings):
         raise ValueError('recovery owner hook missing or ambiguous')
     modules=list(MODULES)
     if selection is not None:modules.insert(-1,('tools/dev/authority_registry_motion_candidate.lua','authority_registry_motion_candidate.lua'))
+    if local_pair is not None:modules.insert(-1,('src/authority/lua/source_motion_local_pair.lua','source_motion_local_pair.lua'))
     files=[ui/name for _,name in modules]+[md/'authority_job_descriptor_probe.xml']
     if selection is not None:files.append(md/'authority_registry_motion_candidate.xml')
     if any(path.exists() or path.is_symlink() for path in files):raise ValueError('motion overlay would overwrite existing files')
@@ -100,6 +109,8 @@ def install(case,profile,status,settings):
     if selection is not None:
         add+=',authority_motion_candidate_nonce="'+selection['nonce']+'",authority_motion_candidate_indices={'
         add+=','.join(str(n) for n in selection['candidates'])+'}'
+    if local_pair is not None:
+        add+=',authority_motion_pair_nonce="'+local_pair['nonce']+'",authority_motion_pair_index='+str(local_pair['index'])
     config.write_text(cfg[:-2]+add+'}\n',encoding='ascii');config.chmod(0o600)
     owner_add=''' if cfg.authority_recovered_source_motion then
   if not recovered_motion and not C.IsGamePaused() then
@@ -114,6 +125,9 @@ def install(case,profile,status,settings):
     if selection is not None:
         owner_add=owner_add.replace('expected_save_path=cfg.authority_load_save_path}))',
             'expected_save_path=cfg.authority_load_save_path,selection={nonce=cfg.authority_motion_candidate_nonce,candidates=cfg.authority_motion_candidate_indices}}))')
+    if local_pair is not None:
+        owner_add=owner_add.replace('expected_save_path=cfg.authority_load_save_path}))',
+            'expected_save_path=cfg.authority_load_save_path,local_pair={nonce=cfg.authority_motion_pair_nonce,index=cfg.authority_motion_pair_index}}))')
     owner=owner.replace(state_hook,state_hook+'local recovered_motion=nil\n')
     probe.write_text(owner.replace(owner_hook,owner_hook+owner_add),encoding='utf-8')
     return [config,manifest,probe,*files]

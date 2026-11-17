@@ -545,6 +545,17 @@ not pump the control connection. The historical join checkpoint is pinned for
 this diagnostic only and is not a current recoverable running-world snapshot.
 The source result proves neither cross-process ship identity nor gameplay.
 
+The default-off `--diagnostic-local-pair` additionally requires the explicit
+`--diagnostic-source-index N` and the private witness join; it cannot be used
+with candidate selection. For one source PULL it takes two local positions
+and reports their time-derived velocity estimate to the private X4 log; the
+PULL still returns one ordinary fresh sample. After the owned X4 process stops,
+the supervisor records the bounded parsed log result under
+`local_pair_diagnostic`, or records that it was unavailable, missing, invalid,
+or could not be checked after cleanup. A failed overall run remains failed.
+This measures a local position-derived estimate, not native velocity, client
+movement, shared identity, Windows behavior, or playable networking.
+
 The additional `--diagnostic-client-motion` option enables a private,
 one-client delivery experiment alongside either source-selection option. The
 server requires two matching participant receipts and then confirms source
