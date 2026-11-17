@@ -211,14 +211,15 @@ class ServerClient(combined.RecoveredRemoteParticipant):
             self.motion_worker_config['saved_apply_fixture'] = request['saved_apply_fixture']
         return list(installation.paths)
 
-    def prepare_fixture_player_source(self, case, profile, *, slot, sector, grant, timeout, ticket, latest_cache=False):
+    def prepare_fixture_player_source(self, case, profile, *, slot, sector, grant, timeout, ticket, latest_cache=False, freeze_drain=False):
         """Install one private player source; the caller owns and validates its grant."""
         import math
         import authority_fixture_player_source_install as source_install
 
         if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
                 self.client_authority_worker_config is not None or
-                type(latest_cache) is not bool or type(slot) is not int or slot not in (1, 2) or
+                type(latest_cache) is not bool or type(freeze_drain) is not bool or
+                (freeze_drain and not latest_cache) or type(slot) is not int or slot not in (1, 2) or
                 type(sector) is not str or not re.fullmatch(r'[A-Za-z0-9_]{1,128}', sector) or
                 type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 30 or
                 type(ticket) is not dict or type(ticket.get('world_epoch')) is not str or
@@ -255,7 +256,7 @@ class ServerClient(combined.RecoveredRemoteParticipant):
                 case, profile, slot=slot, epoch=checked_grant['epoch'], sector=sector,
                 lease=lease, attempt=attempt, generation=checked_grant['generation'],
                 bootstrap_nonce=bootstrap_nonce, sampler_nonce=sampler_nonce,
-                port=source_socket.getsockname()[1], timeout=timeout, latest_cache=latest_cache)
+                port=source_socket.getsockname()[1], timeout=timeout, latest_cache=latest_cache, freeze_drain=freeze_drain)
             self.fixture_source_installation = installation
             self.motion_sock = source_socket
             self._pin_motion_socket()
@@ -267,6 +268,7 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         self.client_authority_worker_config = {
             'lease': lease, 'attempt': attempt, 'grant': checked_grant,
             'fixture_slot': slot, 'timeout': timeout,
+            **({'freeze_drain': True} if freeze_drain else {}),
         }
         return list(installation.paths)
 
@@ -603,7 +605,9 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             fixture_scripts is None or not participant.keep_worker or client_motion is not None or
             type(fixture_player_source) is not dict or
             not {'sector', 'grant', 'timeout'} <= set(fixture_player_source) or
-            set(fixture_player_source) - {'sector', 'grant', 'timeout', 'latest_cache'} or
+            set(fixture_player_source) - {'sector', 'grant', 'timeout', 'latest_cache', 'freeze_drain'} or
+            type(fixture_player_source.get('freeze_drain', False)) is not bool or
+            (fixture_player_source.get('freeze_drain', False) and not fixture_player_source.get('latest_cache', False)) or
             type(fixture_player_source.get('latest_cache', False)) is not bool):
         raise ValueError('player source requires a retained fixture client')
     participant.cancel_check = cancel_check

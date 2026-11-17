@@ -78,6 +78,114 @@ class ObserverTCP(unittest.TestCase):
             for secret in ('epoch','generation','token','incarnation','session_epoch'):
                 self.assertNotIn(grant[secret],serialized)
 
+    def exercise_tcp_rejoin(self, *, stale_resume=False):
+        case = fixture.ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
+        case.setUp(); self.addCleanup(case.doCleanups)
+        clients = [case.connect(), case.connect()]
+        for client in clients:
+            case.offer_and_claim(client)
+        grants = {handle: {'session_epoch': 'a'*32, 'epoch': 'b'*32, 'generation': 'c'*32,
+                  'index': handle+2, 'sector_macro': 'sector_'+str(handle),
+                  'token': str(handle)*32, 'incarnation': str(handle+2)*32} for handle in (1, 2)}
+        stop = threading.Event(); errors = []; threads = []; lifecycle = []
+        def launch_client(connection, handle, grant):
+            def serve():
+                try:
+                    connection.settimeout(2); data = b''
+                    while not data.endswith(b'\n'):
+                        data += connection.recv(1)
+                    assert json.loads(data)['kind'] == 'accepted'
+                    sequence = 0
+                    baseline = True
+                    class Participant:
+                        def pause(self, handles):
+                            lifecycle.append((handle, 'pause')); return True
+                        def resume(self, handles):
+                            nonlocal baseline
+                            if not (stale_resume and handle == 2 and (2, 'pause') in lifecycle):
+                                baseline = True
+                            lifecycle.append((handle, 'resume')); return True
+                    def pull():
+                        nonlocal sequence, baseline
+                        sequence += 1
+                        rate = None if baseline else {'x': 1., 'y': 0., 'z': 0.}
+                        rotation_rate = None if baseline else {'yaw': 0., 'pitch': 0., 'roll': 0.}
+                        baseline = False
+                        return {'version': 2, 'epoch': grant['epoch'], 'generation': grant['generation'],
+                                'index': grant['index'], 'sequence': sequence, 'sector_macro': grant['sector_macro'],
+                                'source_time': float(sequence), 'x': float(sequence), 'y': 0., 'z': 0.,
+                                'velocity': rate, 'orientation': {'yaw': 0., 'pitch': 0., 'roll': 0.},
+                                'angular_rate': rotation_rate}
+                    app = ExperimentalTCPParticipantClient(connection, Participant(), enabled=True, epoch='a'*32,
+                        handle=handle, timeout=2, authority_grant=grant, authority_guard=lambda value: value == grant,
+                        pull_authority_motion=pull)
+                    while not stop.is_set():
+                        app.poll(.05)
+                    app.close()
+                except (ConnectionError, OSError):
+                    if not stop.is_set() and handle != 1: errors.append('unexpected connection failure')
+                except BaseException as error:
+                    if not stop.is_set() and not (handle == 1 and str(error) == 'participant peer disconnected'):
+                        errors.append(error)
+            thread = threading.Thread(target=serve); thread.start(); threads.append(thread)
+        for handle, connection in enumerate(clients, 1):
+            launch_client(connection, handle, grants[handle])
+        def finish():
+            stop.set()
+            for thread in threads: thread.join(2)
+            self.assertFalse(any(thread.is_alive() for thread in threads)); self.assertEqual(errors, [])
+        self.addCleanup(finish)
+        case.host.tick(.1)
+        replacement_grant = {**grants[1], 'generation': 'd'*32, 'token': '6'*32, 'incarnation': '7'*32}
+        def transition(delivery, owners, create_owner):
+            survivor = owners[2]
+            self.assertTrue(delivery.suspend_client_authority())
+            connection = next(conn for conn, peer in case.control._peers.items() if peer['handle'] == 1)
+            case.control._drop(connection); del owners[1]
+            self.assertTrue(delivery.resume_client_authority())
+            self.assertTrue(delivery.suspend_client_authority())
+            replacement = case.connect(); clients.append(replacement)
+            case.host.tick(.1)  # This pauses the surviving participant.
+            case.offer_and_claim(replacement)
+            launch_client(replacement, 3, replacement_grant)
+            case.host.tick(.1)
+            owners[3] = create_owner(3, replacement_grant)
+            self.assertIs(owners[2], survivor)
+            self.assertTrue(delivery.resume_client_authority())
+            return {'departed': 1, 'survivor': 2, 'replacement': 3, 'grant': replacement_grant}
+        def observe_rejoin():
+            return observer.observe(host=case.host, world=case.world, grants=grants, verify=lambda: True,
+                deadline=time.monotonic()+8, operation_timeout=2, enabled=True,
+                rejoin_callback=transition, suspend_on_exit=True)
+        if stale_resume:
+            with self.assertRaisesRegex(ValueError, 'lacks a fresh baseline'):
+                observe_rejoin()
+            self.assertTrue(case.host._failed)
+            return
+        result = observe_rejoin()
+        self.assertTrue(result['rejoin']['survivor_fresh_baseline_observed'])
+        baseline = result['rejoin']['survivor_baseline']
+        self.assertEqual((baseline['connection_handle'], baseline['registry_index']), (2, 4))
+        self.assertIsNone(baseline['velocity']); self.assertIsNone(baseline['angular_rate'])
+        self.assertGreater(baseline['sequence'], 0); self.assertGreater(baseline['source_time'], 0)
+        before = result['rejoin']['players_before_rejoin']
+        self.assertEqual([(row['connection_handle'], row['registry_index']) for row in before], [(1, 3), (2, 4)])
+        self.assertTrue(all(len(row['samples']) == 2 for row in before + result['players']))
+        serialized = json.dumps(result)
+        for grant in (*grants.values(), replacement_grant):
+            for key in ('epoch', 'generation', 'token', 'incarnation', 'session_epoch'):
+                self.assertNotIn(grant[key], serialized)
+        self.assertEqual((result['rejoin']['surviving_handle'], result['rejoin']['replacement_handle']), (2, 3))
+        self.assertIn((2, 'pause'), lifecycle)
+        self.assertEqual([row['registry_index'] for row in result['players']], [4, 3])
+        self.assertFalse(case.host._failed)
+
+    def test_real_tcp_rejoin_keeps_survivor_and_requires_new_baseline(self):
+        self.exercise_tcp_rejoin()
+
+    def test_real_tcp_rejoin_rejects_stale_resume_velocity(self):
+        self.exercise_tcp_rejoin(stale_resume=True)
+
     def test_boundary_failure_fences_and_retains_nonsecret_progress(self):
         from types import SimpleNamespace
         for failing_call in (1, 2):

@@ -15,8 +15,16 @@ unconfirmed post-pull boundary; no successful test result is issued. A post
 boundary is not attempted after a failed pull in an uncertain host state.
 The result records metadata-check and
 digest-check counts, bytes from successfully verified digest reads and elapsed
-digest/observation time. These metrics cover this observation only; they are
-not a measurement of total process reads or physical disk IO.
+digest/observation time, and the number of successfully opened sampling
+windows. These metrics cover this observation only; they are not a measurement
+of total process reads or physical disk IO.
+
+For the optional rejoin diagnostic, the first pin set is fully checked and
+closed before any client departs. The transition, join, save and admission use
+full hashes. After the replacement client is admitted, its actual private save
+and the surviving client's save are verified and pinned as a second set; the
+first client's old path is outside that set. Each set has its own entry and
+exit digest checks. Any failed verification or cleanup fences the experiment.
 
 The private test supervisor must exclusively own the FD table and serialize
 these guards on its owner thread. It must also own all writers, with no external

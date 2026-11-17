@@ -8,7 +8,9 @@ local Bootstrap = dofile('src/authority/lua/saved_baseline_source_bootstrap.lua'
 local Sampler = dofile('src/authority/lua/source_motion_sampler.lua')
 local IPC = dofile('src/authority/lua/source_motion_ipc.lua')
 local Latest = dofile('src/authority/lua/fixture_player_latest_cache.lua')
+local Barrier = dofile('src/authority/lua/fixture_player_freeze_barrier.lua')
 local latest = os.getenv('TEST_LATEST_CACHE') == '1'
+local drain = os.getenv('TEST_FREEZE_DRAIN') == '1'
 local netmod = assert(package.loadlib(assert(os.getenv('TEST_NET_LIB')), 'luaopen_x4lan_net'))()
 local net = assert(netmod.open('127.0.0.1', assert(tonumber(os.getenv('TEST_NET_PORT')))))
 local slot = assert(tonumber(os.getenv('TEST_FIXTURE_SLOT')))
@@ -18,9 +20,12 @@ local now, game, request, seen, callback, reader = 1, 10
 local actor, boot_done = {}, false
 local function make_session()
  return Session.new({enabled=true, fixture_slot=slot, epoch=epoch, generation=generation,
-  index=index, baseline=4, include_orientation=true, latest_cache=latest, guard=function() return true end,
+  index=index, baseline=4, include_orientation=true, latest_cache=latest, freeze_drain=drain, guard=function() return true end,
   grant=function() return true end, fault=function(reason) error(reason) end,
   register=function(fn) callback=fn; return true end,
+  barrier_factory=function(opts)
+   opts.enabled=true;opts.timeout=5;opts.clock=function() return now end;return Barrier.new(opts)
+  end,
   latest_factory=function(opts)
    return Latest.new({enabled=true,grant={index=index,epoch=epoch,generation=generation,
     source=('7'):rep(32),frame=('8'):rep(32),sector=sector},max_age=1,clock=function() return now end,
@@ -29,7 +34,7 @@ local function make_session()
   end,
   ipc_factory=function(opts)
    return IPC.new({enabled=true, lease=lease, attempt=attempt, epoch=epoch, generation=generation,
-    timeout=5, clock=function() return now end, guard=opts.guard, fault=opts.fault, net=net,
+    timeout=5, clock=function() return now end, guard=opts.guard, fault=opts.fault, net=net, freeze_drain=drain,
     saved_baseline={limit=4,guard=function() return opts.guard() end}})
   end,
   reader_factory=function(opts)
@@ -63,7 +68,7 @@ local function make_session()
    return reader
   end})
 end
-local owner = Owner.new({net=net,lease=lease,attempt=attempt,epoch=epoch,generation=generation,
+local owner = Owner.new({net=net,lease=lease,attempt=attempt,epoch=epoch,generation=generation, latest_cache=latest, freeze_drain=drain,
  seat_ready=function() return true end,paused=function() return false end,guard=function() return true end,
  make_session=make_session,fault=function(reason) error(reason) end})
 while true do

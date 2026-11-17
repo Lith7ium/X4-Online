@@ -114,15 +114,27 @@ class ExperimentalClientOwner:
         with self._operation('loading'):
             return self._load.paused(attempt, paused)
 
-    def activate(self, attempt, controller, *, participant_timeout=30):
+    def activate(self, attempt, controller, *, participant_timeout=30,
+                 authority_grant=None, authority_guard=None, pull_authority_motion=None):
         """Claim the observed load and transfer its socket to one participant.
 
         The caller establishes that the observations and controller belong to
         the same still-live X4 process. A failed or uncertain claim is not retried.
+        Motion source lifetime, pause/drain and cleanup remain the caller's duty.
+        When enabled, all three authority arguments must be supplied together.
         """
         with self._operation('loading'):
             if self._offer is None:
                 raise RuntimeError('participant requires an offered connection')
+            checked_grant = None
+            if any(value is not None for value in
+                   (authority_grant, authority_guard, pull_authority_motion)):
+                from .experimental_tcp_client_authority_motion import grant_value
+                if not callable(authority_guard) or not callable(pull_authority_motion):
+                    raise ValueError('authority pull needs guard and callback')
+                checked_grant = grant_value(authority_grant)
+                if checked_grant['session_epoch'] != self._offer.offer.world_epoch:
+                    raise ValueError('authority grant session differs')
             validate_participant_connection(self._socket, controller, enabled=True,
                 epoch=self._offer.offer.world_epoch, handle=self._offer.offer.connection_handle,
                 timeout=participant_timeout)
@@ -133,7 +145,9 @@ class ExperimentalClientOwner:
             try:
                 self._participant = ExperimentalTCPParticipantClient(
                     conn, controller, enabled=True, epoch=self._offer.offer.world_epoch,
-                    handle=self._offer.offer.connection_handle, timeout=participant_timeout)
+                    handle=self._offer.offer.connection_handle, timeout=participant_timeout,
+                    authority_grant=checked_grant, authority_guard=authority_guard,
+                    pull_authority_motion=pull_authority_motion)
             except BaseException:
                 conn.close()
                 raise

@@ -70,14 +70,34 @@ class ExperimentalTCPJobDelivery:
         self._host=host;self._timeout=float(timeout);self._incarnations={}
         self._failed=False;self._last=None;self._queued=None;self._active=False
         self._test_binding=None;self._test_bind_attempted=False;self._test_bind_busy=False
+        self._authority_suspended = False
+        self._authority_snapshot = None
+        control = host._control
+        if not hasattr(control, '_retired_authority_incarnations'):
+            control._retired_authority_incarnations = set()
+            control._retired_authority_tokens = set()
+        self._retired_authority_incarnations = control._retired_authority_incarnations
+        self._retired_authority_tokens = control._retired_authority_tokens
         host._control._job_delivery_owner=self
 
     def _peer_disconnected(self, handle):
         """Retire only this socket's incarnation after the owner drops it."""
+        owners = getattr(self, '_client_authority_selected_owners', {})
+        owner = owners.get(handle)
+        unsafe = False
+        if owner is not None:
+            owner._revoke_for_disconnect()
+            unsafe = (not self._authority_suspended or self._active or
+                      self._test_bind_busy or self._queued is not None)
+            if unsafe:
+                self._failed = True
+                self._host._failed = True
         incarnation=self._incarnations.pop(handle,None)
         motion=getattr(self,'_motion_owner',None)
         if incarnation is not None and motion is not None:
             motion._peer_disconnected(('peer_'+str(handle),incarnation))
+        if unsafe:
+            raise RuntimeError('client authority disconnected without an orderly suspension')
 
     def _admitted_peers(self):
         """Read the current admitted connection set without creating identities."""
@@ -98,6 +118,8 @@ class ExperimentalTCPJobDelivery:
         return handles,peers
 
     def _peers(self):
+        if self._authority_suspended:
+            raise RuntimeError('client authority membership is suspended')
         try:
             handles,peers=self._admitted_peers()
             if self._test_binding is not None:
@@ -118,6 +140,172 @@ class ExperimentalTCPJobDelivery:
             if h not in self._incarnations:
                 self._incarnations[h]=secrets.token_hex(16)
         return handles,peers
+
+    def suspend_client_authority(self):
+        """Stop authority pulls before an orderly membership transition.
+
+        This only fences this transport owner. The caller must independently
+        drain the local X4 source and server sink before pausing or departure.
+        """
+        host = self._host
+        host._check()
+        host._control._reader_free()
+        owners = getattr(self, '_client_authority_selected_owners', None)
+        if (self._failed or self._authority_suspended or self._active or self._test_bind_busy or
+                self._queued is not None or not owners or
+                getattr(self, '_client_authority_owner', None) is not None or
+                getattr(self, '_motion_owner', None) is not None or
+                any(owner._busy for owner in owners.values())):
+            raise RuntimeError('client authority cannot be suspended safely')
+        reader_lease = object()
+        host._control._reader_lease = reader_lease
+        host._busy = True
+        self._active = True
+        try:
+            handles, peers = self._peers()
+            deadline = time.monotonic() + self._timeout
+            ExperimentalTCPParticipants._quiet(self, peers, deadline)
+            current_handles, current_peers = self._admitted_peers()
+            if (current_handles != handles or any(
+                    current_peers[handle][0] is not peers[handle][0] or
+                    current_peers[handle][1] is not peers[handle][1]
+                    for handle in handles)):
+                raise RuntimeError('authority sockets changed during suspension')
+            if (set(handles) != set(owners) or any(
+                    self._incarnations[handle] != owners[handle]._grant['incarnation'] or
+                    owners[handle]._revoked or owners[handle]._failed or
+                    owners[handle]._delivery is not self or
+                    owners[handle]._connection_handle != handle or
+                    json.dumps(owners[handle]._grant, sort_keys=True, separators=(',', ':')) !=
+                    owners[handle]._grant_wire for handle in handles)):
+                raise RuntimeError('client authority membership differs')
+            if (host._control._reader_lease is not reader_lease or self._failed or host._failed or
+                    host._control._job_delivery_owner is not self or
+                    getattr(self, '_client_authority_selected_owners', None) is not owners or
+                    not self._active or not host._busy):
+                raise RuntimeError('client authority suspend context changed')
+            self._authority_snapshot = {
+                handle: (*peers[handle], self._incarnations[handle], owners[handle])
+                for handle in handles
+            }
+            self._authority_suspended = True
+            return True
+        except BaseException:
+            self._failed = True
+            host._failed = True
+            raise
+        finally:
+            lease_changed = host._control._reader_lease is not reader_lease
+            if not lease_changed:
+                host._control._reader_lease = None
+            else:
+                self._failed = True
+                host._failed = True
+            self._active = False
+            host._busy = False
+            if lease_changed:
+                raise RuntimeError('authority reader lease changed during suspend')
+
+    def resume_client_authority(self):
+        """Rebind admitted sockets without resetting any surviving owner."""
+        host = self._host
+        host._check()
+        host._control._reader_free()
+        if (self._failed or not self._authority_suspended or self._authority_snapshot is None or
+                self._active or self._test_bind_busy or self._queued is not None):
+            raise RuntimeError('client authority cannot resume')
+        owners = getattr(self, '_client_authority_selected_owners', {})
+        if not owners or any(owner._busy or owner._revoked for owner in owners.values()):
+            raise RuntimeError('client authority owners unavailable')
+        previous_bindings = self._authority_snapshot
+        reader_lease = object()
+        host._control._reader_lease = reader_lease
+        host._busy = True
+        self._active = True
+        try:
+            deadline = time.monotonic() + self._timeout
+            handles, peers = self._admitted_peers()
+            if set(handles) != set(owners):
+                raise ValueError('admitted authority owners differ')
+            epoch = host._world.session.world_epoch
+            bindings = []
+            owner_states = {}
+            for handle in handles:
+                owner = owners[handle]
+                grant = owner._grant
+                previous = previous_bindings.get(handle)
+                if (owner._delivery is not self or owner._connection_handle != handle or owner._failed or
+                        json.dumps(grant, sort_keys=True, separators=(',', ':')) != owner._grant_wire or
+                        grant['session_epoch'] != epoch or
+                        grant['incarnation'] in self._retired_authority_incarnations or
+                        grant['token'] in self._retired_authority_tokens):
+                    raise ValueError('retired or foreign authority grant')
+                if (previous is not None and (peers[handle][0] is not previous[0] or
+                        peers[handle][1] is not previous[1] or
+                        grant['incarnation'] != previous[2] or owner is not previous[3])):
+                    raise ValueError('surviving authority participant changed')
+                bindings.append((handle, *peers[handle], grant['incarnation']))
+                owner_states[handle] = (owner, owner._grant_wire, owner._request,
+                                        owner._last_sequence, owner._last_time)
+            if len({item[3] for item in bindings}) != len(bindings):
+                raise ValueError('authority incarnation reused')
+            ExperimentalTCPParticipants._quiet(self, peers, deadline)
+            current_handles, current_peers = self._admitted_peers()
+            if (current_handles != handles or host._world.session.world_epoch != epoch or
+                    self._failed or host._failed or host._control._reader_lease is not reader_lease or
+                    time.monotonic() >= deadline or not self._authority_suspended or
+                    self._authority_snapshot is not previous_bindings or
+                    host._control._job_delivery_owner is not self or
+                    getattr(self, '_client_authority_selected_owners', None) is not owners or
+                    not self._active or not host._busy or set(owners) != set(handles) or any(
+                        current_peers[handle][0] is not peers[handle][0] or
+                        current_peers[handle][1] is not peers[handle][1] or
+                        owners[handle] is not owner_states[handle][0] or
+                        owners[handle]._revoked or owners[handle]._failed or
+                        (owners[handle]._grant_wire, owners[handle]._request,
+                         owners[handle]._last_sequence, owners[handle]._last_time) != owner_states[handle][1:] or
+                        json.dumps(owners[handle]._grant, sort_keys=True, separators=(',', ':')) !=
+                        owners[handle]._grant_wire for handle in handles)):
+                raise RuntimeError('authority membership changed during resume')
+            self._incarnations = {handle: incarnation for handle, _, _, incarnation in bindings}
+            if self._test_binding is not None:
+                self._test_binding = (epoch, tuple(bindings))
+            self._authority_snapshot = None
+            self._authority_suspended = False
+            return True
+        except BaseException:
+            self._failed = True
+            host._failed = True
+            raise
+        finally:
+            lease_changed = host._control._reader_lease is not reader_lease
+            if not lease_changed:
+                host._control._reader_lease = None
+            else:
+                self._failed = True
+                host._failed = True
+            self._active = False
+            host._busy = False
+            if lease_changed:
+                raise RuntimeError('authority reader lease changed during resume')
+
+    def release_client_authority(self):
+        """Release an idle, fully detached authority delivery from the host."""
+        host = self._host
+        host._check()
+        host._control._reader_free()
+        if (self._failed or not self._authority_suspended or self._active or self._test_bind_busy or
+                self._queued is not None or self._last is not None or self._incarnations or
+                getattr(self, '_client_authority_selected_owners', {}) or
+                getattr(self, '_client_authority_owner', None) is not None or
+                getattr(self, '_motion_owner', None) is not None or
+                host._control._job_delivery_owner is not self):
+            raise RuntimeError('client authority delivery cannot be released')
+        self._authority_snapshot = None
+        self._test_binding = None
+        self._failed = True
+        host._control._job_delivery_owner = None
+        return True
 
     def bind_test_incarnation(self, handle, incarnation, *, enabled=False):
         """Bind one pre-generated diagnostic token to an admitted connection.

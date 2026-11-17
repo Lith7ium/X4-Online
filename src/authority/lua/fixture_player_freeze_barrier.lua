@@ -120,4 +120,5 @@ function M.new(options)
  return api
 end
 
+X4LAN_FIXTURE_PLAYER_FREEZE_BARRIER=M
 return M

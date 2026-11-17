@@ -28,15 +28,17 @@ class ExperimentalClientAuthorityMotionIPC:
     """Exclusive synchronous request owner, fenced after every uncertainty."""
     def __init__(self,sock,*,enabled=False,lease,attempt,epoch,generation,incarnation,
                  guard,validate_peer,grant,timeout=20,include_orientation=False,
-                 fixture_slot=None,fixture_sector=None):
+                 fixture_slot=None,fixture_sector=None,freeze_drain=False):
         tokens=(lease,attempt,epoch,generation,incarnation)
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
             any(type(v) is not str or not _TOKEN.fullmatch(v) for v in tokens) or len(set(tokens))!=len(tokens) or
-            not all(callable(f) for f in (guard,validate_peer,grant)) or type(include_orientation) is not bool or
+            not all(callable(f) for f in (guard,validate_peer,grant)) or type(include_orientation) is not bool or type(freeze_drain) is not bool or
             type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=120):
             raise ValueError('invalid client authority motion context')
+        if freeze_drain and (fixture_slot is None or not include_orientation):
+            raise ValueError('freeze drain requires fixture 6D source')
         if fixture_slot is None:
             if fixture_sector is not None:
                 raise ValueError('fixture sector requires a player slot')
@@ -55,6 +57,8 @@ class ExperimentalClientAuthorityMotionIPC:
         self._lease=lease;self._attempt=attempt;self._epoch=epoch;self._generation=generation;self._incarnation=incarnation
         self._guard=guard;self._validate=validate_peer;self._grant=grant;self._timeout=float(timeout)
         self._include_orientation=include_orientation
+        self._freeze_drain=freeze_drain
+        self._resume_baseline_required=False
         self._index,self._baseline,self._sector=index,baseline,sector
         self._owner=threading.get_ident();self._state='new';self._next=0;self._sequence=0;self._last_time=None
     @property
@@ -70,14 +74,14 @@ class ExperimentalClientAuthorityMotionIPC:
         original_grant = self._grant
         original_context = (self._peer, self._local, self._lease, self._attempt, self._epoch,
                             self._generation, self._incarnation, self._timeout, self._owner,
-                            self._next, self._sequence, self._last_time, self._include_orientation,
-                            self._index, self._baseline, self._sector)
+                            self._next, self._sequence, self._last_time, self._include_orientation, self._freeze_drain,
+                            self._index, self._baseline, self._sector, self._resume_baseline_required)
 
         def context_unchanged():
             current_context = (self._peer, self._local, self._lease, self._attempt, self._epoch,
                                self._generation, self._incarnation, self._timeout, self._owner,
-                               self._next, self._sequence, self._last_time, self._include_orientation,
-                               self._index, self._baseline, self._sector)
+                               self._next, self._sequence, self._last_time, self._include_orientation, self._freeze_drain,
+                               self._index, self._baseline, self._sector, self._resume_baseline_required)
             return (self._sock is original_socket and self._guard is original_guard and
                     self._validate is original_peer_validator and self._grant is original_grant and
                     current_context == original_context and
@@ -165,13 +169,41 @@ class ExperimentalClientAuthorityMotionIPC:
             value=motion_value(sample)
             if (value['sector_macro']!=self._sector or value['sequence']!=self._sequence+1 or
                 (self._last_time is not None and value['source_time']<=self._last_time) or
-                (self._sequence==0 and value['velocity'] is not None)):
+                ((self._sequence==0 or self._resume_baseline_required) and value['velocity'] is not None)):
                 raise ValueError('client motion stale or foreign sample')
             self._quiet(deadline,'pulling');self._sequence=value['sequence'];self._last_time=value['source_time']
+            self._resume_baseline_required=False
             self._state='ready';return value
         except BaseException:self._fail();raise
+    def _barrier(self, request_kind, reply_kind, required, pending, completed):
+        if (not self._freeze_drain or self._state != required or
+                threading.get_ident() != self._owner):
+            self._fail()
+            raise RuntimeError('client authority barrier unavailable')
+        self._state = pending
+        deadline = time.monotonic() + self._timeout
+        try:
+            request, parts = self._request(request_kind, [], deadline, pending)
+            if parts != ['S', self._lease, self._attempt, reply_kind, self._epoch, self._generation, request]:
+                raise ValueError('client authority barrier acknowledgement mismatch')
+            self._quiet(deadline, pending)
+            self._state = completed
+            if request_kind == 'RESUME':
+                self._resume_baseline_required = True
+            return True
+        except BaseException:
+            # The request or acknowledgement may have reached the other side.
+            self._fail()
+            raise
+
+    def freeze(self):
+        return self._barrier('FREEZE', 'FROZEN', 'ready', 'freezing', 'frozen')
+
+    def resume(self):
+        return self._barrier('RESUME', 'RESUMED', 'frozen', 'resuming', 'ready')
+
     def close(self):
-        if threading.get_ident()!=self._owner or self._state not in ('new','ready'):
+        if threading.get_ident()!=self._owner or self._state not in ('new','ready','frozen'):
             self._fail();raise RuntimeError('client motion cannot close')
         self._state='closed'
         with _SOCKET_LOCK:_SOCKET_OWNERS.pop(self._sock,None)

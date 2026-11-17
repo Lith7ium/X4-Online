@@ -5,6 +5,8 @@ function M.new(c)
  assert(type(c)=='table' and (type(c.net)=='table' or type(c.net)=='userdata') and type(c.net.send)=='function' and
   type(c.net.receive)=='function' and type(c.net.pending)=='function')
  assert(c.latest_cache==nil or type(c.latest_cache)=='boolean')
+ assert(c.freeze_drain==nil or type(c.freeze_drain)=='boolean')
+ assert(not c.freeze_drain or c.latest_cache==true)
  for _,name in ipairs({'seat_ready','paused','guard','make_session','fault'}) do
   assert(type(c[name])=='function',name)
  end
@@ -36,7 +38,9 @@ function M.new(c)
      if c.latest_cache then was_paused=true end
     else
      if was_paused then
-      assert(c.net:pending()==false and session:after_resume() and c.net:pending()==false and c.guard())
+      if not c.freeze_drain then
+       assert(c.net:pending()==false and session:after_resume() and c.net:pending()==false and c.guard())
+      end
       was_paused=false
      end
      assert(session:tick() and c.guard())
@@ -62,6 +66,7 @@ function M.new_x4(cfg)
  local owner
  owner=M.new{net=net,lease=cfg.lease,attempt=cfg.attempt,epoch=cfg.epoch,generation=cfg.generation,
   latest_cache=cfg.latest_cache,
+  freeze_drain=cfg.freeze_drain,
   seat_ready=function() return X4LAN_FIXTURE_SEAT_READY==true end,
   paused=function() return ffi.C.IsGamePaused() end,guard=guard,
   fault=function(reason) DebugError('[X4LAN] AUTH_FIXTURE_PLAYER_SOURCE ERROR '..reason) end,
@@ -71,6 +76,7 @@ function M.new_x4(cfg)
     lease=cfg.lease,attempt=cfg.attempt,bootstrap_nonce=cfg.bootstrap_nonce,sampler_nonce=cfg.sampler_nonce,
     timeout=cfg.timeout,interval=cfg.interval,include_orientation=true,net=net,
     latest_cache=cfg.latest_cache,cache_module=X4LAN_FIXTURE_PLAYER_LATEST_CACHE,
+    freeze_drain=cfg.freeze_drain,barrier_module=X4LAN_FIXTURE_PLAYER_FREEZE_BARRIER,
     reader=X4LAN_CLIENT_AUTHORITY_MOTION_READER,ipc=X4LAN_AUTHORITY_SOURCE_MOTION_IPC,
     bootstrap=X4LAN_SAVED_BASELINE_SOURCE_BOOTSTRAP,sampler=X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER,
     descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,resolve=X4LAN_RESOLVE_STRING,

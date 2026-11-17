@@ -22,7 +22,7 @@ MAX_PULLS_PER_PLAYER = 4096
 
 
 def observe(*, host, world, grants, verify, deadline, operation_timeout=30, enabled=False,
-            verify_transaction_boundary=None, progress=None):
+            verify_transaction_boundary=None, progress=None, rejoin_callback=None, suspend_on_exit=False):
     """Observe two rate-bearing 6D samples per handle; return no grant secrets.
 
     Grants map admitted connection handles to the caller's private assertions.
@@ -40,6 +40,8 @@ def observe(*, host, world, grants, verify, deadline, operation_timeout=30, enab
             not 0 < operation_timeout <= 300 or
             (verify_transaction_boundary is not None and not callable(verify_transaction_boundary)) or
             (progress is not None and (type(progress) is not dict or progress)) or
+            (rejoin_callback is not None and not callable(rejoin_callback)) or
+            type(suspend_on_exit) is not bool or
             type(grants) is not dict or len(grants) != 2 or
             any(type(handle) is not int or not 1 <= handle <= MAX_INTEGER for handle in grants)):
         raise ValueError('invalid fixture observation context')
@@ -82,13 +84,14 @@ def observe(*, host, world, grants, verify, deadline, operation_timeout=30, enab
             raise RuntimeError('fixture participant bindings unconfirmed')
         check()
         owners = {}
-        for handle in handles:
-            grant = selected[handle]
-            def grant_guard(candidate, expected=grant):
+        def create_owner(handle, grant):
+            def grant_guard(candidate):
                 check()
-                return candidate == expected
-            owners[handle] = ExperimentalTCPClientAuthorityMotion(delivery, enabled=True, grant=grant,
+                return candidate == grant
+            return ExperimentalTCPClientAuthorityMotion(delivery, enabled=True, grant=grant,
                 guard=grant_guard, connection_handle=handle)
+        for handle in handles:
+            owners[handle] = create_owner(handle, selected[handle])
         evidence = {handle: [] for handle in handles}
         last = {handle: None for handle in handles}
         attempts = {handle: 0 for handle in handles}
@@ -104,67 +107,129 @@ def observe(*, host, world, grants, verify, deadline, operation_timeout=30, enab
 
         for handle in handles:
             record_progress(handle)
-        while any(len(evidence[handle]) < 2 for handle in handles):
-            for handle in handles:
-                if len(evidence[handle]) == 2:
-                    continue
-                check()
-                if attempts[handle] >= MAX_PULLS_PER_PLAYER:
-                    raise RuntimeError('fixture source sample limit exceeded')
-                if verify_transaction_boundary is not None:
-                    boundary_ok = verify_transaction_boundary()
+        def collect_samples(resume_handle=None):
+            baseline_pending = resume_handle is not None
+            resume_baseline = None
+            while any(len(evidence[handle]) < 2 for handle in handles):
+                for handle in handles:
+                    if len(evidence[handle]) == 2:
+                        continue
                     check()
-                    if boundary_ok is not True:
-                        raise RuntimeError('fixture transaction boundary guard failed')
-                attempts[handle] += 1
-                without_post_boundary[handle] += 1
-                record_progress(handle)
-                sample = owners[handle].pull()
-                if sample is not None:
-                    received[handle] += 1
+                    if attempts[handle] >= MAX_PULLS_PER_PLAYER:
+                        raise RuntimeError('fixture source sample limit exceeded')
+                    if verify_transaction_boundary is not None:
+                        boundary_ok = verify_transaction_boundary()
+                        check()
+                        if boundary_ok is not True:
+                            raise RuntimeError('fixture transaction boundary guard failed')
+                    attempts[handle] += 1
+                    without_post_boundary[handle] += 1
                     record_progress(handle)
-                if verify_transaction_boundary is not None:
-                    boundary_ok = verify_transaction_boundary()
+                    sample = owners[handle].pull()
+                    if sample is not None:
+                        received[handle] += 1
+                        record_progress(handle)
+                    if verify_transaction_boundary is not None:
+                        boundary_ok = verify_transaction_boundary()
+                        check()
+                        if boundary_ok is not True:
+                            raise RuntimeError('fixture transaction boundary guard failed')
+                        without_post_boundary[handle] -= 1
+                        record_progress(handle)
+                    else:
+                        check()
+                    if sample is not None:
+                        sample = motion_value(sample)
+                        grant = selected[handle]
+                        prior = last[handle]
+                        if (sample['version'] != 2 or sample['epoch'] != grant['epoch'] or
+                                sample['generation'] != grant['generation'] or sample['index'] != grant['index'] or
+                                sample['sector_macro'] != grant['sector_macro'] or
+                                sample['sequence'] != (1 if prior is None else prior['sequence'] + 1) or
+                                (prior is None and sample['velocity'] is not None) or
+                                (prior is not None and sample['source_time'] <= prior['source_time'])):
+                            raise ValueError('fixture player sample differs from granted track')
+                        if baseline_pending and handle == resume_handle:
+                            if sample['velocity'] is not None or sample['angular_rate'] is not None:
+                                raise ValueError('resumed fixture source lacks a fresh baseline')
+                            baseline_pending = False
+                            resume_baseline = {'connection_handle': handle, 'registry_index': grant['index'],
+                                               'sequence': sample['sequence'], 'source_time': sample['source_time'],
+                                               'velocity': sample['velocity'], 'angular_rate': sample['angular_rate']}
+                        last[handle] = sample
+                        if sample['velocity'] is not None:
+                            with_velocity[handle] += 1
+                        record_progress(handle)
+                        if sample['velocity'] is not None:
+                            evidence[handle].append({key: copy.deepcopy(sample[key]) for key in
+                                ('sequence', 'source_time', 'x', 'y', 'z', 'orientation', 'velocity', 'angular_rate')})
+                    # Pump only after the pull releases the exclusive reader. Do not
+                    # ask the world to advance an unexpected lifecycle operation.
                     check()
-                    if boundary_ok is not True:
-                        raise RuntimeError('fixture transaction boundary guard failed')
-                    without_post_boundary[handle] -= 1
-                    record_progress(handle)
-                else:
+                    host.tick(0, defer_world=True)
                     check()
-                if sample is not None:
-                    sample = motion_value(sample)
-                    grant = selected[handle]
-                    prior = last[handle]
-                    if (sample['version'] != 2 or sample['epoch'] != grant['epoch'] or
-                            sample['generation'] != grant['generation'] or sample['index'] != grant['index'] or
-                            sample['sector_macro'] != grant['sector_macro'] or
-                            sample['sequence'] != (1 if prior is None else prior['sequence'] + 1) or
-                            (prior is None and sample['velocity'] is not None) or
-                            (prior is not None and sample['source_time'] <= prior['source_time'])):
-                        raise ValueError('fixture player sample differs from granted track')
-                    last[handle] = sample
-                    if sample['velocity'] is not None:
-                        with_velocity[handle] += 1
-                    record_progress(handle)
-                    if sample['velocity'] is not None:
-                        evidence[handle].append({key: copy.deepcopy(sample[key]) for key in
-                            ('sequence', 'source_time', 'x', 'y', 'z', 'orientation', 'velocity', 'angular_rate')})
-                # Pump only after the pull releases the exclusive reader. Do not
-                # ask the world to advance an unexpected lifecycle operation.
-                check()
-                host.tick(0, defer_world=True)
-                check()
-            if any(len(evidence[handle]) < 2 for handle in handles):
-                check()
-                select.select([], [], [], min(.05, max(0, deadline - time.monotonic())))
-                check()
+                if any(len(evidence[handle]) < 2 for handle in handles):
+                    check()
+                    select.select([], [], [], min(.05, max(0, deadline - time.monotonic())))
+                    check()
+            return resume_baseline
+        collect_samples()
+        rejoin_evidence = None
+        if rejoin_callback is not None:
+            check()
+            old_handles = handles
+            before_players = [{'connection_handle': handle, 'registry_index': selected[handle]['index'],
+                               'sector_macro': selected[handle]['sector_macro'],
+                               'samples': copy.deepcopy(evidence[handle])} for handle in handles]
+            old_selected = copy.deepcopy(selected)
+            old_owners = dict(owners)
+            old_last = copy.deepcopy(last)
+            # The callback must preserve the delivery and surviving owner, and
+            # return only after the actual session has resumed with a new peer.
+            transition = rejoin_callback(delivery, owners, create_owner)
+            if type(transition) is not dict or set(transition) != {'departed', 'survivor', 'replacement', 'grant'}:
+                raise ValueError('invalid fixture rejoin result')
+            departed, survivor, replacement = (transition[name] for name in ('departed', 'survivor', 'replacement'))
+            replacement_grant = grant_value(transition['grant'])
+            if (set((departed, survivor)) != set(old_handles) or replacement in old_handles or
+                    type(replacement) is not int or replacement <= 0 or
+                    replacement_grant['index'] != old_selected[departed]['index'] or
+                    replacement_grant['sector_macro'] != old_selected[departed]['sector_macro'] or
+                    replacement_grant['session_epoch'] != epoch or
+                    replacement_grant['token'] in {g['token'] for g in old_selected.values()} or
+                    replacement_grant['incarnation'] in {g['incarnation'] for g in old_selected.values()} or
+                    set(owners) != {survivor, replacement} or
+                    owners[survivor] is not old_owners[survivor] or
+                    owners[replacement] in old_owners.values()):
+                raise ValueError('fixture rejoin identity differs')
+            initial_players = world.session.players
+            initial_ready = world.session.ready_players
+            handles = tuple(sorted((survivor, replacement)))
+            if tuple(handle for handle, _ in initial_players) != handles or initial_ready != initial_players:
+                raise ValueError('fixture rejoin participant set differs')
+            selected = {survivor: old_selected[survivor], replacement: replacement_grant}
+            check()
+            evidence = {handle: [] for handle in handles}
+            last = {survivor: old_last[survivor], replacement: None}
+            for mapping in (attempts, received, with_velocity, without_post_boundary):
+                mapping[replacement] = 0
+            record_progress(replacement)
+            resume_baseline = collect_samples(resume_handle=survivor)
+            rejoin_evidence = {'surviving_handle': survivor, 'replacement_handle': replacement,
+                               'survivor_fresh_baseline_observed': True, 'survivor_baseline': resume_baseline,
+                               'players_before_rejoin': before_players}
+        if suspend_on_exit:
+            check()
+            if delivery.suspend_client_authority() is not True:
+                raise RuntimeError('fixture authority suspension unconfirmed')
+            check()
         return {'fixture_player_samples_observed': True,
                 'players': [{'connection_handle': handle, 'registry_index': selected[handle]['index'],
                              'sector_macro': selected[handle]['sector_macro'], 'samples': evidence[handle]}
                             for handle in handles],
                 'server_x4_motion_applied': False, 'native_velocity_proven': False,
-                'cross_process_identity_proven': False, 'multiplayer_gameplay_proven': False}
+                'cross_process_identity_proven': False, 'multiplayer_gameplay_proven': False,
+                **({'rejoin': rejoin_evidence} if rejoin_evidence is not None else {})}
     except BaseException:
         delivery._failed = True
         host._failed = True

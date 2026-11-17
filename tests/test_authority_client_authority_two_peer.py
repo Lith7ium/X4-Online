@@ -132,4 +132,140 @@ class TwoPeerAuthority(unittest.TestCase):
         self.assertEqual(self.requests,[])
         self.assertTrue(self.case.host._failed)
 
+    def test_orderly_departure_preserves_survivor_and_revokes_old_grant(self):
+        first=self.owner(1);second=self.owner(2)
+        self.assertEqual(first.pull()['sequence'],1)
+        self.assertEqual(second.pull()['sequence'],1)
+        self.assertTrue(self.delivery.suspend_client_authority())
+        with self.assertRaisesRegex(RuntimeError,'suspended'):second.pull()
+        connection=next(conn for conn,peer in self.case.control._peers.items() if peer['handle']==1)
+        self.case.control._drop(connection)
+        with self.assertRaisesRegex(RuntimeError,'revoked'):first.pull()
+        with self.assertRaisesRegex(ValueError,'retired authority grant'):
+            self.owner(1)
+        self.assertTrue(self.delivery.resume_client_authority())
+        self.assertEqual(second.pull()['sequence'],2)
+        # A new client joins while the surviving owner and its sequence persist.
+        self.assertTrue(self.delivery.suspend_client_authority())
+        newcomer=self.case.connect();self.clients.append(newcomer)
+        self.case.host.tick(.1)  # Pause the surviving client before saving the join baseline.
+        self.case.offer_and_claim(newcomer)
+        newcomer.settimeout(.1)
+        def serve_newcomer():
+            data=b'';sequence=0
+            try:
+                while not self.stop.is_set():
+                    try:chunk=newcomer.recv(8192)
+                    except socket.timeout:continue
+                    if not chunk:break
+                    data+=chunk
+                    while b'\n' in data:
+                        raw,data=data.split(b'\n',1);request=json.loads(raw)
+                        if request['kind']=='accepted':continue
+                        if request['kind']=='participant_command':
+                            reply=dict(request,kind='participant_receipt',status='confirmed')
+                        else:
+                            assert request['kind']=='authority_motion_pull' and request['connection_handle']==3
+                            sequence+=1;grant=request['grant']
+                            sample={'version':1,'epoch':grant['epoch'],'generation':grant['generation'],
+                                    'index':grant['index'],'sequence':sequence,'sector_macro':grant['sector_macro'],
+                                    'source_time':float(sequence),'x':3.,'y':0.,'z':0.,'velocity':None}
+                            reply={key:request[key] for key in ('version','connection_handle','session_epoch',
+                                                                'incarnation','request_id','grant')}
+                            reply.update(kind='authority_motion_result',sample=sample,sample_sha256=motion_digest(sample))
+                        newcomer.sendall(json.dumps(reply,separators=(',',':')).encode()+b'\n')
+            except BaseException as error:
+                if not self.stop.is_set():self.errors.append(error)
+        thread=threading.Thread(target=serve_newcomer);thread.start();self.threads.append(thread)
+        self.case.host.tick(.1)
+        grant={**self.grants[0],'token':'3'*32,'incarnation':'f'*32}
+        replacement=self.owner(3,grant)
+        self.assertTrue(self.delivery.resume_client_authority())
+        self.assertEqual(second.pull()['sequence'],3)
+        self.assertEqual(replacement.pull()['sequence'],1)
+        self.assertFalse(self.case.host._failed)
+
+    def test_unexpected_departure_fences_the_host_and_revokes_grant(self):
+        first=self.owner(1);self.owner(2)
+        connection=next(conn for conn,peer in self.case.control._peers.items() if peer['handle']==1)
+        with self.assertRaisesRegex(RuntimeError,'control channel faulted'):
+            self.case.control._drop(connection)
+        self.assertTrue(self.case.host._failed)
+        with self.assertRaisesRegex(RuntimeError,'revoked'):first.pull()
+
+    def test_explicit_revoke_retires_original_identity_if_grant_changed(self):
+        first=self.owner(1);self.owner(2)
+        self.assertTrue(self.delivery.suspend_client_authority())
+        original_token=first._grant['token']
+        original_incarnation=first._grant['incarnation']
+        first._grant['token']='9'*32
+        with self.assertRaisesRegex(RuntimeError,'changed during revocation'):
+            first.revoke()
+        self.assertIn(original_token,self.delivery._retired_authority_tokens)
+        self.assertIn(original_incarnation,self.delivery._retired_authority_incarnations)
+        self.assertTrue(self.case.host._failed)
+
+    def test_disconnect_retires_original_identity_if_grant_changed(self):
+        first=self.owner(1);self.owner(2)
+        self.assertTrue(self.delivery.suspend_client_authority())
+        original_token=first._grant['token']
+        original_incarnation=first._grant['incarnation']
+        first._grant['incarnation']='9'*32
+        connection=next(conn for conn,peer in self.case.control._peers.items() if peer['handle']==1)
+        with self.assertRaisesRegex(RuntimeError,'control channel faulted'):
+            self.case.control._drop(connection)
+        self.assertIn(original_token,self.delivery._retired_authority_tokens)
+        self.assertIn(original_incarnation,self.delivery._retired_authority_incarnations)
+        self.assertTrue(self.case.host._failed)
+
+    def test_cyclic_grant_is_retired_before_owner_is_fenced(self):
+        first=self.owner(1);self.owner(2)
+        self.assertTrue(self.delivery.suspend_client_authority())
+        original_token=first._grant['token']
+        original_incarnation=first._grant['incarnation']
+        first._grant['cycle']=first._grant
+        with self.assertRaisesRegex(RuntimeError,'changed during revocation'):
+            first.revoke()
+        self.assertIn(original_token,self.delivery._retired_authority_tokens)
+        self.assertIn(original_incarnation,self.delivery._retired_authority_incarnations)
+        self.assertTrue(self.case.host._failed)
+
+    def test_suspend_refuses_busy_reader_without_releasing_it(self):
+        self.owner(1);self.owner(2)
+        lease=object();self.case.control._reader_lease=lease
+        try:
+            with self.assertRaises(RuntimeError):self.delivery.suspend_client_authority()
+            self.assertIs(self.case.control._reader_lease,lease)
+            self.assertFalse(self.delivery._authority_suspended)
+        finally:self.case.control._reader_lease=None
+
+    def test_suspend_fences_unread_peer_input(self):
+        self.owner(1);self.owner(2)
+        self.clients[1].sendall(b'unexpected\n')
+        connection=next(conn for conn,peer in self.case.control._peers.items() if peer['handle']==2)
+        self.assertIn(connection,select.select([connection],[],[],1)[0])
+        with self.assertRaisesRegex(RuntimeError,'unexpected input'):
+            self.delivery.suspend_client_authority()
+        self.assertTrue(self.case.host._failed)
+        self.assertFalse(self.delivery._authority_suspended)
+
+    def test_release_requires_departure_and_does_not_revive_retired_tokens(self):
+        first=self.owner(1);second=self.owner(2)
+        self.assertTrue(self.delivery.suspend_client_authority())
+        with self.assertRaisesRegex(RuntimeError,'cannot be released'):
+            self.delivery.release_client_authority()
+        for handle in (1,2):
+            connection=next(conn for conn,peer in self.case.control._peers.items() if peer['handle']==handle)
+            self.case.control._drop(connection)
+        self.assertTrue(self.delivery.release_client_authority())
+        self.assertIsNone(self.case.control._job_delivery_owner)
+        replacement=ExperimentalTCPJobDelivery(self.case.host,enabled=True,timeout=1)
+        for stale_grant in (self.grants[0], {**self.grants[0],'token':'9'*32},
+                            {**self.grants[0],'incarnation':'9'*32}):
+            with self.subTest(stale_grant=stale_grant), self.assertRaisesRegex(ValueError,'retired authority grant'):
+                ExperimentalTCPClientAuthorityMotion(replacement,enabled=True,grant=stale_grant,
+                                                      guard=lambda _:True,connection_handle=1)
+        with self.assertRaisesRegex(RuntimeError,'revoked'):first.pull()
+        with self.assertRaisesRegex(RuntimeError,'revoked'):second.pull()
+
 if __name__=='__main__':unittest.main()

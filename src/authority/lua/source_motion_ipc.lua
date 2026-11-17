@@ -15,6 +15,8 @@ function M.new(c)
  assert(type(c.clock)=='function' and type(c.guard)=='function' and type(c.fault)=='function')
  assert(c.stop==nil or type(c.stop)=='function') -- caller owns sampler, bootstrap and event-router shutdown
  assert(c.candidate_enabled==nil or type(c.candidate_enabled)=='boolean')
+ assert(c.freeze_drain==nil or type(c.freeze_drain)=='boolean')
+ if c.freeze_drain then assert(type(c.net.pending)=='function') end
  if c.candidate_enabled then assert(c.saved_baseline~=nil)end
  if c.saved_baseline~=nil then
   assert(type(c.saved_baseline)=='table' and integer(c.saved_baseline.limit) and type(c.saved_baseline.guard)=='function')
@@ -66,14 +68,20 @@ function M.new(c)
    assert(p[1]=='P' and p[2]==c.lease and p[3]==c.attempt and p[5]==c.epoch and p[6]==c.generation)
    if state=='binding' then
     assert(#p==6 and p[4]=='BOUND');state='ready';assert(send(context('ATTACHED')));deadline=nil
-   elseif state=='ready' then
-    assert((#p==7 and (p[4]=='PULL' or (p[4]=='STOP' and c.stop) or
+   elseif state=='ready' or (state=='frozen' and c.freeze_drain) then
+    local was_frozen=state=='frozen'
+    assert((#p==7 and (p[4]=='PULL' or (c.freeze_drain and (p[4]=='FREEZE' or p[4]=='RESUME')) or (p[4]=='STOP' and c.stop) or
      (p[4]=='CANDIDATE' and c.candidate_enabled and not candidate_done))) or
      (#p==9 and p[4]=='REGISTER_SAVED' and c.saved_baseline))
     assert(p[7]:match('^[1-9]%d*$') and #p[7]<=16)
     local n=tonumber(p[7]);assert(integer(n) and string.format('%.0f',n)==p[7] and n==seq+1)
+    assert((was_frozen and p[4]=='RESUME') or (not was_frozen and p[4]~='RESUME'))
     request=n;deadline=last+c.timeout
-    if p[4]=='STOP' then
+    if p[4]=='FREEZE' then
+     assert(c.freeze_drain and not was_frozen);state='freeze_requested'
+    elseif p[4]=='RESUME' then
+     assert(c.freeze_drain and was_frozen);state='resume_requested'
+    elseif p[4]=='STOP' then
      -- stop() must synchronously close the idle bootstrap, sampler and event
      -- router, or return false. Keep the UDP socket owned until X4 cleanup so
      -- the supervisor can still validate its peer after the acknowledgement.
@@ -98,6 +106,27 @@ function M.new(c)
   end)
   busy=false;if not ok then return fail('packet')end;return true
  end
+ -- FREEZE/RESUME share the existing sequence and local socket ownership.
+ -- The session owns draining/reset and is the only caller of completion.
+ function api:freeze_request()return state=='freeze_requested' and request or nil end
+ function api:resume_request()return state=='resume_requested' and request or nil end
+ function api:queue_empty()
+  if busy or not c.freeze_drain or (state~='freeze_requested' and state~='resume_requested' and state~='frozen' and state~='ready') then return false end
+  local ok,queued=pcall(c.net.pending,c.net)
+  return ok and queued==false
+ end
+ local function complete_barrier(kind,id,expected,next_state)
+  if busy or state~=expected or id~=request then return fail('barrier_complete') end
+  busy=true;local ok=pcall(function()
+   assert(check() and c.net:pending()==false and check())
+   assert(send({kind,c.epoch,c.generation,string.format('%.0f',request)}))
+   seq=request;request=nil;deadline=nil;state=next_state
+  end);busy=false
+  if not ok then return fail('barrier_complete') end
+  return true
+ end
+ function api:freeze_complete(id)return complete_barrier('FROZEN',id,'freeze_requested','frozen') end
+ function api:resume_complete(id)return complete_barrier('RESUMED',id,'resume_requested','ready') end
  function api:requested()return state=='requested' end
  function api:candidate_requested()return state=='candidate' end
  function api:candidate_complete(result)

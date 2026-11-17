@@ -23,7 +23,7 @@ class FixtureSaveGuards:
         self._guards = None
         self._stack = None
         self._cleanup_failed = False
-        self.metrics = {'metadata_checks': 0, 'digest_checks': 0,
+        self.metrics = {'metadata_checks': 0, 'digest_checks': 0, 'sampling_windows': 0,
                         'verified_digest_bytes': 0, 'digest_seconds': 0.0}
 
     def check(self, path, expected):
@@ -103,3 +103,59 @@ class FixtureSaveGuards:
     def _require_usable(self):
         if self._cleanup_failed:
             raise RuntimeError('fixture save guard cleanup failed; owner is fenced')
+
+
+class FixtureSamplingWindow:
+    """Bound metadata shortcuts to one sampling phase, with full checks outside it."""
+
+    def __init__(self, guards, verify_context, digest_guard):
+        if not isinstance(guards, FixtureSaveGuards) or not callable(verify_context) or not callable(digest_guard):
+            raise ValueError('fixture window requires its save and process guards')
+        self.guards = guards
+        self.verify_context = verify_context
+        self.digest_guard = digest_guard
+        self.active = False
+        self.failed = False
+
+    def boundary(self):
+        if self.failed or not self.active:
+            raise RuntimeError('fixture sampling window is not active')
+        try:
+            self.verify_context()
+            self.guards.boundary(self.digest_guard)
+            self.verify_context()
+        except BaseException:
+            self.failed = True
+            raise
+        return True
+
+    def open(self, entries):
+        if self.failed or self.active:
+            raise RuntimeError('fixture sampling window cannot open')
+        try:
+            # With no pins active, these are full save hashes, including the
+            # newly admitted client's exact downloaded file and checkpoint.
+            self.verify_context()
+            self.guards.open(entries)
+            self.active = True
+            self.boundary()
+            self.guards.metrics['sampling_windows'] += 1
+        except BaseException:
+            self.failed = True
+            raise
+        return True
+
+    def close(self):
+        if self.failed or not self.active:
+            raise RuntimeError('fixture sampling window cannot close')
+        try:
+            self.boundary()
+            self.guards.close()
+            self.active = False
+            # The transition must begin only after the same files were also
+            # checked using the normal, full-hash path.
+            self.verify_context()
+        except BaseException:
+            self.failed = True
+            raise
+        return True

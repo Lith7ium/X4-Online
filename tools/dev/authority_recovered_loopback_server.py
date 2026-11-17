@@ -573,6 +573,26 @@ def fixture_player_source_sectors(value, *, fixture_mode):
     return tuple(value)
 
 
+def open_fixture_sampling_window(window, *, active_clients, selected_clients, directory_names,
+                                 out, server_save, server_digest):
+    """Pin exactly the currently owned private saves for one sampling phase."""
+    if (tuple(active_clients) != tuple(selected_clients) or len(selected_clients) != 2 or
+            tuple(directory_names) not in (('overlap-01', 'overlap-02'), ('overlap-02', 'overlap-rejoin'))):
+        raise ValueError('fixture sampling clients changed')
+    expected_paths = [out/name/'client/case/home/.config/EgoSoft/X4/45841/save/save_009.xml.gz'
+                      for name in directory_names]
+    if any(active.save_target != path for active, path in zip(selected_clients, expected_paths)):
+        raise ValueError('fixture client save path differs from owned private profile')
+    entries = [(server_save, server_digest)] + [
+        (active.save_target, active.save_digest) for active in selected_clients]
+    window.open(entries)
+    if (tuple(active_clients) != tuple(selected_clients) or
+            any(active.save_target != path for active, path in zip(selected_clients, expected_paths)) or
+            entries != [(server_save, server_digest)] + [
+                (active.save_target, active.save_digest) for active in selected_clients]):
+        raise ValueError('fixture sampling context changed while pinning')
+
+
 def run_overlapping_diagnostics(*, start, active_clients, world, host, control, deadline, verify, clock=None,
                                 marker_script='X4AuthorityCheckpointMarker', observe_players=None):
     """Own two overlapping diagnostics and settle their ordered departures."""
@@ -677,6 +697,13 @@ def run(args):
         latest_fixture_source = getattr(args, 'fixture_player_source_latest_cache', False)
         if type(latest_fixture_source) is not bool or (latest_fixture_source and player_source_sectors is None):
             raise ValueError('latest cache requires the private fixture player-source diagnostic')
+        freeze_fixture_source = getattr(args, 'fixture_player_source_freeze_drain', False)
+        if type(freeze_fixture_source) is not bool or (freeze_fixture_source and not latest_fixture_source):
+            raise ValueError('freeze drain requires the private fixture latest-cache source')
+        fixture_rejoin = getattr(args, 'fixture_player_source_rejoin', False)
+        if (type(fixture_rejoin) is not bool or
+                (fixture_rejoin and not freeze_fixture_source)):
+            raise ValueError('fixture rejoin requires freeze drain')
         fixture_scripts = None
         fixture_helpers = None
         marker_script = 'X4AuthorityCheckpointMarker'
@@ -948,10 +975,12 @@ def run(args):
                         value = secrets.token_hex(16)
                     used_tokens.add(value)
                     return value
-                for slot, sector in enumerate(player_source_sectors, 1):
-                    player_grants.append({'session_epoch': epoch, 'epoch': registry_epoch,
+                def new_player_grant(slot, sector):
+                    return {'session_epoch': epoch, 'epoch': registry_epoch,
                         'generation': fresh_player_token(), 'index': slot + 2, 'sector_macro': sector,
-                        'token': fresh_player_token(), 'incarnation': fresh_player_token()})
+                        'token': fresh_player_token(), 'incarnation': fresh_player_token()}
+                for slot, sector in enumerate(player_source_sectors, 1):
+                    player_grants.append(new_player_grant(slot, sector))
             def cancelled():
                 if stop[0]: raise InterruptedError('diagnostic cancelled')
             def base_overlap():
@@ -965,11 +994,11 @@ def run(args):
                     check_process=check, check_cancel=cancelled)
             def cancel_overlap(): verify_overlap()
             overlap_guard[0] = verify_overlap
-            def start_overlap(index):
+            def start_overlap(index, *, rejoining=False):
                 diagnostic_class = fixture_helpers.FixtureServerClient if fixture_mode else diagnostic_client.ServerClient
                 diagnostic = diagnostic_class(deadline, source_store.directory, keep_worker=True)
                 diagnostics.append(diagnostic)
-                diagnostic_out = out/('overlap-%02d' % (index+1)); diagnostic_out.mkdir(mode=0o700)
+                diagnostic_out = out/('overlap-rejoin' if rejoining else 'overlap-%02d' % (index+1)); diagnostic_out.mkdir(mode=0o700)
                 return diagnostic_client.run_one(diagnostic, args=args, out=diagnostic_out, game=game,
                     home=home, uid=user.pw_uid, steam=steam, auth=auth, user=user.pw_name,
                     processes=processes, server_proc=proc, server_started=started, server_identity=identity,
@@ -980,7 +1009,7 @@ def run(args):
                     fixture_slot=index+1 if fixture_mode else None,
                     fixture_player_source=({'sector': player_source_sectors[index],
                         'grant': player_grants[index], 'timeout': 15,
-                        'latest_cache': latest_fixture_source} if player_grants else None),
+                        'latest_cache': latest_fixture_source, 'freeze_drain': freeze_fixture_source} if player_grants else None),
                     server_out=out, cancel_check=cancel_overlap,
                     verify_client_save=fixture_save_guards.check if fixture_save_guards else None)
             def observe_fixture_players(clients):
@@ -1000,37 +1029,77 @@ def run(args):
                     by_handle[handle] = player_grants[index]
                 progress = {}
                 result['fixture_player_source_progress'] = progress
-                options = {'progress': progress}
+                options = {'progress': progress, 'suspend_on_exit': True}
+                sampling_window = None
                 if fixture_save_guards is not None:
-                    try:
-                        expected_client_paths = [out/('overlap-%02d' % index)/'client/case/home/.config/EgoSoft/X4/45841/save/save_009.xml.gz'
-                                                 for index in (1, 2)]
-                        if any(active.save_target != path for active, path in zip(clients, expected_client_paths)):
-                            raise ValueError('fixture client save path differs from owned private profile')
-                        entries = [(target, checkpoint.sha256)] + [
-                            (active.save_target, active.save_digest) for active in clients]
-                        fixture_save_guards.open(entries)
-                    except BaseException:
-                        fence_observation()
-                        raise
+                    from authority_fixture_save_guards import FixtureSamplingWindow
                     def digest_guard():
                         if time.monotonic() >= deadline:
                             raise TimeoutError('fixture digest deadline expired')
                         cancelled(); check(); cancelled()
                         return True
-                    def boundary():
+                    sampling_window = FixtureSamplingWindow(fixture_save_guards, verify_overlap, digest_guard)
+                    options['verify_transaction_boundary'] = sampling_window.boundary
+                if fixture_rejoin:
+                    def rejoin_player(delivery, owners, create_owner):
+                        if len(active_clients) != 2 or tuple(active_clients) != tuple(clients):
+                            raise RuntimeError('fixture clients changed before rejoin')
+                        first, survivor = active_clients
+                        if sampling_window is not None:
+                            sampling_window.close()
+                        first_peer = first.participant.server_tcp
+                        survivor_peer = survivor.participant.server_tcp
+                        first_handle = control._peers[first_peer]['handle']
+                        survivor_handle = control._peers[survivor_peer]['handle']
+                        survivor_owner = owners[survivor_handle]
+                        if delivery.suspend_client_authority() is not True:
+                            raise RuntimeError('fixture departure suspension unconfirmed')
+                        active_clients.pop(0)
+                        departure_result = first.finish()
+                        diagnostic_client.recovery.tcp.await_eof(first_peer, deadline, verify_overlap)
+                        while first_peer in control._peers:
+                            verify_overlap()
+                            host.tick(min(.1, diagnostic_client.recovery.marked.remaining(deadline)))
+                        if (world.session.state != 'running' or world.session.pending is not None or
+                                len(world.session.ready_players) != 1 or first_handle in delivery._client_authority_selected_owners):
+                            raise RuntimeError('fixture survivor or departure unconfirmed')
+                        del owners[first_handle]
+                        if delivery.resume_client_authority() is not True:
+                            raise RuntimeError('fixture survivor authority unconfirmed')
+                        if delivery.suspend_client_authority() is not True:
+                            raise RuntimeError('fixture rejoin suspension unconfirmed')
+                        player_grants[0] = new_player_grant(1, player_source_sectors[0])
+                        replacement = start_overlap(0, rejoining=True)
+                        active_clients.append(replacement)
                         verify_overlap()
-                        fixture_save_guards.boundary(digest_guard)
-                        verify_overlap()
-                        return True
-                    options['verify_transaction_boundary'] = boundary
+                        replacement_peer = replacement.participant.server_tcp
+                        replacement_entry = control._peers.get(replacement_peer)
+                        if (replacement_entry is None or replacement_entry['stage'] != 'admitted' or
+                                owners.get(survivor_handle) is not survivor_owner):
+                            raise RuntimeError('fixture replacement or survivor changed')
+                        replacement_handle = replacement_entry['handle']
+                        owners[replacement_handle] = create_owner(replacement_handle, player_grants[0])
+                        if delivery.resume_client_authority() is not True:
+                            raise RuntimeError('fixture replacement authority unconfirmed')
+                        if sampling_window is not None:
+                            open_fixture_sampling_window(sampling_window, active_clients=active_clients,
+                                selected_clients=(survivor, replacement), directory_names=('overlap-02', 'overlap-rejoin'),
+                                out=out, server_save=target, server_digest=checkpoint.sha256)
+                        result['fixture_rejoin_departure'] = departure_result
+                        return {'departed': first_handle, 'survivor': survivor_handle,
+                                'replacement': replacement_handle, 'grant': player_grants[0]}
+                    options['rejoin_callback'] = rejoin_player
                 observation_started = time.monotonic()
                 try:
-                    if fixture_save_guards is not None: boundary()
+                    if sampling_window is not None:
+                        open_fixture_sampling_window(sampling_window, active_clients=active_clients, selected_clients=clients,
+                            directory_names=('overlap-01', 'overlap-02'), out=out,
+                            server_save=target, server_digest=checkpoint.sha256)
                     observation = authority_fixture_player_source_observe.observe(
                         host=host, world=world, grants=by_handle, verify=verify_overlap,
                         deadline=deadline, operation_timeout=120, enabled=True, **options)
-                    if fixture_save_guards is not None: boundary()
+                    if sampling_window is not None:
+                        sampling_window.close()
                     return observation
                 except BaseException:
                     fence_observation()
@@ -1293,6 +1362,10 @@ def main():
                         help='private fixture only: metadata guards between transaction digest boundaries')
     parser.add_argument('--fixture-player-source-latest-cache', action='store_true',
                         help='private fixture only: continuously sample and deliver the newest local pose')
+    parser.add_argument('--fixture-player-source-freeze-drain', action='store_true',
+                        help='private fixture latest source: drain before pause and resume by correlated ACK')
+    parser.add_argument('--fixture-player-source-rejoin', action='store_true',
+                        help='private fixture: depart and rejoin one player after both sources bind')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

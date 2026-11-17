@@ -116,7 +116,8 @@ def config_value(raw):
         raise ValueError('motion secret conflicts with claim attempt')
     if 'client_authority' in obj:
         source=obj['client_authority']
-        if type(source) is not dict or set(source)!={'lease','attempt','grant','fixture_slot','timeout'}:
+        if (type(source) is not dict or set(source)-{'freeze_drain'}!={'lease','attempt','grant','fixture_slot','timeout'} or
+                type(source.get('freeze_drain', False)) is not bool):
             raise ValueError('invalid client authority configuration')
         grant=grant_value(source['grant'])
         secrets=(source['lease'],source['attempt'],grant['epoch'],grant['generation'],grant['incarnation'],grant['token'])
@@ -227,7 +228,9 @@ class GuardedParticipant:
         if self.motion_gate is not None and self.motion_gate.stopped:
             raise RuntimeError('stopped motion lease cannot resume')
         result=self.call('resume',handles)
-        if self.motion_gate is not None and result is True:self.motion_gate.running=True
+        if self.motion_gate is not None and result is True:
+            self.motion_gate.running=True
+            if isinstance(self.motion_gate, LazyClientAuthority):self.motion_gate.resume_source()
         return result
     def close(self): self.controller.close()
 
@@ -328,12 +331,28 @@ class LazyClientAuthority:
                         sector_macro=grant['sector_macro'])),
                 timeout=source['timeout'], include_orientation=True,
                 fixture_slot=source['fixture_slot'], fixture_sector=grant['sector_macro'],
-                expected_peer=source_peer)
+                expected_peer=source_peer, freeze_drain=source.get('freeze_drain', False))
             self.bridge.register_saved()
         return self.bridge.pull()
 
     def suspend(self):
-        self.running = False
+        try:
+            if self.bridge is not None and self.cfg['client_authority'].get('freeze_drain', False):
+                if not self.running or self.bridge.freeze() is not True:
+                    raise RuntimeError('client authority freeze unconfirmed')
+        finally:
+            # A failed or uncertain freeze must never leave sampling available.
+            self.running = False
+
+    def resume_source(self):
+        try:
+            if self.bridge is not None and self.cfg['client_authority'].get('freeze_drain', False):
+                if not self.running or self.bridge.resume() is not True:
+                    raise RuntimeError('client authority resume unconfirmed')
+            return True
+        except BaseException:
+            self.running = False
+            raise
 
     def close(self):
         self.running = False

@@ -43,13 +43,17 @@ class ExperimentalTCPClientAuthorityMotion:
         if existing is not None and (connection_handle is None or connection_handle in existing or len(existing)>=2):
             raise ValueError('authority participant already owned or capacity reached')
         checked_grant=grant_value(grant)
+        if (checked_grant['incarnation'] in delivery._retired_authority_incarnations or
+                checked_grant['token'] in delivery._retired_authority_tokens):
+            raise ValueError('retired authority grant')
         if existing and any(owner._grant['incarnation']==checked_grant['incarnation'] or
                             owner._grant['token']==checked_grant['token'] or
                             owner._grant['index']==checked_grant['index'] for owner in existing.values()):
             raise ValueError('authority grant or ship reused across participants')
         self._grant=checked_grant;self._grant_wire=json.dumps(self._grant,sort_keys=True,separators=(',',':'));self._guard=guard;self._delivery=delivery
+        self._retired_identity = (checked_grant['incarnation'], checked_grant['token'])
         self._connection_handle=connection_handle
-        self._request=0;self._last_sequence=0;self._last_time=None;self._failed=False;self._busy=False
+        self._request=0;self._last_sequence=0;self._last_time=None;self._failed=False;self._busy=False;self._revoked=False
         if connection_handle is None:delivery._client_authority_owner=self
         else:
             if existing is None:existing={};delivery._client_authority_selected_owners=existing
@@ -62,6 +66,8 @@ class ExperimentalTCPClientAuthorityMotion:
             state!=(self._request,self._last_sequence,self._last_time,self._connection_handle)):
             raise RuntimeError('authority grant guard changed')
     def pull(self):
+        if self._revoked or self._delivery._authority_suspended:
+            raise RuntimeError('authority grant is revoked or suspended')
         owners=getattr(self._delivery,'_client_authority_selected_owners',{})
         if self._busy or any(owner is not self and owner._busy for owner in owners.values()):
             self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
@@ -69,6 +75,42 @@ class ExperimentalTCPClientAuthorityMotion:
         self._busy=True
         try:return self._pull()
         finally:self._busy=False
+
+    def revoke(self):
+        """Retire a selected grant while its delivery is suspended and idle."""
+        delivery = self._delivery
+        delivery._host._check()
+        delivery._host._control._reader_free()
+        owners = getattr(delivery, '_client_authority_selected_owners', {})
+        if (self._revoked or self._connection_handle is None or not delivery._authority_suspended or
+                self._busy or delivery._active or delivery._test_bind_busy or
+                owners.get(self._connection_handle) is not self):
+            raise RuntimeError('authority grant cannot be revoked')
+        self._retire()
+        return True
+
+    def _retire(self):
+        delivery = self._delivery
+        try:
+            grant_unchanged = (json.dumps(self._grant, sort_keys=True, separators=(',', ':')) ==
+                               self._grant_wire)
+        except (TypeError, ValueError, RecursionError, OverflowError):
+            grant_unchanged = False
+        self._revoked = True
+        incarnation, token = self._retired_identity
+        delivery._retired_authority_incarnations.add(incarnation)
+        delivery._retired_authority_tokens.add(token)
+        owners = getattr(delivery, '_client_authority_selected_owners', {})
+        if owners.get(self._connection_handle) is self:
+            del owners[self._connection_handle]
+        if not grant_unchanged:
+            delivery._failed = True
+            delivery._host._failed = True
+            raise RuntimeError('authority grant changed during revocation')
+
+    def _revoke_for_disconnect(self):
+        self._retire()
+
     def _pull(self):
         d=self._delivery;host=d._host;host._check()
         host._control._reader_free()

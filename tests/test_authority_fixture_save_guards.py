@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tools/dev')]
-from authority_fixture_save_guards import FixtureSaveGuards
+from authority_fixture_save_guards import FixtureSaveGuards, FixtureSamplingWindow
 import authority_two_x4_live as supervisor
 
 
@@ -46,6 +46,71 @@ class FixtureSaveGuardTests(unittest.TestCase):
         self.guards.close()
         self.assertTrue(self.guards.check(path, expected))
         self.assertEqual(self.full_calls, [path, path])
+
+    def test_separate_sampling_windows_repin_the_replacement_save(self):
+        replacement = Path(self.temp.name) / 'replacement'
+        data = b'fresh replacement save'
+        replacement.write_bytes(data); replacement.chmod(0o400)
+        replacement_entry = (replacement, hashlib.sha256(data).hexdigest())
+        active_entries = list(self.entries)
+        checks = []
+        def verify_context():
+            checks.append(tuple(item[0] for item in active_entries))
+            for entry in active_entries:
+                self.assertTrue(self.guards.check(*entry))
+        window = FixtureSamplingWindow(self.guards, verify_context, lambda: True)
+        window.open(active_entries)
+        window.close()
+        old_save = active_entries[1]
+        active_entries[1] = replacement_entry
+        # While membership is changing, save checks must use full SHA.
+        prior_calls = len(self.full_calls)
+        self.assertTrue(self.guards.check(*replacement_entry))
+        self.assertEqual(len(self.full_calls), prior_calls + 1)
+        window.open(active_entries)
+        with self.assertRaisesRegex(ValueError, 'outside'):
+            self.guards.check(*old_save)
+        self.assertTrue(self.guards.check(*replacement_entry))
+        window.close()
+        self.assertEqual(len(checks), 12)
+        self.assertEqual(self.guards.metrics['digest_checks'], 12)
+        self.assertEqual(self.guards.metrics['sampling_windows'], 2)
+
+    def test_sampling_window_digest_failure_and_cleanup_fence_reopen(self):
+        window = FixtureSamplingWindow(self.guards, lambda: None, lambda: True)
+        bad_entries = list(self.entries)
+        bad_entries[1] = (bad_entries[1][0], 'f' * 64)
+        with self.assertRaisesRegex(ValueError, 'digest differs'):
+            window.open(bad_entries)
+        self.assertTrue(window.failed)
+        with self.assertRaisesRegex(RuntimeError, 'cannot open'):
+            window.open(self.entries)
+        self.guards.close()
+
+    def test_sampling_window_close_failure_prevents_reopening(self):
+        window = FixtureSamplingWindow(self.guards, lambda: None, lambda: True)
+        window.open(self.entries)
+        with patch.object(self.guards, 'close', side_effect=OSError('pin cleanup uncertain')):
+            with self.assertRaisesRegex(OSError, 'pin cleanup uncertain'):
+                window.close()
+        self.assertTrue(window.failed)
+        with self.assertRaisesRegex(RuntimeError, 'cannot open'):
+            window.open(self.entries)
+        self.guards.close()
+
+    def test_sampling_window_full_verification_failure_fences_transition(self):
+        calls = []
+        def verify_context():
+            calls.append('verify')
+            if len(calls) == 6:
+                raise RuntimeError('full transition check failed')
+        window = FixtureSamplingWindow(self.guards, verify_context, lambda: True)
+        window.open(self.entries)
+        with self.assertRaisesRegex(RuntimeError, 'full transition check failed'):
+            window.close()
+        self.assertTrue(window.failed)
+        with self.assertRaisesRegex(RuntimeError, 'cannot open'):
+            window.open(self.entries)
 
     def test_wrong_path_hash_mode_or_duplicate_refused(self):
         self.guards.open(self.entries)

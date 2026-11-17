@@ -141,9 +141,10 @@ def _write_config_transaction(config, original, replacement, paths, secrets):
 
 
 def install(case, profile, *, slot, epoch, sector, lease, attempt, generation,
-            bootstrap_nonce, sampler_nonce, port, timeout, interval=0.1, latest_cache=False):
+            bootstrap_nonce, sampler_nonce, port, timeout, interval=0.1, latest_cache=False, freeze_drain=False):
     tokens = (epoch, lease, attempt, generation, bootstrap_nonce, sampler_nonce)
-    if (type(latest_cache) is not bool or type(slot) is not int or slot not in (1, 2) or
+    if (type(latest_cache) is not bool or type(freeze_drain) is not bool or
+            (freeze_drain and not latest_cache) or type(slot) is not int or slot not in (1, 2) or
             any(type(v) is not str or not re.fullmatch(r'[0-9a-f]{32}', v) for v in tokens) or
             len(set(tokens)) != len(tokens) or bootstrap_nonce[:16] == sampler_nonce[:16] or
             type(sector) is not str or not re.fullmatch(r'[A-Za-z0-9_]{1,128}', sector) or
@@ -181,15 +182,18 @@ def install(case, profile, *, slot, epoch, sector, lease, attempt, generation,
     scripts = (*existing.SCRIPTS, ('tools/dev/authority_fixture_player_source.lua', 'authority_fixture_player_source.lua'))
     if latest_cache:
         scripts += (('src/authority/lua/fixture_player_latest_cache.lua', 'fixture_player_latest_cache.lua'),)
+    if freeze_drain:
+        scripts += (('src/authority/lua/fixture_player_freeze_barrier.lua', 'fixture_player_freeze_barrier.lua'),)
     hook = '    <file name="ui/authority_download_load_probe.lua" />\n'
     additions = ''.join('    <file name="ui/' + target + '" />\n' for _, target in scripts)
     manifest_text = seat.replace_once(manifest_text, hook, additions + hook)
     values = dict(slot=slot, epoch=epoch, sector=sector, lease=lease, attempt=attempt,
                   generation=generation, bootstrap_nonce=bootstrap_nonce, sampler_nonce=sampler_nonce,
                   port=port, timeout=timeout, interval=interval, save_path=str(profile / 'save'))
-    config_text = config_text[:-2] + ',authority_fixture_player_source={' + ','.join(
+    config_text = (config_text[:-2] + ',authority_fixture_player_source={' + ','.join(
         key + '=' + (lua_literal(value) if isinstance(value, str) else format(value, '.17g'))
-        for key, value in values.items()) + (',latest_cache=true' if latest_cache else '') + '}}\n'
+        for key, value in values.items()) + (',latest_cache=true' if latest_cache else '') +
+        (',freeze_drain=true' if freeze_drain else '') + '}}\n')
     installed = []
     for source, name in scripts:
         target = ui / name

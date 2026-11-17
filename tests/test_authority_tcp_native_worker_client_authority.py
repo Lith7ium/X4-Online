@@ -49,6 +49,37 @@ class ClientAuthorityWorker(unittest.TestCase):
             with self.subTest(configuration=bad), self.assertRaises(ValueError):
                 worker.config_value(json.dumps(bad).encode())
 
+    def test_freeze_failure_blocks_engine_pause_and_resume_failure_blocks_sampling(self):
+        config = configuration()
+        config['client_authority']['freeze_drain'] = True
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(('127.0.0.1', 0))
+        self.addCleanup(sock.close)
+        source = worker.LazyClientAuthority(sock, config, lambda: None)
+        operations = []
+
+        class UncertainBridge:
+            def freeze(self):
+                operations.append('freeze')
+                raise RuntimeError('freeze acknowledgement lost')
+            def resume(self):
+                operations.append('resume')
+                raise RuntimeError('resume acknowledgement lost')
+
+        source.bridge = UncertainBridge()
+        source.running = True
+        participant = worker.GuardedParticipant.__new__(worker.GuardedParticipant)
+        participant.motion_gate = source
+        participant.call = lambda operation, handles: operations.append(operation) or True
+        with self.assertRaisesRegex(RuntimeError, 'freeze acknowledgement lost'):
+            participant.pause([1])
+        self.assertEqual(operations, ['freeze'])
+        self.assertFalse(source.running)
+        with self.assertRaisesRegex(RuntimeError, 'resume acknowledgement lost'):
+            participant.resume([1])
+        self.assertEqual(operations, ['freeze', 'resume', 'resume'])
+        self.assertFalse(source.running)
+
     def test_binding_is_lazy_and_pausing_keeps_the_source_for_resume(self):
         cfg = configuration()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

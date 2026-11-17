@@ -23,7 +23,10 @@ function M.new(o)
  assert(c.cache_evidence==nil or type(c.cache_evidence)=='function')
  assert(c.latest_cache==nil or type(c.latest_cache)=='boolean')
  if c.latest_cache then assert(c.fixture_slot~=nil and type(c.latest_factory)=='function')end
+ assert(c.freeze_drain==nil or type(c.freeze_drain)=='boolean')
+ if c.freeze_drain then assert(c.latest_cache==true and type(c.barrier_factory)=='function')end
  local state,busy='new',false;local ipc,reader,staged,registered,latest=nil,nil,nil,false,nil
+ local barrier,scheduling=nil,true
  local api={}
  local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
  local function check()
@@ -70,10 +73,33 @@ function M.new(o)
        authority=function()return check()end,validate_capture=function(sample)
         return staged~=nil and equal(sample,staged) and check()
        end,quiescent=function()
-        return ipc:state()=='ready' and not staged and reader:state()=='sampling' and reader:expected_request()==nil
+        return (ipc:state()=='ready' or (c.freeze_drain and ipc:state()=='freeze_requested')) and
+         not staged and reader:state()=='sampling' and reader:expected_request()==nil
        end,reset_sampler=function()return reader:reset_sampling_baseline()end}))
      end
-     if ipc:requested() then
+     if c.freeze_drain and not barrier then
+      local function quiet()
+       local phase=ipc:state()
+       return (phase=='freeze_requested' or phase=='resume_requested' or phase=='frozen' or phase=='ready') and
+        ipc:queue_empty() and not staged and reader:state()=='sampling' and reader:expected_request()==nil
+      end
+      barrier=assert(c.barrier_factory({guard=check,stop_scheduling=function()scheduling=false;return true end,
+       quiescent=quiet,reset_cache=function()return latest:pause()end,resume_cache=function()return latest:resume()end,
+       start_scheduling=function()scheduling=true;return true end,send_ack=function(kind,id)
+        if kind=='freeze' then return ipc:freeze_complete(id)end
+        if kind=='resume' then return ipc:resume_complete(id)end
+        return false
+       end}))
+     end
+     if c.freeze_drain and ipc:freeze_request()~=nil then
+      if barrier:state()=='running' then assert(barrier:freeze(ipc:freeze_request()))end
+      if reader:expected_request()~=nil then assert(reader:tick() and check())end
+      assert(barrier:tick() and state=='ready' and check())
+     elseif c.freeze_drain and ipc:resume_request()~=nil then
+      assert(barrier:resume(ipc:resume_request()) and state=='ready' and check())
+     elseif c.freeze_drain and ipc:state()=='frozen' then
+      assert(barrier:state()=='frozen' and not scheduling)
+     elseif ipc:requested() then
       local envelope,status=latest:pull()
       assert(envelope~=false and (status=='sample' or status=='empty') and check())
       if envelope and c.audit then
@@ -86,7 +112,7 @@ function M.new(o)
        assert(c.cache_evidence(envelope.capture_sequence,envelope.delivery_sequence)==true and check())
       end
      end
-     assert(reader:tick() and state=='ready' and check())
+     if scheduling then assert(reader:tick() and state=='ready' and check())end
     elseif ipc:requested() then
      assert(registered and reader:state()=='sampling' and not staged and check())
      if reader:expected_request()==nil then assert(ipc:complete(nil) and check())end
@@ -116,7 +142,8 @@ function M.new(o)
  -- A pause is safe only between protocol operations. The owner must also
  -- check the socket for queued packets before and during the pause.
  function api:quiescent()
-  return not busy and state=='ready' and ipc and ipc:state()=='ready' and not staged and
+  return not busy and state=='ready' and ipc and
+   ((c.freeze_drain and ipc:state()=='frozen') or (not c.freeze_drain and ipc:state()=='ready')) and not staged and
    (not reader or (reader:state()=='sampling' and reader:expected_request()==nil))
  end
  function api:after_resume()
@@ -144,7 +171,7 @@ function M.new_x4(o)
  end
  c.ipc_factory=function(x)
   x.enabled=true;x.lease=c.lease;x.attempt=c.attempt;x.epoch=c.epoch;x.generation=c.generation;x.timeout=c.timeout
-  x.clock=GetCurRealTime;x.net=c.net;x.saved_baseline={limit=c.baseline,guard=function(e,n)
+  x.clock=GetCurRealTime;x.net=c.net;x.freeze_drain=c.freeze_drain;x.saved_baseline={limit=c.baseline,guard=function(e,n)
    return e==c.epoch and n==c.baseline and x.guard()==true
   end};return ipc_new(x)
  end
@@ -156,6 +183,13 @@ function M.new_x4(o)
   x.latest_cache=c.latest_cache
   x.bootstrap=c.bootstrap;x.sampler=c.sampler;x.descriptor=c.descriptor;x.resolve=c.resolve;x.expected_save_path=c.expected_save_path
   return reader_new(x)
+ end
+ if c.freeze_drain then
+  assert(type(c.barrier_module)=='table' and type(c.barrier_module.new)=='function')
+  c.barrier_factory=function(x)
+   x.enabled=true;x.clock=GetCurRealTime;x.timeout=c.timeout
+   return c.barrier_module.new(x)
+  end
  end
  if c.latest_cache then
   assert(type(c.cache_module)=='table' and type(c.cache_module.new)=='function' and c.fixture_slot~=nil)

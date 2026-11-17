@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from tests import test_authority_experimental_tcp_participants as fixture
 from authority.experimental_tcp_job_delivery import ExperimentalTCPJobDelivery
+from authority.experimental_tcp_client_authority_motion import ExperimentalTCPClientAuthorityMotion
 from authority.experimental_tcp_participants import ExperimentalTCPParticipants
 
 
@@ -68,6 +69,24 @@ class TwoTestIncarnations(unittest.TestCase):
                 delivery.bind_test_incarnations({1:'b'*32, 2:'c'*32}, enabled=True)
         self.assertTrue(case.host._failed)
         self.assertEqual(delivery._incarnations, {})
+
+    def test_bound_membership_can_resume_with_one_survivor(self):
+        case, _, _, delivery = self.pair()
+        delivery.bind_test_incarnations({1:'b'*32, 2:'c'*32}, enabled=True)
+        owners=[]
+        for handle, incarnation in ((1,'b'*32),(2,'c'*32)):
+            grant={'session_epoch':'a'*32,'epoch':'d'*32,'generation':'e'*32,
+                   'index':handle+2,'sector_macro':'sector_a','token':str(handle)*32,
+                   'incarnation':incarnation}
+            owners.append(ExperimentalTCPClientAuthorityMotion(delivery,enabled=True,grant=grant,
+                guard=lambda _:True,connection_handle=handle))
+        self.assertTrue(delivery.suspend_client_authority())
+        connection=next(conn for conn,peer in case.control._peers.items() if peer['handle']==1)
+        case.control._drop(connection)
+        self.assertTrue(delivery.resume_client_authority())
+        self.assertEqual(delivery.membership(),({'id':'peer_2','incarnation':'c'*32},))
+        with self.assertRaisesRegex(RuntimeError,'revoked'):owners[0].pull()
+        self.assertFalse(case.host._failed)
 
 
 if __name__ == '__main__':

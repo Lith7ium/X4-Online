@@ -20,8 +20,8 @@ from authority_tcp_native_worker import check_process
 
 def bind_client_authority(sock,*,process,lease,attempt,epoch,generation,incarnation,token,session_epoch,
                           guard,running,grant,timeout=20,include_orientation=False,
-                          fixture_slot=None,fixture_sector=None,expected_peer=None):
-    if (type(process) is not dict or type(include_orientation) is not bool or not all(callable(f) for f in (guard,running,grant)) or
+                          fixture_slot=None,fixture_sector=None,expected_peer=None,freeze_drain=False):
+    if (type(process) is not dict or type(include_orientation) is not bool or type(freeze_drain) is not bool or not all(callable(f) for f in (guard,running,grant)) or
         any(type(x) is not str or not re.fullmatch(r'[0-9a-f]{32}',x) for x in (lease,attempt,epoch,generation,incarnation,token)) or
         len({lease,attempt,epoch,generation,incarnation,token})!=6 or type(session_epoch) is not str or
         not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',session_epoch)):
@@ -59,7 +59,7 @@ def bind_client_authority(sock,*,process,lease,attempt,epoch,generation,incarnat
         return ExperimentalClientAuthorityMotionIPC(sock,enabled=True,lease=lease,attempt=attempt,epoch=epoch,generation=generation,
             incarnation=incarnation,guard=lambda:context() and running() is True,validate_peer=peer,
             grant=lambda e,g,i,n:e==epoch and g==generation and i==incarnation and n==index and granted(),timeout=timeout,
-            include_orientation=include_orientation,fixture_slot=fixture_slot,fixture_sector=fixture_sector)
+            include_orientation=include_orientation,fixture_slot=fixture_slot,fixture_sector=fixture_sector,freeze_drain=freeze_drain)
     except BaseException:
         if binding is not None:
             if binding.state!='handed_off':sock.close()

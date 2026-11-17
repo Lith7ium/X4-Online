@@ -33,11 +33,11 @@ class FixtureSourceWorkerChain(unittest.TestCase):
             native = Path(temporary) / 'net.so'
             subprocess.run(['cc', '-std=c11', '-O2', '-shared', '-fPIC', 'src/native/net.c', '-ldl', '-o', str(native)],
                            cwd=ROOT, check=True, capture_output=True)
-            for slot, latest in ((1, False), (2, False), (1, True), (2, True)):
-                with self.subTest(slot=slot, latest=latest):
-                    self.check_slot(slot, native, latest)
+            for slot, latest, drain in ((1, False, False), (2, False, False), (1, True, False), (2, True, False), (1, True, True)):
+                with self.subTest(slot=slot, latest=latest, drain=drain):
+                    self.check_slot(slot, native, latest, drain)
 
-    def check_slot(self, slot, native, latest):
+    def check_slot(self, slot, native, latest, drain=False):
         sockets, children = [], []
         try:
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -52,7 +52,8 @@ class FixtureSourceWorkerChain(unittest.TestCase):
             sockets.append(source); source.bind(('127.0.0.1', 0))
             parent, child = socket.socketpair(); sockets.extend((parent, child)); parent.settimeout(10)
             environment = dict(os.environ, TEST_NET_LIB=str(native), TEST_NET_PORT=str(source.getsockname()[1]),
-                               TEST_FIXTURE_SLOT=str(slot), TEST_LATEST_CACHE='1' if latest else '0')
+                               TEST_FIXTURE_SLOT=str(slot), TEST_LATEST_CACHE='1' if latest else '0',
+                               TEST_FREEZE_DRAIN='1' if drain else '0')
             lua = subprocess.Popen(['luajit', 'tests/authority_fixture_player_source_worker_fake_x4.lua'], cwd=ROOT,
                                    env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             children.append(lua)
@@ -71,6 +72,8 @@ class FixtureSourceWorkerChain(unittest.TestCase):
                        udp_peer=list(engine.getsockname()), udp_next_id=1, deadline=time.monotonic()+25,
                        controller_timeout=8, client_process=identity(lua.pid),
                        client_authority=dict(lease='5'*32, attempt='6'*32, grant=grant, fixture_slot=slot, timeout=1))
+            if drain:
+                cfg['client_authority']['freeze_drain'] = True
             parent.sendall(json.dumps(cfg).encode()+b'\n')
             self.assertEqual(line(server), claim)
             server.sendall(json.dumps(dict(version=1, kind='accepted', attempt_id=attempt)).encode()+b'\n')
@@ -105,6 +108,27 @@ class FixtureSourceWorkerChain(unittest.TestCase):
                 self.assertGreater(samples[1]['source_time'] - samples[0]['source_time'], 1)
                 self.assertEqual([sample['sequence'] for sample in samples], [1, 2])
             self.assertEqual(samples[1]['orientation'], dict(yaw=.1, pitch=.2, roll=.3))
+            if drain:
+                for command_id, operation in ((2, 'pause'), (3, 'resume')):
+                    command = dict(version=1, kind='participant_command', epoch=epoch,
+                                   connection_handle=1, request_id=command_id, operation=operation)
+                    server.sendall(json.dumps(command).encode()+b'\n')
+                    raw, peer = engine.recvfrom(1024)
+                    self.assertEqual(raw, f'CMD|{lease}|{epoch}|{command_id}|{operation}'.encode())
+                    engine.sendto(f'RECEIPT|{lease}|{epoch}|{command_id}|{operation}|confirmed'.encode(), peer)
+                    self.assertEqual(json.loads(line(server)), dict(command, kind='participant_receipt', status='confirmed'))
+                resumed = None
+                for next_id in range(request_id+1, request_id+30):
+                    request = dict(version=1, kind='authority_motion_pull', connection_handle=1, session_epoch=epoch,
+                                   incarnation=grant['incarnation'], request_id=next_id, grant=grant)
+                    server.sendall(json.dumps(request).encode()+b'\n')
+                    answer = json.loads(line(server))
+                    if answer['sample'] is not None:
+                        resumed = answer['sample']; break
+                    time.sleep(.02)
+                self.assertIsNotNone(resumed)
+                self.assertEqual(resumed['sequence'], 3)
+                self.assertIsNone(resumed['velocity'])
             parent.sendall(b'{"command":"stop"}\n')
             self.assertEqual(json.loads(line(parent)), {'event':'stopped'})
             self.assertEqual(helper.wait(timeout=3), 0)

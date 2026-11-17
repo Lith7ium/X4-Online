@@ -1,4 +1,5 @@
 """One owner, real wire/file protocols and simulated X4 observations."""
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -39,6 +40,7 @@ class ClientOwnerTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.download_count = 0
         self.content = b'one isolated offered save'
         source = self.root / 'source'
         source.write_bytes(self.content)
@@ -50,7 +52,7 @@ class ClientOwnerTests(unittest.TestCase):
         self.addCleanup(self.service.close)
         self.service.offer('j1.xml.gz', source)
 
-    def connect(self, *, accepted_attempt=None, send_command=True, host='127.0.0.1'):
+    def connect(self, *, accepted_attempt=None, send_command=True, host='127.0.0.1', authority_commands=None):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind((host, 0))
         listener.listen(1)
@@ -73,7 +75,14 @@ class ClientOwnerTests(unittest.TestCase):
                     accepted = {'version': 1, 'kind': 'accepted',
                                 'attempt_id': accepted_attempt or self.offer.attempt_id}
                     conn.sendall(json.dumps(accepted).encode() + b'\n')
-                    if send_command:
+                    if authority_commands is not None:
+                        for command in authority_commands:
+                            conn.sendall(json.dumps(command).encode() + b'\n')
+                            reply = stream.readline()
+                            if not reply:
+                                break
+                            replies.append(json.loads(reply))
+                    elif send_command:
                         command = {'version': 1, 'kind': 'participant_command', 'epoch': 'epoch',
                                    'connection_handle': 1, 'request_id': 1, 'operation': 'resume'}
                         conn.sendall(json.dumps(command).encode() + b'\n')
@@ -96,7 +105,8 @@ class ClientOwnerTests(unittest.TestCase):
 
     def observe(self, owner):
         bound = owner.request_offer()
-        path = owner.download(self.root / 'download')
+        self.download_count += 1
+        path = owner.download(self.root / ('download-' + str(self.download_count)))
         self.assertEqual(path.read_bytes(), self.content)
         owner.verify_staged(path)
         owner.load_requested(bound.offer.attempt_id)
@@ -122,6 +132,100 @@ class ClientOwnerTests(unittest.TestCase):
         self.assertEqual(replies[0]['status'], 'confirmed')
         owner.close()
         self.assertEqual(client.fileno(), -1)
+
+    @staticmethod
+    def motion_grant():
+        return {'session_epoch': 'epoch', 'epoch': '1'*32, 'generation': '2'*32,
+                'index': 3, 'sector_macro': 'sector_a', 'token': '3'*32, 'incarnation': '4'*32}
+
+    @staticmethod
+    def pull_command(grant, request_id):
+        return {'version': 1, 'kind': 'authority_motion_pull', 'connection_handle': 1,
+                'session_epoch': 'epoch', 'incarnation': grant['incarnation'],
+                'request_id': request_id, 'grant': copy.deepcopy(grant)}
+
+    def test_authority_callbacks_survive_load_handoff_and_copy_grant(self):
+        grant = self.motion_grant()
+        expected_grant = copy.deepcopy(grant)
+        commands = [self.pull_command(grant, request_id) for request_id in (1, 2)]
+        owner, client, thread, errors, claims, replies = self.connect(authority_commands=commands)
+        bound = self.observe(owner)
+        sequence = 0
+        def pull():
+            nonlocal sequence
+            sequence += 1
+            rate = None if sequence == 1 else {'x': 1., 'y': 0., 'z': 0.}
+            angular_rate = None if sequence == 1 else {'yaw': 0., 'pitch': 0., 'roll': 0.}
+            return {'version': 2, 'epoch': expected_grant['epoch'], 'generation': expected_grant['generation'],
+                    'index': 3, 'sequence': sequence, 'sector_macro': 'sector_a', 'source_time': float(sequence),
+                    'x': float(sequence), 'y': 0., 'z': 0., 'velocity': rate,
+                    'orientation': {'yaw': 0., 'pitch': 0., 'roll': 0.}, 'angular_rate': angular_rate}
+        owner.activate(bound.offer.attempt_id, Controller(), authority_grant=grant,
+                       authority_guard=lambda value: value == expected_grant, pull_authority_motion=pull)
+        grant['sector_macro'] = 'mutated_after_activation'
+        deadline = time.monotonic() + 4
+        sent = 0
+        while sent < 2:
+            if owner.poll(.1):
+                sent += 1
+            if time.monotonic() >= deadline:
+                self.fail('authority motion replies timed out')
+        thread.join(4)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(claims), 1)
+        self.assertEqual([reply['sample']['sequence'] for reply in replies], [1, 2])
+        self.assertIsNone(replies[0]['sample']['velocity'])
+        self.assertEqual(replies[1]['sample']['velocity'], {'x': 1., 'y': 0., 'z': 0.})
+        owner.close(); self.assertEqual(client.fileno(), -1)
+
+    def test_invalid_authority_configuration_closes_before_claim(self):
+        good = self.motion_grant()
+        variants = [
+            {'authority_grant': good, 'authority_guard': lambda value: True},
+            {'authority_grant': good, 'pull_authority_motion': lambda: None},
+            {'authority_guard': lambda value: True, 'pull_authority_motion': lambda: None},
+            {'authority_grant': {**good, 'session_epoch': 'foreign'},
+             'authority_guard': lambda value: True, 'pull_authority_motion': lambda: None},
+            {'authority_grant': {**good, 'token': 'invalid'},
+             'authority_guard': lambda value: True, 'pull_authority_motion': lambda: None},
+        ]
+        for options in variants:
+            with self.subTest(options=tuple(options)):
+                owner, client, thread, errors, claims, _ = self.connect(send_command=False)
+                bound = self.observe(owner)
+                with self.assertRaises(ValueError):
+                    owner.activate(bound.offer.attempt_id, Controller(), **options)
+                self.assertEqual(client.fileno(), -1)
+                thread.join(4)
+                self.assertEqual(errors, []); self.assertEqual(claims, [])
+
+    def test_authority_callback_exception_or_reentry_fences_without_reply(self):
+        for mode in ('exception', 'reentry', 'close', 'guard_revoked'):
+            with self.subTest(mode=mode):
+                grant = self.motion_grant()
+                owner, client, thread, errors, _, replies = self.connect(
+                    authority_commands=[self.pull_command(grant, 1)])
+                bound = self.observe(owner)
+                def pull():
+                    if mode == 'exception':
+                        raise RuntimeError('injected source failure')
+                    try:
+                        if mode == 'close':
+                            owner.close()
+                        else:
+                            owner.poll()
+                    except RuntimeError:
+                        pass
+                    return None
+                owner.activate(bound.offer.attempt_id, Controller(), authority_grant=grant,
+                               authority_guard=lambda value: mode != 'guard_revoked' and value == grant,
+                               pull_authority_motion=pull)
+                with self.assertRaises(RuntimeError):
+                    while True:
+                        owner.poll(.1)
+                self.assertEqual(client.fileno(), -1)
+                thread.join(4)
+                self.assertEqual(errors, []); self.assertEqual(replies, [])
 
     def test_reentrant_controller_fences_owner_before_reply(self):
         owner, client, thread, errors, _, replies = self.connect()

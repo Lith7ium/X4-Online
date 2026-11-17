@@ -51,6 +51,21 @@ class QuickGuardGateTests(unittest.TestCase):
         self.assertEqual(calls, 1)
         self.assertNotIn('fixture_save_guard', result)
 
+    def test_rejoin_requires_freeze_and_accepts_both_guard_modes(self):
+        result, calls = self.run_gate(fixture_player_source_rejoin=True,
+                                      fixture_player_source_freeze_drain=True)
+        self.assertEqual(calls, 1)
+        self.assertEqual(result['error'], 'case preparation sentinel')
+        result, calls = self.run_gate(fixture_player_source_rejoin=True,
+                                      fixture_player_source_quick_guards=False)
+        self.assertEqual(calls, 0)
+        self.assertIn('rejoin requires freeze drain', result['error'])
+        result, calls = self.run_gate(fixture_player_source_rejoin=True,
+                                      fixture_player_source_freeze_drain=True,
+                                      fixture_player_source_quick_guards=False)
+        self.assertEqual(calls, 1)
+        self.assertEqual(result['error'], 'case preparation sentinel')
+
     def test_quick_mode_refuses_missing_fixture_or_tls(self):
         result, calls = self.run_gate(fixture_player_source_sectors=None,
                                       fixture_player_source_latest_cache=False)

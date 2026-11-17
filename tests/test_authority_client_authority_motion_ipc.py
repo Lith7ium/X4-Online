@@ -9,7 +9,7 @@ ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'src'))
 from authority.experimental_client_authority_motion_ipc import ExperimentalClientAuthorityMotionIPC as Bridge
 
 class ClientMotionIPC(unittest.TestCase):
- def setup_bridge(self,include_orientation=False,fixture_slot=None):
+ def setup_bridge(self,include_orientation=False,fixture_slot=None,freeze_drain=False):
   sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.bind(('127.0.0.1',0))
   peer=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);peer.bind(('127.0.0.1',0))
   sock.connect(peer.getsockname());peer.connect(sock.getsockname());peer.settimeout(1)
@@ -18,7 +18,7 @@ class ClientMotionIPC(unittest.TestCase):
   index=1318 if fixture_slot is None else fixture_slot+2
   sector=None if fixture_slot is None else 'cluster_01_sector001_macro'
   def make():return Bridge(sock,enabled=True,lease=tokens[0],attempt=tokens[1],epoch=tokens[2],generation=tokens[3],incarnation=tokens[4],
-   guard=lambda:live[0],validate_peer=lambda p:p==peer.getsockname(),grant=lambda e,g,i,n:grant[0] and (e,g,i,n)==(*tokens[2:],index),timeout=.2,include_orientation=include_orientation,fixture_slot=fixture_slot,fixture_sector=sector)
+   guard=lambda:live[0],validate_peer=lambda p:p==peer.getsockname(),grant=lambda e,g,i,n:grant[0] and (e,g,i,n)==(*tokens[2:],index),timeout=.2,include_orientation=include_orientation,fixture_slot=fixture_slot,fixture_sector=sector,freeze_drain=freeze_drain)
   return make(),peer,live,grant,make
  def exchange(self,peer,operation,kind,sequence=None,game='1',velocity=('-','-','-'),alter=None,fixture_slot=None):
   def respond():
@@ -33,9 +33,44 @@ class ClientMotionIPC(unittest.TestCase):
    if alter:alter(response)
    peer.send('|'.join(response).encode())
   worker=threading.Thread(target=respond);worker.start();return worker
- def registered(self,include_orientation=False,fixture_slot=None):
-  b,p,live,grant,make=self.setup_bridge(include_orientation,fixture_slot);t=self.exchange(p,'REGISTER_SAVED','SAVED_REGISTERED',fixture_slot=fixture_slot)
+ def registered(self,include_orientation=False,fixture_slot=None,freeze_drain=False):
+  b,p,live,grant,make=self.setup_bridge(include_orientation,fixture_slot,freeze_drain);t=self.exchange(p,'REGISTER_SAVED','SAVED_REGISTERED',fixture_slot=fixture_slot)
   self.assertTrue(b.register_saved());t.join(1);self.assertFalse(t.is_alive());return b,p,live,grant,make
+ def test_freeze_resume_correlation_and_fresh_baseline(self):
+  for slot in (1, 2):
+   with self.subTest(slot=slot):
+    bridge,peer,_,_,_=self.registered(True,slot,True)
+    reply=self.exchange(peer,'PULL','SAMPLE2',1,fixture_slot=slot)
+    bridge.pull();reply.join(1)
+    reply=self.exchange(peer,'FREEZE','FROZEN')
+    self.assertTrue(bridge.freeze());reply.join(1);self.assertEqual(bridge.state,'frozen')
+    reply=self.exchange(peer,'RESUME','RESUMED')
+    self.assertTrue(bridge.resume());reply.join(1)
+    reply=self.exchange(peer,'PULL','NO_SAMPLE')
+    self.assertIsNone(bridge.pull());reply.join(1)
+    reply=self.exchange(peer,'PULL','SAMPLE2',2,game='2',fixture_slot=slot)
+    self.assertIsNone(bridge.pull()['velocity']);reply.join(1)
+    reply=self.exchange(peer,'PULL','SAMPLE2',3,game='3',velocity=('1','2','3'),fixture_slot=slot)
+    self.assertIsNotNone(bridge.pull()['angular_rate']);reply.join(1);bridge.close()
+ def test_freeze_errors_and_stale_resume_velocity_fence(self):
+  for case in ('wrong_ack','missing_ack','resume_velocity'):
+   with self.subTest(case=case):
+    bridge,peer,_,_,_=self.registered(True,1,True)
+    if case=='wrong_ack':
+     reply=self.exchange(peer,'FREEZE','FROZEN',alter=lambda packet:packet.__setitem__(6,'999'))
+     with self.assertRaises(ValueError):bridge.freeze()
+     reply.join(1)
+    elif case=='missing_ack':
+     with self.assertRaises(RuntimeError):bridge.freeze()
+    else:
+     reply=self.exchange(peer,'PULL','SAMPLE2',1,fixture_slot=1);bridge.pull();reply.join(1)
+     reply=self.exchange(peer,'FREEZE','FROZEN');bridge.freeze();reply.join(1)
+     reply=self.exchange(peer,'RESUME','RESUMED');bridge.resume();reply.join(1)
+     reply=self.exchange(peer,'PULL','SAMPLE2',2,game='2',velocity=('1','2','3'),fixture_slot=1)
+     with self.assertRaises(ValueError):bridge.pull()
+     reply.join(1)
+    self.assertEqual(bridge.state,'failed')
+
  def test_sequential_samples_and_no_sample(self):
   b,p,_,_,_=self.registered()
   t=self.exchange(p,'PULL','NO_SAMPLE');self.assertIsNone(b.pull());t.join(1)

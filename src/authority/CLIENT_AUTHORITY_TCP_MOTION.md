@@ -43,3 +43,23 @@ a synthetic test fixture; its fresh test incarnation is bound once to the
 admitted handle by the explicit opt-in binder. Neither actual assignment nor
 handover is demonstrated. These tests do not
 establish native X4, Internet, Windows or shared-world behavior.
+
+## Ordered participant transitions
+
+For explicitly selected participant owners, `suspend_client_authority()`
+stops new pulls and checks the existing reader lease, admitted sockets and
+queued input. The caller must separately drain the X4 source and any server
+sink: this transport operation is not a freeze or pause acknowledgment.
+An owner whose connection leaves during this suspension is revoked. After the
+world is running and the new admitted set is complete,
+`resume_client_authority()` checks socket and grant bindings under the same
+reader lease. A surviving participant retains its original owner and sample
+sequence; a new participant needs a new owner and grant. Unexpected departure
+without suspension, or an uncertain exchange, fences the host.
+
+When all authority participants have departed, `release_client_authority()`
+can detach an idle delivery owner if it has no other delivery or motion work.
+Retired grant tokens and incarnations remain rejected by a replacement delivery
+for the lifetime of the same control object. They are not a persisted replay
+ledger across process restarts. These methods do not synchronize an X4 pause,
+apply poses, establish frame identity or implement general multiplayer.

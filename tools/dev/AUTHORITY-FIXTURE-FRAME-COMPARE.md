@@ -23,3 +23,17 @@ handles. Synthetic unit tests and a matching result cannot establish runtime
 measurement, cross-process identity, a universal frame, continuous pause or
 multiplayer gameplay. Sectors, anchors and ownership in later saves may change;
 a changed inventory requires a separately verified fixture, not relaxed checks.
+
+On 2026-11-17, two sequential isolated Linux X4 processes loaded the confirmed
+fixture checkpoint and used the read-only MD/FFI probe to measure station
+positions while paused. All 12 candidate stations in the first sector and all
+8 in the second were found in both runs. The maximum measured position delta
+was zero in each sector, and both anchor sets passed the noncollinearity check.
+The private outer scope confirmed process and display cleanup and unchanged
+Steam identity. The complete local results are in
+`.local/private-fixture-frame-scope-real-20261117-01/`.
+
+This result supports these station frames for these two Linux reloads of that
+checkpoint only. It does not prove that X4 consumed the exact staged bytes,
+that two runtime ship references identify the same actor, that other frames or
+Windows match, or that positions are applied or replicated during gameplay.
