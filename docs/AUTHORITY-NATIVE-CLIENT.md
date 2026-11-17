@@ -6,6 +6,11 @@ observation, cooperative claim and server-directed pause/resume polling. The mai
 thread owns X4 and the client owner. A joined background thread serves TLS only.
 No local server or coordinator is constructed. The staging-only CLI is unchanged.
 
+A bounded native Linux observation passed on 17 November 2026: downloaded
+checkpoint load, inspected marker, cooperative admission and one confirmed
+server-directed resume/pause cycle. The server engine was simulated and TLS
+was local. See the [evidence and limits](../reports/AUTHORITY-NATIVE-CLIENT-20261117.md).
+
 ```sh
 python tools/dev/authority_client_native.py --internal-native-client \
   --game '/path/to/X4 Foundations' --display :1 --out .local/new-native-client \
@@ -22,6 +27,9 @@ the staging CLI. Keepalive requires matching server support and an interval belo
 its idle timeout. The output must be new and inside this checkout's `.local`.
 The entire offered download/copy finishes before X4 starts; native save and probe
 files are mounted read-only. Normal X4 profiles are never mounted writable.
+The owner's copy operation also verifies the staged save. Do not repeat that
+state transition or change the verified file's metadata before admission;
+the claim checks its complete fingerprint, including change time.
 
 A retained checkpoint may require its archived saved-state MD script. Only when
 independently verified, supply `--archived-identity-fixture FILE`,

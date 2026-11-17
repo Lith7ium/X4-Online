@@ -16,8 +16,12 @@ The first independent client increment is implemented in
 the existing pinned TLS transport and load owner. It requests and verifies a
 checkpoint download, then disconnects without claiming admission. See
 [client staging](AUTHORITY-CLIENT-STAGING.md) for invocation and scope.
-Native process ownership, actual load and pause receipts, and sustained
-position/velocity application remain required.
+The next increment, [`authority_client_native.py`](../tools/dev/authority_client_native.py),
+now retains that connection through private-profile loading, cooperative
+admission and server-directed native controls. A bounded Linux trial observed
+the saved marker, accepted admission and one confirmed resume/pause cycle.
+See [native client evidence](../reports/AUTHORITY-NATIVE-CLIENT-20261117.md).
+Sustained position/velocity application remains required.
 Windows integration must reuse applicable native/LAN pieces while replacing
 the Linux-specific supervisor boundary; portable Python alone is not proof of
 Windows operation.
@@ -30,15 +34,16 @@ SIGINT and a TERM-resistant helper. Retained output is
 No X4, Windows, WAN or full-suite test was run for this increment. The earlier
 full-suite failure and missing prerequisites remain unresolved.
 
-The next integration must keep the same client owner and connection alive
-through native loading. A completed staging command has closed its offer
-connection and is not an admission handoff. Reuse the private-profile launch
-and ordered marker/load/pause observations from `authority_two_x4_live.py`
-and `authority_trusted_marked_live.py` in a client-only orchestration boundary.
-Keep the existing process identity, protected files and deadline checks;
-do not import the two-X4 supervisor's assumption of a locally owned server.
+The native CLI keeps the same client owner on the main thread; a joined
+background thread handles TLS. It reuses the private-profile launcher and
+ordered marker/load/pause observations without owning a local server.
+The trial used production host admission/control adapters over loopback TLS,
+but simulated the server's engine. It establishes neither a native server
+pair nor Windows, WAN or gameplay operation. A completed staging-only command
+still closes its offer connection and cannot be used as an admission handoff.
 Matching marker/load receipts support a cooperative claim, not independent
-proof of every byte X4 loaded.
+proof of every byte X4 loaded. Existing process identity, protected-file,
+fingerprint and deadline checks remain in place.
 
 The inspected LAN working copy provides a concrete next movement adapter:
 `../x4-playtest7/extension/x4_lan_lab/ui/coop_game.lua` plays buffered poses on
