@@ -56,4 +56,26 @@ class OneShot(unittest.TestCase):
   self.assertTrue(motion.send(fixture.MotionTCP.sample(seq=2,t=2)))
   with self.assertRaises(ValueError):motion.apply_once(sample)
   self.assertEqual(received,[]);self.assertTrue(case.case.host._failed)
+ def test_full_pose_apply_and_preflight_are_rejected_on_both_sides(self):
+  sample={**fixture.MotionTCP.sample(),'version':2,
+   'orientation':{'yaw':.1,'pitch':.2,'roll':.3},'angular_rate':None}
+  for operation in ('preflight','apply_once'):
+   with self.subTest(side='host',operation=operation):
+    _,motion,received,_=self.setup_pair();self.assertTrue(motion.send(sample))
+    with self.assertRaisesRegex(ValueError,'full-pose motion'):
+     getattr(motion,operation)(sample)
+    self.assertEqual(received,[])
+  called=[]
+  for operation in ('_motion_apply','_motion_preflight_command'):
+   with self.subTest(side='participant',operation=operation):
+    participant=object.__new__(ExperimentalTCPParticipantClient)
+    participant._apply_motion_once=lambda _:called.append('apply')
+    participant._preflight_motion=lambda _:called.append('preflight')
+    participant._motion_write_attempted=False;participant._motion_preflight=None
+    participant._handle=1;participant._epoch='session';participant._motion_incarnation='a'*32
+    command={'version':1,'kind':'motion_apply','connection_handle':1,'session_epoch':'session',
+     'incarnation':'a'*32,'request_id':1,'sample':sample}
+    with self.assertRaisesRegex(ValueError,'full-pose motion'):
+     getattr(participant,operation)(command)
+    self.assertEqual(called,[])
 if __name__=='__main__':unittest.main()

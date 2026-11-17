@@ -111,7 +111,13 @@ function M.new(options)
    local allowed_distance = cfg.teleport_distance + speed(last.rate) * (sample.source_time - last.source_time)
    if distance > allowed_distance then reason = 'teleport' end
   end
-  if reason ~= 'append' then samples = {} end
+  if reason ~= 'append' then
+   -- A new continuous motion segment needs a new source-to-observer clock
+   -- estimate as well as new samples. Keeping the old minimum offset after a
+   -- long interruption can put every new sample beyond the prediction horizon.
+   samples = {}
+   offset, lag, lag_at = nil, nil, nil
+  end
   if not hold_only then
    if offset and last_arrival and arrival > last_arrival then
     offset = offset + cfg.clock_leak * (arrival - last_arrival)

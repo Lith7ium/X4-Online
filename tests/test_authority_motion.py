@@ -81,6 +81,30 @@ local r=stationary:render(2.3);assert(r.pose[1]==9 and r.pose[4]==0)
 r=stationary:render(4);assert(r.pose[1]==9 and r.phase=='frozen')
 ''')
 
+    def test_clock_offset_is_relearned_after_motion_discontinuity(self):
+        self.lua(r'''
+local function sample(sequence, time, frame, x)
+ return {sequence=sequence,source_time=time,frame=frame,
+         pose={x,0,0,0,0,0},rate={100,0,0,0,0,0}}
+end
+for _,case in ipairs({
+ {reason='gap',time=2,frame='A',x=0},
+ {reason='frame',time=1.2,frame='B',x=0},
+ {reason='teleport',time=1.2,frame='A',x=1000},
+}) do
+ local m=M.new({delay=.1,horizon=.35,stale=.5,teleport_distance=100,clock_leak=0})
+ assert(m:push(sample(1,1,'A',0),10));assert(m:render(10))
+ local ok,reason=m:push(sample(2,case.time,case.frame,case.x),20)
+ assert(ok and reason==case.reason)
+ local reset=m:render(20)
+ assert(reset.pose[1]==case.x and reset.linear_velocity==nil)
+ assert(m:push(sample(3,case.time+.1,case.frame,case.x+10),20.1))
+ local recovered=m:render(20.15)
+ assert(recovered.phase=='interpolated' and math.abs(recovered.pose[1]-(case.x+5))<1e-6)
+ assert(recovered.linear_velocity and math.abs(recovered.linear_velocity[1]-100)<1e-6)
+end
+''')
+
     def test_missing_rate_invalid_values_reordering_and_copy(self):
         self.lua(r'''
 local m=M.new({delay=0,clock_leak=0})

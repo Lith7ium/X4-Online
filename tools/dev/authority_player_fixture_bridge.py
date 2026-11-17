@@ -65,7 +65,7 @@ class PlayerFixtureBridge(LocalControlBridge):
                 or evidence.sha256 != checkpoint.sha256 or evidence.size != checkpoint.size
                 or evidence.save_name != expected):
             raise ValueError('published fixture checkpoint identity mismatch')
-        checked = fixture.verify(checkpoint, self._fixture_epoch, self._pending_marker)
+        checked = self._verify_fixture(checkpoint)
         if (checked.get('saved_slots_checked') != 2 or
                 checked.get('saved_owner_class_sector_checked') is not True):
             raise ValueError('saved player fixture validation failed')
@@ -79,3 +79,6 @@ class PlayerFixtureBridge(LocalControlBridge):
             self._poisoned = True
             raise
         return True
+
+    def _verify_fixture(self, checkpoint):
+        return fixture.verify(checkpoint, self._fixture_epoch, self._pending_marker)

@@ -63,6 +63,26 @@ class RecoveryStagingTests(unittest.TestCase):
             stage_confirmed_recovery(self.store, self.profile)
         self.assertEqual(list(self.profile.iterdir()), [])
 
+    def test_fixture_marker_requires_explicit_selection(self):
+        marker = 'a' * 32
+        xml = (b'<savegame><script><refs type="string"><ref id="42" string="' + marker.encode() +
+               b'"/></refs></script><md><script name="X4AuthorityPlayerFixtureMarker">'
+               b'<cue name="MarkerState"><vars><value name="$marker" type="string" value="42"/>'
+               b'<value name="$loaded" type="integer"/></vars></cue></script></md></savegame>')
+        self.source.write_bytes(gzip.compress(xml))
+        checkpoint = self.store.publish(self.source, marker=marker)
+        self.store.confirm(checkpoint)
+        with self.assertRaises(MarkerEvidenceError):
+            stage_confirmed_recovery(self.store, self.profile)
+        with self.assertRaises(ValueError):
+            stage_confirmed_recovery(self.store, self.profile, marker_script='OtherMarker')
+        self.assertEqual(list(self.profile.iterdir()), [])
+        selected, target = stage_confirmed_recovery(
+            self.store, self.profile, marker_script='X4AuthorityPlayerFixtureMarker'
+        )
+        self.assertEqual(selected, checkpoint)
+        self.assertEqual(target.read_bytes(), checkpoint.path.read_bytes())
+
     def test_refuses_existing_files_links_and_nonprivate_profile(self):
         checkpoint = self.publish(b'<savegame/>')
         self.store.confirm(checkpoint)

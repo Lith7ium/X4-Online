@@ -5,6 +5,7 @@ This prepares one unregistered two-ship fixture, then saves and checks its
 serialized references. It is not admission, player control, or multiplayer.
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -28,6 +29,8 @@ TAG = '[X4LAN] AUTH_PLAYER_FIXTURE_SAVE '
 ARCHIVED_LOAD_SLOT = 'save_009'
 PRIVATE_LOAD_SLOT = 'save_008'
 SECTOR_READ_SLOT = 2
+HISTORICAL_REGISTRY = ROOT / 'tools/dev/fixtures/census-20261115/authority_ship_registry.xml'
+HISTORICAL_REGISTRY_SHA256 = '8b7c9887c9c1476e45fe84a60243547d96e09b11d4c40fabd151930af517e939'
 _BASE_CHECK = base.check_log_bytes
 _BASE_FAULT = base.fault_log
 
@@ -38,11 +41,24 @@ def replace_once(text, old, new):
     return text.replace(old, new)
 
 
-def install(case, profile, ticket, slot, *, port, lease, world_epoch, nonce):
+def historical_registry():
+    """Select only the reviewed registry matching this archived checkpoint."""
+    contents = base._read_regular(HISTORICAL_REGISTRY, 1 << 20)
+    if hashlib.sha256(contents).hexdigest() != HISTORICAL_REGISTRY_SHA256:
+        raise ValueError('historical registry script differs from pinned fixture')
+    return HISTORICAL_REGISTRY
+
+
+def install(case, profile, ticket, slot, *, port, lease, world_epoch, nonce, registry_script=None):
     if slot != SECTOR_READ_SLOT or ticket['slot'] != ARCHIVED_LOAD_SLOT:
         raise ValueError('expected archived sector-read ticket')
+    if registry_script is not None and Path(registry_script) != historical_registry():
+        raise ValueError('fixture install requires the pinned historical registry')
     ticket['slot'] = PRIVATE_LOAD_SLOT
-    protected = base.install(case, profile, ticket, slot)
+    if registry_script is None:
+        protected = base.install(case, profile, ticket, slot)
+    else:
+        protected = base.install(case, profile, ticket, slot, registry_script=registry_script)
     lab = case / 'extensions/x4_lan_lab'
     md, ui = lab / 'md', lab / 'ui'
     copies = {
@@ -134,6 +150,7 @@ def validate(raw, ticket, slot, *, partial=False):
 def run(args):
     if args.slot != SECTOR_READ_SLOT or not math.isfinite(args.timeout) or args.timeout < 60:
         raise ValueError('fixture save experiment requires slot 2 and at least 60 seconds')
+    historical_registry()
     source_store_directory = base.base.local_directory(args.store)
     original_source_fingerprints = base.archive._path_fingerprints(source_store_directory)
     control_lease, world_epoch, fixture_request_nonce = (secrets.token_hex(16) for _ in range(3))
@@ -143,6 +160,7 @@ def run(args):
     save_attempted = False
     verified_checkpoints = ()
     original_install = base.install
+    original_check_origin_scripts = base.check_origin_scripts
     original_check_log_bytes = base.check_log_bytes
     original_fault_log = base.fault_log
     original_observation_callback = base.observation_callback
@@ -163,9 +181,13 @@ def run(args):
             return install(
                 case, profile, ticket, slot, port=control_socket.getsockname()[1],
                 lease=control_lease, world_epoch=world_epoch, nonce=fixture_request_nonce,
+                registry_script=historical_registry(),
             )
         finally:
             base.install = installed_hook
+
+    def check_historical_origin(store, profile):
+        return original_check_origin_scripts(store, profile, registry_script=historical_registry())
 
     def save(*, profile, out, game, identity, deadline, guard):
         nonlocal save_attempted, verified_checkpoints
@@ -264,6 +286,7 @@ def run(args):
 
     try:
         base.install = install_private
+        base.check_origin_scripts = check_historical_origin
         base.check_log_bytes = validate
         base.fault_log = fault
         base.observation_callback = save
@@ -272,6 +295,7 @@ def run(args):
         return base.run(args)
     finally:
         base.install = original_install
+        base.check_origin_scripts = original_check_origin_scripts
         base.check_log_bytes = original_check_log_bytes
         base.fault_log = original_fault_log
         base.observation_callback = original_observation_callback

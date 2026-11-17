@@ -23,7 +23,7 @@ X4LAN_CONFIG={authority_source_single_job_session=true,authority_source_control_
  authority_source_descriptor_request=dn,authority_source_host_timeout=5,authority_source_timeout=30,authority_source_continuous=true,
  authority_source_window=10,authority_source_capacity=4,authority_source_baseline=10054,
  authority_source_motion_enabled=true,authority_source_motion_port=3333,authority_source_motion_lease=ml,
- authority_source_motion_attempt=ma,authority_source_motion_nonce=mn}
+ authority_source_motion_attempt=ma,authority_source_motion_nonce=mn,authority_source_full_pose=os.getenv('TEST_FULL_POSE')=='1'}
 X4LAN_AUTHORITY_SOURCE_SINGLE_JOB_OWNER=source_mod;X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER=motion_mod
 X4LAN_AUTHORITY_SOURCE_MOTION_IPC=motion_ipc;X4LAN_AUTHORITY_SOURCE_JOB_IPC=job_ipc;X4LAN_AUTHORITY_JOB_DELIVERY=gate
 X4LAN_AUTHORITY_JOB_REGISTRY_PROBE={};X4LAN_AUTHORITY_X4_CONTROL_ENGINE={new=function()return {}end}
@@ -35,13 +35,19 @@ X4LAN_AUTHORITY_JOB_REGISTRY_HOST={new_x4=function(c)host_cfg=c;return {start=fu
  tick=function()if select_actor then local n=select_actor;select_actor=nil;phase='await_delivery';assert(c.report({epoch=epoch,index=10054+n,sequence=n,
   classification='new_registry_entry',birth_confirmed=false,delivery_confirmed=false},40+n))end;return true end,
  confirm_delivery=function(_,e,s,i)assert(e==epoch and s==1 and i==10055);phase='front';return true end}end}
+local full_pose_samples=0
 X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE={new_x4=function(c)
  return {start=function()requests[#requests+1]=c;return true end,tick=function()return true end,response=function(_,v)
   assert(v==c.request_id..'|ok')
   local t=tonumber(ffi.C.GetCurrentGameTime())
-  return true,{epoch=epoch,index=c.row.index,sequence=c.row.sequence,sector_macro='sector_a',macro='ship_a',owner='argon',
+  local sample={epoch=epoch,index=c.row.index,sequence=c.row.sequence,sector_macro='sector_a',macro='ship_a',owner='argon',
    x=-400,y=100000,z=500,game_before_pose=t,game_after_pose=t,local_sector_key=c.include_local_sector and '43' or nil,
    descriptor_atomic=false,sector_identity_proven=false,birth_confirmed=false}
+  if c.include_orientation then
+   full_pose_samples=full_pose_samples+1
+   sample.yaw=full_pose_samples==1 and 3.1 or -3.1;sample.pitch=.2;sample.roll=.3
+  end
+  return true,sample
  end}
 end}
 local router
@@ -69,7 +75,12 @@ io.stdout:write('CONFIRMED\n');io.stdout:flush()
 ffi.cdef[[int usleep(unsigned int);]]
 local answered=1
 while true do
+ if os.getenv('TEST_FULL_POSE')=='1' then clock=clock+.001 end
  tick()
- while #requests>answered do answered=answered+1;router(nil,requests[answered].request_id..'|ok') end
+ while #requests>answered do
+  answered=answered+1
+  if os.getenv('TEST_FULL_POSE')=='1' and answered>2 then ffi.C.TestAdvance(.5) end
+  router(nil,requests[answered].request_id..'|ok')
+ end
  ffi.C.usleep(1000)
 end

@@ -32,6 +32,11 @@ import linux_snapshot_capture as snapshot
 
 RECOVERY=b'[X4LAN] AUTH_RECOVERY '
 MARKER=b'[X4LAN] AUTH_MARKER load '
+# Optional hooks for explicitly isolated recovery experiments. The invoking
+# runner must restore them and provide only files in its own disposable case.
+extra_protected_files=None
+result_finalizer=None
+observation_callback=None
 
 
 class RecoveryWatch(base.LoadWatch):
@@ -167,6 +172,14 @@ def run(args):
         protected=[config,lab/'ui.xml',profile/'content.xml',profile/'config.xml',
                    lab/'md/authority_checkpoint_marker.xml',lab/'ui/authority_checkpoint_marker_probe.lua',
                    lab/'ui/authority_recovery_probe.lua']
+        if extra_protected_files is not None:
+            if not callable(extra_protected_files): raise ValueError('invalid recovery protection hook')
+            additions=extra_protected_files(case,profile)
+            if not isinstance(additions,list): raise ValueError('invalid recovery protection list')
+            for path in additions:
+                if not isinstance(path,Path) or not path.is_relative_to(case):
+                    raise ValueError('recovery protected file outside private case')
+                if path not in protected: protected.append(path)
         expected={path:live.sha(path) for path in protected}
         lock_fd,lock_stat=live.create_lock_target(snapshot.LOCK_TARGET,user.pw_uid,user.pw_gid)
         for number in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP): handlers[number]=signal.signal(number,snapshot.cancel_capture)
@@ -206,6 +219,21 @@ def run(args):
                 if watch.stage and seen_game is None: raise RuntimeError('receipt without owned X4 process')
                 if caught_up and watch.stage==3:
                     if live.sha(target)!=checkpoint.sha256: raise ValueError('staged checkpoint changed')
+                    if observation_callback is not None:
+                        if not callable(observation_callback): raise ValueError('invalid observation hook')
+                        def guard():
+                            if time.monotonic()>=deadline: raise TimeoutError('recovery observation timed out')
+                            if prior.game_identity(proc,started,game)!=seen_game or seen_game is None:
+                                raise RuntimeError('owned X4 process changed')
+                            if live.steam_identity(home,user.pw_uid)!=steam: raise RuntimeError('Steam identity changed')
+                            if any(live.sha(path)!=digest for path,digest in expected.items()):
+                                raise ValueError('protected configuration changed')
+                        guard()
+                        experiment=observation_callback(profile=profile,out=out,game=game,
+                                                        identity=seen_game,deadline=deadline,guard=guard)
+                        guard()
+                        if type(experiment) is not dict: raise ValueError('invalid observation result')
+                        result['experiment']=experiment
                     result.update(success=True,checkpoint_id=checkpoint.checkpoint_id,sha256=checkpoint.sha256,
                                   load_requested=True,marker_after_game_loaded=True,pause_observed=True,
                                   exact_loaded_file_proven=False,zero_advance_proven=False,admitted=False)
@@ -246,6 +274,14 @@ def run(args):
         try:
             if live.steam_identity(home,user.pw_uid)!=steam: result.update(success=False,error='Steam identity changed')
         except (OSError,ValueError,RuntimeError): result.update(success=False,error='Steam identity unavailable')
+        if result_finalizer is not None:
+            was_success=result.get('success') is True
+            try:
+                result_finalizer(result)
+                if type(result.get('success')) is not bool or (not was_success and result['success']):
+                    raise ValueError('recovery finalizer changed failure to success')
+            except BaseException as error:
+                result.update(success=False,error='final result check: '+(str(error) or type(error).__name__))
         (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
     return result
 

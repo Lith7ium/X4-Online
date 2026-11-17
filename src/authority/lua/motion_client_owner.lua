@@ -86,7 +86,9 @@ function M.new(o)
  local function accept(raw)
   if type(raw)~='string' or #raw>768 then return false end
   local p=split(raw)
-  if #p~=18 or p[1]~='M' or p[2]~=c.lease or p[3]~=c.attempt or p[4]~='BIND' or
+  local full_pose = p[4]=='BIND2'
+  if (full_pose and (#p~=24 or apply)) or (not full_pose and (#p~=18 or p[4]~='BIND')) or
+     p[1]~='M' or p[2]~=c.lease or p[3]~=c.attempt or
      not token(p[5],32) or p[6]~=c.epoch or p[7]~=c.generation or not name(p[10]) or not token(p[11],64) then return false end
   local index,seq=natural(p[8]),natural(p[9]);if not index or not seq then return false end
   local t=number(p[12],0,1e12);local x,y,z=number(p[13],-1e7,1e7),number(p[14],-1e7,1e7),number(p[15],-1e7,1e7)
@@ -95,17 +97,33 @@ function M.new(o)
    if observe_count>=apply.observe_limit or index>saved.baseline or
     (stream_index and (index~=stream_index or seq<=stream_sequence or t<=stream_time)) then return false end
   end
+  local pose={x,y,z}
+  if full_pose then
+   for i=16,18 do
+    local angle=number(p[i],-2*math.pi,2*math.pi);if not angle then return false end
+    pose[#pose+1]=angle
+   end
+  end
   local rate
-  if p[16]=='-' and p[17]=='-' and p[18]=='-' then rate=nil
+  local rate_start=full_pose and 19 or 16
+  if p[rate_start]=='-' and p[rate_start+1]=='-' and p[rate_start+2]=='-' then
+   if full_pose and (p[22]~='-' or p[23]~='-' or p[24]~='-') then return false end
+   rate=nil
   else
-   local vx,vy,vz=number(p[16],-5000,5000),number(p[17],-5000,5000),number(p[18],-5000,5000)
+   local vx,vy,vz=number(p[rate_start],-5000,5000),number(p[rate_start+1],-5000,5000),number(p[rate_start+2],-5000,5000)
    if not vx or not vy or not vz then return false end;rate={vx,vy,vz}
+   if full_pose then
+    for i=22,24 do
+     local angular_rate=number(p[i],-2*math.pi,2*math.pi);if not angular_rate then return false end
+     rate[#rate+1]=angular_rate
+    end
+   end
   end
   if not check() then return false end
   if apply and apply.observe_limit then stream_index=index;stream_sequence=seq;stream_time=t end
   local arrival=last
   local entry=tracks[index]
-  if entry and entry.sector~=p[10] then return false end
+  if entry and (entry.sector~=p[10] or entry.dimensions~=#pose) then return false end
   if not entry then
    if track_count>=c.max_tracks then return false end
    track_count=track_count+1
@@ -123,13 +141,13 @@ function M.new(o)
      delivered=true;return true
     end}))
    if state~='ready' or not check() then return false end
-   local buffer=assert(new_buffer({dimensions=3,hold_only=true}))
+   local buffer=assert(new_buffer({dimensions=#pose,hold_only=true}))
    if type(buffer)~='table' or type(buffer.push)~='function' or state~='ready' or not check() then return false end
-   entry={sector=p[10],binding=binding,buffer=buffer,route=route};tracks[index]=entry
+   entry={sector=p[10],binding=binding,buffer=buffer,route=route,dimensions=#pose};tracks[index]=entry
   end
   staged=nil;preflight_ready=false;preflight_attempted=false
   pending={identity={p[5],p[6],p[7],p[8],p[9],p[10],p[11]},index=index,sequence=seq,sector=p[10],binding=entry.binding,
-   buffer=entry.buffer,route=entry.route,arrival=arrival,source_time=t,position={x,y,z},rate=rate}
+   buffer=entry.buffer,route=entry.route,arrival=arrival,source_time=t,position=pose,rate=rate}
   deadline=last+c.timeout;state='pending'
   local ok,v=pcall(entry.binding.begin,entry.binding,{epoch=c.epoch,generation=c.generation,index=index,sequence=seq,sector_macro=p[10]},arrival)
   return ok and v==true and state=='pending' and check()
@@ -222,13 +240,15 @@ function M.new(o)
   busy=true;local ok=pcall(function()
    assert(check());local accepted=pending.binding:event(value)
    assert(accepted==true and delivered==true and state=='pending' and check())
-   local pose={pending.position[1],pending.position[2],pending.position[3]}
-   local rate=pending.rate and {pending.rate[1],pending.rate[2],pending.rate[3]} or nil
+   local pose={};for i=1,#pending.position do pose[i]=pending.position[i] end
+   local rate
+   if pending.rate then rate={};for i=1,#pending.rate do rate[i]=pending.rate[i] end end
    local snapshot={frame=pending.sector,sequence=pending.sequence,source_time=pending.source_time,pose=pose,rate=rate}
    local function vector_unchanged(v,expected)
-    if type(v)~='table' or getmetatable(v)~=nil or #v~=3 then return false end
-    for k in pairs(v)do if type(k)~='number' or k%1~=0 or k<1 or k>3 then return false end end
-    return v[1]==expected[1] and v[2]==expected[2] and v[3]==expected[3]
+    if type(v)~='table' or getmetatable(v)~=nil or #v~=#expected then return false end
+    for k in pairs(v)do if type(k)~='number' or k%1~=0 or k<1 or k>#expected then return false end end
+    for i=1,#expected do if v[i]~=expected[i] then return false end end
+    return true
    end
    local function snapshot_unchanged()
     if getmetatable(snapshot)~=nil or snapshot.frame~=pending.sector or snapshot.sequence~=pending.sequence or

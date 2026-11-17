@@ -21,6 +21,15 @@ The caller must establish what a frame token means and ensure pose, velocity and
 
 Push rejects invalid or nonfinite fields, stale sequence/source time, or a backwards observer time. After frame change, a source gap over the configured stale threshold, or a displacement beyond the configured limit plus the **previous** speed times elapsed time, it drops earlier samples and discards the new sample's rate until the next update. The discontinuity limit is a heuristic, not proof that teleportation did or did not occur. Accepted input is copied; at most sixteen samples are retained.
 
+As in the earlier LAN buffer, a discontinuity also resets the clock-offset
+estimate; the current buffer additionally resets its render-clock slew. This
+allows it to establish a new mapping after a long interruption instead of
+rendering new samples against an obsolete offset. Until new samples arrive,
+the discontinuity sample remains held without an invented velocity. The new
+mapping is based on arrival observations, not synchronized clocks or a measured
+network latency. This is an offline buffer behavior and has not been validated
+as smooth X4 movement in this server branch.
+
 Rendering maps observer time to source time using the lowest observed offset, with a bounded rate of offset increase to accommodate drift. It interpolates between known samples (using shortest-angle wrap). Beyond the latest sample, it applies the supplied linear/Euler rates up to a configured horizon, then freezes at that predicted pose. If the pose would exceed validation limits, rendering fails closed. `result.phase` is `held`, `held-no-rate`, `interpolated`, `extrapolated` or `frozen`. The result freezes indefinitely once its horizon is reached; the caller is responsible for expiring, hiding or replacing stale objects. Arrival/clock data do not prove actual capture time or provide synchronized clocks.
 
 `result.linear_velocity`, when present, is a newly allocated three-number vector

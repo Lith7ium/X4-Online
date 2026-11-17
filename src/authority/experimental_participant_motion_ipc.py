@@ -106,7 +106,16 @@ class ExperimentalParticipantMotionIPC:
             velocity=value['velocity']
             vector=['-','-','-'] if velocity is None else [format(velocity[k],'.17g') for k in ('x','y','z')]
             numeric=[format(value[k],'.17g') for k in ('source_time','x','y','z')]
-            payload='|'.join(['M',self._lease,self._attempt,'BIND',*fields,*numeric,*vector]).encode('ascii')
+            kind = 'BIND'
+            if value['version'] == 2:
+                if self._allow_apply or self._observe_limit is not None:
+                    raise ValueError('orientation apply is not implemented')
+                kind = 'BIND2'
+                axes = ('yaw', 'pitch', 'roll')
+                numeric.extend(format(value['orientation'][k], '.17g') for k in axes)
+                angular = value['angular_rate']
+                vector.extend(['-', '-', '-'] if angular is None else [format(angular[k], '.17g') for k in axes])
+            payload='|'.join(['M',self._lease,self._attempt,kind,*fields,*numeric,*vector]).encode('ascii')
             if len(payload)>_MAX_PACKET:raise ValueError('motion IPC packet too large')
             self._quiet(deadline,'applying')
             if self._sock.send(payload)!=len(payload):raise RuntimeError('motion IPC send failed')

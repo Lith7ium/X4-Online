@@ -225,6 +225,8 @@ class ExperimentalTCPParticipantClient:
                 command['incarnation'] != self._motion_incarnation):
             raise ValueError('one-shot motion apply unavailable')
         sample = motion_value(command['sample'])
+        if sample['version'] != 1:
+            raise ValueError('full-pose motion apply is not implemented')
         track_key = (sample['epoch'], sample['generation'], sample['index'])
         previous_track = self._motion_tracks.get(track_key)
         digest = motion_digest(sample)
@@ -259,6 +261,8 @@ class ExperimentalTCPParticipantClient:
                 command['incarnation'] != self._motion_incarnation):
             raise ValueError('motion preflight unavailable')
         sample = motion_value(command['sample'])
+        if sample['version'] != 1:
+            raise ValueError('full-pose motion preflight is not implemented')
         track_key = (sample['epoch'], sample['generation'], sample['index'])
         previous_track = self._motion_tracks.get(track_key)
         digest = motion_digest(sample)

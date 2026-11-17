@@ -20,14 +20,19 @@ _SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}\Z')
 _MAX = 9007199254740991
 _COMMON = {'version', 'epoch', 'generation', 'index', 'sequence'}
 _SNAPSHOT = _COMMON | {'sector_macro', 'source_time', 'x', 'y', 'z', 'velocity'}
+_SNAPSHOT_V2 = _SNAPSHOT | {'orientation', 'angular_rate'}
 
 
 def motion_value(value, *, despawn=False):
     """Validate exact portable fields and return a detached copy."""
-    if type(despawn) is not bool or type(value) is not dict or set(value) != (_COMMON if despawn else _SNAPSHOT):
+    if type(despawn) is not bool or type(value) is not dict:
         raise ValueError('invalid motion fields')
-    if type(value['version']) is not int or value['version'] != 1:
+    version = value.get('version')
+    if type(version) is not int or version not in (1, 2) or (despawn and version != 1):
         raise ValueError('invalid motion version')
+    expected = _COMMON if despawn else (_SNAPSHOT if version == 1 else _SNAPSHOT_V2)
+    if set(value) != expected:
+        raise ValueError('invalid motion fields')
     if any(type(value[k]) is not str or not _TOKEN.fullmatch(value[k]) for k in ('epoch', 'generation')):
         raise ValueError('invalid motion lineage')
     if any(type(value[k]) is not int or not 1 <= value[k] <= _MAX for k in ('index', 'sequence')):
@@ -45,6 +50,18 @@ def motion_value(value, *, despawn=False):
         if vel is not None and (type(vel) is not dict or set(vel)!={'x','y','z'} or
                 any(not number(vel[k], -5000, 5000) for k in ('x','y','z'))):
             raise ValueError('invalid motion rate')
+        if version == 2:
+            orientation = value['orientation']
+            angular_rate = value['angular_rate']
+            axes = ('yaw', 'pitch', 'roll')
+            if (type(orientation) is not dict or set(orientation) != set(axes) or
+                    any(not number(orientation[k], -2 * math.pi, 2 * math.pi) for k in axes)):
+                raise ValueError('invalid motion orientation')
+            if (vel is None) != (angular_rate is None):
+                raise ValueError('incomplete motion rate')
+            if angular_rate is not None and (type(angular_rate) is not dict or set(angular_rate) != set(axes) or
+                    any(not number(angular_rate[k], -2 * math.pi, 2 * math.pi) for k in axes)):
+                raise ValueError('invalid angular rate')
     return copy.deepcopy(value)
 
 
@@ -305,6 +322,8 @@ class ExperimentalTCPMotion:
             if guard is not None and not callable(guard):
                 raise ValueError('invalid operation guard')
             sample = motion_value(raw)
+            if sample['version'] != 1:
+                raise ValueError('full-pose motion apply is not implemented')
             track_key = (sample['epoch'], sample['generation'], sample['index'])
             track = self._tracks.get(track_key)
             members = delivery.membership()
@@ -396,6 +415,8 @@ class ExperimentalTCPMotion:
             if guard is not None and not callable(guard):
                 raise ValueError('invalid operation guard')
             sample = motion_value(raw)
+            if sample['version'] != 1:
+                raise ValueError('full-pose motion preflight is not implemented')
             track_key = (sample['epoch'], sample['generation'], sample['index'])
             track = self._tracks.get(track_key)
             members = delivery.membership()

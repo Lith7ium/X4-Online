@@ -23,6 +23,19 @@ received this track in a different sector faults before any send, even with
 null velocity; no per-peer frame reset is implemented. Macro equality does not
 establish cross-process coordinate-frame identity.
 
+Snapshot v2 keeps those fields and adds `orientation` and `angular_rate`,
+each with exactly `yaw`, `pitch` and `roll`. As in LAN NAV2, orientation uses
+radians; angular rate is the shortest-arc Euler-coordinate difference divided
+by source game seconds. It is not an engine-native angular velocity vector.
+All angles and angular rates must be finite and within ±2π. Linear velocity
+and angular rate must either both be present or both be null. The source
+sampler emits v1 by default; the private source session can opt in using
+`authority_source_full_pose=true` to read all six pose values. V2 tests use a
+synthetic X4 ABI and descriptor; no native v2 observation has been run. V2 can reach
+the hold-only six-dimensional receiver buffer, but all existing preflight and
+apply paths reject v2 because they do not apply or read back rotation. Neither
+v2 transport nor buffering proves native X4 rotation or gameplay.
+
 Updates must increase sequence and source time. Per-index sends are rate limited
 by source process monotonic time, configurable from 1/240 second to 10 seconds;
 rate rejection does not transmit or alter a sample. Invalid, stale, unknown,

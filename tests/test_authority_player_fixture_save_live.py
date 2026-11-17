@@ -64,21 +64,71 @@ class FixtureSaveLiveTests(unittest.TestCase):
             self.assertNotIn('X4AuthorityCheckpointMarker',bridge)
             self.assertIn('X4LAN_PLAYER_FIXTURE_SAVE_READY()',bridge)
 
+    def test_opted_in_install_uses_the_pinned_historical_registry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            case=Path(temporary)/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab'
+            ui,md=lab/'ui',lab/'md';ui.mkdir(parents=True);md.mkdir();(lab/'native').mkdir()
+            (profile/'save').mkdir(parents=True)
+            for path in (ui/'native_gate_snapshot.lua',md/'native_gate_battle.xml',ui/'config.lua',ui/'sha256.lua',
+                         lab/'content.xml',profile/'content.xml',profile/'config.xml'):
+                path.write_text('test')
+            ticket=dict(self.ticket,slot='save_009')
+            historical=live.historical_registry()
+            protected=live.install(case,profile,ticket,2,port=12345,lease='c'*32,world_epoch='d'*32,
+                                   nonce='e'*32,registry_script=historical)
+            installed=md/'authority_ship_registry.xml'
+            self.assertIn(installed,protected)
+            self.assertEqual(installed.read_bytes(),historical.read_bytes())
+            self.assertNotEqual(installed.read_bytes(),(ROOT/'tools/dev/authority_ship_registry.xml').read_bytes())
+
+    def test_historical_registry_must_match_its_pinned_digest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            modified=Path(temporary)/'authority_ship_registry.xml'
+            modified.write_bytes(live.HISTORICAL_REGISTRY.read_bytes()+b'<!-- changed -->')
+            with patch.object(live,'HISTORICAL_REGISTRY',modified):
+                with self.assertRaisesRegex(ValueError,'pinned fixture'):
+                    live.historical_registry()
+                ticket=dict(self.ticket,slot='save_009')
+                with self.assertRaisesRegex(ValueError,'pinned fixture'):
+                    live.install(Path(temporary),Path(temporary),ticket,2,port=12345,lease='c'*32,
+                                 world_epoch='d'*32,nonce='e'*32,registry_script=modified)
+                self.assertEqual(ticket['slot'],'save_009')
+
+    def test_archive_registry_still_has_to_match_selected_script(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);store=root/'test/checkpoints';store.mkdir(parents=True)
+            origin=store.parent/'server/case'
+            archived_md=origin/'extensions/x4_lan_lab/md';archived_md.mkdir(parents=True)
+            original_content=origin/'home/.config/EgoSoft/X4/45841/content.xml'
+            original_content.parent.mkdir(parents=True);original_content.write_text('same content')
+            profile=root/'profile';profile.mkdir();(profile/'content.xml').write_text('same content')
+            for name in live.base.MD:
+                source=live.HISTORICAL_REGISTRY if name=='authority_ship_registry.xml' else ROOT/'tools/dev'/name
+                shutil.copyfile(source,archived_md/name)
+            with self.assertRaisesRegex(ValueError,'saved-state scripts differ'):
+                live.base.check_origin_scripts(store,profile)
+            live.base.check_origin_scripts(store,profile,registry_script=live.historical_registry())
+            (archived_md/'authority_ship_registry.xml').write_text('different registry')
+            with self.assertRaisesRegex(ValueError,'saved-state scripts differ'):
+                live.base.check_origin_scripts(store,profile,registry_script=live.historical_registry())
+
     def test_supervisor_hooks_restore_on_failure_and_source_change(self):
         with tempfile.TemporaryDirectory() as temporary:
             store=Path(temporary)/'checkpoints';store.mkdir()
             args=SimpleNamespace(slot=2,timeout=120,store=store)
-            original=(live.base.install,live.base.check_log_bytes,live.base.fault_log,live.base.observation_callback,
-                      live.base.result_finalizer,live.base.base.stage_checkpoint)
+            original=(live.base.install,live.base.check_origin_scripts,live.base.check_log_bytes,
+                      live.base.fault_log,live.base.observation_callback,live.base.result_finalizer,
+                      live.base.base.stage_checkpoint)
             def fake_run(_):
                 self.assertTrue(callable(live.base.observation_callback))
+                self.assertIsNot(live.base.check_origin_scripts,original[1])
                 live.base.result_finalizer({'success':False})
                 raise RuntimeError('synthetic failure')
             with patch.object(live.base.base,'local_directory',return_value=store), \
                  patch.object(live.base.archive,'_path_fingerprints',side_effect=[{'a':1},{'a':1}]), \
                  patch.object(live.base,'run',side_effect=fake_run):
                 with self.assertRaisesRegex(RuntimeError,'synthetic failure'): live.run(args)
-            self.assertEqual(original,(live.base.install,live.base.check_log_bytes,live.base.fault_log,
+            self.assertEqual(original,(live.base.install,live.base.check_origin_scripts,live.base.check_log_bytes,live.base.fault_log,
                 live.base.observation_callback,live.base.result_finalizer,live.base.base.stage_checkpoint))
 
     def test_lost_guard_after_save_never_publishes_or_confirms(self):

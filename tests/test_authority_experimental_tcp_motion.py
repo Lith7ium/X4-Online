@@ -60,6 +60,24 @@ class MotionTCP(unittest.TestCase):
     def sample(seq=1,frame='sector_a',t=1,velocity=None):
         return {'version':1,'epoch':'b'*32,'generation':'c'*32,'index':10055,'sequence':seq,
                 'sector_macro':frame,'source_time':t,'x':1,'y':2,'z':3,'velocity':velocity}
+    def test_full_pose_version_validates_exact_fields_and_paired_rates(self):
+        sample = {**self.sample(), 'version': 2,
+                  'orientation': {'yaw': .1, 'pitch': .2, 'roll': .3}, 'angular_rate': None}
+        self.assertEqual(motion_value(sample), sample)
+        moved = {**sample, 'velocity': {'x': 4, 'y': 5, 'z': 6},
+                 'angular_rate': {'yaw': .4, 'pitch': .5, 'roll': .6}}
+        self.assertEqual(motion_value(moved), moved)
+        for invalid in (
+            {**sample, 'orientation': {'yaw': 0, 'pitch': 0}},
+            {**sample, 'orientation': {'yaw': float('nan'), 'pitch': 0, 'roll': 0}},
+            {**sample, 'orientation': {'yaw': 7, 'pitch': 0, 'roll': 0}},
+            {**sample, 'angular_rate': {'yaw': 0, 'pitch': 0, 'roll': 0}},
+            {**moved, 'angular_rate': None},
+            {**moved, 'angular_rate': {'yaw': 0, 'pitch': float('inf'), 'roll': 0}},
+            {**sample, 'version': 1},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                motion_value(invalid)
     def test_huge_min_interval_is_rejected_without_claiming_owner(self):
         delivery = ExperimentalTCPJobDelivery(self.case.host, enabled=True)
         for interval in (10**1000, -(10**1000), float('inf'), float('nan')):

@@ -18,6 +18,16 @@ unknown. Local actor handles are never transmitted. Unexpected packets, stale
 identity, PID/peer guard loss, timeout or uncertain send permanently fault the
 bridge and the shared TCP host. No UDP retries or fabricated receipts occur.
 
+Experimental `SAMPLE2` additionally carries the three NAV2 orientation values
+in radians and their corresponding wrapped Euler rates in radians per source
+game second. Linear and angular rates are either both known or both `-|-|-`.
+The source sampler produces v1 by default; `authority_source_full_pose=true`
+opts the private source session into v2. V2 tests use a synthetic X4 ABI and
+descriptor. `BIND2` delivers v2 through the same participant IPC into a
+six-dimensional hold-only buffer. It is rejected when the XYZ-only apply or
+observe path is configured, and generic TCP preflight/apply also reject v2.
+No actual rotation is applied by this experiment.
+
 Separately, `saved_baseline` and `saved_guard(epoch, baseline)` opt in to
 `register_saved(index)`, optionally through the scheduler's exclusive owner.
 It sends a correlated `REGISTER_SAVED` and requires the exact

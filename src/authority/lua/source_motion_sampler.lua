@@ -6,6 +6,10 @@ local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f
 local function integer(v)return type(v)=='number' and v==v and v>=1 and v<=MAX and v%1==0 end
 local function finite(v)return type(v)=='number' and v==v and v~=math.huge and v~=-math.huge end
 local function name(v)return type(v)=='string' and #v>=1 and #v<=128 and v:match('^[A-Za-z0-9_]+$')~=nil end
+local function copy_orientation(value)
+ if not value then return nil end
+ return {yaw=value.yaw,pitch=value.pitch,roll=value.roll}
+end
 local function valid_row(r,epoch,baseline)
  if type(r)~='table' or getmetatable(r)~=nil or r.epoch~=epoch or not integer(r.index) then return false end
  if r.classification=='new_registry_entry' then return integer(r.sequence) end
@@ -22,6 +26,7 @@ function M.new(o)
  assert(integer(c.max_tracks) and c.max_tracks<=1000000 and integer(c.scan_budget) and c.scan_budget<=1024)
  assert(finite(c.interval) and c.interval>0 and c.interval<=60 and finite(c.timeout) and c.timeout>0 and c.timeout<=120)
  assert(finite(c.min_dt) and finite(c.max_dt) and c.min_dt>0 and c.min_dt<=c.max_dt and c.max_dt<=60)
+ assert(c.include_orientation==nil or type(c.include_orientation)=='boolean')
  local state,busy='ready',false
  local entries,order,actors={}, {}, {}
  local cursor,request_number,last_clock,last_game,pending=1,0,nil,nil,nil
@@ -108,10 +113,17 @@ function M.new(o)
     and finite(sample.x) and finite(sample.y) and finite(sample.z)
     and math.abs(sample.x)<=1e7 and math.abs(sample.y)<=1e7 and math.abs(sample.z)<=1e7)
    local sampled={sector_macro=sample.sector_macro,local_sector_key=sample.local_sector_key,game_after_pose=sample.game_after_pose,x=sample.x,y=sample.y,z=sample.z}
+   if c.include_orientation then
+    sampled.orientation={}
+    for _,axis in ipairs({'yaw','pitch','roll'}) do
+     assert(finite(sample[axis]) and math.abs(sample[axis])<=2*math.pi)
+     sampled.orientation[axis]=sample[axis]
+    end
+   end
    assert(checked_binding(e) and e.sequence<MAX)
    sample=sampled
    local t=sample.game_after_pose;assert(not last_game or t>=last_game,'source game clock regressed')
-   local previous=e.previous;local velocity=nil
+   local previous=e.previous;local velocity,angular_rate=nil,nil
    if previous then
     assert(t>=previous.last_time,'source game clock regressed')
     assert(not e.sent_sector or e.sent_sector~=sample.sector_macro or
@@ -123,25 +135,35 @@ function M.new(o)
      if dt>=c.min_dt and dt<=c.max_dt then
       local x,y,z=(sample.x-previous.x)/dt,(sample.y-previous.y)/dt,(sample.z-previous.z)/dt
       if finite(x) and finite(y) and finite(z) and math.abs(x)<=5000 and math.abs(y)<=5000 and math.abs(z)<=5000 then velocity={x=x,y=y,z=z}end
+      if velocity and c.include_orientation then
+       angular_rate={}
+       for _,axis in ipairs({'yaw','pitch','roll'}) do
+        local delta=(sample.orientation[axis]-previous.orientation[axis]+math.pi)%(2*math.pi)-math.pi
+        local rate=delta/dt
+        if not finite(rate) or math.abs(rate)>2*math.pi then angular_rate=nil;velocity=nil;break end
+        angular_rate[axis]=rate
+       end
+      end
      end
     end
    end
    if previous and t==previous.last_time then
     if previous.sector~=sample.sector_macro or previous.local_sector_key~=sample.local_sector_key then
      e.previous={sector=sample.sector_macro,local_sector_key=sample.local_sector_key,time=t,last_time=t,
-      x=sample.x,y=sample.y,z=sample.z}
+      x=sample.x,y=sample.y,z=sample.z,orientation=copy_orientation(sample.orientation)}
     end
     e.next_due=last_clock+c.interval;pending=nil;state='ready';result=nil;return
    end
    -- The receiver has only seen the last emitted sector, not suppressed reads.
-   if e.sent_sector and e.sent_sector~=sample.sector_macro then velocity=nil end
-   local v={version=1,epoch=c.epoch,generation=c.generation,index=e.row.index,sequence=e.sequence+1,
+   if e.sent_sector and e.sent_sector~=sample.sector_macro then velocity=nil;angular_rate=nil end
+   local v={version=c.include_orientation and 2 or 1,epoch=c.epoch,generation=c.generation,index=e.row.index,sequence=e.sequence+1,
     sector_macro=sample.sector_macro,source_time=t,x=sample.x,y=sample.y,z=sample.z,velocity=velocity}
+   if c.include_orientation then v.orientation=sample.orientation;v.angular_rate=angular_rate end
    assert(check() and state=='pending')
    result=v
    last_game=t;e.sequence=e.sequence+1;e.sent_sector=sample.sector_macro;e.sent_local_sector_key=sample.local_sector_key;e.next_due=last_clock+c.interval
    if not previous or previous.sector~=sample.sector_macro or previous.local_sector_key~=sample.local_sector_key or t-previous.time>=c.min_dt then
-    e.previous={sector=sample.sector_macro,local_sector_key=sample.local_sector_key,time=t,last_time=t,x=sample.x,y=sample.y,z=sample.z}
+    e.previous={sector=sample.sector_macro,local_sector_key=sample.local_sector_key,time=t,last_time=t,x=sample.x,y=sample.y,z=sample.z,orientation=copy_orientation(sample.orientation)}
    else previous.last_time=t end
    pending=nil;state='ready'
   end)
@@ -208,7 +230,7 @@ function M.new_x4(c)
  end
  opts.reader_factory=function(row,actor,request)
   return new_descriptor({enabled=true,epoch=c.epoch,request_id=request,timeout=c.timeout,
-   row=row,actor=actor,expected_save_path=c.expected_save_path,guard=c.guard,include_local_sector=true,
+   row=row,actor=actor,expected_save_path=c.expected_save_path,guard=c.guard,include_local_sector=true,include_orientation=c.include_orientation,
    saved_baseline=row.classification=='saved_baseline' and c.saved_baseline_limit or nil})
  end
  return M.new(opts)

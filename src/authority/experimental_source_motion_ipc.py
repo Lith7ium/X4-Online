@@ -374,7 +374,8 @@ class ExperimentalSourceMotionIPC:
             self._last_pull = time.monotonic()
             self._state = 'ready'
             return None
-        if len(parts) != 17 or parts[:7] != prefix + ['SAMPLE', self._epoch, self._generation, request]:
+        full_pose = len(parts) == 23 and parts[:7] == prefix + ['SAMPLE2', self._epoch, self._generation, request]
+        if not full_pose and (len(parts) != 17 or parts[:7] != prefix + ['SAMPLE', self._epoch, self._generation, request]):
             raise ValueError('foreign source motion response')
         index, sequence = parts[7:9]
         if not re.fullmatch(r'[1-9][0-9]*', index) or not re.fullmatch(r'[1-9][0-9]*', sequence):
@@ -382,8 +383,12 @@ class ExperimentalSourceMotionIPC:
         if int(index) not in self._indices:
             raise ValueError('unconfirmed source motion index')
         time_and_position_fields = parts[10:14]
-        velocity_fields = parts[14:17]
-        numeric_fields = time_and_position_fields + ([] if velocity_fields == ['-', '-', '-'] else velocity_fields)
+        orientation_fields = parts[14:17] if full_pose else []
+        velocity_fields = parts[17:20] if full_pose else parts[14:17]
+        angular_fields = parts[20:23] if full_pose else []
+        if full_pose and ((velocity_fields == ['-', '-', '-']) != (angular_fields == ['-', '-', '-'])):
+            raise ValueError('incomplete source motion rate')
+        numeric_fields = time_and_position_fields + orientation_fields + ([] if velocity_fields == ['-', '-', '-'] else velocity_fields + angular_fields)
         if any(len(item) > 32 or not _NUMBER.fullmatch(item) for item in numeric_fields):
             raise ValueError('invalid source motion numeric syntax')
         try:
@@ -392,9 +397,14 @@ class ExperimentalSourceMotionIPC:
                 zip(('x', 'y', 'z'), map(float, velocity_fields)))
         except ValueError:
             raise ValueError('invalid source motion number') from None
-        sample = motion_value({'version': 1, 'epoch': self._epoch, 'generation': self._generation,
+        raw_sample = {'version': 2 if full_pose else 1, 'epoch': self._epoch, 'generation': self._generation,
             'index': int(index), 'sequence': int(sequence), 'sector_macro': parts[9],
-            'source_time': source_time, 'x': x, 'y': y, 'z': z, 'velocity': velocity})
+            'source_time': source_time, 'x': x, 'y': y, 'z': z, 'velocity': velocity}
+        if full_pose:
+            axes = ('yaw', 'pitch', 'roll')
+            raw_sample['orientation'] = dict(zip(axes, map(float, orientation_fields)))
+            raw_sample['angular_rate'] = None if velocity is None else dict(zip(axes, map(float, angular_fields)))
+        sample = motion_value(raw_sample)
         previous = self._observed.get(sample['index'])
         if previous is not None:
             if sample['sequence'] <= previous['sequence'] or sample['source_time'] <= previous['time']:

@@ -100,7 +100,7 @@ function X4LAN_SOURCE_SINGLE_JOB_TICK()
     sampler=assert(X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER.new_x4({enabled=true,epoch=cfg.authority_source_epoch,
      generation=cfg.authority_source_generation,nonce=cfg.authority_source_motion_nonce,max_tracks=100000,scan_budget=64,
      interval=.1,timeout=cfg.authority_source_host_timeout,min_dt=.02,max_dt=1,
-     diagnostics=true,
+     diagnostics=true,include_orientation=cfg.authority_source_full_pose==true,
      descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,resolve=X4LAN_RESOLVE_STRING,
      expected_save_path=cfg.authority_load_save_path,guard=function()return not failed and source_idle() and not C.IsGamePaused() end,
      binding_guard=function(row,actor)

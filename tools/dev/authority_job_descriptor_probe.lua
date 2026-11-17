@@ -12,6 +12,7 @@ function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(token(o.epoch) and token(o.request_id) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
  assert(o.include_local_sector==nil or type(o.include_local_sector)=='boolean')
+ assert(o.include_orientation==nil or type(o.include_orientation)=='boolean')
  assert(type(o.row)=='table' and o.row.epoch==o.epoch and integer(o.row.index) and o.actor~=nil)
  if o.saved_baseline~=nil then
   assert(integer(o.saved_baseline) and o.row.index<=o.saved_baseline and o.row.classification=='saved_baseline' and o.row.sequence==nil)
@@ -76,6 +77,11 @@ function M.new(o)
       not finite(sample.game_after) or sample.game_before<query_game or sample.game_after<sample.game_before) then
    return fail('snapshot_invalid')
   end
+  if o.include_orientation then
+   for _,axis in ipairs({'yaw','pitch','roll'}) do
+    if not coord(sample[axis]) or math.abs(sample[axis])>2*math.pi then return fail('orientation_invalid') end
+   end
+  end
   if not check() then return false end
   local verified,current=call(o.actor_key,o.actor)
   if not verified then return false end
@@ -88,6 +94,7 @@ function M.new(o)
    sector_identity_proven=false,descriptor_atomic=false,birth_confirmed=false,delivery_confirmed=false}
   -- The key is meaningful only inside this exact X4 process; it must never be sent.
   if o.include_local_sector then result.local_sector_key=sector_key end
+  if o.include_orientation then result.yaw=sample.yaw;result.pitch=sample.pitch;result.roll=sample.roll end
   return true,result
  end
  function api:tick() if state=='waiting' then return check() end;return fail('not_waiting') end
@@ -152,7 +159,8 @@ function M.new_x4(cfg)
   local before=tonumber(C.GetCurrentGameTime());local p=C.GetObjectPositionInSector(a)
   local after=tonumber(C.GetCurrentGameTime())
   assert(o.guard() and live(a,s))
-  return {sector_local=component_key(s),x=tonumber(p.x),y=tonumber(p.y),z=tonumber(p.z),game_before=before,game_after=after}
+  return {sector_local=component_key(s),x=tonumber(p.x),y=tonumber(p.y),z=tonumber(p.z),
+   yaw=tonumber(p.yaw),pitch=tonumber(p.pitch),roll=tonumber(p.roll),game_before=before,game_after=after}
  end
  return M.new(o)
 end

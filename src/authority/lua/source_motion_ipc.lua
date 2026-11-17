@@ -139,16 +139,29 @@ function M.new(c)
    local fields
    if sample==nil then fields={'NO_SAMPLE',c.epoch,c.generation,string.format('%.0f',request)}
    else
-    assert(type(sample)=='table' and getmetatable(sample)==nil and sample.version==1 and sample.epoch==c.epoch and sample.generation==c.generation
+    assert(type(sample)=='table' and getmetatable(sample)==nil and (sample.version==1 or sample.version==2) and sample.epoch==c.epoch and sample.generation==c.generation
      and integer(sample.index) and integer(sample.sequence) and type(sample.sector_macro)=='string' and #sample.sector_macro<=128
      and sample.sector_macro:match('^[A-Za-z0-9_]+$') and finite(sample.source_time) and sample.source_time>=0 and sample.source_time<=1e12)
     for _,k in ipairs({'x','y','z'})do assert(finite(sample[k]) and math.abs(sample[k])<=1e7)end
     local v=sample.velocity
     if v~=nil then assert(type(v)=='table' and getmetatable(v)==nil);for _,k in ipairs({'x','y','z'})do assert(finite(v[k]) and math.abs(v[k])<=5000)end end
-    fields={'SAMPLE',c.epoch,c.generation,string.format('%.0f',request),string.format('%.0f',sample.index),
+    local angular=sample.angular_rate
+    if sample.version==2 then
+     local orientation=sample.orientation
+     assert(type(orientation)=='table' and getmetatable(orientation)==nil)
+     for _,k in ipairs({'yaw','pitch','roll'})do assert(finite(orientation[k]) and math.abs(orientation[k])<=2*math.pi)end
+     assert((v==nil)==(angular==nil))
+     if angular~=nil then
+      assert(type(angular)=='table' and getmetatable(angular)==nil)
+      for _,k in ipairs({'yaw','pitch','roll'})do assert(finite(angular[k]) and math.abs(angular[k])<=2*math.pi)end
+     end
+    else assert(sample.orientation==nil and angular==nil) end
+    fields={sample.version==2 and 'SAMPLE2' or 'SAMPLE',c.epoch,c.generation,string.format('%.0f',request),string.format('%.0f',sample.index),
      string.format('%.0f',sample.sequence),sample.sector_macro,string.format('%.17g',sample.source_time)}
     for _,k in ipairs({'x','y','z'})do fields[#fields+1]=string.format('%.17g',sample[k])end
+    if sample.version==2 then for _,k in ipairs({'yaw','pitch','roll'})do fields[#fields+1]=string.format('%.17g',sample.orientation[k])end end
     for _,k in ipairs({'x','y','z'})do fields[#fields+1]=v and string.format('%.17g',v[k]) or '-'end
+    if sample.version==2 then for _,k in ipairs({'yaw','pitch','roll'})do fields[#fields+1]=angular and string.format('%.17g',angular[k]) or '-'end end
    end
    assert(send(fields));seq=request;request=nil;deadline=nil;state='ready'
   end)

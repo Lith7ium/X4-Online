@@ -37,23 +37,27 @@ NUMBER=r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
 DONE=re.compile(r'DONE slot=([12]) pilot=(present|absent) order=([\w-]{1,96}) state=(started|critical|other|none) game=('+NUMBER+r') x=('+NUMBER+r') y=('+NUMBER+r') z=('+NUMBER+r')\Z',re.ASCII)
 
 
-def check_origin_scripts(store,profile):
+def check_origin_scripts(store,profile,*,registry_script=None):
     origin=store.parent/'server/case'
     original=origin/'home/.config/EgoSoft/X4/45841/content.xml'
     if _read_regular(original,65536)!=_read_regular(profile/'content.xml',65536):
         raise ValueError('archive and private extension lists differ')
     source=origin/'extensions/x4_lan_lab/md'
     for name in MD:
-        if _read_regular(source/name,1<<20)!=_read_regular(ROOT/'tools/dev'/name,1<<20):
+        expected=(Path(registry_script) if name=='authority_ship_registry.xml' and registry_script is not None
+                  else ROOT/'tools/dev'/name)
+        if _read_regular(source/name,1<<20)!=_read_regular(expected,1<<20):
             raise ValueError('archive and read probe saved-state scripts differ: '+name)
 
 
-def install(case,profile,ticket,slot):
+def install(case,profile,ticket,slot,*,registry_script=None):
     if slot not in (1,2): raise ValueError('slot must be 1 or 2')
     config=load.install_probe(case,profile,ticket)
     lab=case/'extensions/x4_lan_lab';ui=lab/'ui'
     for name in (*MD,'authority_sector_read_guard.xml'):
-        shutil.copyfile(ROOT/'tools/dev'/name,lab/'md'/name)
+        source=(Path(registry_script) if name=='authority_ship_registry.xml' and registry_script is not None
+                else ROOT/'tools/dev'/name)
+        shutil.copyfile(source,lab/'md'/name)
     for name in UI: shutil.copyfile(ROOT/'tools/dev'/name,ui/name)
     marker=ui/'authority_checkpoint_marker_probe.lua';text=marker.read_text(encoding='utf-8')
     expected="if phase~='load' or state~='inspect' or type(marker)~='string'"

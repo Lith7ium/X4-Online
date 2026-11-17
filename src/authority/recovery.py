@@ -13,7 +13,7 @@ from .checkpoints import CHUNK, CheckpointError, CheckpointStore
 from .marker_evidence import verify_saved_marker
 
 
-def stage_confirmed_recovery(store, private_profile):
+def stage_confirmed_recovery(store, private_profile, *, marker_script='X4AuthorityCheckpointMarker'):
     """Copy the marked CONFIRMED checkpoint into a new private save_008 slot.
 
     The profile must be a new, empty, owner-only directory outside the checkpoint
@@ -22,7 +22,9 @@ def stage_confirmed_recovery(store, private_profile):
     It creates ``save/`` and exclusively creates ``save_008.xml.gz``; slot 009
     remains free for the normal experimental save controller. The returned pair
     is (verified checkpoint metadata, staged path). The saved marker and its
-    reset load flag are checked, but no X4 load is performed or proven.
+    reset load flag are checked, but no X4 load is performed or proven. The
+    alternate fixture marker is available only by explicit selection for the
+    disposable player-fixture experiment; it does not establish runtime identity.
 
     Cleanup errors from deleting the staged path are attached to the original
     staging exception. File-object and directory-FD close failures can still
@@ -30,6 +32,8 @@ def stage_confirmed_recovery(store, private_profile):
     """
     if not isinstance(store, CheckpointStore):
         raise ValueError('checkpoint store required')
+    if marker_script not in ('X4AuthorityCheckpointMarker', 'X4AuthorityPlayerFixtureMarker'):
+        raise ValueError('unsupported recovery marker script')
     profile = Path(private_profile)
     if profile.is_symlink() or not profile.is_dir():
         raise ValueError('new private profile directory required')
@@ -49,7 +53,7 @@ def stage_confirmed_recovery(store, private_profile):
             raise ValueError('private profile must be empty')
         checkpoint = store.latest_marked_confirmed()
         verify_saved_marker(checkpoint, checkpoint.marker,
-                            script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState')
+                            script_name=marker_script, cue_name='MarkerState')
         os.mkdir('save', 0o700, dir_fd=root_fd)
         created_dir = True
         save_fd = os.open('save', flags, dir_fd=root_fd)

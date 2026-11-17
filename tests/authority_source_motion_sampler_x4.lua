@@ -42,6 +42,18 @@ assert(out[2].sequence==2 and out[2].velocity and out[2].velocity.x==0 and #erro
 -- A newly docked actor fences the sampler before another sample is issued.
 docked=true;now=.4;assert(not x:tick() and x:state()=='failed');assert(#out==2)
 
+-- Actual descriptor/FFI code with the fake ABI exposes all six pose values
+-- only when explicitly requested; it does not establish native-game behavior.
+docked=false
+local full=assert(sampler.new_x4({enabled=true,include_orientation=true,epoch=epoch,generation=generation,nonce=nonce,
+ max_tracks=10,scan_budget=2,interval=.1,timeout=5,min_dt=.02,max_dt=1,descriptor=descriptor,resolve=X4LAN_RESOLVE_STRING,
+ expected_save_path='/private/45841/save',guard=function()return true end,binding_guard=function()return true end,fault=function()end}))
+assert(full:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},41))
+assert(full:tick());req=sent[#sent].request_id
+ok,result=full:event(req..'|'..epoch..'|1|ok|0x29|ship_a|argon|0x2b|sector_a')
+assert(ok and result.version==2 and result.orientation.yaw==0 and result.orientation.pitch==0 and result.orientation.roll==0)
+assert(result.velocity==nil and result.angular_rate==nil)
+
 -- Never read docking state for an ID altered or rounded by conversion.
 docked=false
 for _,mode in ipairs({'wrong_id','rounded_id','bad_roundtrip'})do

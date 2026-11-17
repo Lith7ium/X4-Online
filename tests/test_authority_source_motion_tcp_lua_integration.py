@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +31,7 @@ class Controller:
 
 
 class SourceTCPIntegration(unittest.TestCase):
-    def test_confirmed_lua_actor_through_real_udp_and_admitted_tcp(self):
+    def run_source(self, full_pose=False):
         case = fixture.ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
         case.setUp()
         stop = threading.Event(); ready = threading.Event(); errors = []; seen = []
@@ -42,7 +43,7 @@ class SourceTCPIntegration(unittest.TestCase):
                 subprocess.run(['cc', '-shared', '-fPIC', '-O2', 'tests/fixtures/multi_create_running_owner_abi.c', '-o', str(abi)], cwd=ROOT, check=True, capture_output=True)
                 tcp = case.connect(); case.offer_and_claim(tcp)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.bind(('127.0.0.1', 0))
-                env = dict(os.environ, LD_PRELOAD=str(abi), TEST_NET_LIB=str(net), TEST_NET_PORT=str(sock.getsockname()[1]))
+                env = dict(os.environ, LD_PRELOAD=str(abi), TEST_NET_LIB=str(net), TEST_NET_PORT=str(sock.getsockname()[1]), TEST_FULL_POSE='1' if full_pose else '0')
                 proc = subprocess.Popen(['luajit', 'tests/authority_source_job_motion_udp_fake_x4.lua'], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 st = os.stat(f'/proc/{proc.pid}/exe')
                 fields = Path(f'/proc/{proc.pid}/stat').read_text().rsplit(')', 1)[1].split()
@@ -71,7 +72,25 @@ class SourceTCPIntegration(unittest.TestCase):
                 self.assertTrue(bridge.bind_confirmed(10055))
                 result = bridge.pull()
                 self.assertEqual((result['index'], result['sequence'], result['velocity']), (10055, 1, None))
-                self.assertEqual(seen, [result]); bridge.close(); sock = None
+                if full_pose:
+                    self.assertEqual(result['version'], 2)
+                    self.assertEqual(result['orientation'], {'yaw': 3.1, 'pitch': .2, 'roll': .3})
+                    self.assertIsNone(result['angular_rate'])
+                    deadline = time.monotonic() + 2
+                    second = None
+                    while second is None and time.monotonic() < deadline:
+                        time.sleep(.03)
+                        second = bridge.pull()
+                    self.assertIsNotNone(second, 'second sampled pose did not arrive')
+                    self.assertEqual(second['orientation']['yaw'], -3.1)
+                    self.assertEqual(second['velocity'], {'x': 0, 'y': 0, 'z': 0})
+                    self.assertAlmostEqual(second['angular_rate']['yaw'], (2 * 3.141592653589793 - 6.2) / .5)
+                    self.assertEqual(second['angular_rate']['pitch'], 0)
+                    self.assertEqual(second['angular_rate']['roll'], 0)
+                    self.assertEqual(seen, [result, second])
+                else:
+                    self.assertEqual(seen, [result])
+                bridge.close(); sock = None
         finally:
             stop.set()
             if thread: thread.join(3)
@@ -81,6 +100,12 @@ class SourceTCPIntegration(unittest.TestCase):
             if sock: sock.close()
             case.doCleanups()
         self.assertFalse(thread and thread.is_alive()); self.assertEqual(errors, [])
+
+    def test_confirmed_lua_actor_through_real_udp_and_admitted_tcp(self):
+        self.run_source()
+
+    def test_synthetic_full_pose_through_source_udp_and_tcp(self):
+        self.run_source(full_pose=True)
 
 
 if __name__ == '__main__': unittest.main()

@@ -7,14 +7,17 @@ local binding=dofile('src/authority/lua/replica_motion_binding.lua')
 local core=dofile('src/authority/lua/motion_client_owner.lua')
 local actual_buffer=dofile('src/authority/lua/motion_buffer.lua')
 local buffer={new=function(opts)
- assert(opts.dimensions==3 and opts.hold_only==true)
+ local full_pose=os.getenv('TEST_FULL_POSE')=='1'
+ assert(opts.dimensions==(full_pose and 6 or 3) and opts.hold_only==true)
  local track=actual_buffer.new(opts)
  return {push=function(_,sample,arrival)
   local two=os.getenv('TEST_TWO_SAMPLES')=='1'
   assert(sample.pose[1]==(two and sample.sequence==2 and 2 or 1) and sample.pose[2]==2 and sample.pose[3]==3 and sample.source_time>=0)
+  if full_pose then assert(sample.pose[4]==.1 and sample.pose[5]==.2 and sample.pose[6]==.3) end
   if two and sample.sequence==2 then assert(sample.rate and sample.rate[1]==2 and sample.rate[2]==0 and sample.rate[3]==0)
   elseif os.getenv('TEST_EXPECT_RATE')=='1' then assert(sample.rate and sample.rate[1]==4 and sample.rate[2]==5 and sample.rate[3]==6)
   else assert(sample.rate==nil) end
+  if full_pose and sample.rate then assert(sample.rate[4]==.4 and sample.rate[5]==.5 and sample.rate[6]==.6) end
   return track:push(sample,arrival)
  end}
 end}

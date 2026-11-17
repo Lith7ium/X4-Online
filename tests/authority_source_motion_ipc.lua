@@ -25,6 +25,22 @@ do
  assert(out[#out]:match('|0|2|%-3$'))
  input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|3';assert(not x:tick() and x:state()=='failed')
 end
+-- V2 preserves NAV2's complete pose and Euler-coordinate rates. Missing one
+-- half of the paired rate is never sent as a successful sample.
+do
+ local x,input,out=rig();bind(x,input,out)
+ input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|1';assert(x:tick())
+ assert(x:complete({version=2,epoch=epoch,generation=gen,index=2,sequence=1,sector_macro='sector_a',source_time=42,
+  x=1,y=2,z=3,orientation={yaw=1,pitch=2,roll=3},velocity={x=4,y=5,z=6},angular_rate={yaw=1,pitch=2,roll=3}}))
+ assert(out[#out]=='S|'..lease..'|'..attempt..'|SAMPLE2'..suffix..'|1|2|1|sector_a|42|1|2|3|1|2|3|4|5|6|1|2|3')
+end
+do
+ local x,input,out=rig();bind(x,input,out)
+ input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|1';assert(x:tick())
+ assert(not x:complete({version=2,epoch=epoch,generation=gen,index=2,sequence=1,sector_macro='sector_a',source_time=42,
+  x=1,y=2,z=3,orientation={yaw=1,pitch=2,roll=3},velocity={x=4,y=5,z=6}}))
+ assert(x:state()=='failed' and #out==2)
+end
 do local x,input,out=rig();bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|2';assert(not x:tick())end
 do local x,input,out,clock=rig();bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|1';assert(x:tick());clock(6);assert(not x:tick())end
 do local x,input,out=rig();bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|1';assert(x:tick());input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|2';assert(not x:tick())end

@@ -4,7 +4,7 @@ local function rig(options)
  options=options or {};local clock=0;local values={};local outputs={};local faults={};local healthy=true
  local x
  x=assert(mod.new({enabled=true,epoch=epoch,generation=generation,nonce=nonce,max_tracks=10,scan_budget=2,
-  interval=.1,timeout=2,min_dt=.02,max_dt=1,clock=function()return clock end,
+  interval=.1,timeout=2,min_dt=.02,max_dt=1,include_orientation=options.include_orientation,clock=function()return clock end,
   guard=function()return healthy end,actor_key=function(a)return tostring(a)end,
   binding_guard=function(row,actor)return actor==row.index+40 end,
   reader_factory=function(row,actor,request)
@@ -12,19 +12,35 @@ local function rig(options)
     response=function(_,raw)
      assert(raw==request..'|response')
      local v=table.remove(values,1);assert(v)
-     return true,{epoch=epoch,index=row.index,sequence=row.sequence,sector_macro=v[1],
+     local result={epoch=epoch,index=row.index,sequence=row.sequence,sector_macro=v[1],
       game_before_pose=v[2],game_after_pose=v[2],x=v[3],y=0,z=0,local_sector_key=v[4] or '43',descriptor_atomic=false,sector_identity_proven=false}
+     if options.include_orientation then result.yaw=v[5];result.pitch=0;result.roll=0 end
+     return true,result
     end}
   end,fault=function(v)faults[#faults+1]=v end}))
  local function register(index)
   return x:register({epoch=epoch,index=index,sequence=index,classification='new_registry_entry'},index+40)
  end
- local function sample(sector,t,pos,local_sector_key)
-  values[#values+1]={sector,t,pos,local_sector_key};clock=clock+.2
+ local function sample(sector,t,pos,local_sector_key,yaw)
+  values[#values+1]={sector,t,pos,local_sector_key,yaw};clock=clock+.2
   assert(x:tick());local req=x:expected_request();assert(req)
   local ok,result=x:event(req..'|response');assert(ok);if result then outputs[#outputs+1]=result end
  end
  return x,register,sample,outputs,faults,function(v)clock=v end,function(v)healthy=v end
+end
+-- Full pose follows the short Euler arc and resets both rates across frames.
+do
+ local x,add,sample,out=rig({include_orientation=true});assert(add(1))
+ sample('sector_a',100,0,'43',3.1)
+ assert(out[1].version==2 and out[1].orientation.yaw==3.1 and out[1].velocity==nil and out[1].angular_rate==nil)
+ out[1].orientation.yaw=0 -- A consumer cannot alter the source's next derivative.
+ sample('sector_a',100.5,10,'43',-3.1)
+ assert(out[2].velocity.x==20 and math.abs(out[2].angular_rate.yaw-(2*math.pi-6.2)/.5)<1e-9)
+ sample('sector_b',101,10,'44',0)
+ assert(out[3].velocity==nil and out[3].angular_rate==nil)
+ sample('sector_b',101.2,10,'44',3.1)
+ assert(out[4].velocity==nil and out[4].angular_rate==nil)
+ assert(x:close())
 end
 -- Same actor, finite-difference velocity; changed sector/time gap resets to unknown.
 do

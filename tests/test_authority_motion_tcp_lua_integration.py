@@ -22,7 +22,7 @@ class Controller:
  def resume(self,_):return True
 
 class MotionTCPToLua(unittest.TestCase):
- def run_binding(self,two):
+ def run_binding(self,two,full_pose=False):
   case=fixture.ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation');case.setUp()
   stop=threading.Event();ready=threading.Event();errors=[];thread=None;proc=None;sock=None
   try:
@@ -32,7 +32,7 @@ class MotionTCPToLua(unittest.TestCase):
     subprocess.run(['cc','-O2','-shared','-fPIC','tests/fixtures/replica_motion_binding_abi.c','-o',str(abi)],cwd=ROOT,check=True,capture_output=True)
     tcp=case.connect();case.offer_and_claim(tcp)
     sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.bind(('127.0.0.1',0))
-    env=dict(os.environ,LD_PRELOAD=str(abi),TEST_NET_LIB=str(net),TEST_NET_PORT=str(sock.getsockname()[1]),TEST_TWO_SAMPLES='1' if two else '0')
+    env=dict(os.environ,LD_PRELOAD=str(abi),TEST_NET_LIB=str(net),TEST_NET_PORT=str(sock.getsockname()[1]),TEST_TWO_SAMPLES='1' if two else '0',TEST_FULL_POSE='1' if full_pose else '0')
     proc=subprocess.Popen(['luajit','tests/authority_motion_client_ipc_fake_x4.lua'],cwd=ROOT,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     def participant():
      try:
@@ -55,9 +55,12 @@ class MotionTCPToLua(unittest.TestCase):
     motion=ExperimentalTCPMotion(delivery,enabled=True);motion.track('c'*32,'d'*32,42)
     event={'version':1,'epoch':'c'*32,'generation':'d'*32,'index':42,'sequence':1,'sector_macro':'sector_a',
            'source_time':1,'x':1,'y':2,'z':3,'velocity':None}
+    if full_pose:
+     event.update(version=2,orientation={'yaw':.1,'pitch':.2,'roll':.3},angular_rate=None)
     before=time.monotonic();self.assertTrue(motion.send(event));self.assertGreaterEqual(time.monotonic()-before,.18)
     if two:
      second={**event,'sequence':2,'source_time':1.5,'x':2,'velocity':{'x':2,'y':0,'z':0}}
+     if full_pose:second['angular_rate']={'yaw':.4,'pitch':.5,'roll':.6}
      time.sleep(.025)
      before=time.monotonic();self.assertTrue(motion.send(second));self.assertGreaterEqual(time.monotonic()-before,.18)
     self.assertIsNone(proc.poll())
@@ -72,4 +75,5 @@ class MotionTCPToLua(unittest.TestCase):
   self.assertFalse(thread and thread.is_alive());self.assertEqual(errors,[])
  def test_tcp_receipt_waits_for_real_lua_owner_correlated_md_and_ffi(self):self.run_binding(False)
  def test_two_received_samples_push_unknown_then_verified_rate(self):self.run_binding(True)
+ def test_full_pose_and_rates_reach_real_lua_buffer_over_tcp_and_udp(self):self.run_binding(True,full_pose=True)
 if __name__=='__main__':unittest.main()
