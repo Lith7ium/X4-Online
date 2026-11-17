@@ -9,6 +9,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch, Mock
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev'),str(ROOT/'tests')]
@@ -19,6 +20,20 @@ import authority_tcp_native_live as native
 
 class MotionWiring(unittest.TestCase):
  def setUp(self):fixtures.Install.setUp(self)
+ def test_post_bound_sector_is_explicit_and_uses_fresh_private_tokens(self):
+  participant=client.ServerClient(time.monotonic()+10,self.case,keep_worker=True)
+  self.addCleanup(participant.cleanup_diagnostic)
+  participant.marker='9'*32
+  installation=Mock(paths=())
+  with patch('authority_recovered_client_motion_install.install',return_value=installation) as install:
+   participant.prepare_client_motion(self.case,self.profile,self.status,
+    {'indices':[42],'generation':'3'*32,'timeout':2,'player_sector':True},
+    {'world_epoch':'e'*32,'attempt_id':'f'*32})
+  settings=install.call_args.args[3];sector=settings['player_sector']
+  self.assertIs(sector['after_bound'],True)
+  self.assertEqual(len({sector['incarnation'],sector['nonce'],participant.marker,
+   settings['lease'],settings['attempt'],settings['generation'],settings['nonce'],settings['router_generation']}),8)
+  participant.motion_installation=None
  def test_private_install_socket_and_redaction(self):
   participant=client.ServerClient(time.monotonic()+10,self.case,keep_worker=True)
   self.addCleanup(participant.cleanup_diagnostic)

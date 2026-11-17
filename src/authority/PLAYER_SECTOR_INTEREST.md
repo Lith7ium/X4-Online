@@ -38,12 +38,25 @@ after completion, STOP closes the reader, while late events still fault the
 enclosing owner. The installer protects both overlay files and redacts both
 tokens after owned-process cleanup. The default installer path is unchanged.
 
-This is an additive private diagnostic, not a supervisor option or a network
-interest subscription. The caller must independently generate and fence the
+This is an additive private diagnostic, not a network interest subscription.
+The caller must independently generate and fence the
 process incarnation, ensure exclusive event ownership and validate the final
 log and process lifetime. A log line is provisional if later checks fail;
 no PID, shared sector identity, map viewport, high-attention assignment or
 native game behavior is established by these offline tests.
+
+The recovered-server supervisor provides a separate default-off
+`--diagnostic-client-sector` option only with one-client pair delivery. It
+binds the installed diagnostic incarnation to the admitted TCP peer using the
+existing test-only incarnation fence. A local query starts only after the
+matching BOUND was sent; the supervisor accepts a provisional sector only
+after its matching TCP receipt. It first arms the private append-only log watch
+after a caught-up pre-send read and finally confirms the value only after
+client STOP, owned-process exit and final log checks. The output describes a
+point-in-time local observation, not process authentication or portable sector
+identity. Filesystem and process checks are sampled; the log fence assumes an
+exclusive writer and cannot prove exact emission time or exclude an old-byte
+rewrite while the file grows. This mode is untested in native X4.
 
 If construction fails after partial listener registration, the listener or
 router claim may remain installed. The caller must fence and properly stop the

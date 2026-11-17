@@ -35,6 +35,12 @@ from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
 
 
 class WitnessJoinModeTests(unittest.TestCase):
+    def test_client_sector_requires_explicit_pair_delivery(self):
+        self.assertFalse(MODULE.diagnostic_client_sector(SimpleNamespace(), False))
+        self.assertTrue(MODULE.diagnostic_client_sector(SimpleNamespace(diagnostic_client_sector=True), True))
+        for value, pair in ((True, False), (1, True), ('yes', True)):
+            with self.subTest(value=value, pair=pair), self.assertRaises(ValueError):
+                MODULE.diagnostic_client_sector(SimpleNamespace(diagnostic_client_sector=value), pair)
     def test_pair_delivery_requires_both_existing_opt_ins(self):
         self.assertFalse(MODULE.diagnostic_local_pair_delivery(SimpleNamespace(), False, False))
         args = SimpleNamespace(diagnostic_local_pair_delivery=True)

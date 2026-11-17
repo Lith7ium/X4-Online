@@ -30,6 +30,20 @@ class RecoveredClientPlayerSector(unittest.TestCase):
                            cwd=ROOT, check=True, capture_output=True, timeout=5,
                            env=dict(os.environ, LD_PRELOAD=str(library)))
 
+    @unittest.skipUnless(shutil.which('cc'), 'C compiler is required')
+    def test_single_bind_precedes_sector_query(self):
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / 'motion-abi.so'
+            subprocess.run(['cc', '-shared', '-fPIC', '-O2',
+                            'tests/fixtures/replica_motion_binding_abi.c', '-o', str(library)],
+                           cwd=ROOT, check=True, capture_output=True)
+            for mode in ('good', 'wrong_index', 'forged_ack', 'duplicate', 'send_failure', 'failure_after_send',
+                         'stop_before_query', 'stop_pending'):
+                with self.subTest(mode=mode):
+                    subprocess.run([LUAJIT, 'tests/authority_recovered_sector_after_bound.lua', mode],
+                                   cwd=ROOT, check=True, capture_output=True, text=True, timeout=5,
+                                   env=dict(os.environ, LD_PRELOAD=str(library)))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -176,6 +176,14 @@ def diagnostic_local_pair_delivery(args, local_pair, client_motion):
     return enabled
 
 
+def diagnostic_client_sector(args, pair_delivery):
+    """One client sector read after the sole confirmed pair delivery."""
+    enabled = getattr(args, 'diagnostic_client_sector', False)
+    if type(enabled) is not bool or (enabled and pair_delivery is not True):
+        raise ValueError('client sector requires private pair delivery')
+    return enabled
+
+
 def record_local_pair_result(result, profile, source_index, remaining):
     """Record only final private-log evidence after owned processes have stopped."""
     evidence = {'index': source_index, 'native_velocity_proven': False,
@@ -535,6 +543,7 @@ def run(args):
         source_enabled=source_index is not None or source_candidates is not None
         client_motion=diagnostic_client_motion(args,source_enabled)
         pair_delivery=diagnostic_local_pair_delivery(args,local_pair,client_motion)
+        client_sector=diagnostic_client_sector(args,pair_delivery)
         guard_timing=diagnostic_guard_timing(args,source_enabled)
         long_motion=diagnostic_long_motion(args,witness_join,source_enabled,client_motion)
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
@@ -821,8 +830,9 @@ def run(args):
                     check_base=base_diagnostic if source_enabled else None,
                     check_server_base=verify if source_enabled else None,
                     witness_guard_ready=guard_ready if source_enabled else None,
-                    client_motion={'indices':list(source_candidates or (source_index,)),
-                        'generation':source_settings['generation'],'timeout':client_motion_timeout} if client_motion else None)
+                    client_motion=({'indices':list(source_candidates or (source_index,)),
+                        'generation':source_settings['generation'],'timeout':client_motion_timeout,
+                        **({'player_sector':True} if client_sector else {})} if client_motion else None))
                 if source_enabled:
                     import authority_recovered_source_probe
                     expected_members=tuple(world.session.ready_players)
@@ -848,7 +858,10 @@ def run(args):
                             active=active,host=host,world=world,identity=identity,verify=verify_diagnostic,
                             verify_process=check,candidate_indices=source_candidates,client_motion=client_motion,
                             verify_stopped=verify if client_motion else None, diagnostic_timeouts=budgets,
-                            private_long_diagnostic=long_motion)
+                            private_long_diagnostic=long_motion,
+                            **({'sector_poll':active.sector_poll,'sector_stop':active.sector_stop,
+                                'sector_arm':active.sector_arm,
+                                'sector_incarnation':active.participant._sector_incarnation} if client_sector else {}))
                     result['source_diagnostic'],diagnostic_result=finish_source_diagnostic(
                         diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source,
                         verify_after=verify_motion_stopped if client_motion else None,
@@ -986,6 +999,7 @@ def main():
     parser.add_argument('--diagnostic-client-motion',action='store_true',help='require private Linux client motion receipts: two normally, one with local pair delivery')
     parser.add_argument('--diagnostic-local-pair',action='store_true',help='estimate one local source pair for an explicit private source index')
     parser.add_argument('--diagnostic-local-pair-delivery',action='store_true',help='deliver exactly one known-rate local pair sample to the private client')
+    parser.add_argument('--diagnostic-client-sector',action='store_true',help='observe one private client sector after its pair receipt')
     parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     diagnostic_options = parser.add_mutually_exclusive_group()

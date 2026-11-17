@@ -145,6 +145,7 @@ class Install(unittest.TestCase):
   self.settings['player_sector']={'incarnation':'9'*32,'nonce':'0'*32}
   invalid=[None,{}, {'incarnation':'9'*32,'nonce':'9'*32},
            {'incarnation':'9'*32,'nonce':'0'*31}, {'incarnation':'9'*32,'nonce':'0'*32,'extra':1}]
+  invalid += [{'incarnation':'9'*32,'nonce':'0'*32,'after_bound':value} for value in (False, 1, None, 'true')]
   invalid += [{'incarnation':'9'*32,'nonce':token} for token in
               ('1'*32,'2'*32,'3'*32,'4'*32,'5'*32,'c'*32,'a'*32,'e'*32,'f'*32,'8'*32,'6'*32)]
   for value in invalid:
@@ -158,6 +159,18 @@ class Install(unittest.TestCase):
   before=[p.read_bytes() for p in files]
   with self.assertRaises(ValueError):self.install()
   self.assertEqual([p.read_bytes() for p in files],before)
+ def test_player_sector_after_bound_install_and_token_redaction(self):
+  loader=self.ui/'authority_download_load_probe.lua'
+  original=loader.read_text();hook='  local check={'
+  registry="  registry_status=assert(X4LAN_RECOVERY_REGISTRY_STATUS.new({nonce='"+'8'*32+"',expected='example'}))\n"
+  loader.write_text(original.replace(hook,registry+hook))
+  self.settings['player_sector']={'incarnation':'9'*32,'nonce':'0'*32,'after_bound':True}
+  installation=self.install()
+  control=(self.ui/'authority_two_x4_participant_probe.lua').read_text()
+  self.assertIn('nonce=cfg.authority_client_motion_player_sector_nonce,after_bound=true',control)
+  installation.redact()
+  config=(self.ui/'config.lua').read_text()
+  self.assertNotIn('9'*32,config);self.assertNotIn('0'*32,config)
  def test_loader_missing_changed_or_misordered_is_rejected_before_mutation(self):
   loader=self.ui/'local_udp_module.lua';manifest=self.lab/'ui.xml'
   original_loader=loader.read_bytes();original_manifest=manifest.read_text()

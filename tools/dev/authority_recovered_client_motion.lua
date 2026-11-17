@@ -8,7 +8,7 @@ function M.new(c)
  local fixed={};for k,v in pairs(c)do fixed[k]=v end;c=fixed
  for _,name in ipairs({'guard','running','router_factory','owner_factory','fault'})do assert(type(c[name])=='function',name)end
  local failed,busy=false,false;local router,owner,sector_reader
- local sector_phase,sector_staged='disabled',nil
+ local sector_phase,sector_staged,bound_ready='disabled',nil,nil
  local function fail(reason)
   if not failed then failed=true;pcall(c.fault,reason)end
   return false
@@ -35,9 +35,11 @@ function M.new(c)
   local p=c.player_sector
   assert(type(p)=='table' and token(c.epoch) and token(p.incarnation) and token(p.nonce) and
    c.epoch~=p.incarnation and c.epoch~=p.nonce and p.incarnation~=p.nonce and
-   type(p.factory)=='function' and type(p.register)=='function' and type(p.report)=='function')
+   type(p.factory)=='function' and type(p.register)=='function' and type(p.report)=='function' and
+   (p.after_bound==nil or (p.after_bound==true and type(p.bound_ready)=='function')))
   local incarnation,nonce,factory,register,report=p.incarnation,p.nonce,p.factory,p.register,p.report
-  sector_phase='idle'
+  bound_ready=p.after_bound and p.bound_ready or nil
+  sector_phase=bound_ready and 'waiting_bound' or 'idle'
   local function sector_guard(value)
    if value~=incarnation or not context() then return false end
    local ok,running=pcall(c.running)
@@ -83,11 +85,16 @@ function M.new(c)
    assert(phase=='stopped' or c.running()==true)
    assert(owner:tick()==true and context() and router:state()=='active')
    if sector_reader then
+    if sector_phase=='waiting_bound' then
+     local checked,ready=pcall(bound_ready)
+     assert(checked and type(ready)=='boolean' and context())
+     if ready then sector_phase='idle' end
+    end
     if sector_phase=='idle' then
      assert(owner:state()~='stopped' and c.running()==true)
      sector_phase='pending';assert(sector_reader:begin()==true)
     elseif sector_phase=='pending' then assert(sector_reader:tick()==true)
-    else assert(sector_phase=='done' or sector_phase=='closed')end
+    else assert(sector_phase=='waiting_bound' or sector_phase=='done' or sector_phase=='closed')end
    end
   end)
   busy=false;if not ok then return fail('tick')end;return true
@@ -124,9 +131,10 @@ function M.new_x4(c)
  if c.player_sector~=nil then
   local p=c.player_sector
   assert(type(p)=='table' and getmetatable(p)==nil and token(p.incarnation) and token(p.nonce))
-  for key in pairs(p)do assert(key=='incarnation' or key=='nonce')end
+  for key in pairs(p)do assert(key=='incarnation' or key=='nonce' or key=='after_bound')end
+  assert(p.after_bound==nil or p.after_bound==true)
   assert(p.incarnation~=p.nonce and not seen[p.incarnation] and not seen[p.nonce])
-  sector_config={incarnation=p.incarnation,nonce=p.nonce}
+  sector_config={incarnation=p.incarnation,nonce=p.nonce,after_bound=p.after_bound}
   assert(type(X4LAN_PLAYER_SECTOR_INTEREST)=='table' and type(X4LAN_PLAYER_SECTOR_INTEREST.new_x4)=='function')
  end
  local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);const char* GetSaveFolderPath(void);]]
@@ -140,7 +148,21 @@ function M.new_x4(c)
  end
  -- At most one permitted saved ship is in scope. With a candidate list the
  -- first correlated BIND seals the index; an invalid attempt faults the owner.
- local checked_net={send=function(_,value)return net:send(value)end,receive=function()
+ -- This one-shot diagnostic accepts one BIND. Ordinary motion is unchanged.
+ local bound_phase=sector_config and sector_config.after_bound and 'waiting_bind' or nil
+ local expected_bound
+ local checked_net={send=function(_,value)
+  if bound_phase and type(value)=='string' and value:sub(1,2)=='R|' then
+   local fields={};for item in (value..'|'):gmatch('(.-)|')do fields[#fields+1]=item end
+   if fields[4]=='BOUND' then
+    assert(bound_phase=='waiting_ack' and value==expected_bound)
+    local sent=net:send(value)
+    if sent==true then bound_phase='sent' end
+    return sent
+   end
+  end
+  return net:send(value)
+ end,receive=function()
   local pending=net:pending();assert(type(pending)=='boolean')
   -- Do not consume an arrival racing with a negative readability check:
   -- invalid datagrams return nil from receive and must remain for next tick.
@@ -154,6 +176,11 @@ function M.new_x4(c)
    assert(#fields==18 and token(fields[5]) and fields[6]==c.epoch and fields[7]==c.generation and allowed[fields[8]])
    if locked==nil then locked=fields[8]end
    assert(fields[8]==locked)
+   if bound_phase then
+    assert(bound_phase=='waiting_bind')
+    expected_bound=table.concat({'R',c.lease,c.attempt,'BOUND',unpack(fields,5,11)},'|')
+    bound_phase='waiting_ack'
+   end
   else assert(fields[4]=='STOP' and #fields==7)end
   return value
  end}
@@ -172,6 +199,10 @@ function M.new_x4(c)
     DebugError('[X4LAN] AUTH_CLIENT_SECTOR observed sector='..result.sector_macro)
     return true
    end}
+  if sector_config.after_bound then
+   player_sector.after_bound=true
+   player_sector.bound_ready=function()return bound_phase=='sent'end
+  end
  end
  return M.new({enabled=true,epoch=c.epoch,nonce=c.nonce,router_generation=c.router_generation,player_sector=player_sector,
   guard=environment,running=function()return not C.IsGamePaused()end,

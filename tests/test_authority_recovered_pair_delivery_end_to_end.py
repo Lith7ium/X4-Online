@@ -4,6 +4,7 @@ This exercises local protocol owners; it does not start X4 or prove gameplay.
 """
 import json
 import os
+import queue
 from pathlib import Path
 import shutil
 import signal
@@ -12,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,8 @@ from authority.experimental_tcp_job_delivery import ExperimentalTCPJobDelivery
 from authority.experimental_tcp_motion import ExperimentalTCPMotion, motion_digest
 from authority.experimental_tcp_participant_client import ExperimentalTCPParticipantClient
 from authority_source_job_bind import bind_running_source
+from authority_client_sector_watch import ClientSectorLogWatch
+from authority_recovered_server_client import CorrelatedClientSector
 from authority_tcp_job_client_live import socket_owner
 from authority_tcp_native_worker import check_process
 import test_authority_experimental_tcp_participants as fixture
@@ -46,7 +51,15 @@ class RecoveredPairDeliveryEndToEnd(unittest.TestCase):
         fixture.ParticipantTCPTest.setUp(self)
 
     def test_second_pair_sample_reaches_client_buffer_and_receipt_before_source_stop(self):
+        self.run_pair_delivery(with_sector=False)
+
+    def test_pair_receipt_then_post_bound_sector_and_cooperative_stops(self):
+        self.run_pair_delivery(with_sector=True)
+
+    def run_pair_delivery(self, *, with_sector):
         stop = threading.Event()
+        commands = queue.Queue()
+        client_stopped = threading.Event()
         ready = threading.Event()
         errors = []
         participant_thread = None
@@ -60,7 +73,8 @@ class RecoveredPairDeliveryEndToEnd(unittest.TestCase):
                 subprocess.run(['cc', '-std=c11', '-O2', '-shared', '-fPIC', 'src/native/net.c',
                                 '-ldl', '-o', str(net)], cwd=ROOT, check=True, capture_output=True)
                 subprocess.run(['cc', '-O2', '-shared', '-fPIC',
-                                'tests/fixtures/replica_motion_binding_abi.c', '-o', str(abi)],
+                                ('tests/fixtures/recovered_pair_sector_abi.c' if with_sector else
+                                 'tests/fixtures/replica_motion_binding_abi.c'), '-o', str(abi)],
                                cwd=ROOT, check=True, capture_output=True)
                 tcp = fixture.ParticipantTCPTest.connect(self)
                 fixture.ParticipantTCPTest.offer_and_claim(self, tcp)
@@ -71,8 +85,13 @@ class RecoveredPairDeliveryEndToEnd(unittest.TestCase):
                 source_udp.bind(('127.0.0.1', 0))
                 client_env = dict(os.environ, LD_PRELOAD=str(abi), TEST_NET_LIB=str(net),
                                   TEST_NET_PORT=str(client_udp.getsockname()[1]))
+                client_log = Path(directory) / 'client.log'
+                if with_sector:
+                    client_env['TEST_CLIENT_LOG'] = str(client_log)
+                client_script = ('tests/authority_recovered_pair_sector_fake_x4.lua' if with_sector else
+                                 'tests/authority_saved_motion_pair_client_fake_x4.lua')
                 client_process = subprocess.Popen(
-                    ['luajit', 'tests/authority_saved_motion_pair_client_fake_x4.lua'],
+                    ['luajit', client_script],
                     cwd=ROOT, env=client_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 children.append(client_process)
                 client_identity = process_identity(client_process)
@@ -101,17 +120,24 @@ class RecoveredPairDeliveryEndToEnd(unittest.TestCase):
                             client_udp, enabled=True, lease='a' * 32, attempt='b' * 32,
                             epoch='c' * 32, generation='d' * 32,
                             guard=lambda: client_process.poll() is None,
-                            validate_peer=lambda peer: socket_owner(peer, destination, client_identity), timeout=3)
+                            validate_peer=lambda peer: socket_owner(peer, destination, client_identity), timeout=3,
+                            stop_enabled=with_sector)
                         client_bridge.wait_ready()
                         adapter = ExperimentalTCPParticipantClient(
                             tcp, Controller(), enabled=True, epoch='a' * 32, handle=1,
                             timeout=4, apply_motion=client_bridge)
                         ready.set()
                         while not stop.is_set():
-                            adapter.poll(.05)
+                            try:
+                                command = commands.get_nowait()
+                            except queue.Empty:
+                                adapter.poll(.05)
+                            else:
+                                if command != 'stop' or not client_bridge.stop_remote():
+                                    raise RuntimeError('client motion stop failed')
+                                client_stopped.set()
                     except BaseException as error:
-                        if not stop.is_set():
-                            errors.append(error)
+                        errors.append(error)
                     finally:
                         for owned in (adapter, client_bridge):
                             try:
@@ -141,14 +167,37 @@ class RecoveredPairDeliveryEndToEnd(unittest.TestCase):
                     client_guard=both_processes_alive, timeout=3)
                 delivery = ExperimentalTCPJobDelivery(self.host, enabled=True, timeout=3)
                 motion = ExperimentalTCPMotion(delivery, enabled=True)
+                sector_owner = None
+                if with_sector:
+                    incarnation = '2' * 32
+                    self.assertTrue(delivery.bind_test_incarnation(1, incarnation, enabled=True))
+                    member = {'id': 'peer_1', 'incarnation': incarnation}
+                    self.assertEqual(delivery.membership(), (member,))
+                    server_peer = next(peer for peer, state in self.host._control._peers.items()
+                                       if state.get('handle') == 1 and state.get('stage') == 'admitted')
+                    participant_state = SimpleNamespace(
+                        server_tcp=server_peer, _sector_incarnation=incarnation,
+                        motion_installation=SimpleNamespace(
+                            secrets={'player_sector_incarnation': incarnation}),
+                        motion_stop_confirmed=False,
+                        check_active=lambda **_: both_processes_alive(),
+                        check_motion_stopped=lambda: client_stopped.is_set() and both_processes_alive())
+                    watch = ClientSectorLogWatch(client_log, disarmed=True)
+                    sector_owner = CorrelatedClientSector(watch, participant_state, self.world, self.host, 1)
                 staged = []
+
+                def validate_sample(sample):
+                    staged.append(sample.copy())
+                    if sector_owner is not None:
+                        sector_owner.arm()
+                    return True
                 bridge = ExperimentalSourceMotionIPC(
                     source_udp, motion, enabled=True, lease='1' * 32, attempt='2' * 32,
                     epoch='c' * 32, generation='d' * 32, guard=both_processes_alive,
                     validate_peer=lambda peer: socket_owner(peer, destination, source_identity),
                     timeout=5, saved_baseline=10054,
                     saved_guard=lambda epoch, count: epoch == 'c' * 32 and count == 10054,
-                    validate_sample=lambda sample: staged.append(sample.copy()) or True,
+                    validate_sample=validate_sample,
                     stop_enabled=True)
                 self.assertTrue(bridge.register_saved(42))
                 sample = bridge.pull()
@@ -161,11 +210,43 @@ class RecoveredPairDeliveryEndToEnd(unittest.TestCase):
                 receipt = (2, motion_digest(expected))
                 track = motion._tracks[('c' * 32, 'd' * 32, 42)]
                 self.assertIn(receipt, track['peer_samples'].values())
+                if with_sector:
+                    self.assertEqual(track['peer_samples'][(member['id'], incarnation)], receipt)
+                    deadline = time.monotonic() + 3
+                    observation = None
+                    while observation is None and time.monotonic() < deadline:
+                        self.assertEqual(delivery.membership(), (member,))
+                        observation = sector_owner.poll(member, receipt)
+                        self.assertEqual(delivery.membership(), (member,))
+                        if observation is None:
+                            time.sleep(.01)
+                    self.assertEqual(observation, 'sector_a')
                 # The real Lua fake checks pose/time/rate in push before it sends BOUND.
                 self.assertTrue(bridge.stop_remote())
                 bridge.close()
                 bridge = None
-                self.assertTrue(both_processes_alive())
+                if with_sector:
+                    commands.put('stop')
+                    self.assertTrue(client_stopped.wait(3), 'client STOP was not confirmed')
+                    self.assertEqual(errors, [])
+                    participant_state.motion_stop_confirmed = True
+                    self.assertTrue(sector_owner.stop())
+                    stop.set()
+                    participant_thread.join(3)
+                    self.assertFalse(participant_thread.is_alive())
+                    self.assertEqual(errors, [])
+                    self.assertIsNone(client_process.poll())
+                    client_process.terminate()
+                    _, stderr = client_process.communicate(timeout=3)
+                    self.assertEqual(client_process.returncode, -signal.SIGTERM)
+                    self.assertEqual(stderr, b'')
+                    children.remove(client_process)
+                    result = sector_owner.finish()
+                    self.assertEqual(result, {'sector_macro': 'sector_a', 'participant_id': 'peer_1',
+                                              'motion_sample_sha256': receipt[1], 'point_in_time_only': True,
+                                              'cross_process_sector_identity_proven': False})
+                else:
+                    self.assertTrue(both_processes_alive())
                 self.assertEqual(errors, [])
         finally:
             original_error = sys.exception()

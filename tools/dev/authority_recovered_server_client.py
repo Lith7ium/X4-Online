@@ -41,6 +41,91 @@ class ClientMotionErrorWatch(witness.ErrorWatch):
         return True
 
 
+class CorrelatedClientSector:
+    """Provisional local log observation bound to one already admitted peer.
+
+    The source probe separately verifies the actual motion receipt and retains
+    delivery membership around every poll; this owner fences the client side.
+    """
+    def __init__(self, watch, participant, world, host, handle):
+        self.watch, self.participant, self.world, self.host, self.handle = watch, participant, world, host, handle
+        self.peer = participant.server_tcp
+        self.session = world.session
+        self.control = host._control
+        self.peer_state = self.control._peers.get(self.peer)
+        if self.peer_state is None or self.peer_state.get('stage') != 'admitted' or self.peer_state.get('handle') != handle:
+            raise RuntimeError('client sector peer unavailable')
+        self.installation = participant.motion_installation
+        self.incarnation = participant._sector_incarnation
+        if (type(self.incarnation) is not str or not re.fullmatch(r'[0-9a-f]{32}', self.incarnation) or
+            self.installation.secrets.get('player_sector_incarnation') != self.incarnation):
+            raise RuntimeError('client sector installation context unavailable')
+        self.binding = self.value = None
+
+    def _installation_unchanged(self):
+        return (self.participant.motion_installation is self.installation and
+                self.participant._sector_incarnation == self.incarnation and
+                self.installation.secrets.get('player_sector_incarnation') == self.incarnation)
+
+    def _unchanged(self):
+        return (self.participant.server_tcp is self.peer and self.world.session is self.session and
+                self.host._control is self.control and self.control._peers.get(self.peer) is self.peer_state and
+                self.peer_state.get('stage') == 'admitted' and self.peer_state.get('handle') == self.handle and
+                self._installation_unchanged())
+
+    def _active(self):
+        if not self._unchanged() or self.participant.check_active(server_checked=True) is not True or not self._unchanged():
+            raise RuntimeError('client sector process or peer changed')
+
+    def arm(self):
+        # Called within the source reader lease after its before/after guard.
+        # Reentering participant.check_active here would violate that lease.
+        if not self._unchanged(): raise RuntimeError('client sector context changed before arm')
+        self.watch.arm()
+        if not self._unchanged(): raise RuntimeError('client sector context changed during arm')
+        return True
+
+    def poll(self, recipient, receipt):
+        if (type(recipient) is not dict or set(recipient) != {'id', 'incarnation'} or
+            recipient['id'] != 'peer_' + str(self.handle) or type(recipient['incarnation']) is not str or
+            recipient['incarnation'] != self.incarnation or type(receipt) is not tuple or
+            len(receipt) != 2 or receipt[0] != 2 or type(receipt[1]) is not str or
+            not re.fullmatch(r'[0-9a-f]{64}', receipt[1])):
+            raise RuntimeError('client sector correlation unavailable')
+        binding = (recipient['id'], recipient['incarnation'], receipt)
+        if self.binding is not None and self.binding != binding:
+            raise RuntimeError('client sector participant changed')
+        self._active()
+        value = self.watch.observe()
+        self._active()
+        self.binding = binding
+        if value is not None:
+            if self.value is not None and self.value != value:
+                raise RuntimeError('client sector result changed')
+            self.value = value
+        return value
+
+    def stop(self):
+        if self.value is None or self.participant.motion_stop_confirmed is not True or not self._unchanged():
+            raise RuntimeError('client sector stop unavailable')
+        if self.participant.check_motion_stopped() is not True or not self._unchanged():
+            raise RuntimeError('client sector worker changed')
+        self.watch.confirm_stop(confirmed=True)
+        if not self._unchanged() or self.participant.check_motion_stopped() is not True or not self._unchanged():
+            raise RuntimeError('client sector worker changed')
+        return True
+
+    def finish(self):
+        if not self._installation_unchanged():
+            raise RuntimeError('client sector installation changed')
+        value = self.watch.finish(process_stopped=True)
+        if not self._installation_unchanged() or self.binding is None or self.value != value:
+            raise ValueError('final client sector correlation missing')
+        return {'sector_macro':value, 'participant_id':self.binding[0],
+                'motion_sample_sha256':self.binding[2][1],
+                'point_in_time_only':True, 'cross_process_sector_identity_proven':False}
+
+
 class ServerClient(combined.RecoveredRemoteParticipant):
     """Reuse the paired runner without ever closing the server's control."""
     cancel_check = None
@@ -50,7 +135,10 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         import authority_recovered_client_motion_install as motion_install
 
         if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
-                type(request) is not dict or set(request) != {'indices', 'generation', 'timeout'} or
+                type(request) is not dict or set(request) not in (
+                    {'indices', 'generation', 'timeout'},
+                    {'indices', 'generation', 'timeout', 'player_sector'}) or
+                ('player_sector' in request and request['player_sector'] is not True) or
                 type(ticket) is not dict):
             raise ValueError('invalid retained client motion request')
 
@@ -77,6 +165,11 @@ class ServerClient(combined.RecoveredRemoteParticipant):
                 'nonce': fresh_token(),
                 'router_generation': fresh_token(),
             }
+            if request.get('player_sector') is True:
+                if type(self.marker) is not str or not re.fullmatch(r'[0-9a-f]{32}', self.marker):
+                    raise ValueError('client sector requires the confirmed marker')
+                excluded_tokens.add(self.marker)
+                settings['player_sector'] = {'incarnation': fresh_token(), 'nonce': fresh_token(), 'after_bound': True}
             installation = motion_install.install(case, profile, status, settings)
         except BaseException:
             motion_socket.close()
@@ -84,6 +177,8 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         self.motion_sock = motion_socket
         self._pin_motion_socket()
         self.motion_installation = installation
+        if request.get('player_sector') is True:
+            self._sector_incarnation = settings['player_sector']['incarnation']
         self.motion_worker_config = {
             key: settings[key] for key in ('lease', 'attempt', 'generation', 'timeout')
         }
@@ -358,9 +453,11 @@ def settle_departure(host, world, control, peer, deadline, check, ticket, marker
 
 class ActiveClient:
     """Retained diagnostic with explicit owner-driven finalization."""
-    def __init__(self, participant, result, finish):
+    def __init__(self, participant, result, finish, sector_poll=None, sector_stop=None, sector_arm=None):
         self.participant, self.result, self._finish = participant, result, finish
         self._finished = False
+        self.sector_poll, self.sector_stop = sector_poll, sector_stop
+        self.sector_arm = sector_arm
 
     def finish(self):
         if self._finished: raise RuntimeError('diagnostic already finalized')
@@ -453,6 +550,11 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     expected = {path:base.live.sha(path) for path in protected}
     motion_watch=ClientMotionErrorWatch(profile/'engine-output.log') if client_motion is not None else None
     if motion_watch is not None:motion_watch.poll()
+    sector_watch = None
+    if client_motion is not None and client_motion.get('player_sector') is True:
+        from authority_client_sector_watch import ClientSectorLogWatch
+        sector_watch = ClientSectorLogWatch(profile/'engine-output.log', disarmed=True)
+        sector_watch.poll()
     command = base.load.readonly_save_command(case, game, binds, lock, args.display, auth, user, args.seed, target)
     pos = command.index('--die-with-parent')
     for path in protected:
@@ -490,6 +592,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                 value=guarded_registry_observation(lambda: client_context(check), verify)
                 if motion_watch is not None:
                     motion_watch.poll();client_context(check)
+                if sector_watch is not None:
+                    sector_watch.poll();client_context(check)
                 return value
             def check_protected(): return registry_context(check_server)
             def active_protected(): return registry_context(check_base)
@@ -520,6 +624,9 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                     (result.get('helper_active') is not True if participant.keep_worker
                      else result.get('helper_clean_exit') is not True)):
                 raise RuntimeError('diagnostic admission or participant resume not confirmed')
+            sector_owner = (CorrelatedClientSector(sector_watch, participant, world, host, handle)
+                            if sector_watch is not None else None)
+
             def finish():
                 # The supervisor removes this client from its aggregate first.
                 # Reap helpers before X4 and keep the X4 registered on uncertainty.
@@ -543,13 +650,19 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                 if motion_watch is not None:
                     motion_watch.poll()
                     if motion_watch.identity is None:raise ValueError('client motion log missing')
+                sector_evidence = sector_owner.finish() if sector_owner is not None else None
                 check_server()
                 participant.redact()
                 participant.config = None
                 record_client_evidence(result, ticket, participant.marker, client_identity, server_identity)
+                if sector_evidence is not None:
+                    result['client_sector_observation'] = sector_evidence
                 return result
             if participant.keep_worker:
                 participant.check_active()
-                return ActiveClient(participant, result, finish)
+                return ActiveClient(participant, result, finish,
+                                    sector_owner.poll if sector_owner is not None else None,
+                                    sector_owner.stop if sector_owner is not None else None,
+                                    sector_owner.arm if sector_owner is not None else None)
             return finish()
         time.sleep(.1)

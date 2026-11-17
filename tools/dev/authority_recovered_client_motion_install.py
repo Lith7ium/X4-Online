@@ -60,8 +60,8 @@ class Installation:
     def __init__(self,paths,config,settings):
         self.paths=tuple(paths);self.config=config;self.secrets={k:settings[k] for k in SECRET_FIELDS}
         if 'player_sector' in settings:
-            for name,value in settings['player_sector'].items():
-                self.secrets['player_sector_'+name]=value
+            for name in ('incarnation','nonce'):
+                self.secrets['player_sector_'+name]=settings['player_sector'][name]
         st=config.lstat();self.identity=(st.st_dev,st.st_ino)
     def redact(self):
         # Call only after owned X4 has stopped and final input evidence passed.
@@ -107,8 +107,11 @@ def install(case,profile,status,settings):
         raise ValueError('invalid client motion settings')
     player_sector=settings.get('player_sector')
     if 'player_sector' in settings:
-        if (type(player_sector) is not dict or set(player_sector)!={'incarnation','nonce'} or
-            any(type(value) is not str or not HEX.fullmatch(value) for value in player_sector.values())):
+        if (type(player_sector) is not dict or set(player_sector) not in
+            ({'incarnation','nonce'}, {'incarnation','nonce','after_bound'}) or
+            ('after_bound' in player_sector and player_sector['after_bound'] is not True) or
+            any(type(player_sector[name]) is not str or not HEX.fullmatch(player_sector[name])
+                for name in ('incarnation','nonce'))):
             raise ValueError('invalid player sector settings')
     indices=[settings['index']] if 'index' in settings else settings['indices']
     if (type(indices) is not list or not 1<=len(indices)<=32 or
@@ -220,8 +223,9 @@ def install(case,profile,status,settings):
  end
 '''
     if player_sector is not None:
+        after_bound=',after_bound=true' if player_sector.get('after_bound') is True else ''
         code=code.replace('    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
-                          '    player_sector={incarnation=cfg.authority_client_motion_player_sector_incarnation,nonce=cfg.authority_client_motion_player_sector_nonce},\n'
+                          '    player_sector={incarnation=cfg.authority_client_motion_player_sector_incarnation,nonce=cfg.authority_client_motion_player_sector_nonce'+after_bound+'},\n'
                           '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
     ctl=ctl.replace(local_hook,local_hook+'ffi.cdef[[bool IsGamePaused(void);]]\nlocal client_motion=nil\n')
     ctl=ctl.replace(validity_hook," if not ffi.C.IsPlayerValid() then if client_motion then error('client motion player lost') end;return end\n")

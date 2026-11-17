@@ -441,7 +441,8 @@ class Probe(unittest.TestCase):
         for mode in ('ok','wrong_sample','wrong_digest','no_receipt','worker_failure','bad_socket',
                      'pair_zero','pair_nonzero','pair_no_sample','pair_unknown_rate','pair_wrong_index',
                      'pair_wrong_sequence','pair_wrong_digest','pair_worker_failure','pair_source_stop',
-                     'pair_guard_stop','pair_bad_socket'):
+                     'pair_guard_stop','pair_bad_socket','pair_sector_ok','pair_sector_peer_change',
+                     'pair_sector_poll_failure','pair_sector_bad_stop','pair_sector_bad_receipt'):
             with self.subTest(mode=mode):
                 events,kwargs,_=self.context();kwargs['client_motion']=True;kwargs['verify_stopped']=Mock()
                 pair_delivery = mode.startswith('pair_')
@@ -453,8 +454,28 @@ class Probe(unittest.TestCase):
                 kwargs['diagnostics'] = diagnostics
                 kwargs['world'].session.players=kwargs['world'].session.ready_players=((1,'one'),)
                 selected={'id':'peer_1','incarnation':'f'*32}
+                if mode.startswith('pair_sector_'):
+                    kwargs['active'].participant.handle=1
+                    kwargs['active'].participant._sector_incarnation='f'*32
+                    def poll_sector(recipient, receipt):
+                        events.append('sector_poll')
+                        self.assertEqual(recipient,selected)
+                        self.assertEqual(receipt[0],2)
+                        if mode=='pair_sector_peer_change':selected['incarnation']='9'*32
+                        if mode=='pair_sector_poll_failure':raise RuntimeError('sector log invalid')
+                        return 'sector_a'
+                    def stop_sector():
+                        events.append('sector_stop')
+                        return mode!='pair_sector_bad_stop'
+                    kwargs['sector_poll']=poll_sector;kwargs['sector_stop']=stop_sector
+                    kwargs['sector_arm']=lambda: events.append('sector_arm') or True
+                    kwargs['sector_incarnation']='f'*32
                 class Delivery:
                     def __init__(self,*a,**kw):pass
+                    def bind_test_incarnation(self,handle,incarnation,*,enabled):
+                        assert (handle,incarnation,enabled)==(1,'f'*32,True)
+                        events.append('bind_incarnation')
+                        return True
                     def membership(self):return (selected,)
                 class Motion:
                     def __init__(self,*a,**kw):self._tracks={}
@@ -479,7 +500,7 @@ class Probe(unittest.TestCase):
                         if mode=='pair_wrong_sequence':sample['sequence']=1
                         self.capture(sample)
                         events.append('tcp_send')
-                        digest='0'*64 if mode in ('wrong_digest','pair_wrong_digest') else motion_digest(sample)
+                        digest='0'*64 if mode in ('wrong_digest','pair_wrong_digest','pair_sector_bad_receipt') else motion_digest(sample)
                         self.motion._tracks[('a'*32,'d'*32,1)]={'peer_samples':{('peer_1','f'*32):(sample['sequence'],digest)}}
                         if mode=='no_receipt':return None
                         if mode=='wrong_sample':return dict(sample,x=1)
@@ -505,7 +526,7 @@ class Probe(unittest.TestCase):
                      patch.object(subject.os,'fstat',return_value=SimpleNamespace(st_dev=3,st_ino=4)), \
                      patch.object(subject,'check_process'),patch.object(subject,'socket_owner',return_value=mode not in ('bad_socket','pair_bad_socket')), \
                      patch.object(subject.time,'sleep'):
-                    if mode in ('ok','pair_zero','pair_nonzero'):
+                    if mode in ('ok','pair_zero','pair_nonzero','pair_sector_ok'):
                         result=subject.run(**kwargs)
                         self.assertTrue(result['client_motion_receipts_confirmed'])
                         self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'], 1 if pair_delivery else 2)
@@ -518,6 +539,13 @@ class Probe(unittest.TestCase):
                             self.assertEqual(events.count('pull'),1)
                             self.assertLess(events.index('source_stop'),events.index('guard_stop'))
                             self.assertLess(events.index('guard_stop'),events.index('client_stop'))
+                            if mode=='pair_sector_ok':
+                                self.assertLess(events.index('bind_incarnation'),events.index('pull'))
+                                self.assertLess(events.index('sector_arm'),events.index('tcp_send'))
+                                self.assertLess(events.index('tcp_send'),events.index('sector_poll'))
+                                self.assertLess(events.index('sector_poll'),events.index('source_stop'))
+                                self.assertLess(events.index('client_stop'),events.index('sector_stop'))
+                                self.assertLess(events.index('sector_stop'),events.index('source_close'))
                         else:
                             self.assertFalse(result['second_sample_velocity_present'])
                         self.assertLess(events.index('source_stop'),events.index('client_stop'))
@@ -529,6 +557,9 @@ class Probe(unittest.TestCase):
                         if mode in ('pair_unknown_rate','pair_wrong_index','pair_wrong_sequence'):
                             self.assertNotIn('tcp_send',events)
                         if mode=='pair_wrong_digest':self.assertIn('tcp_send',events)
+                        if mode=='pair_sector_bad_receipt':self.assertNotIn('sector_poll',events)
+                        if mode in ('pair_sector_peer_change','pair_sector_poll_failure'):
+                            self.assertNotIn('client_stop',events)
                         if mode in ('wrong_sample', 'wrong_digest', 'no_receipt'):
                             self.assertEqual(diagnostics.snapshot()['prevalidated_samples'], 1)
                             self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'], 0)

@@ -67,7 +67,8 @@ class SourceProbeDiagnostics:
 def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         identity, verify, verify_process, timeout=90, candidate_indices=None,
         client_motion=False, verify_stopped=None, diagnostics=None,
-        diagnostic_timeouts=None, private_long_diagnostic=False):
+        diagnostic_timeouts=None, private_long_diagnostic=False, sector_poll=None, sector_stop=None,
+        sector_arm=None, sector_incarnation=None):
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -96,6 +97,10 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or not callable(verify) or not callable(verify_process)
             or type(client_motion) is not bool
             or type(private_long_diagnostic) is not bool
+            or (sector_poll is None and any(value is not None for value in (sector_stop, sector_arm, sector_incarnation)))
+            or (sector_poll is not None and (not callable(sector_poll) or not callable(sector_stop) or
+                not callable(sector_arm) or type(sector_incarnation) is not str or
+                not re.fullmatch(r'[0-9a-f]{32}', sector_incarnation) or not pair_delivery))
             or (private_long_diagnostic and not client_motion)
             or (client_motion and not callable(verify_stopped))
             or (diagnostics is not None and not isinstance(diagnostics, SourceProbeDiagnostics))
@@ -235,6 +240,9 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                     value.get('velocity') is None):
                 raise RuntimeError('pair delivery lacks the correlated known-rate sample')
             motion_digest(value)
+        if sector_poll is not None:
+            if staged_samples or sector_arm() is not True:
+                raise RuntimeError('client sector pre-send fence unavailable')
         staged_samples.append(copy.deepcopy(value))
         if diagnostics is not None:
             # Parsed source sample staged locally; not a delivered receipt.
@@ -245,6 +253,14 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     motion = ExperimentalTCPMotion(delivery, enabled=True)
     selected_recipient = None
     if client_motion:
+        if sector_poll is not None:
+            if (len(world.session.ready_players) != 1 or
+                active.participant.handle != world.session.ready_players[0][0] or
+                active.participant._sector_incarnation != sector_incarnation):
+                raise RuntimeError('client sector participant unavailable')
+            if checked_operation(delivery.bind_test_incarnation, active.participant.handle,
+                                 sector_incarnation, enabled=True) is not True:
+                raise RuntimeError('client sector participant binding unconfirmed')
         members = delivery.membership()
         if len(members) != 1 or len(world.session.ready_players) != 1:
             raise RuntimeError('exactly one admitted motion recipient required')
@@ -252,6 +268,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         if members[0]['id'] != 'peer_' + str(handle):
             raise RuntimeError('motion recipient differs from admitted client')
         selected_recipient = copy.deepcopy(members[0])
+        if sector_poll is not None and selected_recipient['incarnation'] != sector_incarnation:
+            raise RuntimeError('client sector incarnation differs from participant')
 
     def select_recipients(_sample, members):
         if not client_motion:
@@ -322,6 +340,26 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         time.sleep(.1)
     if len(samples) != (1 if pair_delivery else 2):
         raise RuntimeError('pair sample unavailable' if pair_delivery else 'two server source samples unavailable')
+    if sector_poll is not None:
+        # The receipt above belongs to this already admitted incarnation. The
+        # local owner starts its read only after sending the correlated BOUND.
+        def receipt_is_current():
+            track = motion._tracks.get((settings['epoch'], settings['generation'], index))
+            peer_key = (selected_recipient['id'], selected_recipient['incarnation'])
+            return track is not None and track['peer_samples'].get(peer_key) == expected_receipt
+        while True:
+            active_guard()
+            if tuple(delivery.membership()) != (selected_recipient,) or not receipt_is_current():
+                raise RuntimeError('client sector participant changed')
+            observed = checked_operation(sector_poll, copy.deepcopy(selected_recipient), expected_receipt)
+            active_guard()
+            if tuple(delivery.membership()) != (selected_recipient,) or not receipt_is_current():
+                raise RuntimeError('client sector participant changed')
+            if observed is not None:
+                if type(observed) is not str or not re.fullmatch(r'[A-Za-z0-9_]{1,128}', observed):
+                    raise ValueError('invalid client sector observation')
+                break
+            time.sleep(.05)
     if diagnostics is not None:
         diagnostics.enter('stop_source')
     if checked_operation(source.stop_remote) is not True:
@@ -362,6 +400,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
 
         if active.participant.stop_motion_worker(source_stopped=stopped_source) is not True:
             raise RuntimeError('client motion worker stop unconfirmed')
+        if sector_stop is not None and checked_operation(sector_stop) is not True:
+            raise RuntimeError('client sector stop unconfirmed')
         if stopped_source() is not True:
             raise RuntimeError('source fence changed after client stop')
     if diagnostics is not None:
