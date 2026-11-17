@@ -689,6 +689,21 @@ establish destruction, runtime identity, or the cause of the missing matches.
 The local diagnostic and its bounded synthetic checks are retained alongside
 the earlier analysis; no additional X4 process was started.
 
+A separate disposable, single-process experiment
+(`.local/single-ship-destruction-native-03`) then dispatched one targeted
+`destroy_object` action and observed a matching object-destroyed event before
+one private save. In that saved file, the target's fixture reference and both
+registry directions still matched, but no `<component id>` definition in the
+observer's recognized format was found for it. The separately referenced
+control ship had a recognized universe component. The event carries no native
+action ID, so its delivery does not independently prove what caused it; the
+observer does not establish runtime identity or rule out other ID formats.
+This shows that the strict assumption that every saved registry entry has a
+recognized saved ship component can fail after this observed sequence. It does
+not prove the cause of the 22 missing entries in run 09 or generalize to all
+destruction and despawn paths. The diagnostic save was not confirmed as a
+recovery checkpoint, and the runner reported no owned X4 processes remaining.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
