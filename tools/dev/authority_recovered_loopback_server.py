@@ -44,6 +44,25 @@ from authority.world import WorldCoordinator
 from authority_control_cycle_evidence import read_cycle_evidence
 
 
+def record_fixture_throttle_uncertainty(result, error):
+    """Persist only fixed, nonsecret evidence from the actual IPC failure."""
+    from authority_fixture_client_throttle_ipc import ThrottleUnconfirmed
+    if type(result) is not dict or type(result.get('fixture_sample_write')) is not dict or type(error) is not ThrottleUnconfirmed:
+        raise ValueError('invalid fixture throttle diagnostic context')
+    phases = {'unknown', 'waiting_ready', 'validating_ready', 'sending_go', 'waiting_started',
+              'validating_started', 'waiting_stopped', 'validating_stopped', 'final_check'}
+    error_classes = {'timeout', 'invalid_value', 'runtime_error', 'os_error', 'other_error', 'interrupted'}
+    flags = ('attempted', 'started', 'stopped', 'started_phase_datagram_received', 'stopped_phase_datagram_received')
+    if (type(error.phase) is not str or error.phase not in phases or
+            type(error.error_class) is not str or error.error_class not in error_classes or
+            any(type(getattr(error, name)) is not bool for name in flags) or
+            type(error.elapsed_ms) is not int or error.elapsed_ms < 0):
+        raise ValueError('invalid fixture throttle diagnostic values')
+    result['fixture_sample_write']['throttle_uncertain'] = {
+        **{name: getattr(error, name) for name in flags}, 'phase': error.phase,
+        'error_class': error.error_class, 'elapsed_ms': error.elapsed_ms}
+
+
 def read_evidence(path, limit=65536):
     """Read bounded local evidence, refusing symlinks and in-place changes."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -349,6 +368,11 @@ def redact_recovery_config(text):
         if key in redacted:
             redacted,count=re.subn(key+r'"[0-9a-f]{32}"',key+'"redacted"',redacted)
             if count!=1:raise ValueError('invalid source secret')
+    for name in ('generation', 'lease', 'attempt', 'nonce'):
+        key = 'fixture_sample_write_' + name + '='
+        if key in redacted:
+            redacted, count = re.subn(key + r'"[0-9a-f]{32}"', key + '"redacted"', redacted)
+            if count != 1: raise ValueError('invalid fixture write secret')
     return redacted
 
 
@@ -593,15 +617,50 @@ def open_fixture_sampling_window(window, *, active_clients, selected_clients, di
         raise ValueError('fixture sampling context changed while pinning')
 
 
+def open_first_fixture_sampling_window(window, *, active_clients, active, out, server_save, server_digest):
+    """Pin the server and first client's exact saves before the second join."""
+    expected_path = out/'overlap-01/client/case/home/.config/EgoSoft/X4/45841/save/save_009.xml.gz'
+    if tuple(active_clients) != (active,) or active.save_target != expected_path:
+        raise ValueError('first fixture measurement client or save path changed')
+    entries = [(server_save, server_digest), (active.save_target, active.save_digest)]
+    window.open(entries, expected_count=2)
+    if (tuple(active_clients) != (active,) or active.save_target != expected_path or
+            entries != [(server_save, server_digest), (active.save_target, active.save_digest)]):
+        raise ValueError('first fixture measurement saves changed while pinning')
+
+
 def run_overlapping_diagnostics(*, start, active_clients, world, host, control, deadline, verify, clock=None,
-                                marker_script='X4AuthorityCheckpointMarker', observe_players=None):
+                                marker_script='X4AuthorityCheckpointMarker', observe_players=None,
+                                measure_first=None):
     """Own two overlapping diagnostics and settle their ordered departures."""
     import authority_recovered_server_client as client
     if active_clients: raise ValueError('diagnostics must start with an empty active set')
+    if measure_first is not None and (not callable(measure_first) or clock is None):
+        raise ValueError('measurement requires an owner callback and the server clock')
     for index in range(2):
         active = start(index)
         active_clients.append(active)
         verify()
+        if index == 0 and measure_first is not None:
+            first_peer = active.participant.server_tcp
+            first_players = tuple(world.session.players)
+            if (world.session.state != 'running' or world.session.pending is not None or
+                    len(first_players) != 1 or tuple(world.session.ready_players) != first_players or
+                    first_peer not in control._peers):
+                raise RuntimeError('first diagnostic participant is not running')
+            def check_first_client():
+                verify()
+                if (len(active_clients) != 1 or active_clients[0] is not active or
+                        world.session.state != 'running' or world.session.pending is not None or
+                        tuple(world.session.players) != first_players or
+                        tuple(world.session.ready_players) != first_players or
+                        first_peer not in control._peers):
+                    raise RuntimeError('first participant changed during process measurement')
+            def tick_first_client():
+                host.tick(min(.1, client.recovery.marked.remaining(deadline)))
+            check_first_client()
+            measurement = measure_first(active, clock, tick_first_client, check_first_client)
+            check_first_client()
     if (world.session.state != 'running' or len(world.session.ready_players) != 2 or
             len(world.session.players) != 2):
         raise RuntimeError('two active diagnostic participants not confirmed')
@@ -644,7 +703,18 @@ def run_overlapping_diagnostics(*, start, active_clients, world, host, control, 
               'diagnostic_overlap_clients':[first_result, second_result]}
     if clock_result is not None: result['diagnostic_remaining_server_clock'] = clock_result
     if player_observation is not None: result['fixture_player_source_diagnostic'] = player_observation
+    if measure_first is not None:
+        result['diagnostic_process_measurement'] = measurement
     return result
+
+def diagnostic_process_measure_seconds(args):
+    duration = getattr(args, 'diagnostic_process_measure_seconds', None)
+    if (duration is not None and
+            (type(duration) not in (int, float) or not math.isfinite(duration) or
+             not 5 <= duration <= 300 or getattr(args, 'diagnostic_overlap', False) is not True)):
+        raise ValueError('process measurement requires overlap and a duration of 5 to 300 seconds')
+    return duration
+
 
 def run(args):
     if sys.platform != 'linux' or os.geteuid() == 0:
@@ -671,7 +741,7 @@ def run(args):
     result = {'supervisor_version':1, 'success':False, 'scope':'isolated recovered Linux X4, loopback only; not gameplay or Internet',
               'windows_tested':False, 'internet_tested':False, 'exact_loaded_file_proven':False,
               'engine_operations':operations}
-    processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=clock_sock=source_sock=None
+    processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=clock_sock=source_sock=sample_write_sock=None
     endpoint=out/'endpoint.json'; deadline=time.monotonic()+args.timeout
     watch=target=checkpoint=expected=profile=None
     local_pair=False;source_index=None
@@ -681,6 +751,7 @@ def run(args):
     guard_context = []
     fixture_save_guards = None
     try:
+        measure_seconds = diagnostic_process_measure_seconds(args)
         fixture_mode = getattr(args, 'fixture_overlap', False)
         if type(fixture_mode) is not bool or (fixture_mode and (
                 getattr(args, 'diagnostic_overlap', False) is not True or
@@ -704,6 +775,19 @@ def run(args):
         if (type(fixture_rejoin) is not bool or
                 (fixture_rejoin and not freeze_fixture_source)):
             raise ValueError('fixture rejoin requires freeze drain')
+        sample_write_slot = getattr(args, 'fixture_player_sample_write_slot', None)
+        sample_write_after_throttle = getattr(args, 'fixture_player_sample_write_after_throttle', False)
+        if (type(sample_write_after_throttle) is not bool or
+                (sample_write_after_throttle and (sample_write_slot is None or not latest_fixture_source))):
+            raise ValueError('fixture movement write requires a latest-sample source and selected slot')
+        if (sample_write_slot is not None and
+                (type(sample_write_slot) is not int or sample_write_slot not in (1, 2) or
+                 player_source_sectors is None or fixture_rejoin)):
+            raise ValueError('fixture sample write requires a non-rejoin fixture source session')
+        if sample_write_slot is not None:
+            original_sectors = ('cluster_33_sector001_macro', 'cluster_45_sector001_macro')
+            if player_source_sectors[sample_write_slot - 1] != original_sectors[sample_write_slot - 1]:
+                raise ValueError('fixture sample writer requires its original test sector')
         fixture_scripts = None
         fixture_helpers = None
         marker_script = 'X4AuthorityCheckpointMarker'
@@ -764,6 +848,29 @@ def run(args):
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
         protected = (fixture_helpers.install_server(case, profile, fixture_scripts, sock.getsockname()[1], lease, epoch)
                      if fixture_mode else bridge.install_probe(case, profile, sock.getsockname()[1], lease, epoch))
+        sample_writer = None
+        if sample_write_slot is not None:
+            import authority_fixture_player_sample_install as sample_install
+            sample_write_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sample_write_sock.bind(('127.0.0.1', 0))
+            registry_epoch = fixture_helpers.fixture_source.fixture_save.base.archive.REGISTRY_EPOCH
+            reserved = {lease, epoch, registry_epoch}
+            def fresh_sample_token():
+                value = secrets.token_hex(16)
+                while value in reserved:
+                    value = secrets.token_hex(16)
+                reserved.add(value)
+                return value
+            sample_writer = {'epoch': registry_epoch, 'generation': fresh_sample_token(),
+                             'lease': fresh_sample_token(), 'attempt': fresh_sample_token(),
+                             'nonce': fresh_sample_token()}
+            protected.extend(sample_install.install(case, profile, slot=sample_write_slot,
+                port=sample_write_sock.getsockname()[1], **sample_writer))
+            result['fixture_sample_write'] = {'scope': 'one experimental server-local XYZ write',
+                'source_to_server_frame_assumed': True, 'same_run_frame_proven': False,
+                'windows_frame_proven': False, 'native_velocity_proven': False,
+                'rotation_from_sample_applied': False, 'client_movement_proven': False, 'gameplay_proven': False,
+                'dispatch_attempted': False, 'immediate_readback_confirmed': False}
         registry_check = None
         enrollment = None
         if getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or witness_phase:
@@ -969,6 +1076,8 @@ def run(args):
             if player_source_sectors is not None:
                 registry_epoch = fixture_helpers.fixture_source.fixture_save.base.archive.REGISTRY_EPOCH
                 used_tokens = {epoch, registry_epoch}
+                if sample_writer is not None:
+                    used_tokens.update(sample_writer.values())
                 def fresh_player_token():
                     value = secrets.token_hex(16)
                     while value in used_tokens:
@@ -977,7 +1086,8 @@ def run(args):
                     return value
                 def new_player_grant(slot, sector):
                     return {'session_epoch': epoch, 'epoch': registry_epoch,
-                        'generation': fresh_player_token(), 'index': slot + 2, 'sector_macro': sector,
+                        'generation': (sample_writer['generation'] if sample_writer is not None and slot == sample_write_slot
+                                       else fresh_player_token()), 'index': slot + 2, 'sector_macro': sector,
                         'token': fresh_player_token(), 'incarnation': fresh_player_token()}
                 for slot, sector in enumerate(player_source_sectors, 1):
                     player_grants.append(new_player_grant(slot, sector))
@@ -1009,7 +1119,8 @@ def run(args):
                     fixture_slot=index+1 if fixture_mode else None,
                     fixture_player_source=({'sector': player_source_sectors[index],
                         'grant': player_grants[index], 'timeout': 15,
-                        'latest_cache': latest_fixture_source, 'freeze_drain': freeze_fixture_source} if player_grants else None),
+                        'latest_cache': latest_fixture_source, 'freeze_drain': freeze_fixture_source,
+                        'throttle': sample_write_after_throttle and index + 1 == sample_write_slot} if player_grants else None),
                     server_out=out, cancel_check=cancel_overlap,
                     verify_client_save=fixture_save_guards.check if fixture_save_guards else None)
             def observe_fixture_players(clients):
@@ -1030,6 +1141,75 @@ def run(args):
                 progress = {}
                 result['fixture_player_source_progress'] = progress
                 options = {'progress': progress, 'suspend_on_exit': True}
+                if sample_write_slot is not None:
+                    from authority_fixture_player_sample_write_ipc import FixturePlayerSampleWriteIPC
+                    identity_stat = (game / 'X4').stat()
+                    process_identity = {'pid': identity[0], 'start_ticks': identity[1],
+                                        'exe_dev': identity_stat.st_dev, 'exe_ino': identity_stat.st_ino}
+                    expected_players = world.session.players
+                    expected_ready_players = world.session.ready_players
+                    def write_sample(handle, grant, sample):
+                        if (control._peers.get(by_handle_peer[handle], {}).get('handle') != handle or
+                                by_handle.get(handle) != grant):
+                            raise RuntimeError('fixture sample grant owner changed')
+                        def same_grant(candidate):
+                            return candidate == by_handle.get(handle)
+                        def writer_guard():
+                            verify_overlap()
+                            if (world.session.state != 'running' or world.session.pending is not None or
+                                    world.session.players != expected_players or
+                                    world.session.ready_players != expected_ready_players or
+                                    control._peers.get(by_handle_peer[handle], {}).get('handle') != handle):
+                                raise RuntimeError('fixture write session changed')
+                            return True
+                        writer = FixturePlayerSampleWriteIPC(sample_write_sock, enabled=True,
+                            lease=sample_writer['lease'], attempt=sample_writer['attempt'], grant=grant,
+                            process=process_identity, guard=writer_guard, grant_guard=same_grant,
+                            timeout=min(120, max(0, deadline-time.monotonic())))
+                        try:
+                            writer.wait_ready()
+                            return writer.apply_once(sample)
+                        finally:
+                            result['fixture_sample_write']['dispatch_attempted'] = writer.write_attempted
+                            result['fixture_sample_write']['immediate_readback_confirmed'] = writer.write_confirmed
+                            writer.close()
+                    by_handle_active = {control._peers[active.participant.server_tcp]['handle']: active
+                                        for active in clients}
+                    by_handle_peer = {handle: active.participant.server_tcp
+                                      for handle, active in by_handle_active.items()}
+                    options.update(sample_write_slot=sample_write_slot, write_sample_once=write_sample)
+                    if sample_write_after_throttle:
+                        import authority_fixture_client_throttle_ipc as throttle_ipc
+                        def pulse_client(handle, grant):
+                            active = by_handle_active[handle]
+                            if by_handle.get(handle) != grant:
+                                raise RuntimeError('fixture throttle grant owner changed')
+                            process = getattr(active.participant, '_fixture_throttle_process', None)
+                            if type(process) is not dict:
+                                raise RuntimeError('fixture throttle process identity unavailable')
+                            def running():
+                                return (world.session.state == 'running' and world.session.pending is None and
+                                        world.session.players == expected_players and
+                                        world.session.ready_players == expected_ready_players)
+                            def throttle_guard():
+                                verify_overlap()
+                                if (not running() or by_handle.get(handle) != grant or
+                                        control._peers.get(by_handle_peer[handle], {}).get('handle') != handle):
+                                    raise RuntimeError('fixture throttle session changed')
+                                return True
+                            def pump():
+                                throttle_guard()
+                                host.tick(0, defer_world=True)
+                                throttle_guard()
+                            try:
+                                receipt = active.participant.pulse_fixture_throttle(
+                                    process=dict(process), guard=throttle_guard, running=running, pump=pump, timeout=15)
+                            except throttle_ipc.ThrottleUnconfirmed as error:
+                                record_fixture_throttle_uncertainty(result, error)
+                                raise RuntimeError('fixture throttle unconfirmed') from None
+                            result['fixture_sample_write']['throttle_receipt'] = dict(receipt)
+                            return receipt
+                        options['pulse_client_once'] = pulse_client
                 sampling_window = None
                 if fixture_save_guards is not None:
                     from authority_fixture_save_guards import FixtureSamplingWindow
@@ -1098,6 +1278,8 @@ def run(args):
                     observation = authority_fixture_player_source_observe.observe(
                         host=host, world=world, grants=by_handle, verify=verify_overlap,
                         deadline=deadline, operation_timeout=120, enabled=True, **options)
+                    if sample_write_after_throttle:
+                        result['fixture_sample_write']['client_movement_proven'] = observation.get('client_movement_proven') is True
                     if sampling_window is not None:
                         sampling_window.close()
                     return observation
@@ -1112,9 +1294,53 @@ def run(args):
                         except BaseException:
                             fence_observation()
                             raise
+            measure_first = None
+            if measure_seconds is not None:
+                from authority_overlap_process_measurement import measure_single_client_phase, write_report
+                def measure_first(active, clock_owner, tick, check_first_client):
+                    window = None
+                    if fixture_save_guards is not None:
+                        from authority_fixture_save_guards import FixtureSamplingWindow
+                        if fixture_save_guards._guards is not None:
+                            raise RuntimeError('measurement requires closed fixture sampling guards')
+                        def digest_guard():
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError('measurement digest deadline expired')
+                            cancelled(); check(); cancelled()
+                            return True
+                        window = FixtureSamplingWindow(fixture_save_guards, check_first_client, digest_guard)
+                    try:
+                        if window is not None:
+                            open_first_fixture_sampling_window(window, active_clients=active_clients,
+                                active=active, out=out, server_save=target, server_digest=checkpoint.sha256)
+                        measured = measure_single_client_phase(
+                            server_identity=identity, client_identity=active.x4_identity,
+                            supervisor_identity=(os.getpid(), live.start_ticks(os.getpid())),
+                            clock=clock_owner, tick=tick, check=check_first_client,
+                            duration=measure_seconds, deadline=deadline)
+                        if window is not None:
+                            window.close()
+                        measured['save_guard_mode'] = ('pinned_metadata_with_full_sha256_boundaries'
+                                                       if window is not None else 'full_sha256_checks')
+                        measured['other_protected_files_full_hashes'] = True
+                        if window is not None:
+                            measured['fixture_save_guard_metrics'] = dict(fixture_save_guards.metrics)
+                        summary = write_report(out, measured)
+                        result['diagnostic_process_measurement'] = summary
+                        return summary
+                    except BaseException as error:
+                        host._failed = True
+                        if fixture_save_guards is not None:
+                            try:
+                                fixture_save_guards.close()
+                            except BaseException as cleanup_error:
+                                raise BaseExceptionGroup('measurement and guard cleanup failed',
+                                                         [error, cleanup_error]) from None
+                        raise
             result.update(run_overlapping_diagnostics(start=start_overlap, active_clients=active_clients,
                 world=world, host=host, control=control, deadline=deadline, verify=verify_overlap, clock=clock,
-                marker_script=marker_script, observe_players=observe_fixture_players if player_grants else None))
+                marker_script=marker_script, observe_players=observe_fixture_players if player_grants else None,
+                measure_first=measure_first))
             overlap_guard[0] = None
         if getattr(args, 'diagnostic_client', False) or diagnostic_count == 2:
             # Opt-in local test clients, all resources still registered to
@@ -1276,6 +1502,9 @@ def run(args):
         if source_sock is not None:
             try: source_sock.close()
             except BaseException as error: errors.append('source socket cleanup: '+type(error).__name__)
+        if sample_write_sock is not None:
+            try: sample_write_sock.close()
+            except BaseException as error: errors.append('sample write socket cleanup: '+type(error).__name__)
         helpers_stopped = cleanup_diagnostics(diagnostics, errors)
         remaining = stop_owned_processes(processes, helpers_stopped, errors)
         result['owned_processes_remaining']=remaining
@@ -1291,6 +1520,13 @@ def run(args):
                     raise ValueError('final protected recovery inputs changed')
                 if witness_check:
                     verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
+                if sample_write_slot is not None:
+                    import authority_fixture_player_sample_install as sample_install
+                    observation = result.get('fixture_player_source_diagnostic', {}).get('server_position_once')
+                    if type(observation) is not dict:
+                        raise ValueError('fixture sample write observation missing')
+                    sample_install.verify_log(profile / 'engine-output.log', nonce=sample_writer['nonce'],
+                                              digest=observation['sample_sha256'])
                 if fixture_mode:
                     if (source_store.latest_marked_confirmed() != checkpoint or
                             read_evidence(fixture_source_result_path) != fixture_source_result):
@@ -1352,6 +1588,8 @@ def main():
     parser.add_argument('--diagnostic-saved-apply',action='store_true',help='private one-shot ENH-870 preflight and possible write; not gameplay')
     parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
+    parser.add_argument('--diagnostic-process-measure-seconds', type=float, metavar='SECONDS',
+                        help='private overlap: measure the running server, first client and supervisor before the second join for 5 to 300 seconds')
     parser.add_argument('--diagnostic-tls-certificate',type=Path,help='private local diagnostic TLS certificate')
     parser.add_argument('--diagnostic-tls-private-key',type=Path,help='private local diagnostic TLS key')
     parser.add_argument('--diagnostic-single-owner',action='store_true',help='private single-owner load-only diagnostic')
@@ -1364,6 +1602,10 @@ def main():
                         help='private fixture only: continuously sample and deliver the newest local pose')
     parser.add_argument('--fixture-player-source-freeze-drain', action='store_true',
                         help='private fixture latest source: drain before pause and resume by correlated ACK')
+    parser.add_argument('--fixture-player-sample-write-slot', type=int, choices=(1, 2),
+                        help='private diagnostic: write exactly one fixture SAMPLE2 position; frames assumed')
+    parser.add_argument('--fixture-player-sample-write-after-throttle', action='store_true',
+                        help='private diagnostic: observe changed client position after one bounded throttle impulse')
     parser.add_argument('--fixture-player-source-rejoin', action='store_true',
                         help='private fixture: depart and rejoin one player after both sources bind')
     diagnostic_options = parser.add_mutually_exclusive_group()

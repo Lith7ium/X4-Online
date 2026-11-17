@@ -6,6 +6,7 @@ function M.new(c)
   type(c.net.receive)=='function' and type(c.net.pending)=='function')
  assert(c.latest_cache==nil or type(c.latest_cache)=='boolean')
  assert(c.freeze_drain==nil or type(c.freeze_drain)=='boolean')
+ assert(c.throttle==nil or type(c.throttle)=='table')
  assert(not c.freeze_drain or c.latest_cache==true)
  for _,name in ipairs({'seat_ready','paused','guard','make_session','fault'}) do
   assert(type(c[name])=='function',name)
@@ -46,6 +47,7 @@ function M.new(c)
      assert(session:tick() and c.guard())
     end
    end
+   if c.throttle and state=='running' then assert(c.throttle:tick()) end
   end)
   if not ok then return fail('source_tick') end
   return true
@@ -56,17 +58,23 @@ end
 
 function M.new_x4(cfg)
  local ffi=require('ffi')
- ffi.cdef[[bool IsGamePaused(void); bool IsPlayerValid(void); const char* GetSaveFolderPath(void);]]
+ ffi.cdef[[bool IsGamePaused(void); bool IsPlayerValid(void); const char* GetSaveFolderPath(void); double GetCurrentGameTime(void);]]
  local net=assert(X4LAN_LOCAL_UDP_MODULE.load(ffi.os,package.loadlib).open('127.0.0.1',cfg.port))
  local function guard()
   local path=ffi.C.GetSaveFolderPath()
   return ffi.C.IsPlayerValid() and path~=nil and path~=ffi.NULL and
    ffi.string(path):gsub('\\','/'):gsub('/+$','')==cfg.save_path
  end
+ local throttle
+ if cfg.throttle_enabled then
+  local throttle_net=assert(X4LAN_LOCAL_UDP_MODULE.load(ffi.os,package.loadlib).open('127.0.0.1',cfg.throttle_port))
+  throttle=assert(X4LAN_FIXTURE_CLIENT_THROTTLE_DRIVER.new(cfg,throttle_net,guard,
+   function() return ffi.C.IsGamePaused() end,function() return tonumber(ffi.C.GetCurrentGameTime()) end))
+ end
  local owner
  owner=M.new{net=net,lease=cfg.lease,attempt=cfg.attempt,epoch=cfg.epoch,generation=cfg.generation,
   latest_cache=cfg.latest_cache,
-  freeze_drain=cfg.freeze_drain,
+  freeze_drain=cfg.freeze_drain,throttle=throttle,
   seat_ready=function() return X4LAN_FIXTURE_SEAT_READY==true end,
   paused=function() return ffi.C.IsGamePaused() end,guard=guard,
   fault=function(reason) DebugError('[X4LAN] AUTH_FIXTURE_PLAYER_SOURCE ERROR '..reason) end,

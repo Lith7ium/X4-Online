@@ -7,6 +7,7 @@ Neither Windows, internet, gameplay nor exact bytes consumed by X4 are proven.
 """
 from pathlib import Path
 import json
+import os
 import re
 import secrets
 import select
@@ -211,14 +212,14 @@ class ServerClient(combined.RecoveredRemoteParticipant):
             self.motion_worker_config['saved_apply_fixture'] = request['saved_apply_fixture']
         return list(installation.paths)
 
-    def prepare_fixture_player_source(self, case, profile, *, slot, sector, grant, timeout, ticket, latest_cache=False, freeze_drain=False):
+    def prepare_fixture_player_source(self, case, profile, *, slot, sector, grant, timeout, ticket, latest_cache=False, freeze_drain=False, throttle=False):
         """Install one private player source; the caller owns and validates its grant."""
         import math
         import authority_fixture_player_source_install as source_install
 
         if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
                 self.client_authority_worker_config is not None or
-                type(latest_cache) is not bool or type(freeze_drain) is not bool or
+                type(latest_cache) is not bool or type(freeze_drain) is not bool or type(throttle) is not bool or
                 (freeze_drain and not latest_cache) or type(slot) is not int or slot not in (1, 2) or
                 type(sector) is not str or not re.fullmatch(r'[A-Za-z0-9_]{1,128}', sector) or
                 type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 30 or
@@ -250,20 +251,36 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         lease, attempt, bootstrap_nonce = fresh_token(), fresh_token(), fresh_token()
         sampler_nonce = fresh_token(different_prefix=bootstrap_nonce)
         source_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        throttle_socket = None
         try:
             source_socket.bind(('127.0.0.1', 0))
+            throttle_config = None
+            if throttle:
+                throttle_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                throttle_socket.bind(('127.0.0.1', 0))
+                throttle_config = {'port': throttle_socket.getsockname()[1], 'lease': fresh_token(),
+                                   'attempt': fresh_token(), 'nonce': fresh_token(), 'timeout': 10}
             installation = source_install.install(
                 case, profile, slot=slot, epoch=checked_grant['epoch'], sector=sector,
                 lease=lease, attempt=attempt, generation=checked_grant['generation'],
                 bootstrap_nonce=bootstrap_nonce, sampler_nonce=sampler_nonce,
-                port=source_socket.getsockname()[1], timeout=timeout, latest_cache=latest_cache, freeze_drain=freeze_drain)
+                port=source_socket.getsockname()[1], timeout=timeout, latest_cache=latest_cache, freeze_drain=freeze_drain,
+                throttle=throttle_config)
             self.fixture_source_installation = installation
             self.motion_sock = source_socket
             self._pin_motion_socket()
+            if throttle_socket is not None:
+                info = os.fstat(throttle_socket.fileno())
+                self.fixture_throttle_socket = throttle_socket
+                self._fixture_throttle_identity = (throttle_socket, info.st_dev, info.st_ino)
+                self.fixture_throttle_config = {**throttle_config, 'epoch': checked_grant['epoch'],
+                                                'generation': checked_grant['generation'], 'slot': slot}
+                self._fixture_throttle_used = False
         except BaseException:
             if self.motion_sock is source_socket:
                 self.motion_sock = None
             source_socket.close()
+            if throttle_socket is not None: throttle_socket.close()
             raise
         self.client_authority_worker_config = {
             'lease': lease, 'attempt': attempt, 'grant': checked_grant,
@@ -271,6 +288,28 @@ class ServerClient(combined.RecoveredRemoteParticipant):
             **({'freeze_drain': True} if freeze_drain else {}),
         }
         return list(installation.paths)
+
+    def pulse_fixture_throttle(self, *, process, guard, running, pump, timeout=15):
+        """Call once only after the caller verified this participant's baseline."""
+        import authority_fixture_client_throttle_ipc as throttle_ipc
+        sock = getattr(self, 'fixture_throttle_socket', None)
+        identity = getattr(self, '_fixture_throttle_identity', None)
+        config = getattr(self, 'fixture_throttle_config', None)
+        if (getattr(self, '_fixture_throttle_used', True) or sock is None or identity is None or sock is not identity[0] or
+                config is None or type(process) is not dict or
+                process != getattr(self, '_fixture_throttle_process', None)):
+            raise ValueError('fixture throttle owner unavailable')
+        current = os.fstat(sock.fileno())
+        if (current.st_dev, current.st_ino) != identity[1:]:
+            raise ValueError('fixture throttle socket changed')
+        self._fixture_throttle_used = True
+        try:
+            return throttle_ipc.pulse(sock, process=process, lease=config['lease'], attempt=config['attempt'],
+                epoch=config['epoch'], generation=config['generation'], nonce=config['nonce'], slot=config['slot'],
+                guard=guard, running=running, pump=pump, timeout=timeout)
+        except BaseException:
+            self.fault = True
+            raise
 
     def redact(self):
         errors = []
@@ -337,6 +376,18 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         for helper in reversed(self.helpers):
             try: helper.stop()
             except BaseException as error: errors.append(error)
+        throttle_socket = getattr(self, 'fixture_throttle_socket', None)
+        if throttle_socket is not None:
+            try:
+                identity = getattr(self, '_fixture_throttle_identity', None)
+                info = os.fstat(throttle_socket.fileno())
+                if identity is None or throttle_socket is not identity[0] or (info.st_dev, info.st_ino) != identity[1:]:
+                    raise RuntimeError('fixture throttle socket identity changed')
+                throttle_socket.close()
+            except BaseException as error: errors.append(error)
+            else:
+                self.fixture_throttle_socket = None
+                self.fixture_throttle_config = None
         for name in ('remote_ipc', 'ipc', 'client_tcp', 'second', 'sock', 'motion_sock'):
             obj = getattr(self, name, None)
             if obj is not None:
@@ -561,12 +612,13 @@ def settle_departure(host, world, control, peer, deadline, check, ticket, marker
 class ActiveClient:
     """Retained diagnostic with explicit owner-driven finalization."""
     def __init__(self, participant, result, finish, sector_poll=None, sector_stop=None, sector_arm=None,
-                 *, save_target=None, save_digest=None):
+                 *, save_target=None, save_digest=None, x4_identity=None):
         self.participant, self.result, self._finish = participant, result, finish
         self._finished = False
         self.sector_poll, self.sector_stop = sector_poll, sector_stop
         self.sector_arm = sector_arm
         self.save_target, self.save_digest = save_target, save_digest
+        self.x4_identity = x4_identity
 
     def finish(self):
         if self._finished: raise RuntimeError('diagnostic already finalized')
@@ -605,7 +657,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             fixture_scripts is None or not participant.keep_worker or client_motion is not None or
             type(fixture_player_source) is not dict or
             not {'sector', 'grant', 'timeout'} <= set(fixture_player_source) or
-            set(fixture_player_source) - {'sector', 'grant', 'timeout', 'latest_cache', 'freeze_drain'} or
+            set(fixture_player_source) - {'sector', 'grant', 'timeout', 'latest_cache', 'freeze_drain', 'throttle'} or
+            type(fixture_player_source.get('throttle', False)) is not bool or
             type(fixture_player_source.get('freeze_drain', False)) is not bool or
             (fixture_player_source.get('freeze_drain', False) and not fixture_player_source.get('latest_cache', False)) or
             type(fixture_player_source.get('latest_cache', False)) is not bool):
@@ -779,6 +832,10 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                     'cross_process_identity_proven': False, 'exact_loaded_file_proven': False}
             original_accept = session.accept
             try:
+                if getattr(participant, 'fixture_throttle_config', None) is not None:
+                    executable = (game / 'X4').stat()
+                    participant._fixture_throttle_process = {'pid': client_identity[0], 'start_ticks': client_identity[1],
+                                                             'exe_dev': executable.st_dev, 'exe_ino': executable.st_ino}
                 participant.on_ready(world=world, handle=handle, ticket=ticket, target=target,
                     server_identity=server_identity, server_proc=server_proc, server_started=server_started,
                     client_identity=client_identity, client_proc=proc, client_started=started,
@@ -851,6 +908,7 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                                     sector_owner.poll if sector_owner is not None else None,
                                     sector_owner.stop if sector_owner is not None else None,
                                     sector_owner.arm if sector_owner is not None else None,
-                                    save_target=target, save_digest=ticket['sha256'])
+                                    save_target=target, save_digest=ticket['sha256'],
+                                    x4_identity=client_identity)
             return finish()
         time.sleep(.1)

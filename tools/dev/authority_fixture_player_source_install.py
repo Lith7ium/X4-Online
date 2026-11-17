@@ -141,7 +141,7 @@ def _write_config_transaction(config, original, replacement, paths, secrets):
 
 
 def install(case, profile, *, slot, epoch, sector, lease, attempt, generation,
-            bootstrap_nonce, sampler_nonce, port, timeout, interval=0.1, latest_cache=False, freeze_drain=False):
+            bootstrap_nonce, sampler_nonce, port, timeout, interval=0.1, latest_cache=False, freeze_drain=False, throttle=None):
     tokens = (epoch, lease, attempt, generation, bootstrap_nonce, sampler_nonce)
     if (type(latest_cache) is not bool or type(freeze_drain) is not bool or
             (freeze_drain and not latest_cache) or type(slot) is not int or slot not in (1, 2) or
@@ -152,6 +152,16 @@ def install(case, profile, *, slot, epoch, sector, lease, attempt, generation,
             any(type(v) not in (int, float) or not math.isfinite(v) for v in (timeout, interval)) or
             not 0 < timeout <= 120 or not 0 < interval <= 60):
         raise ValueError('invalid fixture source context')
+    if throttle is not None:
+        if (type(throttle) is not dict or set(throttle) != {'port', 'lease', 'attempt', 'nonce', 'timeout'} or
+                type(throttle['port']) is not int or not 1 <= throttle['port'] <= 65535 or
+                type(throttle['timeout']) not in (int, float) or not math.isfinite(throttle['timeout']) or
+                not 3 <= throttle['timeout'] <= 15 or
+                any(type(throttle[key]) is not str or not re.fullmatch(r'[0-9a-f]{32}', throttle[key])
+                    for key in ('lease', 'attempt', 'nonce')) or
+                len(set(tokens + tuple(throttle[key] for key in ('lease', 'attempt', 'nonce')))) != 9):
+            raise ValueError('invalid fixture throttle context')
+        throttle = dict(throttle)
     case = Path(case).resolve(strict=True)
     profile = Path(profile).resolve(strict=True)
     if not profile.is_relative_to(case) or profile.name != '45841':
@@ -184,21 +194,33 @@ def install(case, profile, *, slot, epoch, sector, lease, attempt, generation,
         scripts += (('src/authority/lua/fixture_player_latest_cache.lua', 'fixture_player_latest_cache.lua'),)
     if freeze_drain:
         scripts += (('src/authority/lua/fixture_player_freeze_barrier.lua', 'fixture_player_freeze_barrier.lua'),)
+    throttle_cue = None
+    if throttle is not None:
+        scripts += (('tools/dev/authority_fixture_client_throttle.lua', 'authority_fixture_client_throttle.lua'),
+                    ('tools/dev/authority_fixture_client_throttle_driver.lua', 'authority_fixture_client_throttle_driver.lua'))
+        throttle_cue = md / 'authority_fixture_client_throttle.xml'
     hook = '    <file name="ui/authority_download_load_probe.lua" />\n'
     additions = ''.join('    <file name="ui/' + target + '" />\n' for _, target in scripts)
     manifest_text = seat.replace_once(manifest_text, hook, additions + hook)
     values = dict(slot=slot, epoch=epoch, sector=sector, lease=lease, attempt=attempt,
                   generation=generation, bootstrap_nonce=bootstrap_nonce, sampler_nonce=sampler_nonce,
                   port=port, timeout=timeout, interval=interval, save_path=str(profile / 'save'))
+    if throttle is not None:
+        values.update(throttle_port=throttle['port'], throttle_lease=throttle['lease'],
+                      throttle_attempt=throttle['attempt'], throttle_nonce=throttle['nonce'],
+                      throttle_timeout=throttle['timeout'])
     config_text = (config_text[:-2] + ',authority_fixture_player_source={' + ','.join(
         key + '=' + (lua_literal(value) if isinstance(value, str) else format(value, '.17g'))
         for key, value in values.items()) + (',latest_cache=true' if latest_cache else '') +
-        (',freeze_drain=true' if freeze_drain else '') + '}}\n')
+        (',freeze_drain=true' if freeze_drain else '') +
+        (',throttle_enabled=true' if throttle is not None else '') + '}}\n')
     installed = []
     for source, name in scripts:
         target = ui / name
         shutil.copyfile(ROOT / source, target)
         installed.append(target)
+    if throttle_cue is not None:
+        shutil.copyfile(ROOT / 'tools/dev/authority_fixture_client_throttle.xml', throttle_cue)
     cue = md / 'authority_job_descriptor_probe.xml'
     shutil.copyfile(ROOT / 'tools/dev/authority_job_descriptor_probe.xml', cue)
     loader.write_text(loader_text, encoding='utf-8')
@@ -206,5 +228,7 @@ def install(case, profile, *, slot, epoch, sector, lease, attempt, generation,
     manifest.write_text(manifest_text, encoding='utf-8')
     secrets = {name: values[name] for name in
                ('epoch', 'lease', 'attempt', 'generation', 'bootstrap_nonce', 'sampler_nonce')}
+    if throttle is not None:
+        secrets.update({name: values[name] for name in ('throttle_lease', 'throttle_attempt', 'throttle_nonce')})
     return _write_config_transaction(config, original_config, config_text.encode('ascii'),
-                                     [*installed, cue, loader, participant, manifest, config], secrets)
+                                     [*installed, cue, *([throttle_cue] if throttle_cue else []), loader, participant, manifest, config], secrets)

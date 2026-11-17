@@ -91,6 +91,60 @@ class FixtureSourceParentTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.prepare()
         self.participant.motion_worker_config = None
 
+    def test_opt_in_throttle_is_protected_one_shot_and_redacted(self):
+        paths = self.prepare(throttle=True)
+        for name in ('authority_fixture_client_throttle.lua', 'authority_fixture_client_throttle_driver.lua'):
+            self.assertIn(self.ui / name, paths)
+        self.assertIn(self.ui.parent / 'md/authority_fixture_client_throttle.xml', paths)
+        installation = self.participant.fixture_source_installation
+        self.assertEqual(len(installation.secrets), 9)
+        self.assertIn('throttle_enabled=true', (self.ui / 'config.lua').read_text())
+        config = dict(self.participant.fixture_throttle_config)
+        self.participant._fixture_throttle_process = {'pid':1}
+        import authority_fixture_client_throttle_ipc as ipc
+        with patch.object(ipc, 'pulse', return_value={'stop_acknowledged': True}) as invoke:
+            result = self.participant.pulse_fixture_throttle(process={'pid':1}, guard=lambda:True,
+                running=lambda:True, pump=lambda:None)
+            self.assertTrue(result['stop_acknowledged'])
+            self.assertEqual(invoke.call_args.kwargs['nonce'], config['nonce'])
+            with self.assertRaises(ValueError):
+                self.participant.pulse_fixture_throttle(process={'pid':1}, guard=lambda:True,
+                    running=lambda:True, pump=lambda:None)
+        with patch.object(client.combined.RecoveredRemoteParticipant, 'redact'):
+            self.participant.redact()
+        self.assertTrue(all(installer.lua_literal(value) not in (self.ui/'config.lua').read_text()
+                            for value in installation.secrets.values()))
+        self.assertTrue(self.participant.cleanup_diagnostic())
+        self.assertIsNone(self.participant.fixture_throttle_socket)
+
+    def test_failed_throttle_fences_participant_without_retry(self):
+        self.prepare(throttle=True)
+        self.participant._fixture_throttle_process = {'pid':1}
+        import authority_fixture_client_throttle_ipc as ipc
+        with patch.object(ipc, 'pulse', side_effect=ipc.ThrottleUnconfirmed(
+                'lost receipt', attempted=True, started=False, stopped=False)):
+            with self.assertRaises(ipc.ThrottleUnconfirmed):
+                self.participant.pulse_fixture_throttle(process={'pid':1}, guard=lambda:True,
+                    running=lambda:True, pump=lambda:None)
+        self.assertTrue(self.participant.fault)
+        with self.assertRaises(ValueError):
+            self.participant.pulse_fixture_throttle(process={'pid':1}, guard=lambda:True,
+                running=lambda:True, pump=lambda:None)
+
+    def test_throttle_socket_replacement_never_closes_foreign_socket(self):
+        self.prepare(throttle=True)
+        owned=self.participant.fixture_throttle_socket
+        foreign=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        try:
+            self.participant.fixture_throttle_socket=foreign
+            with self.assertRaisesRegex(RuntimeError, 'cleanup unconfirmed'):
+                self.participant.cleanup_diagnostic()
+            self.assertGreaterEqual(foreign.fileno(),0)
+        finally:
+            self.participant.fixture_throttle_socket=owned
+            self.participant.cleanup_diagnostic()
+            foreign.close()
+
     def test_replaced_source_socket_is_not_closed_by_cleanup(self):
         self.prepare()
         owned = self.participant.motion_sock

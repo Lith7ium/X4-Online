@@ -36,10 +36,11 @@ class FixtureSaveGuards:
         self.metrics['metadata_checks'] += 1
         return entry[0].check()
 
-    def open(self, entries):
+    def open(self, entries, *, expected_count=3):
         self._require_usable()
-        if self._guards is not None or type(entries) is not list or len(entries) != 3:
-            raise ValueError('three distinct fixture saves required')
+        if (type(expected_count) is not int or expected_count not in (2, 3) or
+                self._guards is not None or type(entries) is not list or len(entries) != expected_count):
+            raise ValueError('expected two or three distinct fixture saves')
         stack = ExitStack()
         guards = {}
         try:
@@ -129,14 +130,14 @@ class FixtureSamplingWindow:
             raise
         return True
 
-    def open(self, entries):
+    def open(self, entries, *, expected_count=3):
         if self.failed or self.active:
             raise RuntimeError('fixture sampling window cannot open')
         try:
             # With no pins active, these are full save hashes, including the
             # newly admitted client's exact downloaded file and checkpoint.
             self.verify_context()
-            self.guards.open(entries)
+            self.guards.open(entries, expected_count=expected_count)
             self.active = True
             self.boundary()
             self.guards.metrics['sampling_windows'] += 1
