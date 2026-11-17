@@ -36,13 +36,27 @@ class LatestMotionPoll:
             if self.control._peers.get(conn) is not peer or peer['stage'] != 'admitted':
                 raise RuntimeError('motion peer changed')
             pending = peer.setdefault('motion_pending', {})
-            if key not in pending and len(pending) >= self.limit:
+            active = peer.get('motion_active')
+            replaces_active = active is not None and active['key'] == key and active['sent'] == 0
+            if not replaces_active and key not in pending and len(pending) >= self.limit:
                 overflow.append(conn)
         for conn in overflow:self.control._drop(conn)
         survivors=[]
         for conn, peer, key, data, expected, accepted, discarded, guard in entries:
             if conn in overflow:continue
-            peer['motion_pending'][key] = (data, expected, accepted, discarded, guard)
+            active = peer.get('motion_active')
+            if active is not None and active['key'] == key and active['sent'] == 0:
+                # Keep the original deadline: replacement must not let a slow
+                # connection defer its timeout indefinitely. Nothing has been
+                # sent, so the old receipt and guard can also be replaced.
+                active['discarded']()
+                obsolete_pending = peer['motion_pending'].pop(key, None)
+                if obsolete_pending is not None:
+                    obsolete_pending[3]()
+                active.update(data=data, expected=expected, accepted=accepted,
+                              discarded=discarded, guard=guard)
+            else:
+                peer['motion_pending'][key] = (data, expected, accepted, discarded, guard)
             survivors.append(conn)
         return frozenset(survivors)
 

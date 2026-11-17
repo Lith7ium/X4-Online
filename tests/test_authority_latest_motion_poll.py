@@ -48,6 +48,84 @@ class LatestMotionPollTest(unittest.TestCase):
         self.assertEqual([s['sequence'] for h,s,_ in self.case.received if h==1],[1,2])
         self.spin(lambda:self.control._motion_idle())
 
+    def test_unsent_active_frame_is_replaced_even_with_full_pending_queue(self):
+        target = list(self.control._peers)[0]
+        target_member = [member for member in self.case.delivery.membership()
+                         if member['id'] == 'peer_1']
+        self.control._latest_motion.limit = 1
+        self.motion.track('b' * 32, 'c' * 32, 10056)
+        guard_calls = []
+        original_send = socket.socket.send
+
+        def blocked_send(sock, data, *args, **kwargs):
+            if sock is target:
+                raise BlockingIOError()
+            return original_send(sock, data, *args, **kwargs)
+
+        self.motion.enqueue_latest(self.case.sample(), recipients=target_member,
+                                   _guard=lambda: guard_calls.append('old'))
+        with patch.object(socket.socket, 'send', blocked_send):
+            self.host.tick(.01)
+        active = self.control._peers[target]['motion_active']
+        self.assertEqual(active['sent'], 0)
+        deadline = active['deadline']
+        self.assertEqual(guard_calls, ['old'])
+
+        other_ship = self.case.sample()
+        other_ship['index'] = 10056
+        self.motion.enqueue_latest(other_ship, recipients=target_member)
+        self.motion.enqueue_latest(self.case.sample(2, t=2), recipients=target_member,
+                                   _guard=lambda: guard_calls.append('new'))
+        self.assertIn(target, self.control._peers)
+        self.assertEqual(active['deadline'], deadline)
+        self.assertEqual(active['expected']['request_id'], 2)
+        self.assertEqual(len(self.control._peers[target]['motion_pending']), 1)
+        track = self.motion._tracks[('b' * 32, 'c' * 32, 10055)]
+        identity = (target_member[0]['id'], target_member[0]['incarnation'])
+        self.assertEqual(track['latest_frames'][identity], 'sector_a')
+
+        self.spin(self.control._motion_idle)
+        received = [(sample['index'], sample['sequence'])
+                    for handle, sample, _ in self.case.received if handle == 1]
+        self.assertEqual(received, [(10055, 2), (10056, 1)])
+        self.assertEqual(guard_calls.count('old'), 1)
+        self.assertIn('new', guard_calls)
+        self.assertEqual(track['peer_samples'][identity][0], 2)
+
+    def test_replacing_unsent_frame_discards_older_pending_copy(self):
+        target = list(self.control._peers)[0]
+        member = [item for item in self.case.delivery.membership() if item['id'] == 'peer_1']
+        original_send = socket.socket.send
+
+        def blocked_send(sock, data, *args, **kwargs):
+            if sock is target:
+                raise BlockingIOError()
+            return original_send(sock, data, *args, **kwargs)
+
+        self.motion.enqueue_latest(self.case.sample(), recipients=member)
+        with patch.object(socket.socket, 'send', blocked_send):
+            self.host.tick(.01)
+        peer = self.control._peers[target]
+        active = peer['motion_active']
+        callbacks = []
+        active_discard = active['discarded']
+
+        def discard_active():
+            callbacks.append('active')
+            active_discard()
+
+        active['discarded'] = discard_active
+        # Model a pending copy left by an earlier queue implementation.
+        peer['motion_pending'][active['key']] = (
+            active['data'], active['expected'], active['accepted'],
+            lambda: callbacks.append('pending'), active['guard'])
+        self.motion.enqueue_latest(self.case.sample(2, t=2), recipients=member)
+        self.assertEqual(callbacks, ['active', 'pending'])
+        self.assertNotIn(active['key'], peer['motion_pending'])
+        self.spin(self.control._motion_idle)
+        self.assertEqual([sample['sequence'] for handle, sample, _ in self.case.received
+                          if handle == 1], [2])
+
     def test_lifecycle_barrier_discards_pending_and_waits_for_sent_receipt(self):
         self.motion.enqueue_latest(self.case.sample());self.spin(lambda:len(self.case.received)>=2)
         self.motion.enqueue_latest(self.case.sample(2,t=2))

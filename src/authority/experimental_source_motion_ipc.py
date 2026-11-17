@@ -361,57 +361,79 @@ class ExperimentalSourceMotionIPC:
             self._quiet(deadline,'candidate');self._candidate_selected=index;self._state='ready'
             return index
         except BaseException:self._fail();raise
-    def _consume(self,data,request,deadline,*,latest):
-        if not data or len(data)>_MAX_PACKET:raise ValueError('invalid source motion response')
-        try:parts=data.decode('ascii').split('|')
-        except UnicodeError:raise ValueError('invalid source motion encoding') from None
-        prefix=['S',self._lease,self._attempt]
-        if parts==prefix+['NO_SAMPLE',self._epoch,self._generation,request]:
-            self._quiet(deadline,'pulling');self._last_pull=time.monotonic();self._state='ready';return None
-        if len(parts)!=17 or parts[:7]!=prefix+['SAMPLE',self._epoch,self._generation,request]:
+    def _consume(self, data, request, deadline, *, latest):
+        if not data or len(data) > _MAX_PACKET:
+            raise ValueError('invalid source motion response')
+        try:
+            parts = data.decode('ascii').split('|')
+        except UnicodeError:
+            raise ValueError('invalid source motion encoding') from None
+        prefix = ['S', self._lease, self._attempt]
+        if parts == prefix + ['NO_SAMPLE', self._epoch, self._generation, request]:
+            self._quiet(deadline, 'pulling')
+            self._last_pull = time.monotonic()
+            self._state = 'ready'
+            return None
+        if len(parts) != 17 or parts[:7] != prefix + ['SAMPLE', self._epoch, self._generation, request]:
             raise ValueError('foreign source motion response')
-        index,sequence=parts[7:9]
-        if not re.fullmatch(r'[1-9][0-9]*',index) or not re.fullmatch(r'[1-9][0-9]*',sequence):
+        index, sequence = parts[7:9]
+        if not re.fullmatch(r'[1-9][0-9]*', index) or not re.fullmatch(r'[1-9][0-9]*', sequence):
             raise ValueError('invalid motion identity')
-        if int(index) not in self._indices:raise ValueError('unconfirmed source motion index')
-        numbers=parts[10:14];velocity=parts[14:17]
-        fields=numbers+([] if velocity==['-','-','-'] else velocity)
-        if any(len(item)>32 or not _NUMBER.fullmatch(item) for item in fields):
+        if int(index) not in self._indices:
+            raise ValueError('unconfirmed source motion index')
+        time_and_position_fields = parts[10:14]
+        velocity_fields = parts[14:17]
+        numeric_fields = time_and_position_fields + ([] if velocity_fields == ['-', '-', '-'] else velocity_fields)
+        if any(len(item) > 32 or not _NUMBER.fullmatch(item) for item in numeric_fields):
             raise ValueError('invalid source motion numeric syntax')
         try:
-            t,x,y,z=map(float,numbers)
-            v=None if velocity==['-','-','-'] else dict(zip(('x','y','z'),map(float,velocity)))
-        except ValueError:raise ValueError('invalid source motion number') from None
-        value=motion_value({'version':1,'epoch':self._epoch,'generation':self._generation,
-            'index':int(index),'sequence':int(sequence),'sector_macro':parts[9],
-            'source_time':t,'x':x,'y':y,'z':z,'velocity':v})
-        previous=self._observed.get(value['index'])
+            source_time, x, y, z = map(float, time_and_position_fields)
+            velocity = None if velocity_fields == ['-', '-', '-'] else dict(
+                zip(('x', 'y', 'z'), map(float, velocity_fields)))
+        except ValueError:
+            raise ValueError('invalid source motion number') from None
+        sample = motion_value({'version': 1, 'epoch': self._epoch, 'generation': self._generation,
+            'index': int(index), 'sequence': int(sequence), 'sector_macro': parts[9],
+            'source_time': source_time, 'x': x, 'y': y, 'z': z, 'velocity': velocity})
+        previous = self._observed.get(sample['index'])
         if previous is not None:
-            if value['sequence']<=previous['sequence'] or value['source_time']<=previous['time']:
+            if sample['sequence'] <= previous['sequence'] or sample['source_time'] <= previous['time']:
                 raise ValueError('stale or non-monotone source motion sample')
-            if value['sector_macro']!=previous['frame'] and value['velocity'] is not None:
+            if sample['sector_macro'] != previous['frame'] and sample['velocity'] is not None:
                 raise ValueError('source frame transition requires unknown velocity')
         if self._validate_sample is not None:
-            candidate=copy.deepcopy(value);self._check(deadline,'pulling')
-            accepted=self._call_fenced(self._validate_sample,candidate)
-            self._check(deadline,'pulling')
-            if accepted is not True or motion_digest(candidate)!=motion_digest(value):
+            candidate = copy.deepcopy(sample)
+            self._check(deadline, 'pulling')
+            accepted = self._call_fenced(self._validate_sample, candidate)
+            self._check(deadline, 'pulling')
+            if accepted is not True or motion_digest(candidate) != motion_digest(sample):
                 raise ValueError('source motion pre-send validation failed')
-        self._quiet(deadline,'pulling')
-        control=self._motion._delivery._host._control
-        fenced=latest and (self._pending_barrier_generation!=control._latest_motion.generation or
-                           control._latest_motion.blocked or control._latest_motion.world_blocked or
-                           self._motion._delivery._host._world.session.pending is not None)
-        selected=[] if fenced else (None if self._select_recipients is None else self._select(value,deadline))
-        if selected!=[]:
+        self._quiet(deadline, 'pulling')
+        control = self._motion._delivery._host._control
+        fenced = latest and (self._pending_barrier_generation != control._latest_motion.generation or
+                             control._latest_motion.blocked or control._latest_motion.world_blocked or
+                             self._motion._delivery._host._world.session.pending is not None)
+        # None selects all recipients; an empty list selects nobody.
+        if fenced:
+            selected = []
+        elif self._select_recipients is None:
+            selected = None
+        else:
+            selected = self._select(sample, deadline)
+        if selected != []:
             if latest:
-                if self._motion_call(self._motion.enqueue_latest,value,recipients=selected,_guard=self._latest_guard) is not True:
-                    selected=[]
-            elif self._motion_call(self._motion.send,value,guard=lambda:self._check(deadline,'pulling') or True,recipients=selected) is not True:
+                if self._motion_call(self._motion.enqueue_latest, sample, recipients=selected,
+                                     _guard=self._latest_guard) is not True:
+                    selected = []
+            elif self._motion_call(self._motion.send, sample, guard=lambda: self._check(deadline, 'pulling') or True,
+                                   recipients=selected) is not True:
                 raise RuntimeError('motion TCP not confirmed')
-        self._observed[value['index']]={'sequence':value['sequence'],'time':value['source_time'],'frame':value['sector_macro']}
-        self._quiet(deadline,'pulling');self._last_pull=time.monotonic();self._state='ready'
-        return None if selected==[] else value
+        self._observed[sample['index']] = {'sequence': sample['sequence'], 'time': sample['source_time'],
+                                           'frame': sample['sector_macro']}
+        self._quiet(deadline, 'pulling')
+        self._last_pull = time.monotonic()
+        self._state = 'ready'
+        return None if selected == [] else sample
 
     def _latest_guard(self):
         """Revalidate source ownership under the control owner's reader lease."""
