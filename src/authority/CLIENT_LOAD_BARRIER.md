@@ -94,6 +94,29 @@ native Windows, X4 startup, profile safety or multiplayer behavior.
 The associated full check ran 4,644 tests without test failures, but remained
 incomplete because 56 checks were skipped.
 
+A separate synthetic experiment tested `CreateProcessW` with a private job
+in the creation attribute list under Windows Python in Wine. In both runs 02
+and 03, the suspended test process was observed in the job before its first
+thread was resumed. Run 02 could not check the test grandchild: its process
+handle requested `PROCESS_QUERY_LIMITED_INFORMATION` and `IsProcessInJob`
+failed with error 5. Run 03 compared two simultaneously held handles for the
+same live synthetic grandchild: the limited query again failed with error 5,
+while a handle with `PROCESS_QUERY_INFORMATION` confirmed job membership.
+[Microsoft documents](https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob)
+either query right as sufficient for this API; current [upstream Wine source](https://raw.githubusercontent.com/wine-mirror/wine/master/server/process.c)
+requires the latter. The exact source of the tested Wine build was not verified.
+The result is evidence for this Wine run, not for native Windows behavior.
+
+Run 03 terminated its private job and observed both test-process handles
+signaled. Run 02 also observed both handles signaled during failure cleanup.
+Each private wineserver stop and wait reported no error, but the subsequent
+prefix-process scans were incomplete despite finding no visible matching
+processes; complete cleanup is not confirmed. The local results are in
+`.local/windows-job-list-wine-20261117-02/` and
+`.local/windows-job-list-wine-20261117-03/`. These runs did not launch X4, test
+creator termination during `CreateProcessW`, establish general process-tree
+containment or cleanup, or make the existing X4 process owner safe to use.
+
 ## Windows fixture overlay installer
 
 `experimental_windows_fixture_overlay.install_fixture_overlay` can populate an
