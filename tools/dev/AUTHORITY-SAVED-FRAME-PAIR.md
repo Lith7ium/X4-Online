@@ -50,3 +50,28 @@ The installer and comparator are `authority_saved_frame_pair_live.py` and
 `authority_saved_frame_compare.py`; the local probe is
 `authority_frame_read.lua`/`.xml`. Their focused tests simulate X4 and MD;
 the native observations above are a separate bounded run.
+
+## Optional current-registry compatibility diagnostic
+
+The default-off `--diagnostic-current-registry-script`, together with the
+required explicit `--expected-current-registry-sha256`, installs the current
+`authority_ship_registry.xml` in each disposable profile over a staged copy of
+the pinned census checkpoint. This deliberate overlay differs from the script
+that was saved with that checkpoint. The archive's own provenance and original
+scripts are checked as before; only this one private overlay is checked against
+the separately pinned current source. Before process launch the source hash
+must match the explicitly supplied value. The other saved-state overlays must
+still match the archive. The archive scripts are checked against their expected
+versions during profile preparation; the running archive fingerprint does not
+cover those scripts. The current source and installed files are fingerprinted
+and sampled during the diagnostic. The expected ship code, macro and faction
+are required independently in both parsed frame observations.
+
+The frame probe reads the existing registry state directly; it does not issue
+the current script's correlated status request. Consequently, this experiment
+does not prove that the new registry cue actions executed, that all saved
+references or generations survived a save/reload, or that this checkpoint is
+accepted by the separate witness-recovery supervisor. No checkpoint is saved
+or confirmed. The existing checks for the archive, private processes, pause,
+marker and staged files continue to apply. This option has focused offline
+tests only; no native X4 run with it is claimed here.

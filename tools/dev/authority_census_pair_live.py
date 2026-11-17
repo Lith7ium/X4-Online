@@ -28,6 +28,15 @@ import authority_sector_pair_transfer_live as pair_transfer
 import authority_two_x4_live as owned
 
 
+def verify_saved_overlay(case, store):
+    """Require each installed saved-state script to match the archive."""
+    for name in installer._BASE_MD:
+        installed = case/'extensions/x4_lan_lab/md'/name
+        archived = store.parent/'server/case/extensions/x4_lan_lab/md'/name
+        if _read_regular(installed, 1 << 20) != _read_regular(archived, 1 << 20):
+            raise ValueError('saved-state overlay differs from archive')
+
+
 def load_observation(raw,ticket,*,partial=False):
     lowered=raw.lower()
     if (base.fault_log(raw) or b'[x4lan] auth_census_job error fault' in lowered
@@ -104,9 +113,7 @@ def run(args):
             check_cancel()
             fingerprints={p:base.stable_read(p,1<<20,collect=False)[:2] for p in protected}
             census.origin_scripts(store,e['profile'])
-            for name in installer._BASE_MD:
-                if _read_regular(e['case']/'extensions/x4_lan_lab/md'/name,1<<20)!=_read_regular(store.parent/'server/case/extensions/x4_lan_lab/md'/name,1<<20):
-                    raise ValueError('saved-state overlay differs from archive')
+            verify_saved_overlay(e['case'], store)
             command=readonly.readonly_save_command(e['case'],game,e['binds'],e['lock'],args.display,auth,user.pw_name,args.seed,target)
             pos=command.index('--die-with-parent')
             for path in fingerprints:command[pos:pos]=['--ro-bind',str(path),str(path)];pos+=3
