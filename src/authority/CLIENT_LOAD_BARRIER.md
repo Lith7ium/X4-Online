@@ -240,12 +240,19 @@ explicit exclusive PID-namespace membership assumption.
 An optional Linux diagnostic guard now checks a host-network UDP socket inherited
 by a process in another network namespace. It pins the process and both
 connected socket endpoints, samples their identities and checks for matching
-IPv4 and IPv4-mapped IPv6 flows. The synthetic tests exercise bidirectional
-datagrams and competing sockets. The guard assumes cooperative ownership and
+IPv4 and IPv6 socket port usage. The synthetic tests exercise bidirectional
+datagrams and competing sockets, including wildcard bindings and IP_PKTINFO.
+The guard assumes cooperative ownership and
 does not prevent changes between checks; its caller must fence the session on
 failure. It is not connected to the X4 launcher or game bridge. Passing a file
 descriptor through the sandbox was also exercised with a synthetic process, but
 X4 startup, Steam connectivity and socket adoption remain untested.
+
+The existing local participant peer check also rejects any additional IPv4 or
+IPv6 UDP socket using the observed sender port in the peer's network namespace.
+This closes reproduced cases in which another local socket could send using the
+same apparent source. It can also reject harmless sockets on other interfaces;
+it remains a sampled check and the caller must separately own the receiver.
 
 A separate private Cage/Xwayland menu attempt used a fresh profile with an
 empty read-only save directory and hid the installed extensions. X4 started,
@@ -257,11 +264,21 @@ test-directory assumptions, no X4 process remained afterward. This attempt did
 not establish a working display, the reason for the stall, or game networking.
 Its local result is `.local/private-x4-menu-real-20261117-01/result.json`.
 
-The repository check for the guard ran 4,664 tests with one error in a separate
-source-motion UDP-peer ownership test and 56 skipped checks. The error message
-does not distinguish a mismatched packet from a failed ownership check. A single
-targeted rerun passed, but the original failure remains unexplained. The full
-check did not pass.
+An additional synthetic display probe with a process-wide file-size limit
+terminated Cage with `SIGXFSZ`. The observed test PIDs exited, but the result
+directory was removed before an empty-namespace receipt could be retained and
+the later process scan was incomplete. Full cleanup was therefore not
+independently confirmed. The limited harness is disabled for real X4; the local
+report is `.local/private-x4-menu-output-limit-failure-20261117.md`.
+
+Two repository checks ran 4,664 and 4,677 tests respectively, each with one
+error in a source-motion UDP handshake test and 56 skipped checks. Their shared
+error message did not distinguish a mismatched packet from a failed ownership
+check. Targeted reruns passed, but the original failures remain unexplained. The
+direct worker now reports separate fixed diagnostic categories without packet
+contents or tokens; its process-level result remains intentionally generic.
+A subsequent check ran 4,681 tests without test failures, but still skipped 56
+checks and therefore remains incomplete under the repository's check policy.
 
 The associated repository check reported 4,623 tests without failures and
 56 skips; it was incomplete and must not be presented as a complete passing

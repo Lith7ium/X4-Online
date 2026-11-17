@@ -45,27 +45,76 @@ _XML=('<savegame><script><refs type="string"><ref id="42" string="'+_MARKER+
       '<value name="$loaded" type="integer"/></vars></cue></script></md></savegame>')
 
 
-def socket_owner(peer, destination, process):
-    """Sample X4's fd table and its network namespace; require one exact UDP flow."""
+def _proc_ipv4_endpoint(address):
+    value = int.from_bytes(socket.inet_aton(address[0]), byteorder=sys.byteorder)
+    return f'{value:08X}:{address[1]:04X}'
+
+
+def _udp_table(path, address_length):
+    lines = path.read_text().splitlines()
+    if not lines or 'local_address' not in lines[0]:
+        raise RuntimeError('UDP socket table unavailable')
+    result = []
+    for line in lines[1:]:
+        row = line.split()
+        if len(row) <= 9:
+            raise RuntimeError('invalid UDP socket table row')
+        local = row[1].split(':')
+        if (len(local) != 2 or len(local[0]) != address_length or len(local[1]) != 4 or
+                not all(char in '0123456789ABCDEF' for char in local[0] + local[1]) or
+                not row[9].isdigit()):
+            raise RuntimeError('invalid UDP socket table endpoint')
+        result.append(row)
+    return result
+
+
+def socket_owner(peer, destination, process, *, diagnostic=None):
+    """Sample the connected IPv4 peer and reject competing local sources.
+
+    Reject any other IPv4 or IPv6 UDP socket with the same source port in the
+    peer's network namespace, regardless of its bind address or remote. This is
+    conservative: harmless sockets on other interfaces or IPv6-only sockets
+    can also cause rejection. A socket with a different bind address can still
+    select a loopback source using IP_PKTINFO. These are sampled checks; the
+    caller must fence changes between samples and own the receiving socket.
+    """
+    if diagnostic is not None and not callable(diagnostic):
+        raise ValueError('diagnostic callback must be callable')
+    def reject(reason):
+        if diagnostic is not None:
+            diagnostic(reason)
+        return False
     check_process(process)
-    if peer[0]!='127.0.0.1' or destination[0]!='127.0.0.1': return False
-    def address(p): return '0100007F:'+format(p,'04X')
-    proc=Path('/proc')/str(process['pid'])
-    rows=(proc/'net/udp').read_text().splitlines()[1:]
-    matches=[]
-    for row in rows:
-        cols=row.split()
-        if len(cols)>9 and cols[1]==address(peer[1]) and cols[2]==address(destination[1]):
-            matches.append(cols[9])
-    if len(matches)!=1 or not matches[0].isdigit(): return False
-    wanted='socket:['+matches[0]+']'
-    found=[]
-    for fd in (proc/'fd').iterdir():
-        try: target=os.readlink(fd)
-        except FileNotFoundError: continue
-        if target==wanted: found.append(fd.name)
+    if peer[0] != '127.0.0.1' or destination[0] != '127.0.0.1':
+        return reject('non-loopback endpoint')
+    proc = Path('/proc') / str(process['pid'])
+    rows = _udp_table(proc / 'net/udp', 8)
+    rows6 = _udp_table(proc / 'net/udp6', 32)
+    peer_endpoint = _proc_ipv4_endpoint(peer)
+    destination_endpoint = _proc_ipv4_endpoint(destination)
+    peer_rows = [row for row in rows
+                 if row[1] == peer_endpoint and row[2] == destination_endpoint]
+    if len(peer_rows) != 1:
+        return reject('connected IPv4 flow count differs from one')
+    inode = peer_rows[0][9]
+    source_port = f'{peer[1]:04X}'
+    if any(row[1].rsplit(':', 1)[1] == source_port and row[9] != inode for row in rows):
+        return reject('competing IPv4 source port')
+    if any(row[1].rsplit(':', 1)[1] == source_port for row in rows6):
+        return reject('competing IPv6 source port')
+    wanted = 'socket:[' + inode + ']'
+    found = []
+    for fd in (proc / 'fd').iterdir():
+        try:
+            target = os.readlink(fd)
+        except FileNotFoundError:
+            continue
+        if target == wanted:
+            found.append(fd.name)
     check_process(process)
-    return len(found)==1
+    if len(found) != 1:
+        return reject('process socket descriptor count differs from one')
+    return True
 
 
 def config(raw):
@@ -131,8 +180,14 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
         readable,_,bad=select.select([control],[],[control],0)
         if readable or bad: raise RuntimeError('parent control changed')
         return True
-    def peer_guard(peer,sock):
-        guard();result=socket_owner(peer,sock.getsockname(),process);guard();return result
+    def peer_guard(peer,sock,*,diagnostic=None):
+        guard()
+        if diagnostic is None:
+            result=socket_owner(peer,sock.getsockname(),process)
+        else:
+            result=socket_owner(peer,sock.getsockname(),process,diagnostic=diagnostic)
+        guard()
+        return result
     guard()
     participant_udp.settimeout(.1);participant_peer=None
     expected=('HELLO|'+c['participant_lease']+'|'+c['epoch']).encode()
@@ -140,7 +195,12 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
         guard()
         try:data,peer=participant_udp.recvfrom(769)
         except socket.timeout:continue
-        if data!=expected or not peer_guard(peer,participant_udp): raise RuntimeError('participant peer not owned by X4')
+        if data!=expected:
+            raise RuntimeError('unexpected participant hello')
+        diagnostics=[]
+        if not peer_guard(peer,participant_udp,diagnostic=diagnostics.append):
+            reason=diagnostics[0] if len(diagnostics)==1 else 'reason unavailable'
+            raise RuntimeError('participant peer not owned by X4: '+reason)
         participant_peer=peer
     with tempfile.TemporaryDirectory(prefix='x4-job-client-') as tmp:
         root=Path(tmp);(root/'store').mkdir()

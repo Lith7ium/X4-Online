@@ -5,10 +5,12 @@ from pathlib import Path
 import select
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools/dev'))
@@ -212,6 +214,72 @@ class InheritedHostUDPGuardTest(unittest.TestCase):
 
     def test_competing_ipv6_at_supervisor_endpoint_is_rejected(self):
         self.assert_competing_ipv6_flow_rejected(self.server, self.anchor)
+
+    def assert_wildcard_sender_rejected(self, local_socket, remote_socket, family):
+        try:
+            competitor = socket.socket(family, socket.SOCK_DGRAM)
+            self.addCleanup(competitor.close)
+            if family == socket.AF_INET6:
+                competitor.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            local_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            competitor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            wildcard = '::' if family == socket.AF_INET6 else '0.0.0.0'
+            competitor.bind((wildcard, local_socket.getsockname()[1]))
+        except OSError as error:
+            if family == socket.AF_INET6 and error.errno in (
+                    errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL,
+                    errno.EPROTONOSUPPORT, errno.ENOPROTOOPT):
+                self.skipTest(f'IPv4-mapped IPv6 socket unavailable: {error}')
+            raise
+        local_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+        target = remote_socket.getsockname()
+        if family == socket.AF_INET6:
+            target = ('::ffff:127.0.0.1', target[1])
+        competitor.sendto(b'foreign', target)
+        remote_socket.settimeout(1)
+        self.assertEqual(remote_socket.recv(100), b'foreign')
+        with self.assertRaisesRegex(RuntimeError, 'competing'):
+            self.guard.check()
+
+    def test_ipv4_wildcard_sender_at_inherited_port_is_rejected(self):
+        self.assert_wildcard_sender_rejected(self.anchor, self.server, socket.AF_INET)
+
+    def test_ipv4_wildcard_sender_at_supervisor_port_is_rejected(self):
+        self.assert_wildcard_sender_rejected(self.server, self.anchor, socket.AF_INET)
+
+    def test_ipv6_wildcard_sender_at_inherited_port_is_rejected(self):
+        self.assert_wildcard_sender_rejected(self.anchor, self.server, socket.AF_INET6)
+
+    def test_ipv6_wildcard_sender_at_supervisor_port_is_rejected(self):
+        self.assert_wildcard_sender_rejected(self.server, self.anchor, socket.AF_INET6)
+
+    def test_other_bound_address_with_pktinfo_sender_is_rejected(self):
+        competitor = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(competitor.close)
+        competitor.bind(('127.0.0.2', self.anchor.getsockname()[1]))
+        # Linux IP_PKTINFO requests the outgoing source address independently
+        # of the address used in bind().
+        info = struct.pack('=I4s4s', 0, socket.inet_aton('127.0.0.1'), b'\0' * 4)
+        competitor.sendmsg([b'foreign'], [(socket.IPPROTO_IP, 8, info)], 0,
+                           self.server.getsockname())
+        self.server.settimeout(1)
+        self.assertEqual(self.server.recv(100), b'foreign')
+        with self.assertRaisesRegex(RuntimeError, 'competing socket'):
+            self.guard.check()
+
+    def test_missing_ipv6_table_header_is_rejected(self):
+        original = Path.read_text
+
+        def missing_table(path, *args, **kwargs):
+            if str(path) == '/proc/thread-self/net/udp6':
+                return ''
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, 'read_text', missing_table):
+            with self.assertRaisesRegex(RuntimeError, 'UDP table unavailable'):
+                self.guard.check()
+        with self.assertRaisesRegex(RuntimeError, 'guard closed'):
+            self.guard.check()
 
     def test_reuse_option_is_rejected(self):
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

@@ -7,6 +7,8 @@ and supervisor sockets until this guard is closed. The child must not duplicate,
 pass on, reconnect, or replace that FD. The caller must serialize the guard with its UDP
 operations and fence the entire session after a failure. These are point-in-time
 checks, not proof that the child cannot change a descriptor after a check.
+Both endpoint ports must be exclusive across all IPv4 and IPv6 UDP sockets in
+the host namespace. This conservative rule may reject harmless other bindings.
 """
 import os
 from pathlib import Path
@@ -165,26 +167,38 @@ class InheritedHostUDPGuard:
         def endpoint(address):
             ipv4 = int.from_bytes(socket.inet_aton(address[0]), byteorder=sys.byteorder)
             return f'{ipv4:08X}:{address[1]:04X}'
-        def mapped_endpoint(address):
-            ipv6 = socket.inet_pton(socket.AF_INET6, '::ffff:' + address[0])
-            words = (int.from_bytes(ipv6[i:i + 4], byteorder=sys.byteorder)
-                     for i in range(0, 16, 4))
-            return ''.join(f'{word:08X}' for word in words) + f':{address[1]:04X}'
-        rows = Path('/proc/thread-self/net/udp').read_text().splitlines()[1:]
-        parsed = [line.split() for line in rows]
-        rows6 = Path('/proc/thread-self/net/udp6').read_text().splitlines()[1:]
-        parsed6 = [line.split() for line in rows6]
+        def table(name):
+            lines = Path('/proc/thread-self/net', name).read_text().splitlines()
+            if not lines or 'local_address' not in lines[0]:
+                raise RuntimeError('host network UDP table unavailable')
+            rows = lines[1:]
+            result = []
+            for row in rows:
+                columns = row.split()
+                if len(columns) <= 9:
+                    raise RuntimeError('malformed host network UDP table')
+                address, separator, port = columns[1].rpartition(':')
+                if not separator or not address or len(port) != 4:
+                    raise RuntimeError('malformed host network UDP address')
+                try:
+                    port = int(port, 16)
+                except ValueError as error:
+                    raise RuntimeError('malformed host network UDP port') from error
+                result.append((port, columns))
+            return result
+        ipv4_rows = table('udp')
+        ipv6_rows = table('udp6')
         flows = ((self._local, self._destination, self._socket_identity),
                  (self._destination, self._local, self._supervisor_identity))
         for local, remote, identity in flows:
-            matches = [row for row in parsed if len(row) > 9 and
-                       row[1] == endpoint(local) and row[2] == endpoint(remote)]
-            if len(matches) != 1 or matches[0][9] != str(identity[1]):
+            # A socket bound to another local address or a wildcard may send
+            # from 127.0.0.1 using IP_PKTINFO. A different remote or an
+            # unconnected socket therefore remains a potential competing sender.
+            matches = [row for port, row in ipv4_rows if port == local[1]]
+            if (len(matches) != 1 or matches[0][1] != endpoint(local) or
+                    matches[0][2] != endpoint(remote) or matches[0][9] != str(identity[1])):
                 raise RuntimeError('host network UDP flow changed or has a competing socket')
-            mapped_matches = [row for row in parsed6 if len(row) > 9 and
-                              row[1] == mapped_endpoint(local) and
-                              row[2] == mapped_endpoint(remote)]
-            if mapped_matches:
+            if any(port == local[1] for port, _ in ipv6_rows):
                 raise RuntimeError('host network UDP flow has a competing IPv6 socket')
         self._anchor_check()
         self._process_check()
