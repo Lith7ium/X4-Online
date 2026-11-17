@@ -35,7 +35,8 @@ def _inspect(path, offer, pump=None):
     before_path = os.lstat(path)
     if not stat.S_ISREG(before_path.st_mode):
         raise ValueError('staged save is not a regular file')
-    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    flags = (os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_CLOEXEC', 0)
+             | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
     fd = os.open(path, flags)
     try:
         before = os.fstat(fd)

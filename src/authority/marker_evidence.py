@@ -61,7 +61,8 @@ def _parse(checkpoint, callback, *, characters=None):
         parser.CharacterDataHandler = lambda value: characters(path, value)
     parser.StartDoctypeDeclHandler = reject
     parser.ExternalEntityRefHandler = reject
-    fd = os.open(checkpoint.path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    fd = os.open(checkpoint.path, flags)
     with os.fdopen(fd, 'rb') as raw:
         before = os.fstat(raw.fileno())
         if not stat.S_ISREG(before.st_mode):

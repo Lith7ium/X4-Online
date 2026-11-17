@@ -53,7 +53,8 @@ def stage_confirmed_recovery(store, private_profile):
         os.mkdir('save', 0o700, dir_fd=root_fd)
         created_dir = True
         save_fd = os.open('save', flags, dir_fd=root_fd)
-        source_fd = os.open(checkpoint.path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        source_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+        source_fd = os.open(checkpoint.path, source_flags)
         try:
             before = os.fstat(source_fd)
             if not stat.S_ISREG(before.st_mode):
