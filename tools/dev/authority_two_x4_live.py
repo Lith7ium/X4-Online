@@ -193,7 +193,7 @@ def close_owned_file_service(service):
 
 def check_live_context(*, deadline, server_proc, server_started, server_identity,
                        client_proc, client_started, client_identity, game, home,
-                       uid, steam, target, ticket, expected):
+                       uid, steam, target, ticket, expected, verify_target=None):
     """Point-in-time process/Steam and protected-byte checks for opt-in hooks."""
     def check_identities():
         if (time.monotonic() >= deadline or
@@ -202,7 +202,11 @@ def check_live_context(*, deadline, server_proc, server_started, server_identity
             live.steam_identity(home, uid) != steam):
             raise RuntimeError('deadline, process or Steam identity changed')
     check_identities()
-    if (live.sha(target) != ticket['sha256'] or
+    if verify_target is not None and not callable(verify_target):
+        raise ValueError('invalid client save guard')
+    valid_target = (live.sha(target) == ticket['sha256'] if verify_target is None
+                    else verify_target(target, ticket['sha256']) is True)
+    if (not valid_target or
             any(live.sha(path) != digest for path, digest in expected.items())):
         raise ValueError('client staged save or protected configuration changed')
     check_identities()

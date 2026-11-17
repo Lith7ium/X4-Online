@@ -113,6 +113,20 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
     return fixture
 
 
+def verify_fixture_source(store, checkpoint, profile):
+    """Validate either the initial fixture save or a stopped supervisor output."""
+    import authority_saved_registry_checkpoint_source as fixture_source
+    original_result = store.directory.parent/'registry-save-result.json'
+    original_source = original_result.exists() or original_result.is_symlink()
+    result_path = original_result if original_source else store.directory.parent/'result.json'
+    result_bytes = read_evidence(result_path)
+    verifier = fixture_source.verify if original_source else fixture_source.verify_recovered
+    scripts = verifier(store.directory, checkpoint, profile)
+    if read_evidence(result_path) != result_bytes:
+        raise ValueError('fixture source result changed during verification')
+    return scripts, result_path, result_bytes
+
+
 
 def witness_mode(args):
     """Allow joining a witness source only in the explicit single-client probe."""
@@ -548,8 +562,19 @@ def validate_overlap_identities(first, second):
             len({identities[0][0], identities[0][1], identities[1][1]}) != 3):
         raise ValueError('diagnostic X4 identities are not three distinct processes')
 
+def fixture_player_source_sectors(value, *, fixture_mode):
+    """Only the explicit two-client fixture may request local player sources."""
+    if value is None:
+        return None
+    if (fixture_mode is not True or type(value) is not list or len(value) != 2 or
+            any(type(sector) is not str or not re.fullmatch(r'[A-Za-z0-9_]{1,128}', sector)
+                for sector in value) or len(set(value)) != 2):
+        raise ValueError('player source requires two distinct fixture sectors')
+    return tuple(value)
+
+
 def run_overlapping_diagnostics(*, start, active_clients, world, host, control, deadline, verify, clock=None,
-                                marker_script='X4AuthorityCheckpointMarker'):
+                                marker_script='X4AuthorityCheckpointMarker', observe_players=None):
     """Own two overlapping diagnostics and settle their ordered departures."""
     import authority_recovered_server_client as client
     if active_clients: raise ValueError('diagnostics must start with an empty active set')
@@ -560,6 +585,11 @@ def run_overlapping_diagnostics(*, start, active_clients, world, host, control, 
     if (world.session.state != 'running' or len(world.session.ready_players) != 2 or
             len(world.session.players) != 2):
         raise RuntimeError('two active diagnostic participants not confirmed')
+    player_observation = None
+    if observe_players is not None:
+        if not callable(observe_players): raise ValueError('invalid player observer')
+        player_observation = observe_players(tuple(active_clients))
+        verify()
     # The remaining participant is guarded during each intentional departure.
     first = active_clients.pop(0)
     first_result = first.finish()
@@ -593,6 +623,7 @@ def run_overlapping_diagnostics(*, start, active_clients, world, host, control, 
     result = {'diagnostic_overlap_confirmed':True, 'diagnostic_remaining_session_running':True,
               'diagnostic_overlap_clients':[first_result, second_result]}
     if clock_result is not None: result['diagnostic_remaining_server_clock'] = clock_result
+    if player_observation is not None: result['fixture_player_source_diagnostic'] = player_observation
     return result
 
 def run(args):
@@ -628,6 +659,7 @@ def run(args):
     diagnostics = []
     active_clients = []
     guard_context = []
+    fixture_save_guards = None
     try:
         fixture_mode = getattr(args, 'fixture_overlap', False)
         if type(fixture_mode) is not bool or (fixture_mode and (
@@ -637,6 +669,14 @@ def run(args):
                 getattr(args, 'registry_witness_join', False) or
                 getattr(args, 'diagnostic_single_owner', False))):
             raise ValueError('fixture overlap requires the dedicated two-client diagnostic')
+        player_source_sectors = fixture_player_source_sectors(
+            getattr(args, 'fixture_player_source_sectors', None), fixture_mode=fixture_mode)
+        quick_fixture_guards = getattr(args, 'fixture_player_source_quick_guards', False)
+        if type(quick_fixture_guards) is not bool or (quick_fixture_guards and player_source_sectors is None):
+            raise ValueError('quick guards require the private fixture player-source diagnostic')
+        latest_fixture_source = getattr(args, 'fixture_player_source_latest_cache', False)
+        if type(latest_fixture_source) is not bool or (latest_fixture_source and player_source_sectors is None):
+            raise ValueError('latest cache requires the private fixture player-source diagnostic')
         fixture_scripts = None
         fixture_helpers = None
         marker_script = 'X4AuthorityCheckpointMarker'
@@ -663,13 +703,25 @@ def run(args):
                                        getattr(args, 'registry_enroll', False)))):
             raise ValueError('single-owner diagnostic requires one load-only diagnostic client')
         tls_certificate, tls_private_key = validate_diagnostic_tls(args, source_enabled)
+        if quick_fixture_guards:
+            if (source_enabled is not False or client_motion is not False or
+                    tls_certificate is not None or tls_private_key is not None):
+                raise ValueError('quick guards are limited to the private local fixture source')
+            from authority_fixture_save_guards import FixtureSaveGuards
+            fixture_save_guards = FixtureSaveGuards(live.sha)
+            result['fixture_save_guard'] = {
+                'mode': 'pinned_metadata_between_digest_boundaries',
+                'exclusive_writer_and_fd_owner_assumed': True,
+                'unchanged_bytes_between_boundaries_proven': False,
+                'exact_loaded_file_proven': False,
+                'metrics': fixture_save_guards.metrics,
+            }
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage, marker_script=marker_script)
         if fixture_mode:
-            import authority_saved_registry_checkpoint_source as fixture_source
-            fixture_scripts = fixture_source.verify(source_store.directory, checkpoint, profile)
-            fixture_source_result = read_evidence(source_store.directory.parent/'registry-save-result.json')
+            fixture_scripts, fixture_source_result_path, fixture_source_result = verify_fixture_source(
+                source_store, checkpoint, profile)
             fixture = None
         elif source_store.directory == source.DEFAULT_STORE.resolve():
             if witness_join: raise ValueError('witness join requires an own verified source')
@@ -788,7 +840,9 @@ def run(args):
         def verify():
             check()
             if identity is None: raise RuntimeError('recovery receipt without owned X4')
-            if live.sha(target) != checkpoint.sha256 or any(live.sha(p) != h for p,h in expected.items()):
+            save_valid = (live.sha(target) == checkpoint.sha256 if fixture_save_guards is None else
+                          fixture_save_guards.check(target, checkpoint.sha256))
+            if not save_valid or any(live.sha(p) != h for p,h in expected.items()):
                 raise ValueError('recovery save or protected configuration changed')
             if witness_check:
                 verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
@@ -884,6 +938,20 @@ def run(args):
             raise ValueError('choose one diagnostic mode')
         if overlap:
             import authority_recovered_server_client as diagnostic_client
+            player_grants = []
+            if player_source_sectors is not None:
+                registry_epoch = fixture_helpers.fixture_source.fixture_save.base.archive.REGISTRY_EPOCH
+                used_tokens = {epoch, registry_epoch}
+                def fresh_player_token():
+                    value = secrets.token_hex(16)
+                    while value in used_tokens:
+                        value = secrets.token_hex(16)
+                    used_tokens.add(value)
+                    return value
+                for slot, sector in enumerate(player_source_sectors, 1):
+                    player_grants.append({'session_epoch': epoch, 'epoch': registry_epoch,
+                        'generation': fresh_player_token(), 'index': slot + 2, 'sector_macro': sector,
+                        'token': fresh_player_token(), 'incarnation': fresh_player_token()})
             def cancelled():
                 if stop[0]: raise InterruptedError('diagnostic cancelled')
             def base_overlap():
@@ -910,10 +978,74 @@ def run(args):
                     session=session, control=control, check_server=verify_overlap, check_base=base_overlap,
                     check_server_base=server_overlap, fixture_scripts=fixture_scripts,
                     fixture_slot=index+1 if fixture_mode else None,
-                    server_out=out, cancel_check=cancel_overlap)
+                    fixture_player_source=({'sector': player_source_sectors[index],
+                        'grant': player_grants[index], 'timeout': 15,
+                        'latest_cache': latest_fixture_source} if player_grants else None),
+                    server_out=out, cancel_check=cancel_overlap,
+                    verify_client_save=fixture_save_guards.check if fixture_save_guards else None)
+            def observe_fixture_players(clients):
+                import authority_fixture_player_source_observe
+                def fence_observation():
+                    host._failed = True
+                    delivery_owner = getattr(host._control, '_job_delivery_owner', None)
+                    if delivery_owner is not None:
+                        delivery_owner._failed = True
+                by_handle = {}
+                for index, active in enumerate(clients):
+                    peer = control._peers.get(active.participant.server_tcp)
+                    if peer is None or peer['stage'] != 'admitted':
+                        raise RuntimeError('fixture player admission changed')
+                    handle = peer['handle']
+                    if handle in by_handle: raise RuntimeError('fixture player handle reused')
+                    by_handle[handle] = player_grants[index]
+                progress = {}
+                result['fixture_player_source_progress'] = progress
+                options = {'progress': progress}
+                if fixture_save_guards is not None:
+                    try:
+                        expected_client_paths = [out/('overlap-%02d' % index)/'client/case/home/.config/EgoSoft/X4/45841/save/save_009.xml.gz'
+                                                 for index in (1, 2)]
+                        if any(active.save_target != path for active, path in zip(clients, expected_client_paths)):
+                            raise ValueError('fixture client save path differs from owned private profile')
+                        entries = [(target, checkpoint.sha256)] + [
+                            (active.save_target, active.save_digest) for active in clients]
+                        fixture_save_guards.open(entries)
+                    except BaseException:
+                        fence_observation()
+                        raise
+                    def digest_guard():
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError('fixture digest deadline expired')
+                        cancelled(); check(); cancelled()
+                        return True
+                    def boundary():
+                        verify_overlap()
+                        fixture_save_guards.boundary(digest_guard)
+                        verify_overlap()
+                        return True
+                    options['verify_transaction_boundary'] = boundary
+                observation_started = time.monotonic()
+                try:
+                    if fixture_save_guards is not None: boundary()
+                    observation = authority_fixture_player_source_observe.observe(
+                        host=host, world=world, grants=by_handle, verify=verify_overlap,
+                        deadline=deadline, operation_timeout=120, enabled=True, **options)
+                    if fixture_save_guards is not None: boundary()
+                    return observation
+                except BaseException:
+                    fence_observation()
+                    raise
+                finally:
+                    if fixture_save_guards is not None:
+                        fixture_save_guards.metrics['observation_seconds'] = time.monotonic() - observation_started
+                        try:
+                            fixture_save_guards.close()
+                        except BaseException:
+                            fence_observation()
+                            raise
             result.update(run_overlapping_diagnostics(start=start_overlap, active_clients=active_clients,
                 world=world, host=host, control=control, deadline=deadline, verify=verify_overlap, clock=clock,
-                marker_script=marker_script))
+                marker_script=marker_script, observe_players=observe_fixture_players if player_grants else None))
             overlap_guard[0] = None
         if getattr(args, 'diagnostic_client', False) or diagnostic_count == 2:
             # Opt-in local test clients, all resources still registered to
@@ -1092,11 +1224,14 @@ def run(args):
                     verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
                 if fixture_mode:
                     if (source_store.latest_marked_confirmed() != checkpoint or
-                            read_evidence(source_store.directory.parent/'registry-save-result.json') != fixture_source_result):
+                            read_evidence(fixture_source_result_path) != fixture_source_result):
                         raise ValueError('fixture checkpoint source changed')
                     source_md = source_store.directory.parent/'case/extensions/x4_lan_lab/md'
                     if any(read_evidence(source_md/name, 1 << 20) != data for name, data in fixture_scripts.items()):
                         raise ValueError('fixture source scripts changed')
+                    if fixture_source_result_path.name == 'result.json':
+                        import authority_saved_registry_checkpoint_source as fixture_source
+                        fixture_source.verify_current_confirmed(source_store.directory)
             except BaseException as error:
                 result.update(success=False, error='final recovery evidence invalid: '+str(error))
         if local_pair:
@@ -1152,6 +1287,12 @@ def main():
     parser.add_argument('--diagnostic-tls-private-key',type=Path,help='private local diagnostic TLS key')
     parser.add_argument('--diagnostic-single-owner',action='store_true',help='private single-owner load-only diagnostic')
     parser.add_argument('--fixture-overlap',action='store_true',help='use the confirmed four-entry player fixture for the private overlap diagnostic')
+    parser.add_argument('--fixture-player-source-sectors', nargs=2, metavar=('SLOT1', 'SLOT2'),
+                        help='opt in to read-only 6D player-source probes in the named fixture sectors')
+    parser.add_argument('--fixture-player-source-quick-guards', action='store_true',
+                        help='private fixture only: metadata guards between transaction digest boundaries')
+    parser.add_argument('--fixture-player-source-latest-cache', action='store_true',
+                        help='private fixture only: continuously sample and deliver the newest local pose')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

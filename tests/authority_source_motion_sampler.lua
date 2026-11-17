@@ -87,6 +87,14 @@ do
  assert(not pcall(sample,'sector_a',100.5,5,'45') and x:state()=='failed')
 end
 -- Fair bounded traversal and per-index sequence.
+-- Reset retains the sequence while discarding the derivative baseline.
+do
+ local x,add,sample,out=rig();assert(add(1));sample('sector_a',100,0,'43')
+ sample('sector_a',100.5,5,'43');assert(out[2].velocity.x==10)
+ assert(x:reset_baseline(1));sample('sector_a',100.5,5,'43');assert(#out==2)
+ sample('sector_a',101,10,'43');assert(out[3].sequence==3 and out[3].velocity==nil)
+ sample('sector_a',101.5,15,'43');assert(out[4].sequence==4 and out[4].velocity.x==10)
+end
 do
  local x,add,sample,out=rig();assert(add(1) and add(2))
  sample('sector_a',100,10);sample('sector_b',100.5,20)

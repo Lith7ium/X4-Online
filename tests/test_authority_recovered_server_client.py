@@ -311,14 +311,20 @@ r=json.loads(f.readline());s.sendall((json.dumps(dict(token=c['token'],seq=r['se
             check()
             return {'server_game_time_before':1.0,'server_game_time_after':2.0}
         clock=SimpleNamespace(observe=observe)
+        def observe_players(clients):
+            events.append(('players', tuple(client.participant.server_tcp for client in clients)))
+            return {'fixture_player_samples_observed': True}
         with patch.object(subject.recovery.tcp,'await_eof') as eof, \
              patch.object(subject,'settle_departure',return_value=checkpoint) as settle:
             result=supervisor.run_overlapping_diagnostics(start=start,active_clients=active,world=world,
-                host=host,control=control,deadline=time.monotonic()+2,verify=verify,clock=clock)
+                host=host,control=control,deadline=time.monotonic()+2,verify=verify,clock=clock,
+                observe_players=observe_players)
         self.assertTrue(result['diagnostic_overlap_confirmed'])
         self.assertTrue(result['diagnostic_remaining_session_running'])
         self.assertEqual(result['diagnostic_overlap_clients'][1]['departure_checkpoint_id'],'new')
         self.assertIn(('finish','a',('b',)),events)
+        self.assertLess(events.index(('players',('a','b'))),events.index(('finish','a',('b',))))
+        self.assertTrue(result['fixture_player_source_diagnostic']['fixture_player_samples_observed'])
         self.assertIn(('finish','b',()),events)
         self.assertIn(('clock',('b',)),events)
         self.assertLess(events.index(('finish','a',('b',))),events.index(('clock',('b',))))
@@ -326,6 +332,15 @@ r=json.loads(f.readline());s.sendall((json.dumps(dict(token=c['token'],seq=r['se
         self.assertEqual(result['diagnostic_remaining_server_clock']['server_game_time_after'],2.0)
         self.assertEqual(active,[])
         eof.assert_called_once(); settle.assert_called_once()
+
+    def test_fixture_player_sources_require_two_distinct_valid_sectors(self):
+        self.assertIsNone(supervisor.fixture_player_source_sectors(None, fixture_mode=False))
+        sectors = ['cluster_33_sector001_macro', 'cluster_45_sector001_macro']
+        self.assertEqual(supervisor.fixture_player_source_sectors(sectors, fixture_mode=True), tuple(sectors))
+        for value, fixture_mode in ((sectors, False), (sectors[:1], True), ([sectors[0], sectors[0]], True),
+                                    ([sectors[0], '../unsafe'], True), (tuple(sectors), True)):
+            with self.subTest(value=value, fixture_mode=fixture_mode), self.assertRaises(ValueError):
+                supervisor.fixture_player_source_sectors(value, fixture_mode=fixture_mode)
 
     def test_overlap_guard_hashes_each_save_across_boundaries_and_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

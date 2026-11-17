@@ -27,10 +27,18 @@ function M.new(o)
  local c={};for k,v in pairs(o)do c[k]=v end
  assert(token(c.epoch) and token(c.generation) and token(c.bootstrap_nonce) and token(c.sampler_nonce))
  assert(c.epoch~=c.generation and c.bootstrap_nonce~=c.sampler_nonce and c.bootstrap_nonce:sub(1,16)~=c.sampler_nonce:sub(1,16))
- assert(c.index==1318 and c.baseline==10054 and c.sector=='cluster_115_sector001_macro')
  assert(c.include_orientation==nil or type(c.include_orientation)=='boolean')
+ assert(c.latest_cache==nil or type(c.latest_cache)=='boolean')
+ if c.latest_cache then assert(c.fixture_slot~=nil and type(c.current_sector)=='function')end
+ if c.fixture_slot~=nil then
+  assert((c.fixture_slot==1 or c.fixture_slot==2) and c.index==c.fixture_slot+2 and
+   c.baseline==4 and name(c.sector) and c.include_orientation==true and type(c.controlled)=='function')
+ else
+  assert(c.index==1318 and c.baseline==10054 and c.sector=='cluster_115_sector001_macro')
+ end
  for _,k in ipairs({'guard','authority','bootstrap_factory','sampler_factory','stage_sample','fault'})do assert(type(c[k])=='function',k)end
  local state,busy='new',false;local bootstrap,sampler,staged,actor,last_sequence,last_time=nil,nil,nil,nil,0,nil
+ local cache_sector_key=nil
  local api={}
  local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
  local function check()
@@ -39,6 +47,11 @@ function M.new(o)
   if not ok or g~=true or state~=before then return false end
   local ok2,grant=pcall(c.authority,c.epoch,c.generation,c.index)
   if not ok2 or grant~=true or state~=before then return false end
+  if c.fixture_slot~=nil and actor~=nil then
+   local original_actor=actor
+   local valid,controlled=pcall(c.controlled,original_actor)
+   if not valid or controlled~=true or actor~=original_actor or state~=before then return false end
+  end
   local ok3,again=pcall(c.guard)
   return ok3 and again==true and state==before
  end
@@ -60,6 +73,10 @@ function M.new(o)
    bootstrap=assert(c.bootstrap_factory({epoch=c.epoch,baseline=c.baseline,nonce=c.bootstrap_nonce,
     complete=function(index,a,sector)
      if state~='bootstrapping' or staged or index~=c.index or sector~=c.sector or a==nil or not check() then return false end
+     if c.fixture_slot~=nil then
+      local valid,controlled=pcall(c.controlled,a)
+      if not valid or controlled~=true or state~='bootstrapping' or not check() then return false end
+     end
      staged={actor=a};return true
     end}))
    sampler=assert(c.sampler_factory({epoch=c.epoch,generation=c.generation,nonce=c.sampler_nonce,include_orientation=c.include_orientation,
@@ -116,6 +133,28 @@ function M.new(o)
   if state=='sampling' then return sampler:expected_request()end
   return nil
  end
+ -- Local-only fixture identity for the cache. The caller must not send this
+ -- actor/sector identity over the wire or interpret it as cross-world proof.
+ function api:cache_context()
+  if not c.latest_cache or busy or state~='sampling' or actor==nil then return nil end
+  busy=true;local context
+  local ok=pcall(function()
+   assert(check())
+   local key,sector=c.current_sector(actor)
+   assert(type(key)=='string' and key:match('^[1-9]%d*$') and sector==c.sector and check())
+   assert(cache_sector_key==nil or cache_sector_key==key)
+   cache_sector_key=key
+   context={actor=actor,sector=sector,frame=c.sampler_nonce,valid=true,controlled=true}
+  end)
+  busy=false;if not ok then fail('cache_context');return nil end;return context
+ end
+ function api:reset_sampling_baseline()
+  if not c.latest_cache or busy or state~='sampling' then return fail('reset_baseline')end
+  busy=true;local ok=pcall(function()
+   assert(check() and sampler:reset_baseline(c.index)==true and state=='sampling' and check())
+  end)
+  busy=false;if not ok then return fail('reset_baseline')end;return true
+ end
  function api:state()return state end
  return api
 end
@@ -124,6 +163,36 @@ function M.new_x4(o)
  assert(type(o.bootstrap)=='table' and type(o.bootstrap.new_x4)=='function' and type(o.sampler)=='table' and type(o.sampler.new_x4)=='function')
  assert(type(o.descriptor)=='table' and type(o.resolve)=='table' and type(o.expected_save_path)=='string')
  local c={};for k,v in pairs(o)do c[k]=v end
+ if c.fixture_slot~=nil then
+  assert(type(c.resolve.actor_u64)=='function')
+  local ffi=require('ffi')
+  if not pcall(ffi.typeof,'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
+  ffi.cdef[[bool IsValidComponent(UniverseID);bool IsComponentOperational(UniverseID);
+   bool IsComponentClass(UniverseID,const char*);UniverseID GetPlayerControlledShipID(void);
+   UniverseID GetContextByClass(UniverseID,const char*,bool);]]
+  local native=ffi.C
+  c.controlled=function(value)
+   local actor=c.resolve.actor_u64(value)
+   return actor~=nil and native.IsValidComponent(actor) and native.IsComponentOperational(actor) and
+    native.IsComponentClass(actor,'ship') and native.GetPlayerControlledShipID()==actor and
+    native.IsValidComponent(actor) and native.GetPlayerControlledShipID()==actor
+  end
+  if c.latest_cache then
+   assert(type(GetComponentData)=='function' and type(ConvertStringToLuaID)=='function' and type(ConvertIDTo64Bit)=='function')
+   c.current_sector=function(value)
+    local actor=c.resolve.actor_u64(value)
+    if not actor or not c.controlled(value) then return nil end
+    local sector=native.GetContextByClass(actor,'sector',false)
+    if sector==0 or not native.IsValidComponent(sector) or not native.IsComponentClass(sector,'sector') then return nil end
+    local key=tostring(sector):gsub('ULL$','')
+    local local_id=ConvertStringToLuaID(key)
+    if not local_id or c.resolve.actor_u64(ConvertIDTo64Bit(local_id))~=sector then return nil end
+    local sector_name=GetComponentData(local_id,'macro')
+    if not c.controlled(value) or native.GetContextByClass(actor,'sector',false)~=sector then return nil end
+    return key,sector_name
+   end
+  end
+ end
  local b,s=c.bootstrap.new_x4,c.sampler.new_x4
  c.bootstrap_factory=function(x)
   x.enabled=true;x.timeout=c.timeout;x.guard=c.guard;x.baseline_guard=function(e,n)

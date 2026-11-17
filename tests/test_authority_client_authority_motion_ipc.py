@@ -9,27 +9,32 @@ ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'src'))
 from authority.experimental_client_authority_motion_ipc import ExperimentalClientAuthorityMotionIPC as Bridge
 
 class ClientMotionIPC(unittest.TestCase):
- def setup_bridge(self,include_orientation=False):
+ def setup_bridge(self,include_orientation=False,fixture_slot=None):
   sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sock.bind(('127.0.0.1',0))
   peer=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);peer.bind(('127.0.0.1',0))
   sock.connect(peer.getsockname());peer.connect(sock.getsockname());peer.settimeout(1)
   self.addCleanup(sock.close);self.addCleanup(peer.close)
   live=[True];grant=[True];tokens=('1'*32,'2'*32,'3'*32,'4'*32,'5'*32)
+  index=1318 if fixture_slot is None else fixture_slot+2
+  sector=None if fixture_slot is None else 'cluster_01_sector001_macro'
   def make():return Bridge(sock,enabled=True,lease=tokens[0],attempt=tokens[1],epoch=tokens[2],generation=tokens[3],incarnation=tokens[4],
-   guard=lambda:live[0],validate_peer=lambda p:p==peer.getsockname(),grant=lambda e,g,i,n:grant[0] and (e,g,i,n)==(*tokens[2:],1318),timeout=.2,include_orientation=include_orientation)
+   guard=lambda:live[0],validate_peer=lambda p:p==peer.getsockname(),grant=lambda e,g,i,n:grant[0] and (e,g,i,n)==(*tokens[2:],index),timeout=.2,include_orientation=include_orientation,fixture_slot=fixture_slot,fixture_sector=sector)
   return make(),peer,live,grant,make
- def exchange(self,peer,operation,kind,sequence=None,game='1',velocity=('-','-','-'),alter=None):
+ def exchange(self,peer,operation,kind,sequence=None,game='1',velocity=('-','-','-'),alter=None,fixture_slot=None):
   def respond():
    p=peer.recv(769).decode().split('|');assert p[3]==operation
    response=['S',p[1],p[2],kind,p[4],p[5],p[6]]
    if kind=='SAVED_REGISTERED':response+=['1318','10054']
    elif kind=='SAMPLE':response+=['1318',str(sequence),'cluster_115_sector001_macro',game,'1','2','3',*velocity]
    elif kind=='SAMPLE2':response+=['1318',str(sequence),'cluster_115_sector001_macro',game,'1','2','3','0.1','0.2','0.3',*velocity,*(['-','-','-'] if velocity==('-','-','-') else ['0.4','0.5','0.6'])]
+   if fixture_slot is not None and kind=='SAVED_REGISTERED':response[7:9]=[str(fixture_slot+2),'4']
+   if fixture_slot is not None and kind in ('SAMPLE','SAMPLE2'):
+    response[7]=str(fixture_slot+2);response[9]='cluster_01_sector001_macro'
    if alter:alter(response)
    peer.send('|'.join(response).encode())
   worker=threading.Thread(target=respond);worker.start();return worker
- def registered(self,include_orientation=False):
-  b,p,live,grant,make=self.setup_bridge(include_orientation);t=self.exchange(p,'REGISTER_SAVED','SAVED_REGISTERED')
+ def registered(self,include_orientation=False,fixture_slot=None):
+  b,p,live,grant,make=self.setup_bridge(include_orientation,fixture_slot);t=self.exchange(p,'REGISTER_SAVED','SAVED_REGISTERED',fixture_slot=fixture_slot)
   self.assertTrue(b.register_saved());t.join(1);self.assertFalse(t.is_alive());return b,p,live,grant,make
  def test_sequential_samples_and_no_sample(self):
   b,p,_,_,_=self.registered()
@@ -44,6 +49,18 @@ class ClientMotionIPC(unittest.TestCase):
   self.assertEqual(first['orientation'],{'yaw':.1,'pitch':.2,'roll':.3});self.assertIsNone(first['angular_rate'])
   t=self.exchange(p,'PULL','SAMPLE2',2,game='1.5',velocity=('0','1','-2'));second=b.pull();t.join(1)
   self.assertEqual(second['angular_rate'],{'yaw':.4,'pitch':.5,'roll':.6});b.close()
+ def test_fixture_slots_are_correlated_and_foreign_slot_is_rejected(self):
+  for slot in (1,2):
+   with self.subTest(slot=slot):
+    b,p,_,_,_=self.registered(True,slot)
+    t=self.exchange(p,'PULL','SAMPLE2',1,fixture_slot=slot)
+    sample=b.pull();t.join(1)
+    self.assertEqual((sample['index'],sample['sector_macro'],sample['version']),
+                     (slot+2,'cluster_01_sector001_macro',2))
+    def foreign(response):response[7]=str(5-slot)
+    t=self.exchange(p,'PULL','SAMPLE2',2,game='1.5',fixture_slot=slot,alter=foreign)
+    with self.assertRaises(ValueError):b.pull()
+    t.join(1);self.assertEqual(b.state,'failed')
  def test_opt_in_rejects_wrong_version_or_partial_angular_rate(self):
   for mode in ('version','partial','mixed'):
    with self.subTest(mode=mode):

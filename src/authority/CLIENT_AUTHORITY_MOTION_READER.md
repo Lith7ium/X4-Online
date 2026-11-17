@@ -32,6 +32,38 @@ same opt-in on the private installer and Python binding. Two-sample diagnostics
 also check the angular rate against the wrapped orientation difference. The
 flag does not start a game by itself and is not a general multiplayer option.
 
+The server-side `ExperimentalTCPClientAuthorityMotion` can also be created
+with an explicit `connection_handle`. Up to two such owners may share the
+existing serialized TCP reader, each with its own grant, incarnation, request
+and sample sequence. The selected handle must still be admitted with the
+grant's incarnation at every pull. Activity or disconnection on the other
+admitted socket during a pull fences the operation. Without a handle, the
+original one-admitted-participant restriction and exclusive ownership remain.
+These are caller-supplied test grants; the two-peer tests simulate participants
+and do not establish real multiplayer authority or X4 control.
+
+The private fixture diagnostic can instead select player slot 1 or 2, bound to
+saved registry indices 3 and 4. It verifies the locally controlled ship around
+each read and exchanges a PID-checked READY/ARM before binding the same UDP
+peer. An idle source may survive a pause; a pending request or datagram during
+pause fences it. The optional two-client observer reads 6D samples and rates,
+but does not write them to server X4. Its delivery owner is retained until the
+diagnostic server ends. This fixture path does not establish a common frame,
+movement replication, sector transitions or playable multiplayer. Tests using
+the TCP worker and Lua state machines simulate game components and MD.
+
+An isolated Linux run on 2026-11-17 loaded the server and seated two real X4
+clients in the fixture, but its player-source observation exceeded the
+40-minute orchestration deadline. Cleanup was confirmed. The run did not
+record per-pull progress, so it cannot establish whether samples or rates
+arrived; it is a failed diagnostic, not a successful native movement test.
+The process repeatedly hashed the same saves, accounting for more than
+500 GB of logical reads, largely served from the cache. Separately, the
+pull-driven sampler requires adjacent source measurements within one game
+second to derive velocity; the failed run did not prove which limitation
+caused its timeout. See `FIXTURE_PLAYER_LATEST_CACHE.md` for the unintegrated
+continuous-sampling experiment.
+
 This module installs no hooks, socket, transport, scheduler or server writer.
 An opt-in participant-session adapter is described below; it has not been
 validated in native X4 and does not implement client departure/handover. The user-approved policy is that another present

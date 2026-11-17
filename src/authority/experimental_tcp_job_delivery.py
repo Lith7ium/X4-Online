@@ -101,10 +101,12 @@ class ExperimentalTCPJobDelivery:
         try:
             handles,peers=self._admitted_peers()
             if self._test_binding is not None:
-                epoch,handle,conn,peer,incarnation=self._test_binding
-                if (self._host._world.session.world_epoch!=epoch or handles!=(handle,) or
-                    peers[handle][0] is not conn or peers[handle][1] is not peer or
-                    self._incarnations!={handle:incarnation}):
+                epoch,bindings=self._test_binding
+                if (self._host._world.session.world_epoch!=epoch or
+                    handles!=tuple(handle for handle,_,_,_ in bindings) or
+                    self._incarnations!={handle:incarnation for handle,_,_,incarnation in bindings} or
+                    any(peers[handle][0] is not conn or peers[handle][1] is not peer
+                        for handle,conn,peer,_ in bindings)):
                     raise RuntimeError('test incarnation membership changed')
                 ExperimentalTCPParticipants._quiet(self,peers,time.monotonic()+self._timeout)
                 return handles,peers
@@ -124,6 +126,18 @@ class ExperimentalTCPJobDelivery:
         exclusive access. This is not authentication or an authority grant.
         Any changed membership requires fencing rather than rebinding.
         """
+        return self._bind_test_incarnations(((handle, incarnation),), 1, enabled=enabled)
+
+    def bind_test_incarnations(self, bindings, *, enabled=False):
+        """Bind exactly two existing participants to distinct diagnostic tokens.
+
+        The caller owns token freshness and process/slot fencing. This does not
+        authenticate either participant or establish high-attention authority.
+        """
+        pairs = tuple(bindings.items()) if type(bindings) is dict else ()
+        return self._bind_test_incarnations(pairs, 2, enabled=enabled)
+
+    def _bind_test_incarnations(self, pairs, count, *, enabled):
         host = self._host
         if enabled is not True:
             raise ValueError('explicit test incarnation opt-in required')
@@ -137,8 +151,12 @@ class ExperimentalTCPJobDelivery:
         try:
             host._check()
             if (self._failed or self._test_bind_attempted or self._test_binding is not None or self._incarnations or
-                self._queued is not None or self._last is not None or type(handle) is not int or
-                not 1 <= handle <= MAX_INTEGER or type(incarnation) is not str or not _TOKEN.fullmatch(incarnation)):
+                self._queued is not None or self._last is not None or len(pairs) != count or
+                any(type(handle) is not int or not 1 <= handle <= MAX_INTEGER or
+                    type(incarnation) is not str or not _TOKEN.fullmatch(incarnation)
+                    for handle, incarnation in pairs) or
+                len({handle for handle, _ in pairs}) != count or
+                len({incarnation for _, incarnation in pairs}) != count):
                 raise ValueError('test incarnation requires fresh delivery and token')
             self._test_bind_attempted = True
             host._control._reader_free()
@@ -149,26 +167,31 @@ class ExperimentalTCPJobDelivery:
             deadline = time.monotonic() + self._timeout
             epoch = host._world.session.world_epoch
             handles, peers = self._admitted_peers()
-            if handles != (handle,):
-                raise ValueError('exactly one admitted requested handle required')
-            connection, peer_state = peers[handle]
+            requested = dict(pairs)
+            if len(handles) != count or set(handles) != set(requested):
+                raise ValueError('exactly the requested admitted handles required')
+            bindings = tuple((handle, *peers[handle], requested[handle]) for handle in handles)
+
+            def same_connections(current_handles, current_peers):
+                return (current_handles == handles and
+                        all(current_peers[handle][0] is connection and current_peers[handle][1] is peer_state
+                            for handle, connection, peer_state, _ in bindings))
+
             ExperimentalTCPParticipants._quiet(self, peers, deadline)
             current_handles, current_peers = self._admitted_peers()
-            if (current_handles != handles or current_peers[handle][0] is not connection or
-                current_peers[handle][1] is not peer_state or host._world.session.world_epoch != epoch or
+            if (not same_connections(current_handles, current_peers) or host._world.session.world_epoch != epoch or
                 self._incarnations or self._failed or host._failed or host._busy is not True or
                 self._active is not True or host._control._reader_lease is not reader_lease):
                 raise RuntimeError('test binding context changed')
             ExperimentalTCPParticipants._quiet(self, peers, deadline)
             current_handles, current_peers = self._admitted_peers()
-            if (current_handles != handles or current_peers[handle][0] is not connection or
-                current_peers[handle][1] is not peer_state or host._world.session.world_epoch != epoch or
+            if (not same_connections(current_handles, current_peers) or host._world.session.world_epoch != epoch or
                 self._incarnations or self._failed or host._failed or host._busy is not True or
                 self._active is not True or host._control._reader_lease is not reader_lease or
                 time.monotonic() >= deadline):
                 raise RuntimeError('test binding context changed after quiet check')
-            self._incarnations[handle] = incarnation
-            self._test_binding = (epoch, handle, connection, peer_state, incarnation)
+            self._incarnations = {handle: incarnation for handle, _, _, incarnation in bindings}
+            self._test_binding = (epoch, bindings)
             return True
         except BaseException:
             self._failed = True

@@ -126,6 +126,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         self.client_tcp = self.server_tcp = self.ipc = self.second = None
         self.control = self.host = self.participants = None
         self.motion_sock = self.motion_worker_config = None
+        self.client_authority_worker_config = None
         self._motion_worker_timeout_snapshot = None
         self.motion_stop_confirmed = False
 
@@ -433,7 +434,8 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
         self.ipc = ipc_parent
         retained = False
         try:
-            if self.motion_worker_config is not None:self._pin_motion_ipc()
+            if self.motion_worker_config is not None or self.client_authority_worker_config is not None:
+                self._pin_motion_ipc()
             st = (game/'X4').stat()
             config = {'version':1, 'claim':encode_load_claim(claim).decode('ascii'),
                       'epoch':ticket['world_epoch'], 'handle':handle, 'lease':self.lease,
@@ -444,12 +446,18 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
             if remote_finish is not None:
                 config['already_admitted'] = True
             motion_sock=self.motion_sock
-            if (motion_sock is None)!=(self.motion_worker_config is None):
+            source_config = self.client_authority_worker_config
+            if self.motion_worker_config is not None and source_config is not None:
+                raise ValueError('motion socket has more than one owner')
+            if (motion_sock is None)!=(self.motion_worker_config is None and source_config is None):
                 raise ValueError('motion socket/config mismatch')
             if motion_sock is not None:
                 if not self.keep_worker: raise ValueError('motion requires retained worker')
                 self._check_motion_socket()
-                config['motion']=dict(self.motion_worker_config)
+                if source_config is not None:
+                    config['client_authority'] = dict(source_config)
+                else:
+                    config['motion']=dict(self.motion_worker_config)
             encoded = json.dumps(config, separators=(',', ':')).encode('ascii')+b'\n'
             if len(encoded)>4096: raise ValueError('helper configuration too large')
             fds=[self.client_tcp.fileno(),self.sock.fileno(),ipc_child.fileno()]

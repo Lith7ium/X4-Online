@@ -18,6 +18,7 @@ import authority_recovered_remote_load_pair_live as combined
 import authority_recovery_tcp_join_live as recovery
 import authority_recovery_registry_witness as witness
 from authority.marker_evidence import verify_saved_marker
+from authority.experimental_tcp_client_authority_motion import grant_value
 from authority_helper_lifecycle import OwnedHelper
 from authority_tcp_native_worker import parse_json, read_line, send_frame
 
@@ -31,6 +32,8 @@ class ClientMotionErrorWatch(witness.ErrorWatch):
     """Pin one append-only client log and scan incrementally through exit."""
     TAGS = (
         b'[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR',
+        b'[X4LAN] AUTH_FIXTURE_PLAYER_SOURCE ERROR',
+        b'[X4LAN] AUTH_FIXTURE_PLAYER_SOURCE SESSION_ERROR',
         b'[X4LAN] AUTH_PARTICIPANT ERROR',
         b'Error while executing onEvent script for event: X4AuthoritySavedBaselineMotionBind.Result.',
         b'Error while executing onEvent script for event: X4AuthorityReplicaMotionBind.Result.',
@@ -144,6 +147,7 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         import authority_recovered_client_motion_install as motion_install
 
         if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
+                self.client_authority_worker_config is not None or
                 type(request) is not dict or
                 set(request) - {'player_sector', 'saved_apply_fixture'} != {'indices', 'generation', 'timeout'} or
                 ('player_sector' in request and request['player_sector'] is not True) or
@@ -207,8 +211,76 @@ class ServerClient(combined.RecoveredRemoteParticipant):
             self.motion_worker_config['saved_apply_fixture'] = request['saved_apply_fixture']
         return list(installation.paths)
 
+    def prepare_fixture_player_source(self, case, profile, *, slot, sector, grant, timeout, ticket, latest_cache=False):
+        """Install one private player source; the caller owns and validates its grant."""
+        import math
+        import authority_fixture_player_source_install as source_install
+
+        if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
+                self.client_authority_worker_config is not None or
+                type(latest_cache) is not bool or type(slot) is not int or slot not in (1, 2) or
+                type(sector) is not str or not re.fullmatch(r'[A-Za-z0-9_]{1,128}', sector) or
+                type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 30 or
+                type(ticket) is not dict or type(ticket.get('world_epoch')) is not str or
+                not re.fullmatch(r'[0-9a-f]{32}', ticket['world_epoch']) or
+                type(ticket.get('attempt_id')) is not str or
+                not re.fullmatch(r'[0-9a-f]{32}', ticket['attempt_id']) or
+                type(self.lease) is not str or not re.fullmatch(r'[0-9a-f]{32}', self.lease)):
+            raise ValueError('invalid retained fixture player source request')
+        checked_grant = grant_value(grant)
+        if (checked_grant['session_epoch'] != ticket['world_epoch'] or
+                checked_grant['index'] != slot + 2 or checked_grant['sector_macro'] != sector or
+                any(checked_grant[name] in (self.lease, ticket['world_epoch'], ticket['attempt_id'])
+                    for name in ('epoch', 'generation', 'incarnation', 'token'))):
+            raise ValueError('fixture player source grant differs from join context')
+        excluded = {self.lease, ticket['world_epoch'], ticket['attempt_id'],
+                    checked_grant['epoch'], checked_grant['generation'],
+                    checked_grant['incarnation'], checked_grant['token']}
+        marker = getattr(self, 'marker', None)
+        if isinstance(marker, str): excluded.add(marker)
+
+        def fresh_token(*, different_prefix=None):
+            while True:
+                token = secrets.token_hex(16)
+                if token not in excluded and (different_prefix is None or token[:16] != different_prefix[:16]):
+                    excluded.add(token)
+                    return token
+
+        lease, attempt, bootstrap_nonce = fresh_token(), fresh_token(), fresh_token()
+        sampler_nonce = fresh_token(different_prefix=bootstrap_nonce)
+        source_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            source_socket.bind(('127.0.0.1', 0))
+            installation = source_install.install(
+                case, profile, slot=slot, epoch=checked_grant['epoch'], sector=sector,
+                lease=lease, attempt=attempt, generation=checked_grant['generation'],
+                bootstrap_nonce=bootstrap_nonce, sampler_nonce=sampler_nonce,
+                port=source_socket.getsockname()[1], timeout=timeout, latest_cache=latest_cache)
+            self.fixture_source_installation = installation
+            self.motion_sock = source_socket
+            self._pin_motion_socket()
+        except BaseException:
+            if self.motion_sock is source_socket:
+                self.motion_sock = None
+            source_socket.close()
+            raise
+        self.client_authority_worker_config = {
+            'lease': lease, 'attempt': attempt, 'grant': checked_grant,
+            'fixture_slot': slot, 'timeout': timeout,
+        }
+        return list(installation.paths)
+
     def redact(self):
         errors = []
+        fixture_source = getattr(self, 'fixture_source_installation', None)
+        if fixture_source is not None:
+            try:
+                fixture_source.redact()
+            except BaseException as error:
+                errors.append(error)
+            else:
+                self.fixture_source_installation = None
+                self.client_authority_worker_config = None
         installation = getattr(self, 'motion_installation', None)
         if installation is not None:
             try:
@@ -486,11 +558,13 @@ def settle_departure(host, world, control, peer, deadline, check, ticket, marker
 
 class ActiveClient:
     """Retained diagnostic with explicit owner-driven finalization."""
-    def __init__(self, participant, result, finish, sector_poll=None, sector_stop=None, sector_arm=None):
+    def __init__(self, participant, result, finish, sector_poll=None, sector_stop=None, sector_arm=None,
+                 *, save_target=None, save_digest=None):
         self.participant, self.result, self._finish = participant, result, finish
         self._finished = False
         self.sector_poll, self.sector_stop = sector_poll, sector_stop
         self.sector_arm = sector_arm
+        self.save_target, self.save_digest = save_target, save_digest
 
     def finish(self):
         if self._finished: raise RuntimeError('diagnostic already finalized')
@@ -503,7 +577,7 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             recovery_target, server_expected, recovery_watch, listener, host, service,
             world, session, control, check_server, server_out=None, expected_baseline=None, cancel_check=None,
             check_base=None, check_server_base=None, witness_guard_ready=None, client_motion=None,
-            fixture_scripts=None, fixture_slot=None):
+            fixture_scripts=None, fixture_slot=None, fixture_player_source=None, verify_client_save=None):
     """Load one genuine local client, confirm admission/resume and disconnect.
 
     Must run on the server's owner/main thread; it registers its X4 in the
@@ -513,6 +587,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     base = recovery.base
     if cancel_check is not None and not callable(cancel_check):
         raise ValueError('invalid diagnostic cancellation check')
+    if verify_client_save is not None and not callable(verify_client_save):
+        raise ValueError('invalid diagnostic client save guard')
     if participant.keep_worker and (not callable(check_base) or not callable(check_server_base)):
         raise ValueError('retained client requires independent process and server guards')
     if witness_guard_ready is not None and (not callable(witness_guard_ready) or
@@ -523,6 +599,13 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     if ((fixture_scripts is None and fixture_slot is not None) or
             (fixture_scripts is not None and (type(fixture_slot) is not int or fixture_slot not in (1, 2)))):
         raise ValueError('fixture scripts and player slot must be supplied together')
+    if fixture_player_source is not None and (
+            fixture_scripts is None or not participant.keep_worker or client_motion is not None or
+            type(fixture_player_source) is not dict or
+            not {'sector', 'grant', 'timeout'} <= set(fixture_player_source) or
+            set(fixture_player_source) - {'sector', 'grant', 'timeout', 'latest_cache'} or
+            type(fixture_player_source.get('latest_cache', False)) is not bool):
+        raise ValueError('player source requires a retained fixture client')
     participant.cancel_check = cancel_check
     if hasattr(participant, '_diagnostic_server_guard'):
         participant._diagnostic_server_guard = check_server
@@ -544,7 +627,7 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     if (tls_certificate is None) != (tls_private_key is None):
         raise ValueError('both diagnostic TLS certificate and private key are required')
     if tls_certificate is not None:
-        if client_motion is not None:
+        if client_motion is not None or fixture_player_source is not None:
             raise ValueError('diagnostic TLS currently supports load-only clients')
         from authority_diagnostic_tls_link import DiagnosticTLSLink
         link = DiagnosticTLSLink(participant)
@@ -605,6 +688,10 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
         for path in registered_seat.install(case, profile, slot=fixture_slot, nonce=seat_nonce,
                 epoch=epoch, timeout=min(120, args.timeout), scripts=fixture_scripts):
             if path not in protected: protected.append(path)
+        if fixture_player_source is not None:
+            for path in participant.prepare_fixture_player_source(
+                    case, profile, slot=fixture_slot, ticket=ticket, **fixture_player_source):
+                if path not in protected: protected.append(path)
     if registry_observation is not None:
         client_registry, nonce, status = registry_observation
         protected += client_registry.install(case, nonce, status)
@@ -620,7 +707,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             for path in participant.prepare_client_motion(case,profile,status,client_motion,ticket):
                 if path not in protected:protected.append(path)
     expected = {path:base.live.sha(path) for path in protected}
-    motion_watch=ClientMotionErrorWatch(profile/'engine-output.log') if client_motion is not None else None
+    motion_watch = (ClientMotionErrorWatch(profile/'engine-output.log')
+                    if client_motion is not None or fixture_player_source is not None else None)
     if motion_watch is not None:motion_watch.poll()
     sector_watch = None
     if client_motion is not None and client_motion.get('player_sector') is True:
@@ -654,10 +742,11 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             if base.live.sha(target) != ticket['sha256']: raise ValueError('client staged save changed')
             def client_context(check):
                 check()
+                target_option = {} if verify_client_save is None else {'verify_target': verify_client_save}
                 return base.check_live_context(deadline=deadline, server_proc=server_proc,
                     server_started=server_started, server_identity=server_identity, client_proc=proc,
                     client_started=started, client_identity=client_identity, game=game, home=home,
-                    uid=uid, steam=steam, target=target, ticket=ticket, expected=expected)
+                    uid=uid, steam=steam, target=target, ticket=ticket, expected=expected, **target_option)
             def registry_context(check):
                 verify = (lambda: client_registry.verify_log(profile/'engine-output.log', nonce, status, ticket,
                                                              participant.marker)) if registry_observation is not None else None
@@ -757,6 +846,7 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                 return ActiveClient(participant, result, finish,
                                     sector_owner.poll if sector_owner is not None else None,
                                     sector_owner.stop if sector_owner is not None else None,
-                                    sector_owner.arm if sector_owner is not None else None)
+                                    sector_owner.arm if sector_owner is not None else None,
+                                    save_target=target, save_digest=ticket['sha256'])
             return finish()
         time.sleep(.1)

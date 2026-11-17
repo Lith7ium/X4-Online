@@ -51,6 +51,7 @@ class MotionWiring(unittest.TestCase):
   log=self.case/'engine.log';log.write_text('normal\n')
   self.assertTrue(client.ClientMotionErrorWatch(log).poll())
   for tag in ('[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR','[X4LAN] AUTH_PARTICIPANT ERROR',
+   '[X4LAN] AUTH_FIXTURE_PLAYER_SOURCE ERROR', '[X4LAN] AUTH_FIXTURE_PLAYER_SOURCE SESSION_ERROR',
    'Error while executing onEvent script for event: X4AuthoritySavedBaselineMotionBind.Result.',
    'Error while executing onEvent script for event: X4AuthorityReplicaMotionBind.Result.'):
    with self.subTest(tag=tag):

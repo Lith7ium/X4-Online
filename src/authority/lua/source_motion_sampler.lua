@@ -124,10 +124,15 @@ function M.new(o)
    sample=sampled
    local t=sample.game_after_pose;assert(not last_game or t>=last_game,'source game clock regressed')
    local previous=e.previous;local velocity,angular_rate=nil,nil
+   assert(not e.sent_sector or e.sent_sector~=sample.sector_macro or
+    e.sent_local_sector_key==sample.local_sector_key,'sent local sector identity changed under same macro')
+   -- A baseline reset preserves the last emitted game time. A still-paused or
+   -- unchanged clock cannot produce a new sequence with a duplicate time.
+   if not previous and e.last_emitted_time and t==e.last_emitted_time then
+    e.next_due=last_clock+c.interval;pending=nil;state='ready';result=nil;return
+   end
    if previous then
     assert(t>=previous.last_time,'source game clock regressed')
-    assert(not e.sent_sector or e.sent_sector~=sample.sector_macro or
-     e.sent_local_sector_key==sample.local_sector_key,'sent local sector identity changed under same macro')
     assert(previous.sector~=sample.sector_macro or previous.local_sector_key==sample.local_sector_key,
      'local sector identity changed under same macro')
     if previous.sector==sample.sector_macro and previous.local_sector_key==sample.local_sector_key then
@@ -161,7 +166,7 @@ function M.new(o)
    if c.include_orientation then v.orientation=sample.orientation;v.angular_rate=angular_rate end
    assert(check() and state=='pending')
    result=v
-   last_game=t;e.sequence=e.sequence+1;e.sent_sector=sample.sector_macro;e.sent_local_sector_key=sample.local_sector_key;e.next_due=last_clock+c.interval
+   last_game=t;e.last_emitted_time=t;e.sequence=e.sequence+1;e.sent_sector=sample.sector_macro;e.sent_local_sector_key=sample.local_sector_key;e.next_due=last_clock+c.interval
    if not previous or previous.sector~=sample.sector_macro or previous.local_sector_key~=sample.local_sector_key or t-previous.time>=c.min_dt then
     e.previous={sector=sample.sector_macro,local_sector_key=sample.local_sector_key,time=t,last_time=t,x=sample.x,y=sample.y,z=sample.z,orientation=copy_orientation(sample.orientation)}
    else previous.last_time=t end
@@ -170,6 +175,17 @@ function M.new(o)
   busy=false;if not ok then return fail('sample')end;return true,result
  end
  function api:state()return state end
+ function api:reset_baseline(index)
+  if busy or state~='ready' or not integer(index) or not entries[index] then return fail('reset')end
+  busy=true
+  local ok=pcall(function()
+   local entry=entries[index]
+   assert(check() and checked_binding(entry) and state=='ready')
+   entry.previous=nil
+   assert(check() and checked_binding(entry) and state=='ready')
+  end)
+  busy=false;if not ok then return fail('reset')end;return true
+ end
  function api:close()if busy or state=='pending' then return fail('close')end;state='closed';return true end
  return api
 end

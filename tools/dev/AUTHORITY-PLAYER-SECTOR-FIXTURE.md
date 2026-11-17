@@ -1,4 +1,42 @@
-# Two-sector player-ship fixture (preparation only)
+# Two-sector player-ship fixture
+
+On 2026-11-17, a second private Linux loopback diagnostic recovered the server,
+admitted two X4 clients in different fixture sectors, and collected three
+samples per client through the opt-in latest-value source. Each track included
+two complete position, orientation, linear and angular rate samples. Both
+ships were stationary: their observed rates were zero. The cache recorded
+skipped local intermediate captures for both clients. After their departures,
+the server confirmed checkpoint `checkpoint-1824452264874c5e8b6ab69c814d0ba6`
+(SHA-256 `5825ff8edbf0ec511ab3cf1af9533d4b56ae336e29f3f59af70450e44f2e3183`).
+The outer private display and process cleanup succeeded, and Steam identity was
+unchanged. Results are under
+`.local/private-fixture-player-cache-scope-real-20261117-02/`.
+
+The source observes locally controlled fixture ships; this experiment does not
+apply their motion to the server X4, prove cross-process ship identity or native
+velocity, or demonstrate moving ships, smooth motion, combat, trade, Windows,
+or Internet play. The diagnostic's sampled save guards assume an exclusive
+writer and cannot prove unchanged bytes between digest boundaries or the exact
+bytes consumed by X4. The test pulls were separated by tens of game seconds;
+they do not establish a usable update rate.
+
+The subsequent repository check ran 4,833 tests: one errored and 26 were
+skipped, so validation is incomplete under this repository's policy. The error
+occurred while checking ownership of a UDP test peer, before the test's
+operation/cleanup failure injection; it did not recur in focused runs, and
+its cause remains unknown. The skips include Windows-only checks and missing
+stock-data or reverse-engineering inputs. The private full log is
+`.local/check-player-cache-final-20261117.log`.
+
+On 2026-11-17, a private Linux diagnostic restarted the fixture server from its
+own previously confirmed final checkpoint, then admitted two real Linux X4
+clients with separately seated fixture ships. After the first client departed,
+the server clock advanced with the second still admitted; after the last
+departure the server paused and confirmed a new marked checkpoint. The outer
+private-display and process-scope verification also succeeded; its result is
+`.local/private-fixture-restart-overlap-scope-real-20261117-01/result.json`.
+This is a bounded fixture result, not proof of flight, movement replication,
+sector changes, Windows, Internet connectivity or a playable shared universe.
 
 These files prepare an opt-in diagnostic for two explicitly created Company ships in the two sectors already held by `X4AuthoritySectorReferenceFixture.State`. The fixture alone does not install itself or assign seats; the separate runner below can request a disposable test save. The one-shot `Create` event requires `player.module == 'custom_creative'`, the matching saved epoch and two distinct sector references. This game-start guard does not establish an isolated profile; the caller must provide one. It creates two small Argon fighter hulls with owner `faction.player`, omits pilot creation, and requests `create_ship/safepos` with plot-box avoidance. The cue checks owner, macro, sector, operational state, empty pilot reference, and that neither object is the active player ship, docked or internally stored. The two ship and sector references and the fault/pending state are saved in the cue. If any step fails, creation is not retried: a partial object can remain, so discard the isolated test world.
 

@@ -27,7 +27,8 @@ _SECTOR='cluster_115_sector001_macro'
 class ExperimentalClientAuthorityMotionIPC:
     """Exclusive synchronous request owner, fenced after every uncertainty."""
     def __init__(self,sock,*,enabled=False,lease,attempt,epoch,generation,incarnation,
-                 guard,validate_peer,grant,timeout=20,include_orientation=False):
+                 guard,validate_peer,grant,timeout=20,include_orientation=False,
+                 fixture_slot=None,fixture_sector=None):
         tokens=(lease,attempt,epoch,generation,incarnation)
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
@@ -36,6 +37,15 @@ class ExperimentalClientAuthorityMotionIPC:
             not all(callable(f) for f in (guard,validate_peer,grant)) or type(include_orientation) is not bool or
             type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=120):
             raise ValueError('invalid client authority motion context')
+        if fixture_slot is None:
+            if fixture_sector is not None:
+                raise ValueError('fixture sector requires a player slot')
+            index, baseline, sector = _INDEX, _BASELINE, _SECTOR
+        else:
+            if (type(fixture_slot) is not int or fixture_slot not in (1, 2) or include_orientation is not True or
+                    type(fixture_sector) is not str or not re.fullmatch(r'[A-Za-z0-9_]{1,128}', fixture_sector)):
+                raise ValueError('invalid fixture player motion context')
+            index, baseline, sector = fixture_slot + 2, 4, fixture_sector
         peer=sock.getpeername()
         if peer[0]!='127.0.0.1' or not peer[1]:raise ValueError('connected loopback peer required')
         with _SOCKET_LOCK:
@@ -45,6 +55,7 @@ class ExperimentalClientAuthorityMotionIPC:
         self._lease=lease;self._attempt=attempt;self._epoch=epoch;self._generation=generation;self._incarnation=incarnation
         self._guard=guard;self._validate=validate_peer;self._grant=grant;self._timeout=float(timeout)
         self._include_orientation=include_orientation
+        self._index,self._baseline,self._sector=index,baseline,sector
         self._owner=threading.get_ident();self._state='new';self._next=0;self._sequence=0;self._last_time=None
     @property
     def state(self):return self._state
@@ -59,12 +70,14 @@ class ExperimentalClientAuthorityMotionIPC:
         original_grant = self._grant
         original_context = (self._peer, self._local, self._lease, self._attempt, self._epoch,
                             self._generation, self._incarnation, self._timeout, self._owner,
-                            self._next, self._sequence, self._last_time, self._include_orientation)
+                            self._next, self._sequence, self._last_time, self._include_orientation,
+                            self._index, self._baseline, self._sector)
 
         def context_unchanged():
             current_context = (self._peer, self._local, self._lease, self._attempt, self._epoch,
                                self._generation, self._incarnation, self._timeout, self._owner,
-                               self._next, self._sequence, self._last_time, self._include_orientation)
+                               self._next, self._sequence, self._last_time, self._include_orientation,
+                               self._index, self._baseline, self._sector)
             return (self._sock is original_socket and self._guard is original_guard and
                     self._validate is original_peer_validator and self._grant is original_grant and
                     current_context == original_context and
@@ -79,13 +92,13 @@ class ExperimentalClientAuthorityMotionIPC:
             raise RuntimeError('client process guard failed')
         if self._validate(self._peer) is not True or not context_unchanged():
             raise RuntimeError('client UDP peer changed')
-        if self._grant(self._epoch, self._generation, self._incarnation, _INDEX) is not True or not context_unchanged():
+        if self._grant(self._epoch, self._generation, self._incarnation, self._index) is not True or not context_unchanged():
             raise RuntimeError('client test grant unavailable')
         if self._guard() is not True or not context_unchanged():
             raise RuntimeError('client process guard changed')
         if self._validate(self._peer) is not True or not context_unchanged():
             raise RuntimeError('client UDP peer changed')
-        if self._grant(self._epoch, self._generation, self._incarnation, _INDEX) is not True or not context_unchanged():
+        if self._grant(self._epoch, self._generation, self._incarnation, self._index) is not True or not context_unchanged():
             raise RuntimeError('client test grant changed')
 
     def _quiet(self, deadline, phase):
@@ -118,8 +131,8 @@ class ExperimentalClientAuthorityMotionIPC:
             self._fail();raise RuntimeError('client motion registration unavailable')
         self._state='registering';deadline=time.monotonic()+self._timeout
         try:
-            request,parts=self._request('REGISTER_SAVED',[str(_INDEX),str(_BASELINE)],deadline,'registering')
-            if parts!=['S',self._lease,self._attempt,'SAVED_REGISTERED',self._epoch,self._generation,request,str(_INDEX),str(_BASELINE)]:
+            request,parts=self._request('REGISTER_SAVED',[str(self._index),str(self._baseline)],deadline,'registering')
+            if parts!=['S',self._lease,self._attempt,'SAVED_REGISTERED',self._epoch,self._generation,request,str(self._index),str(self._baseline)]:
                 raise ValueError('client motion registration mismatch')
             self._quiet(deadline,'registering');self._state='ready';return True
         except BaseException:self._fail();raise
@@ -135,7 +148,7 @@ class ExperimentalClientAuthorityMotionIPC:
             kind='SAMPLE2' if self._include_orientation else 'SAMPLE'
             if len(parts)!=(23 if self._include_orientation else 17) or parts[:7]!=prefix+[kind,self._epoch,self._generation,request]:
                 raise ValueError('client motion response mismatch')
-            if parts[7]!=str(_INDEX) or not re.fullmatch(r'[1-9][0-9]{0,15}',parts[8]):
+            if parts[7]!=str(self._index) or not re.fullmatch(r'[1-9][0-9]{0,15}',parts[8]):
                 raise ValueError('client motion identity invalid')
             numbers=parts[10:14]
             orientation=parts[14:17] if self._include_orientation else []
@@ -144,13 +157,13 @@ class ExperimentalClientAuthorityMotionIPC:
             fields=numbers+orientation+([] if vel==['-','-','-'] else vel)+([] if angular==['-','-','-'] else angular)
             if any(len(v)>32 or not _NUMBER.fullmatch(v) for v in fields):raise ValueError('client motion number invalid')
             t,x,y,z=map(float,numbers);rate=None if vel==['-','-','-'] else dict(zip(('x','y','z'),map(float,vel)))
-            sample={'version':2 if self._include_orientation else 1,'epoch':self._epoch,'generation':self._generation,'index':_INDEX,
+            sample={'version':2 if self._include_orientation else 1,'epoch':self._epoch,'generation':self._generation,'index':self._index,
                 'sequence':int(parts[8]),'sector_macro':parts[9],'source_time':t,'x':x,'y':y,'z':z,'velocity':rate}
             if self._include_orientation:
                 sample['orientation']=dict(zip(('yaw','pitch','roll'),map(float,orientation)))
                 sample['angular_rate']=None if angular==['-','-','-'] else dict(zip(('yaw','pitch','roll'),map(float,angular)))
             value=motion_value(sample)
-            if (value['sector_macro']!=_SECTOR or value['sequence']!=self._sequence+1 or
+            if (value['sector_macro']!=self._sector or value['sequence']!=self._sequence+1 or
                 (self._last_time is not None and value['source_time']<=self._last_time) or
                 (self._sequence==0 and value['velocity'] is not None)):
                 raise ValueError('client motion stale or foreign sample')

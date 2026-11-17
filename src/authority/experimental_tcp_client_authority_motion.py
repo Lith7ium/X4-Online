@@ -1,6 +1,7 @@
 """Opt-in server-initiated, read-only test-grant client motion pull.
 
-One admitted TCP participant and the existing control reader are shared.
+One explicitly selected participant, or the legacy sole participant, shares the
+existing exclusive control reader. Selection is fenced by its incarnation.
 The grant is a caller assertion, not HA ownership or authentication; the
 caller owns all X4 lifecycle, PID/UDP-inode validation and failure fencing.
 """
@@ -31,23 +32,38 @@ def grant_value(value):
 
 class ExperimentalTCPClientAuthorityMotion:
     """One immutable test grant and one serialized, non-writing participant pull."""
-    def __init__(self,delivery,*,enabled=False,grant,guard):
+    def __init__(self,delivery,*,enabled=False,grant,guard,connection_handle=None):
         if enabled is not True or type(delivery) is not ExperimentalTCPJobDelivery or not callable(guard):
             raise ValueError('enabled authority pull and guard required')
+        if connection_handle is not None and (type(connection_handle) is not int or not 1<=connection_handle<=_MAX):
+            raise ValueError('invalid authority participant handle')
         delivery._host._check()
         if getattr(delivery,'_client_authority_owner',None) is not None:raise ValueError('authority pull already owned')
-        self._grant=grant_value(grant);self._grant_wire=json.dumps(self._grant,sort_keys=True,separators=(',',':'));self._guard=guard;self._delivery=delivery
+        existing=getattr(delivery,'_client_authority_selected_owners',None)
+        if existing is not None and (connection_handle is None or connection_handle in existing or len(existing)>=2):
+            raise ValueError('authority participant already owned or capacity reached')
+        checked_grant=grant_value(grant)
+        if existing and any(owner._grant['incarnation']==checked_grant['incarnation'] or
+                            owner._grant['token']==checked_grant['token'] or
+                            owner._grant['index']==checked_grant['index'] for owner in existing.values()):
+            raise ValueError('authority grant or ship reused across participants')
+        self._grant=checked_grant;self._grant_wire=json.dumps(self._grant,sort_keys=True,separators=(',',':'));self._guard=guard;self._delivery=delivery
+        self._connection_handle=connection_handle
         self._request=0;self._last_sequence=0;self._last_time=None;self._failed=False;self._busy=False
-        delivery._client_authority_owner=self
+        if connection_handle is None:delivery._client_authority_owner=self
+        else:
+            if existing is None:existing={};delivery._client_authority_selected_owners=existing
+            existing[connection_handle]=self
     def _guarded(self):
-        probe=copy.deepcopy(self._grant);state=(self._request,self._last_sequence,self._last_time)
+        probe=copy.deepcopy(self._grant);state=(self._request,self._last_sequence,self._last_time,self._connection_handle)
         if (json.dumps(self._grant,sort_keys=True,separators=(',',':'))!=self._grant_wire or self._guard(probe) is not True or
             json.dumps(probe,sort_keys=True,separators=(',',':'))!=self._grant_wire or
             json.dumps(self._grant,sort_keys=True,separators=(',',':'))!=self._grant_wire or
-            state!=(self._request,self._last_sequence,self._last_time)):
+            state!=(self._request,self._last_sequence,self._last_time,self._connection_handle)):
             raise RuntimeError('authority grant guard changed')
     def pull(self):
-        if self._busy:
+        owners=getattr(self._delivery,'_client_authority_selected_owners',{})
+        if self._busy or any(owner is not self and owner._busy for owner in owners.values()):
             self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
             raise RuntimeError('reentrant authority pull')
         self._busy=True
@@ -59,10 +75,16 @@ class ExperimentalTCPClientAuthorityMotion:
         try:
             if self._failed or d._failed or self._request>=_MAX:raise RuntimeError('authority pull unavailable')
             members=d.membership();handles,peers=d._peers();incarnations=dict(d._incarnations)
-            if len(handles)!=1 or len(members)!=1 or self._grant['session_epoch']!=host._world.session.world_epoch:
-                raise RuntimeError('one admitted authority participant required')
-            h=handles[0]
-            if incarnations[h]!=self._grant['incarnation'] or members!=({'id':'peer_'+str(h),'incarnation':incarnations[h]},):
+            if self._connection_handle is None:
+                if len(handles)!=1 or len(members)!=1:raise RuntimeError('one admitted authority participant required')
+                h=handles[0]
+            else:
+                h=self._connection_handle
+                owners=getattr(d,'_client_authority_selected_owners',None)
+                if len(handles)>2 or h not in handles or type(owners) is not dict or owners.get(h) is not self:
+                    raise RuntimeError('selected authority participant unavailable')
+            if (self._grant['session_epoch']!=host._world.session.world_epoch or incarnations[h]!=self._grant['incarnation'] or
+                {'id':'peer_'+str(h),'incarnation':incarnations[h]} not in members):
                 raise RuntimeError('authority participant changed')
             host._control._reader_free()
         except BaseException:
@@ -73,7 +95,9 @@ class ExperimentalTCPClientAuthorityMotion:
             def check():
                 self._guarded()
                 if (time.monotonic()>=deadline or self._failed or d._failed or host._failed or host._busy is not True or
-                    d._active is not True or host._control._reader_lease is not lease or d._incarnations!=incarnations):
+                    d._active is not True or host._control._reader_lease is not lease or d._incarnations!=incarnations or
+                    (self._connection_handle is not None and (self._connection_handle!=h or
+                     getattr(d,'_client_authority_selected_owners',{}).get(h) is not self))):
                     raise RuntimeError('authority pull context changed')
             check();ExperimentalTCPParticipants._quiet(d,peers,deadline)
             request={'version':1,'kind':'authority_motion_pull','connection_handle':h,'session_epoch':host._world.session.world_epoch,
@@ -96,7 +120,8 @@ class ExperimentalTCPClientAuthorityMotion:
             raw=json.dumps(request,sort_keys=True,separators=(',',':'),allow_nan=False).encode('ascii')+b'\n'
             if len(raw)>MAX_MESSAGE+1:raise ValueError('authority pull frame too large')
             conn,peer=peers[h]
-            answer=ExperimentalTCPParticipants._exchange(d,conn,peer,[],raw,None,deadline,check=check,validate_answer=validate)
+            others=[item[0] for handle,item in peers.items() if handle!=h]
+            answer=ExperimentalTCPParticipants._exchange(d,conn,peer,others,raw,None,deadline,check=check,validate_answer=validate)
             check();current,current_peers=d._peers()
             if current!=handles or current_peers[h]!=peers[h] or d._incarnations!=incarnations:raise RuntimeError('authority participant changed')
             ExperimentalTCPParticipants._quiet(d,peers,deadline);check()

@@ -2,7 +2,8 @@
 """One opt-in Linux native-client worker; no X4 is started by this module.
 
 The parent gives this process exclusive ownership of three inherited sockets.
-An explicit diagnostic opt-in adds a fourth, separate motion UDP socket.
+An explicit diagnostic opt-in adds a fourth, separate motion UDP socket, used
+either for received motion or for one fixture player's read-only source.
 All secrets travel over the private IPC socket, never argv or standard output.
 
 The three argv values are inherited TCP, UDP and private AF_UNIX stream FDs.
@@ -35,6 +36,7 @@ from authority.local_participant_control import LocalParticipantControl
 from authority.load_messages import MAX_INTEGER, MAX_MESSAGE, _pairs, _reject_constant
 from authority.trusted_load_messages import decode_load_claim
 from authority.experimental_participant_motion_ipc import ExperimentalParticipantMotionIPC
+from authority.experimental_tcp_client_authority_motion import grant_value
 
 MAX_CONFIG=16384
 MAX_IPC=256
@@ -73,9 +75,11 @@ def config_value(raw):
     obj=parse_json(raw)
     fields={'version','claim','epoch','handle','lease','udp_peer','udp_next_id','deadline',
             'controller_timeout','client_process'}
-    if (type(obj) is not dict or not fields<=set(obj) or set(obj)-fields-{'already_admitted','motion'} or
+    if (type(obj) is not dict or not fields<=set(obj) or set(obj)-fields-{'already_admitted','motion','client_authority'} or
             type(obj['version']) is not int or obj['version']!=1):
         raise ValueError('invalid worker configuration')
+    if 'motion' in obj and 'client_authority' in obj:
+        raise ValueError('motion socket has more than one owner')
     if 'already_admitted' in obj and obj['already_admitted'] is not True:
         raise ValueError('invalid handoff state')
     if (type(obj['epoch']) is not str or not _HEX.fullmatch(obj['epoch']) or
@@ -110,6 +114,20 @@ def config_value(raw):
         raise ValueError('claim does not match worker context')
     if 'motion' in obj and claim.receipt.attempt_id in (obj['motion']['lease'],obj['motion']['attempt']):
         raise ValueError('motion secret conflicts with claim attempt')
+    if 'client_authority' in obj:
+        source=obj['client_authority']
+        if type(source) is not dict or set(source)!={'lease','attempt','grant','fixture_slot','timeout'}:
+            raise ValueError('invalid client authority configuration')
+        grant=grant_value(source['grant'])
+        secrets=(source['lease'],source['attempt'],grant['epoch'],grant['generation'],grant['incarnation'],grant['token'])
+        if (any(type(secret) is not str or not _HEX.fullmatch(secret) for secret in secrets) or
+                len(set(secrets))!=len(secrets) or
+                any(secret in (obj['lease'],obj['epoch'],claim.receipt.attempt_id) for secret in secrets) or
+                grant['session_epoch']!=obj['epoch'] or type(source['fixture_slot']) is not int or
+                source['fixture_slot'] not in (1,2) or grant['index']!=source['fixture_slot']+2 or
+                not finite(source['timeout']) or not 0<source['timeout']<=30 or
+                6*source['timeout']>=obj['controller_timeout']):
+            raise ValueError('invalid client authority context or timeout')
     if time.monotonic()>=obj['deadline']: raise TimeoutError('expired worker configuration')
     check_process(obj['client_process'])
     return obj,raw_claim,claim.receipt.attempt_id
@@ -201,7 +219,9 @@ class GuardedParticipant:
         self.guard()
         return result
     def pause(self,handles):
-        if self.motion_gate is not None:self.motion_gate.stop()
+        if self.motion_gate is not None:
+            if isinstance(self.motion_gate, LazyClientAuthority):self.motion_gate.suspend()
+            else:self.motion_gate.stop()
         return self.call('pause',handles)
     def resume(self,handles):
         if self.motion_gate is not None and self.motion_gate.stopped:
@@ -266,12 +286,71 @@ class LazyMotion:
         elif self.bridge.state not in ('closed','failed'):self.bridge.close()
 
 
+class LazyClientAuthority:
+    """Read one controlled fixture ship only while this participant is running.
+
+    This is a diagnostic grant, not proof of server authority or ship identity.
+    The supervisor must coordinate the X4 source start and own its shutdown.
+    """
+    def __init__(self, sock, cfg, guard):
+        self.sock, self.cfg, self.guard = sock, cfg, guard
+        self.running = False
+        self.stopped = False
+        self.bridge = None
+        self.grant = grant_value(cfg['client_authority']['grant'])
+
+    def grant_is_current(self, grant):
+        self.guard()
+        return self.running and not self.stopped and grant == self.grant
+
+    def pull(self):
+        if not self.grant_is_current(self.grant):
+            raise RuntimeError('client authority unavailable while paused')
+        if self.bridge is None:
+            # This import must be delayed when the worker is the main module.
+            from authority_client_authority_bind import bind_client_authority
+            from authority_fixture_player_source_arm import arm_fixture_source
+            source = self.cfg['client_authority']
+            grant = self.grant
+            source_peer = arm_fixture_source(
+                self.sock, process=self.cfg['client_process'], lease=source['lease'],
+                attempt=source['attempt'], epoch=grant['epoch'], generation=grant['generation'],
+                guard=lambda: (self.guard() is None), running=lambda: self.running and not self.stopped,
+                timeout=source['timeout'])
+            self.bridge = bind_client_authority(
+                self.sock, process=self.cfg['client_process'], lease=source['lease'],
+                attempt=source['attempt'], epoch=grant['epoch'], generation=grant['generation'],
+                incarnation=grant['incarnation'], token=grant['token'], session_epoch=grant['session_epoch'],
+                guard=lambda: (self.guard() is None), running=lambda: self.running and not self.stopped,
+                grant=lambda epoch, generation, index, token, incarnation, session_epoch:
+                    self.grant_is_current(dict(epoch=epoch, generation=generation, index=index,
+                        token=token, incarnation=incarnation, session_epoch=session_epoch,
+                        sector_macro=grant['sector_macro'])),
+                timeout=source['timeout'], include_orientation=True,
+                fixture_slot=source['fixture_slot'], fixture_sector=grant['sector_macro'],
+                expected_peer=source_peer)
+            self.bridge.register_saved()
+        return self.bridge.pull()
+
+    def suspend(self):
+        self.running = False
+
+    def close(self):
+        self.running = False
+        self.stopped = True
+        if self.bridge is None:
+            self.sock.close()
+        elif self.bridge.state not in ('closed', 'failed'):
+            self.bridge.close()
+
+
 def run(tcp,udp,ipc,motion_udp=None):
     verify_sockets(tcp,udp,ipc,motion_udp)
     tcp.setblocking(False);ipc.setblocking(False)
     # Bootstrap timeout is bounded even before receiving an absolute deadline.
     cfg,claim,attempt=config_value(read_line(ipc,MAX_CONFIG,time.monotonic()+30))
-    if ('motion' in cfg)!=(motion_udp is not None): raise ValueError('motion socket/config mismatch')
+    if (('motion' in cfg or 'client_authority' in cfg)!=(motion_udp is not None)):
+        raise ValueError('motion socket/config mismatch')
     deadline=cfg['deadline']
     def context():
         if time.monotonic()>=deadline: raise TimeoutError('worker deadline')
@@ -292,19 +371,24 @@ def run(tcp,udp,ipc,motion_udp=None):
                 ack['kind']!='accepted' or ack['attempt_id']!=attempt):
             raise ValueError('unexpected admission response')
     guard()
-    motion=LazyMotion(motion_udp,cfg,guard) if motion_udp is not None else None
-    controller=GuardedParticipant(udp,cfg,guard,motion)
+    motion=LazyMotion(motion_udp,cfg,guard) if 'motion' in cfg else None
+    source=LazyClientAuthority(motion_udp,cfg,guard) if 'client_authority' in cfg else None
+    controller=GuardedParticipant(udp,cfg,guard,motion or source)
     adapter=ExperimentalTCPParticipantClient(tcp,controller,enabled=True,epoch=cfg['epoch'],
         handle=cfg['handle'],timeout=min(cfg['controller_timeout'],max(.001,deadline-time.monotonic())),apply_motion=motion,
         preflight_motion=motion.preflight if motion is not None and cfg['motion'].get('saved_apply_fixture') == RECOVERY_SETTER_FIXTURE else None,
-        apply_motion_once=motion.apply_once if motion is not None and cfg['motion'].get('saved_apply_fixture') == RECOVERY_SETTER_FIXTURE else None)
+        apply_motion_once=motion.apply_once if motion is not None and cfg['motion'].get('saved_apply_fixture') == RECOVERY_SETTER_FIXTURE else None,
+        authority_grant=source.grant if source is not None else None,
+        authority_guard=source.grant_is_current if source is not None else None,
+        pull_authority_motion=source.pull if source is not None else None)
     cleaned=False
     def cleanup():
         nonlocal cleaned
         if cleaned:return
         cleaned=True;errors=[]
         for action in (lambda:adapter.close() if not adapter._closed and not adapter._failed else None,
-                       controller.close, lambda:motion.close() if motion is not None else None):
+                       controller.close, lambda:motion.close() if motion is not None else None,
+                       lambda:source.close() if source is not None else None):
             try:action()
             except BaseException as error:errors.append(error)
         if errors:raise BaseExceptionGroup('participant worker cleanup failed',errors)
