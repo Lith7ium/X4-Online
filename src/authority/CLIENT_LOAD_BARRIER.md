@@ -74,6 +74,26 @@ sentinel, was left unchanged. Native Windows, real junctions and X4 were not
 tested by that run. Its private output is
 `.local/fresh-profile-wine-20261117-01/`.
 
+## Experimental Windows process owner
+
+`experimental_windows_owned_process.py` is a separate process-lifecycle
+experiment. It is not integrated with X4: its start window can leave an
+untracked process if `Popen` is interrupted, so it must not be used to launch
+X4 until that gap is controlled and demonstrated. It does not establish a
+process tree, log source, executable identity or profile ownership.
+
+On 2026-11-17, one private Windows-Python-under-Wine run observed exit code 7
+from a synthetic child and used the retained process handle to terminate and
+observe exit from a second synthetic child. The overall probe reported failure:
+its private wineserver stop and wait returned successfully, but the subsequent
+point-in-time prefix-process scan could not inspect some same-user `/proc`
+entries, so its bounded cleanup checks were not confirmed. No complete process
+tree cleanup is proven. The result is recorded under
+`.local/windows-owned-process-wine-20261117-01/`. This is not evidence of
+native Windows, X4 startup, profile safety or multiplayer behavior.
+The associated full check ran 4,644 tests without test failures, but remained
+incomplete because 56 checks were skipped.
+
 ## Windows fixture overlay installer
 
 `experimental_windows_fixture_overlay.install_fixture_overlay` can populate an
