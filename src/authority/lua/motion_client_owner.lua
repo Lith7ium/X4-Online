@@ -264,6 +264,12 @@ function M.new_x4(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(type(o.binding)=='table' and type(o.binding.new_x4)=='function' and type(RegisterEvent)=='function' and type(GetCurRealTime)=='function')
  local c={};for k,v in pairs(o)do c[k]=v end
+ local configured_apply_fixture
+ if c.saved_apply~=nil then
+  assert(type(c.saved_apply)=='table')
+  configured_apply_fixture=c.saved_apply.fixture
+  assert(configured_apply_fixture==nil or (configured_apply_fixture=='recovery_enh_870' and c.epoch=='4ba7be438ebb04ec5bb85fdb95b5a488'))
+ end
  local router=c.event_router
  if router~=nil then
   assert(type(router)=='table' and type(router.issue)=='function' and type(router.owns)=='function' and token(c.router_generation,32) and
@@ -308,13 +314,13 @@ function M.new_x4(o)
  end
  if c.saved_apply~=nil then
   local a=c.saved_apply
-  assert(type(a)=='table' and a.enabled==true and type(a.module)=='table' and type(a.module.new_x4)=='function' and
+  assert(type(a)=='table' and a.fixture==configured_apply_fixture and a.enabled==true and type(a.module)=='table' and type(a.module.new_x4)=='function' and
    (a.immediate_readback==nil or a.immediate_readback==true) and
    (a.observe_limit==nil or (integer(a.observe_limit) and a.observe_limit>=2 and a.observe_limit<=8 and a.immediate_readback==true)))
-  local native_apply=a.module.new_x4;local apply_log=a.log
+  local native_apply=a.module.new_x4;local apply_log=a.log;local apply_fixture=configured_apply_fixture
   c.saved_apply={enabled=true,immediate_readback=a.immediate_readback,observe_limit=a.observe_limit,register=router and function()return true end or function(fn)return register('X4AuthoritySavedMotionApply.Result',fn)~=false end,
    factory=function(opt)
-    opt.expected_save_path=c.expected_save_path;opt.test_profile='45841';opt.resolve=c.resolve;opt.log=apply_log
+    opt.expected_save_path=c.expected_save_path;opt.test_profile='45841';opt.resolve=c.resolve;opt.log=apply_log;opt.fixture=apply_fixture
     if router then
      opt.request_nonce=c.nonce
      opt.md_issue=function(screen,op,args)return issue(router,screen,op,args)end

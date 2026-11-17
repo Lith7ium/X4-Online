@@ -1,6 +1,17 @@
 -- Disposable, explicitly enabled one-shot diagnostic. No clearance claim.
 -- All actor/sector/zone identities remain local to this process.
 local M={}
+-- These are two isolated test fixtures, not a general ship-selection API.
+local DEFAULT_FIXTURE={index=1318,sector='cluster_115_sector001_macro',code='WRG-830',
+ macro='ship_ter_m_corvette_01_a_macro',owner='pioneers'}
+local RECOVERY_FIXTURE={name='recovery_enh_870',epoch='4ba7be438ebb04ec5bb85fdb95b5a488',
+ index=1318,sector='cluster_06_sector001_macro',code='ENH-870',
+ macro='ship_arg_m_trans_container_02_b_macro',owner='antigone'}
+local function fixture(name)
+ if name==nil then return DEFAULT_FIXTURE end
+ if name==RECOVERY_FIXTURE.name then return RECOVERY_FIXTURE end
+ error('unknown saved motion fixture')
+end
 local function finite(x)return type(x)=='number' and x==x and x~=math.huge and x~=-math.huge end
 local function token(v,n)return type(v)=='string' and #v==n and v:match('^[0-9a-f]+$')~=nil end
 local function natural(v)return type(v)=='string' and v:match('^[1-9]%d*$') and #v<=20 end
@@ -13,6 +24,7 @@ local function distance(a,b)return math.sqrt((a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2
 function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  local c={};for k,v in pairs(o)do c[k]=v end
+ local selected=fixture(c.fixture)
  for _,k in ipairs({'clock','game','guard','issue','inspect','write','log','fault'})do assert(type(c[k])=='function',k)end
  assert(finite(c.timeout) and c.timeout>1 and c.timeout<=30)
  assert(c.request_nonce==nil or token(c.request_nonce,32))
@@ -54,8 +66,9 @@ function M.new(o)
   if busy or state~='idle' or used then return fail('begin')end
   used=true
   if type(v)~='table' or not token(v.request,32) or not token(v.epoch,32) or not token(v.generation,32) or
-     not token(v.digest,64) or v.index~=1318 or type(v.sequence)~='number' or v.sequence<1 or v.sequence%1~=0 or
-     v.sector_macro~='cluster_115_sector001_macro' or not natural(v.actor_key) or not natural(v.sector_key) or not natural(v.zone_key) or
+     not token(v.digest,64) or v.index~=selected.index or (selected.epoch and v.epoch~=selected.epoch) or
+     type(v.sequence)~='number' or v.sequence<1 or v.sequence%1~=0 or
+     v.sector_macro~=selected.sector or not natural(v.actor_key) or not natural(v.sector_key) or not natural(v.zone_key) or
      type(v.target)~='table' or not finite(v.target.x) or not finite(v.target.y) or not finite(v.target.z) then return fail('identity')end
   pending={request=v.request,epoch=v.epoch,generation=v.generation,digest=v.digest,index=v.index,sequence=v.sequence,
    sector_macro=v.sector_macro,actor_key=v.actor_key,sector_key=v.sector_key,zone_key=v.zone_key,
@@ -131,6 +144,7 @@ end
 
 function M.new_x4(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
+ local selected=fixture(o.fixture)
  assert(o.test_profile=='45841' and type(o.expected_save_path)=='string' and o.expected_save_path:sub(1,1)=='/' and o.expected_save_path:sub(-11)=='/45841/save')
  assert(type(o.resolve)=='table' and o.resolve==X4LAN_RESOLVE_STRING and type(o.guard)=='function')
  local ffi=require('ffi')
@@ -166,8 +180,9 @@ function M.new_x4(o)
  end
  c.issue=function(id,p)
   local ar,a,sr,s,zr,z=ids(p);assert(a and s and z)
-  local accepted = md_issue('X4AuthoritySavedMotionApply','Inspect',
-   {request_id=id,epoch=p.epoch,index=p.index,actor=ar,sector=sr,zone=zr})
+  local args={request_id=id,epoch=p.epoch,index=p.index,actor=ar,sector=sr,zone=zr}
+  if selected.name then args.fixture=selected.name end
+  local accepted = md_issue('X4AuthoritySavedMotionApply','Inspect',args)
   if o.md_issue then return accepted == true end
   return accepted ~= false
  end
@@ -182,9 +197,9 @@ function M.new_x4(o)
   if own~=0 then assert(own~=a)else assert(C.GetContextByClass(container,'station',true)~=0)end
   local docked,docking,stored=GetComponentData(ar,'isdocked','isdocking','isinternallystored')
   assert(docked==false and docking==false and stored==false)
-  local macro,owner=GetComponentData(ar,'macro','owner');assert(macro=='ship_ter_m_corvette_01_a_macro' and owner=='pioneers')
+  local macro,owner=GetComponentData(ar,'macro','owner');assert(macro==selected.macro and owner==selected.owner)
   local sector_macro=GetComponentData(sr,'macro');assert(sector_macro==p.sector_macro)
-  local code=C.GetObjectIDCode(a);assert(code~=nil and code~=ffi.NULL and ffi.string(code)=='WRG-830')
+  local code=C.GetObjectIDCode(a);assert(code~=nil and code~=ffi.NULL and ffi.string(code)==selected.code)
   assert(c.guard());return a,s
  end
  c.inspect=function(p)

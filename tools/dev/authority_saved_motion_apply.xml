@@ -9,8 +9,18 @@
    <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship?">
     <do_if value="not md.X4AuthorityShipRegistry.State.$faulted and @$r.$epoch == md.X4AuthorityShipRegistry.State.$epoch and md.X4AuthorityShipRegistry.State.$last ge 1318 and @$r.$index == 1318">
      <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{1318}"/>
-     <find_sector name="$sectors" macro="macro.cluster_115_sector001_macro" multiple="true" required="false"/>
-     <do_if value="@$sectors.count == 1 and @$ship.isoperational and $ship.isclass.ship and @$ship == @$r.$actor and @$ship.sector == $sectors.{1}">
+     <set_value name="$fixture_ok" exact="false"/>
+     <do_if value="not $r.$fixture?">
+      <find_sector name="$sectors" macro="macro.cluster_115_sector001_macro" multiple="true" required="false"/>
+      <set_value name="$fixture_ok" exact="true"/>
+     </do_if>
+     <do_elseif value="$r.$fixture == 'recovery_enh_870' and $r.$epoch == '4ba7be438ebb04ec5bb85fdb95b5a488'">
+      <find_sector name="$sectors" macro="macro.cluster_06_sector001_macro" multiple="true" required="false"/>
+      <do_if value="@$ship.idcode == 'ENH-870' and @$ship.macro.id == 'ship_arg_m_trans_container_02_b_macro' and @$ship.owner.id == 'antigone'">
+       <set_value name="$fixture_ok" exact="true"/>
+      </do_if>
+     </do_elseif>
+     <do_if value="$fixture_ok and @$sectors.count == 1 and @$ship.isoperational and $ship.isclass.ship and @$ship == @$r.$actor and @$ship.sector == $sectors.{1}">
       <do_if value="@md.X4AuthorityShipRegistry.State.$byship.{$ship} == 1318 and @$ship.sector == @$r.$sector and @$ship.parent == @$r.$zone and @$ship.parent.isclass.zone">
        <do_if value="$ship != player.ship and $ship != player.occupiedship and $ship != player.container and not $ship.dock.exists and not $ship.isinternallystored">
         <set_value name="$ok" exact="true"/>

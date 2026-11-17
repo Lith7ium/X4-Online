@@ -10,6 +10,23 @@ it does not certify collision clearance, cross-process frame identity after
 resume, continuous motion, or a usable multiplayer session. The sample and
 one-shot apply are not a general movement algorithm.
 
+The local writer additionally supports an explicitly selected, fixed
+`recovery_enh_870` fixture: registry epoch
+`4ba7be438ebb04ec5bb85fdb95b5a488`, index 1318,
+`cluster_06_sector001_macro`, code `ENH-870`, macro
+`ship_arg_m_trans_container_02_b_macro`, owner `antigone`. Without that
+selection the original `WRG-830` fixture remains the default. The optional
+router must also be configured for this exact fixture; its epoch and index
+checks and matching pre/post Inspect arguments remain in force. The writer and
+MD inspect repeat local identity and existing safety checks. The epoch alone
+does not prove checkpoint provenance or cross-process identity.
+
+Offline tests compose the actual saved binder, motion owner, event router and
+writer with simulated MD responses and a fake X4 ABI. They do not execute the
+MD file in X4. The recovery installer and active recovery probe do not yet
+connect this option, and no recovery-specific two-process frame fence or native
+setter effect has been established. This fixture is not gameplay evidence.
+
 ## First attempt
 
 On 2026-11-16, `.local/authority-saved-setter-pair-01/result.json` reported
