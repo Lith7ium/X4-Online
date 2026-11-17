@@ -42,8 +42,7 @@ class RemoteLoadClientTests(unittest.TestCase):
         def serve():
             try:
                 conn,_=listener.accept();conn.settimeout(3)
-                with conn:
-                    stream=conn.makefile('rb')
+                with conn, conn.makefile('rb') as stream:
                     for _ in range(not_ready_count):
                         if stream.readline()!=offer_request(): raise AssertionError('unexpected offer request')
                         conn.sendall(b'{\"version\":1,\"kind\":\"not_ready\"}\n')
