@@ -26,9 +26,11 @@ class RecoveredClientPlayerSector(unittest.TestCase):
             subprocess.run(['cc', '-shared', '-fPIC', '-O2',
                             'tests/fixtures/recovered_client_sector_abi.c', '-o', str(library)],
                            cwd=ROOT, check=True, capture_output=True)
-            subprocess.run([LUAJIT, 'tests/authority_recovered_client_sector_x4.lua'],
-                           cwd=ROOT, check=True, capture_output=True, timeout=5,
-                           env=dict(os.environ, LD_PRELOAD=str(library)))
+            for mode in ('normal', 'untrusted_fault'):
+                with self.subTest(mode=mode):
+                    subprocess.run([LUAJIT, 'tests/authority_recovered_client_sector_x4.lua', mode],
+                                   cwd=ROOT, check=True, capture_output=True, timeout=5,
+                                   env=dict(os.environ, LD_PRELOAD=str(library)))
 
     @unittest.skipUnless(shutil.which('cc'), 'C compiler is required')
     def test_single_bind_precedes_sector_query(self):

@@ -168,3 +168,20 @@ its one simulated write and explicitly reports one write after STOP. It is not a
 native X4 run. No common running frame, collision clearance, continuous motion
 or gameplay is established by this option. In particular, a local preflight
 cannot prove that the independently running worlds have equivalent frames.
+
+One native run, `.local/authority-recovered-apply-once-01`, reached the
+private Linux witness join and recorded one confirmed client receipt after
+the motion binding. The source's local pair produced a nonzero estimate over
+approximately 0.114 X4 game seconds. The complete pull took approximately
+194 seconds of wall time; this is not the age of the received sample.
+
+The overall run failed in the reported `saved_apply_preflight` phase with a
+generic client-motion fault. No completed preflight, `INTENT` or
+`WRITE_ENTERED` was recorded in the client log, and the supervisor's
+`saved-apply-intent.json` was absent. These observations do not establish a
+position write; the received logs are not an independent trace of every
+possible engine effect. The diagnostic did not separately confirm worker
+STOP, while its result reported no owned X4 processes remaining. The generic
+fault does not distinguish a local age failure from a transport, MD, router
+or other failure; the cause remains unknown. The result does not establish a
+common frame, visible movement, Windows, Internet or gameplay.

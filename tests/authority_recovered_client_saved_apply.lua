@@ -1,6 +1,6 @@
 -- Recovery overlay with real Lua components, fake X4 ABI and simulated MD.
 local ffi=require('ffi');ffi.cdef[[void TestAdvance(void);int TestWrites(void);void TestSetRecoveryCode(bool);]]
-local events,requests,input,out,logs={}, {}, {}, {}, {};local now=1
+local events,requests,input,out,logs={}, {}, {}, {}, {};local now=1;local reject_inspection=false
 ffi.C.TestSetRecoveryCode(true)
 function RegisterEvent(name,cb)assert(not events[name]);events[name]=cb;return true end
 function GetCurRealTime()return now end
@@ -9,6 +9,7 @@ function ConvertStringToLuaID(s)return ffi.new('uint64_t',tonumber(s))end
 function ConvertIDTo64Bit(v)return v end
 function GetComponentData(ref,...)
  local args={...};if args[1]=='isdocked' then return false,false,false end
+ if reject_inspection then error('synthetic inspection failure') end
  if args[1]=='macro' and tonumber(ref)==41 then return 'ship_arg_m_trans_container_02_b_macro','antigone' end
  if args[1]=='macro' and tonumber(ref)==43 then return 'cluster_06_sector001_macro' end
  error('unexpected read')
@@ -49,6 +50,13 @@ local pre=('3'):rep(32);local apply=('2'):rep(32)
 if mode=='apply_first' then input[1]=packet('APPLY',apply);assert(not owner:tick() and ffi.C.TestWrites()==0);return end
 if mode=='wrong_sequence' then input[1]=packet('PREFLIGHT',pre,'2');assert(not owner:tick() and ffi.C.TestWrites()==0);return end
 input[1]=packet('PREFLIGHT',pre);assert(owner:tick())
+if mode=='preflight_fault' then
+ reject_inspection=true
+ events['X4AuthoritySavedMotionApply.Result'](nil,nonce..'-'..pre..'-pre|ok')
+ assert(owner:state()=='failed' and ffi.C.TestWrites()==0)
+ assert(logs[#logs]=='[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR reason=owner_preflight_pre_inspect',tostring(logs[#logs]))
+ return
+end
 events['X4AuthoritySavedMotionApply.Result'](nil,nonce..'-'..pre..'-pre|ok')
 assert(owner:tick() and out[#out]:find('|PREFLIGHTED|',1,true) and ffi.C.TestWrites()==0)
 if mode=='repeat_preflight' then input[1]=packet('PREFLIGHT',('4'):rep(32));assert(not owner:tick() and ffi.C.TestWrites()==0);return end

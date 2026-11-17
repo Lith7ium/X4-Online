@@ -4,6 +4,26 @@
 local M={}
 local player_sector_event_claimed=false
 local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
+-- Only static diagnostic codes may cross into X4's log. Never interpolate a
+-- callback's arbitrary text: it may contain wire data or control characters.
+local owner_reasons={start=true,late_packet=true,tick=true,apply_event=true,event=true}
+local writer_reasons={begin_guard=true,dispatch_guard=true,dispatch_issue=true,pre_guard=true,pre_response=true,
+ pre_inspect=true,pre_game=true,pre_distance=true,preflight_log=true,pre_intent=true,pre_write_marker=true,write=true,
+ post_guard=true,post_response=true,immediate_inspect=true,immediate_game=true,immediate_log=true,post_inspect=true,
+ post_game=true,post_observation=true,post_readback=true,post_log=true,tick_guard=true,post_dispatch=true,
+ identity=true,begin=true,event=true,tick=true,unknown=true}
+local router_reasons={guard_reentrant=true,reentrant_or_failed=true,operation=true}
+local function safe_fault(source,reason)
+ if type(reason)~='string' then return source end
+ if source=='router' and router_reasons[reason] then return 'router_'..reason end
+ if source=='owner' then
+  if owner_reasons[reason] then return 'owner_'..reason end
+  local operation,stage=reason:match('^(preflight)_(%a[%a_]*)$')
+  if not operation then operation,stage=reason:match('^(apply)_(%a[%a_]*)$') end
+  if operation and writer_reasons[stage] then return 'owner_'..operation..'_'..stage end
+ end
+ return source
+end
 function M.new(c)
  if type(c)~='table' or c.enabled~=true then return nil,'disabled' end
  local fixed={};for k,v in pairs(c)do fixed[k]=v end;c=fixed
@@ -24,11 +44,11 @@ function M.new(c)
   if not ok or closed~=true or sector_reader:state()~='closed' or not context() then return false end
   sector_phase='closed';return true
  end
- router=assert(c.router_factory({guard=context,fault=function()fail('router')end}))
+ router=assert(c.router_factory({guard=context,fault=function(reason)fail(safe_fault('router',reason))end}))
  assert(router:start() and context())
  owner=assert(c.owner_factory({router=router,guard=context,stop=function()
   return context() and c.running()==true and router:state()=='active' and stop_sector_reader()
- end,fault=function()fail('owner')end}))
+ end,fault=function(reason)fail(safe_fault('owner',reason))end}))
  if c.player_sector==nil then
   assert(router:attach(c.router_generation,c.nonce,c.epoch,owner) and owner:start() and context())
  else
@@ -266,7 +286,18 @@ function M.new_x4(c)
    end
    return X4LAN_MOTION_CLIENT_OWNER.new_x4(options)
   end,
-  fault=function()DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR')end})
+  fault=function(reason)
+   -- safe_fault produces only the static codes above. Wrapper-owned reasons
+   -- are also literals; unexpected values fall back to the original message.
+   local wrapper_reasons={state=true,tick=true,sector_event=true}
+   local known=wrapper_reasons[reason]
+   if type(reason)=='string' and reason:match('^owner_') then
+    known=safe_fault('owner',reason:sub(7))==reason
+   elseif type(reason)=='string' and reason:match('^router_') then
+    known=safe_fault('router',reason:sub(8))==reason
+   end
+   DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR'..(known and ' reason='..reason or ''))
+  end})
 end
 X4LAN_RECOVERED_CLIENT_MOTION=M
 return M
