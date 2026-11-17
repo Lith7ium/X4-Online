@@ -38,3 +38,25 @@ design dynamic rejoining of a running client.
 A separate isolated Linux X4 run combined this barrier with a localhost download;
 see [the native experiment](../../docs/AUTHORITY-CLIENT-DOWNLOAD-LOAD.md). It
 does not establish Windows behavior or actual client admission.
+
+## Experimental single-thread client owner
+
+`experimental_client_owner.py` composes the existing remote load client with
+`ExperimentalTCPParticipantClient` on one owner thread. After the server accepts
+the load claim, it transfers the same connected socket once to the participant
+adapter. The owner validates the known participant prerequisites before making
+the claim, closes the socket on failure or explicit close, and rejects calls
+from other threads. If admission succeeds but the later handoff fails, the
+server may already consider the client admitted; the caller must treat that
+outcome as uncertain and must not retry the claim automatically.
+
+The caller still owns transport authentication, private staging paths, the X4
+process and its identity, ordered load/marker/pause observations, and a bounded
+pause/resume controller. Observations passed to the owner are trusted caller
+assertions, not independently verified game events. While waiting for them, the
+caller must pump the load connection often enough when keepalive is enabled.
+There is no Windows process or X4 integration, no authenticated X4 event
+channel, and no proof of which file X4 reads. The owner has no production
+launcher integration and does not establish gameplay. Focused local tests use
+real wire and file-service components with simulated X4 observations and
+controller results; they do not establish native Windows or Internet behavior.

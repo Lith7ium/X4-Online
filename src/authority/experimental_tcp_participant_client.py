@@ -17,6 +17,21 @@ from .load_messages import MAX_INTEGER, MAX_MESSAGE, _pairs, _reject_constant
 from .experimental_tcp_job_delivery import job_event, job_digest
 
 
+def validate_participant_connection(conn, controller, *, enabled, epoch, handle, timeout):
+    """Validate known participant prerequisites without changing the socket."""
+    if (enabled is not True or type(conn) is not socket.socket or conn.family != socket.AF_INET or
+            conn.proto not in (0, socket.IPPROTO_TCP) or
+            conn.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM or
+            type(epoch) is not str or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', epoch) or
+            type(handle) is not int or not 1 <= handle <= MAX_INTEGER or
+            type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300 or
+            not callable(getattr(controller, 'pause', None)) or
+            not callable(getattr(controller, 'resume', None))):
+        raise ValueError('enabled client, controller and bounded configuration required')
+    if conn.getpeername()[0] != '127.0.0.1':
+        raise ValueError('experimental client requires loopback peer')
+
+
 class ExperimentalTCPParticipantClient:
     """Accept one command at a time, and reply only after local confirmation.
 
@@ -24,17 +39,8 @@ class ExperimentalTCPParticipantClient:
     adapter checks its deadline after a call but cannot interrupt that call.
     """
     def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None, apply_motion_once=None, preflight_motion=None, authority_grant=None, authority_guard=None, pull_authority_motion=None):
-        if (enabled is not True or type(conn) is not socket.socket or conn.family != socket.AF_INET or
-                conn.proto not in (0, socket.IPPROTO_TCP) or
-                conn.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM or
-                type(epoch) is not str or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', epoch) or
-                type(handle) is not int or not 1 <= handle <= MAX_INTEGER or
-                type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300 or
-                not callable(getattr(controller, 'pause', None)) or
-                not callable(getattr(controller, 'resume', None))):
-            raise ValueError('enabled client, controller and bounded configuration required')
-        if conn.getpeername()[0] != '127.0.0.1':
-            raise ValueError('experimental client requires loopback peer')
+        validate_participant_connection(conn, controller, enabled=enabled,
+                                        epoch=epoch, handle=handle, timeout=timeout)
         conn.setblocking(False)
         self._conn, self._controller, self._epoch, self._handle = conn, controller, epoch, handle
         self._timeout = float(timeout)
