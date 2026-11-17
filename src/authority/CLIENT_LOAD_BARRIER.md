@@ -181,6 +181,16 @@ removal; no X4 process or endpoint remained. Separate X11 and Vulkan queries
 succeeded in an X4-like isolated namespace, but did not start X4 or prove that
 X4 could create and present a swapchain.
 
+An independent headless display experiment later combined a private PID-1
+reaper, Cage, Xwayland, GLES2 and one AMD render node without exposing a KMS
+card node. In `.local/private-pid1-gles2-vulkan-20261117-01/`, the X11 probe
+connected and `vulkaninfo` reported XCB, Xlib and Wayland surface capabilities;
+the reported GPU renderer was the Radeon RX 7900 XTX. The test reported
+cleanup and removed its empty private Xauthority file, under its documented
+exclusive PID-namespace membership assumption. It did not establish that
+Xauthority authentication was enforced, that a frame was presented, that the
+host monitor was unaffected, or that X4 can run in this display environment.
+
 The associated repository check reported 4,623 tests without failures and
 56 skips; it was incomplete and must not be presented as a complete passing
 check. A later check covering the diagnostic timing and fresh-profile helper
