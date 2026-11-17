@@ -128,6 +128,127 @@ class RecoveredClientRegistryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'faulted'):
                 owner.guarded_registry_observation(check, verify)
 
+    def setup_marker_case(self, root):
+        # Exercise the actual production marked-load installer, rather than
+        # synthesizing its hook or passing the expected marker into Lua.
+        lab = self.setup_case(root)
+        probe = lab/'ui/authority_download_load_probe.lua'
+        text = probe.read_text()
+        text = text.replace('  if not X4LAN_AUTHORITY_MARKER_READY() then return end\n', '')
+        text = text.replace('  if not X4LAN_IDENTITY_READY() then return end\n', '')
+        probe.write_text(text)
+        (lab/'ui/config.lua').write_text('X4LAN_CONFIG = {enabled=false}\n')
+        subject.recovery.marked.install_marked_load_probe(Path(root))
+        return lab
+
+    def snapshot_overlay(self, lab):
+        return {path.relative_to(lab): path.read_bytes()
+                for path in lab.rglob('*') if path.is_file()}
+
+    def marker_rows(self, status):
+        return [row for row in self.rows(status) if b'AUTH_IDENTITY' not in row]
+
+    def test_installs_optional_registry_after_real_marked_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = self.setup_marker_case(tmp)
+            status = ('ready', '1'*32, 3, '2'*64)
+            protected = subject.install(tmp, self.nonce, status, load_gate='marker')
+            self.assertEqual(len(protected), 2)
+            probe = (lab/'ui/authority_download_load_probe.lua').read_text()
+            self.assertNotIn('X4LAN_IDENTITY_READY', probe)
+            self.assertLess(probe.index('X4LAN_AUTHORITY_MARKER_READY()'),
+                            probe.index('registry_pause_confirmed=true'))
+            self.assertLess(probe.index('registry_status:ready()'), probe.index('barrier.update()'))
+            self.assertIn("expected='"+'1'*32+"|3'", probe)
+            self.assertIn('if registry_pause_confirmed then error', probe)
+            self.assertIn("RegisterEvent('X4AuthorityShipRegistry.Correlated'", probe)
+            self.assertNotIn(self.marker, probe)
+            self.assertNotIn(self.marker, (lab/'ui/config.lua').read_text())
+
+    def test_marker_gate_missing_duplicate_or_mixed_leaves_overlay_unchanged(self):
+        hook = '  if not X4LAN_AUTHORITY_MARKER_READY() then return end\n'
+        for replacement in ('', hook+hook, hook+'  if not X4LAN_IDENTITY_READY() then return end\n'):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as tmp:
+                lab = self.setup_marker_case(tmp)
+                probe = lab/'ui/authority_download_load_probe.lua'
+                probe.write_text(probe.read_text().replace(hook, replacement))
+                before = self.snapshot_overlay(lab)
+                with self.assertRaises(ValueError):
+                    subject.install(tmp, self.nonce, ('uninitialized',), load_gate='marker')
+                self.assertEqual(self.snapshot_overlay(lab), before)
+
+    def test_invalid_gate_rejected_before_install_or_log_access(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lab = self.setup_marker_case(tmp)
+            before = self.snapshot_overlay(lab)
+            for mode in ('', 'marked', None, True, []):
+                with self.subTest(mode=mode):
+                    with self.assertRaisesRegex(ValueError, 'load gate'):
+                        subject.install(tmp, self.nonce, ('uninitialized',), load_gate=mode)
+                    self.assertEqual(self.snapshot_overlay(lab), before)
+                    with self.assertRaisesRegex(ValueError, 'load gate'):
+                        subject.verify_log(Path(tmp)/'absent', self.nonce, ('uninitialized',),
+                                           self.ticket, self.marker, load_gate=mode)
+
+    def test_marker_log_requires_exact_unique_ordered_receipts_without_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'log'
+            for status in (('uninitialized',), ('ready', '1'*32, 3, '2'*64)):
+                rows = self.marker_rows(status)
+                path.write_bytes(b'\n'.join(rows)+b'\n')
+                self.assertTrue(subject.verify_log(path, self.nonce, status, self.ticket,
+                                                   self.marker, load_gate='marker'))
+                cases = []
+                for index in range(len(rows)):
+                    cases.append(rows[:index]+rows[index+1:])
+                    cases.append(rows[:index]+[rows[index]]+rows[index:])
+                    cases.append(rows[:index]+[rows[index]+b'extra']+rows[index+1:])
+                for index in range(len(rows)-1):
+                    swapped = list(rows)
+                    swapped[index], swapped[index+1] = swapped[index+1], swapped[index]
+                    cases.append(swapped)
+                cases.extend([
+                    self.rows(status),
+                    rows+[b'[X4LAN] AUTH_MARKER load ERROR'],
+                    rows+[b'[X4LAN] AUTH_RECOVERY_REGISTRY '+self.nonce.encode()+b'|startup|wrong'],
+                    rows+[b'[X4LAN] AUTH_RECOVERY_REGISTRY_ERROR '+self.nonce.encode()],
+                    rows+[b'X'*(load.ReceiptWatch.MAX_LINE+1)],
+                ])
+                for index, invalid in enumerate(cases):
+                    with self.subTest(status=status, case=index):
+                        path.write_bytes(b'\n'.join(invalid)+b'\n')
+                        with self.assertRaises(ValueError):
+                            subject.verify_log(path, self.nonce, status, self.ticket,
+                                               self.marker, load_gate='marker')
+                path.write_bytes(b'\n'.join(rows))
+                with self.assertRaisesRegex(ValueError, 'incomplete'):
+                    subject.verify_log(path, self.nonce, status, self.ticket,
+                                       self.marker, load_gate='marker')
+
+    def test_marker_log_rechecks_stability_and_late_fault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'log'
+            status = ('uninitialized',)
+            rows = self.marker_rows(status)
+            path.write_bytes(b'\n'.join(rows)+b'\n')
+            verify = lambda: subject.verify_log(path, self.nonce, status, self.ticket,
+                                               self.marker, load_gate='marker')
+            self.assertTrue(owner.guarded_registry_observation(Mock(return_value=True), verify))
+            evidence = subject.recovery.marked.file_evidence
+            original = evidence._read_regular
+            calls = []
+            def changing_read(*args, **kwargs):
+                calls.append(True)
+                if len(calls) == 2:
+                    with path.open('ab') as stream:
+                        stream.write(b'[X4LAN] AUTH_RECOVERY_REGISTRY_ERROR '+self.nonce.encode()+b'\n')
+                return original(*args, **kwargs)
+            with patch.object(evidence, '_read_regular', side_effect=changing_read):
+                with self.assertRaisesRegex(ValueError, 'changed'):
+                    verify()
+            with self.assertRaisesRegex(ValueError, 'faulted'):
+                owner.guarded_registry_observation(Mock(return_value=True), verify)
+
     def test_checkpoint_parse_pumps_tcp_owner_and_propagates_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'save.xml.gz';path.write_bytes(gzip.compress(b'<savegame/>'))

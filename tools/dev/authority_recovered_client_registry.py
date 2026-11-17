@@ -12,7 +12,18 @@ import authority_recovery_tcp_join_live as recovery
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def install(case, nonce, status):
+def _check_load_gate(load_gate):
+    if load_gate not in ('identity', 'marker'):
+        raise ValueError('invalid client registry load gate')
+
+
+def install(case, nonce, status, *, load_gate='identity'):
+    """Gate on identity by default; marker mode requires an identity-free probe.
+
+    Marker mode uses the existing real marked-load hook, never an injected
+    expected marker. Mixed marker/identity installations are rejected.
+    """
+    _check_load_gate(load_gate)
     if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
         raise ValueError('invalid client registry nonce')
     if status == ('uninitialized',):
@@ -34,8 +45,11 @@ def install(case, nonce, status):
     hook = "local state='initial';local failed=false\n"
     if text.count(hook) != 1: raise ValueError('unexpected client load owner')
     text = text.replace(hook, hook+'local registry_status=nil;local registry_pause_requested=false;local registry_pause_confirmed=false\n')
-    hook = '  if not X4LAN_IDENTITY_READY() then return end\n'
-    if text.count(hook) != 1: raise ValueError('client identity gate unavailable')
+    if load_gate == 'marker' and 'X4LAN_IDENTITY_READY' in text:
+        raise ValueError('marker registry gate requires an identity-free load probe')
+    hook = ('  if not X4LAN_IDENTITY_READY() then return end\n' if load_gate == 'identity' else
+            '  if not X4LAN_AUTHORITY_MARKER_READY() then return end\n')
+    if text.count(hook) != 1: raise ValueError('client ' + load_gate + ' gate unavailable')
     code = '''  if not engine.is_paused() then
    if registry_pause_confirmed then error('client registry pause lost') end
    if not registry_pause_requested then registry_pause_requested=true;engine.pause() end
@@ -64,8 +78,13 @@ def install(case, nonce, status):
     return [module, script]
 
 
-def verify_log(path, nonce, status, ticket, marker):
-    """Require one status receipt between the marker/identity and pause receipt."""
+def verify_log(path, nonce, status, ticket, marker, *, load_gate='identity'):
+    """Require ordered correlated receipts; marker mode rejects identity receipts.
+
+    Identity mode retains its existing observation contract. Marker mode accepts
+    exactly load request, inspected marker, startup registry status, and pause.
+    """
+    _check_load_gate(load_gate)
     evidence = recovery.marked.file_evidence
     before = evidence._read_regular(path, evidence.MAX_LOG, collect=True)
     data = before[2]
@@ -80,10 +99,26 @@ def verify_log(path, nonce, status, ticket, marker):
                    if status_tag in line and line.split(status_tag, 1)[1].strip().startswith((nonce+'|startup|').encode('ascii'))]
     if status_rows != [status_value]: raise ValueError('client registry status missing or ambiguous')
     needles = [recovery.base.client.TAG+watch.expected[0],
-               b'AUTH_MARKER load INSPECTED '+marker.encode('ascii'),
-               b'[X4LAN] AUTH_IDENTITY load READY',
-               status_tag+status_value,
-               recovery.base.client.TAG+watch.expected[1]]
+               b'AUTH_MARKER load INSPECTED '+marker.encode('ascii')]
+    if load_gate == 'identity':
+        needles.append(b'[X4LAN] AUTH_IDENTITY load READY')
+    needles.extend([status_tag+status_value, recovery.base.client.TAG+watch.expected[1]])
+    if load_gate == 'marker':
+        if b'AUTH_IDENTITY load ' in data:
+            raise ValueError('marker registry observation contains identity receipts')
+        # Check every relevant row, including malformed, duplicate or late
+        # marker/load/status events; expected values must match the entire row.
+        tags = (recovery.base.client.TAG, b'AUTH_MARKER load ',
+                status_tag+nonce.encode('ascii')+b'|')
+        observed = []
+        for line in data.splitlines():
+            if len(line) > watch.MAX_LINE:
+                raise ValueError('client registry log line too long')
+            for tag in tags:
+                if tag in line:
+                    observed.append(tag+line.split(tag, 1)[1].strip())
+        if observed != needles:
+            raise ValueError('client registry/load receipts differ or are out of order')
     lines = data.splitlines(); positions = []
     for needle in needles:
         hits = [i for i, line in enumerate(lines) if needle in line]
