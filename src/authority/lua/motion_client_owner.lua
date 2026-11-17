@@ -42,12 +42,37 @@ function M.new(o)
    (apply.observe_limit==nil or (integer(apply.observe_limit) and apply.observe_limit>=2 and apply.observe_limit<=8 and apply.immediate_readback==true)),'invalid saved apply')
   apply={factory=apply.factory,register=apply.register,immediate_readback=apply.immediate_readback,observe_limit=apply.observe_limit}
  end
+ local playback=c.saved_playback
+ if playback~=nil then
+  assert(saved and not apply and type(playback)=='table' and playback.enabled==true and
+   type(playback.factory)=='function','invalid saved playback')
+ end
  local state,busy='new',false;local last,pending,deadline,delivered=nil,nil,nil,nil
  local staged,bound,writer,operation_identity,apply_used,preflight_ready=nil,nil,nil,nil,false,false
  local operation_requests,operation_count,preflight_attempted={},0,false
  local observe_count,stream_index,stream_sequence,stream_time,stream_binding=0,nil,nil,nil,nil
  local tracks,track_count={},0;local api={}
- local function fail(reason)if state~='failed' then state='failed';pcall(c.fault,reason)end;return false end
+ local playback_uncertain=false
+ local function stop_playback()
+  local success=true
+  for _,entry in pairs(tracks)do
+   if entry.playback then
+    local observed,uncertain=pcall(entry.playback.outcome_uncertain,entry.playback)
+    playback_uncertain=playback_uncertain or not observed or uncertain==true
+    local ok,stopped=pcall(entry.playback.stop,entry.playback)
+    success=ok and stopped==true and success
+   end
+  end
+  return success
+ end
+ local function fail(reason)
+  if state~='failed' then
+   state='failed'
+   stop_playback() -- Disable every writer before notifying the enclosing owner.
+   pcall(c.fault,reason,playback_uncertain)
+  end
+  return false
+ end
  local function check()
   if state=='failed' then return false end
   local old=state;local ok,t=pcall(c.clock)
@@ -87,7 +112,7 @@ function M.new(o)
   if type(raw)~='string' or #raw>768 then return false end
   local p=split(raw)
   local full_pose = p[4]=='BIND2'
-  if (full_pose and (#p~=24 or apply)) or (not full_pose and (#p~=18 or p[4]~='BIND')) or
+  if (full_pose and (#p~=24 or apply or playback)) or (not full_pose and (#p~=18 or p[4]~='BIND')) or
      p[1]~='M' or p[2]~=c.lease or p[3]~=c.attempt or
      not token(p[5],32) or p[6]~=c.epoch or p[7]~=c.generation or not name(p[10]) or not token(p[11],64) then return false end
   local index,seq=natural(p[8]),natural(p[9]);if not index or not seq then return false end
@@ -130,7 +155,7 @@ function M.new(o)
    local nonce=c.nonce -- full 128-bit owner nonce; binding adds index and request counter
    local route=saved and index<=saved.baseline and 'saved' or 'replica'
    local factory=route=='saved' and saved.factory or c.factory
-   local binding=assert(factory({capture_binding=apply and function(actor,sector,zone,idx,sequence)
+   local binding=assert(factory({capture_binding=(apply or playback) and function(actor,sector,zone,idx,sequence)
      if state~='pending' or not pending or pending.route~='saved' or idx~=pending.index or sequence~=pending.sequence or staged then return false end
      if type(actor)~='string' or type(sector)~='string' or type(zone)~='string' then return false end
      staged={actor_key=actor,sector_key=sector,zone_key=zone,index=idx,sequence=sequence};return true
@@ -141,13 +166,16 @@ function M.new(o)
      delivered=true;return true
     end}))
    if state~='ready' or not check() then return false end
-   local buffer=assert(new_buffer({dimensions=#pose,hold_only=true}))
-   if type(buffer)~='table' or type(buffer.push)~='function' or state~='ready' or not check() then return false end
+   local buffer
+   if not playback then
+    buffer=assert(new_buffer({dimensions=#pose,hold_only=true}))
+    if type(buffer)~='table' or type(buffer.push)~='function' or state~='ready' or not check() then return false end
+   elseif route~='saved' then return false end
    entry={sector=p[10],binding=binding,buffer=buffer,route=route,dimensions=#pose};tracks[index]=entry
   end
   staged=nil;preflight_ready=false;preflight_attempted=false
   pending={identity={p[5],p[6],p[7],p[8],p[9],p[10],p[11]},index=index,sequence=seq,sector=p[10],binding=entry.binding,
-   buffer=entry.buffer,route=entry.route,arrival=arrival,source_time=t,position=pose,rate=rate}
+   buffer=entry.buffer,entry=entry,route=entry.route,arrival=arrival,source_time=t,position=pose,rate=rate}
   deadline=last+c.timeout;state='pending'
   local ok,v=pcall(entry.binding.begin,entry.binding,{epoch=c.epoch,generation=c.generation,index=index,sequence=seq,sector_macro=p[10]},arrival)
   return ok and v==true and state=='pending' and check()
@@ -218,6 +246,7 @@ function M.new(o)
      assert(c.stop and #p==7 and p[1]=='M' and p[2]==c.lease and p[3]==c.attempt and
       token(p[5],32) and p[6]==c.epoch and p[7]==c.generation and check())
      state='stopping';deadline=last+c.timeout
+     assert(stop_playback())
      for _,entry in pairs(tracks)do
       assert(type(entry.binding.close)=='function' and entry.binding:close()==true and state=='stopping' and check())
      end
@@ -226,6 +255,11 @@ function M.new(o)
      assert(send(reply('STOPPED',{p[5],p[6],p[7]})))
      tracks={};state='stopped';deadline=nil
     elseif p[4]=='APPLY' or p[4]=='OBSERVE' or p[4]=='PREFLIGHT' then assert(accept_operation(packet,p[4])) else assert(not apply_used and accept(packet))end
+   end
+   if playback then
+    for _,entry in pairs(tracks)do
+     if entry.playback then assert(entry.playback:tick()==true and check())end
+    end
    end
   end);busy=false;if not ok then return fail('tick')end;return true
  end
@@ -257,7 +291,28 @@ function M.new(o)
     for k in pairs(snapshot)do if k~='frame' and k~='sequence' and k~='source_time' and k~='pose' and k~='rate' then return false end end
     return not rate or vector_unchanged(rate,pending.rate)
    end
-   local pushed=pending.buffer:push(snapshot,pending.arrival)
+   local receiver=pending.buffer
+   if playback then
+    assert(staged and staged.index==pending.index and staged.sequence==pending.sequence)
+    local entry=pending.entry
+    local identity={actor_key=staged.actor_key,sector_key=staged.sector_key,zone_key=staged.zone_key,
+     index=pending.index,epoch=c.epoch,sector_macro=pending.sector}
+    if entry.playback then
+     for key,value in pairs(identity)do assert(entry.playback_binding[key]==value)end
+    else
+     entry.playback_binding=identity
+     entry.playback=assert(playback.factory({enabled=true,binding=identity,buffer=c.buffer,
+      max_age=c.max_age,clock=c.clock,guard=function()return state~='failed' and state~='stopped' and check()end,
+      fault=function()fail('playback')end}))
+     assert(type(entry.playback.push)=='function' and type(entry.playback.tick)=='function' and
+      type(entry.playback.stop)=='function' and check())
+    end
+    receiver=entry.playback
+   end
+   local pushed,reason=receiver:push(snapshot,pending.arrival)
+   -- Opt-in playback BOUND means correlated binding and consumed packet, not
+   -- applied movement. Paused/expired samples are acknowledged but not buffered.
+   if playback and pushed~=true and (reason=='paused' or reason=='expired') then pushed=true end
    assert(pushed==true and state=='pending' and check() and snapshot_unchanged())
    if c.audit then
     local good,accepted=pcall(c.audit,pending.index,pending.sequence,pending.sector,pending.source_time)
@@ -276,6 +331,13 @@ function M.new(o)
    end
    assert(send(reply('BOUND',pending.identity)));pending=nil;staged=nil;deadline=nil;delivered=nil;state='ready'
   end);busy=false;if not ok then return fail('event')end;return true
+ end
+ function api:outcome_uncertain()
+  if playback_uncertain then return true end
+  for _,entry in pairs(tracks)do
+   if entry.playback and entry.playback:outcome_uncertain() then return true end
+  end
+  return false
  end
  function api:state()return state end
  return api
@@ -347,6 +409,19 @@ function M.new_x4(o)
     end
     return native_apply(opt)
    end}
+ end
+ if c.saved_playback~=nil then
+  local settings=c.saved_playback
+  assert(c.saved_apply==nil and type(settings)=='table' and settings.enabled==true and
+   type(settings.module)=='table' and type(settings.module.new_playback_x4)=='function' and
+   type(settings.playback)=='table' and type(settings.record)=='function')
+  local native_playback=settings.module.new_playback_x4
+  c.saved_playback={enabled=true,factory=function(opt)
+   opt.expected_save_path=c.expected_save_path;opt.test_profile='45841';opt.resolve=c.resolve
+   opt.fixture=settings.fixture;opt.playback=settings.playback;opt.max_step=settings.max_step
+   opt.buffer_options=settings.buffer_options;opt.record=settings.record
+   return native_playback(opt)
+  end}
  end
  owner=M.new(c);return owner
 end

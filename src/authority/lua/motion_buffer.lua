@@ -74,7 +74,7 @@ function M.new(options)
  options = options or {}
  assert(type(options) == 'table', 'options must be a table')
  local known = {delay=true, horizon=true, stale=true, teleport_distance=true,
-  clock_leak=true, slew=true, dimensions=true, hold_only=true}
+  clock_leak=true, slew=true, dimensions=true, hold_only=true, deferred_arrival=true}
  for key in pairs(options) do assert(known[key], 'unknown motion option') end
  local cfg = {delay=options.delay or .15, horizon=options.horizon or .35,
   stale=options.stale or .75, teleport_distance=options.teleport_distance or 10000,
@@ -83,6 +83,8 @@ function M.new(options)
  assert(dimensions == 3 or dimensions == 6, 'invalid motion dimensions')
  assert(options.hold_only == nil or type(options.hold_only) == 'boolean', 'invalid hold mode')
  local hold_only = options.hold_only == true
+ assert(options.deferred_arrival == nil or type(options.deferred_arrival) == 'boolean', 'invalid deferred arrival mode')
+ local deferred_arrival = options.deferred_arrival == true
  for key, value in pairs(cfg) do
   assert(finite(value) and value >= 0, 'invalid motion option: '..key)
  end
@@ -97,7 +99,8 @@ function M.new(options)
  function track:push(sample, arrival)
   if not valid_sample(sample, dimensions) or not timestamp(arrival) then return false, 'invalid' end
   if sample.sequence <= last_sequence or (last_source and sample.source_time <= last_source) or
-     (last_arrival and arrival < last_arrival) or (last_render and arrival < last_render) then return false, 'stale' end
+     (last_arrival and arrival < last_arrival) or
+     (not deferred_arrival and last_render and arrival < last_render) then return false, 'stale' end
   local last = samples[#samples]
   local reason = 'append'
   if last and sample.frame ~= last.frame then

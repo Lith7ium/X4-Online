@@ -142,7 +142,7 @@ function M.new(o)
  return api
 end
 
-function M.new_x4(o)
+local function native_callbacks(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  local selected=fixture(o.fixture)
  assert(o.test_profile=='45841' and type(o.expected_save_path)=='string' and o.expected_save_path:sub(1,1)=='/' and o.expected_save_path:sub(-11)=='/45841/save')
@@ -209,7 +209,46 @@ function M.new_x4(o)
  c.write=function(p,t)
   local a,s=live(p);C.SetObjectSectorPos(a,s,ffi.new('UIPosRot',t));assert(live(p)==a);return true
  end
- return M.new(c)
+ return c
+end
+
+function M.new_x4(options)
+ local callbacks, reason = native_callbacks(options)
+ if not callbacks then return nil, reason end
+ return M.new(callbacks)
+end
+
+-- Separate sustained-playback factory. The one-shot state machine above is unchanged.
+function M.new_playback_x4(options)
+ if type(options) ~= 'table' or options.enabled ~= true then return nil, 'disabled' end
+ assert(type(options.playback) == 'table' and type(options.playback.new) == 'function')
+ assert(finite(options.max_step) and options.max_step > 0 and options.max_step <= 50)
+ local selected = fixture(options.fixture)
+ assert(type(options.binding) == 'table')
+ local binding = {}
+ for key, value in pairs(options.binding) do binding[key] = value end
+ assert(token(binding.epoch,32) and binding.index == selected.index and binding.sector_macro == selected.sector and
+  (not selected.epoch or binding.epoch == selected.epoch) and natural(binding.actor_key) and
+  natural(binding.sector_key) and natural(binding.zone_key))
+ local callbacks = assert(native_callbacks(options))
+ local ffi = require('ffi')
+ return options.playback.new({enabled=true, buffer=options.buffer, frame=binding.sector_macro,
+  clock=callbacks.clock, game=callbacks.game, paused=function() return ffi.C.IsGamePaused() end,
+  guard=callbacks.guard, max_age=options.max_age, max_step=options.max_step,
+  buffer_options=options.buffer_options, fault=options.fault,
+  record=function(event)
+   event.index=binding.index
+   event.epoch=binding.epoch
+   event.sector_macro=binding.sector_macro
+   return options.record(event)
+  end,
+  read=function() return callbacks.inspect(binding) end,
+  write=function(target)
+   -- Read actual orientation immediately before each XYZ-only native write.
+   local actual = callbacks.inspect(binding)
+   return callbacks.write(binding, {x=target.x, y=target.y, z=target.z,
+    yaw=actual.yaw*180/math.pi, pitch=actual.pitch*180/math.pi, roll=actual.roll*180/math.pi})
+  end})
 end
 X4LAN_SAVED_MOTION_APPLY=M
 return M
