@@ -90,6 +90,56 @@ class Install(unittest.TestCase):
   self.assertIn('saved_apply_fixture=cfg.authority_client_motion_saved_apply_fixture',
                 (self.ui/'authority_two_x4_participant_probe.lua').read_text())
   self.assertIn('authority_client_motion_saved_apply_fixture="recovery_enh_870"',(self.ui/'config.lua').read_text())
+ def prepare_playback(self):
+  self.status=('ready',subject.RECOVERY_APPLY_EPOCH,10082,'d'*64)
+  loader=self.ui/'authority_download_load_probe.lua'
+  loader.write_text(loader.read_text().replace("expected='"+'c'*32+'|100',"expected='"+self.status[1]+'|10082'))
+  self.settings.update(index=1318,saved_playback_fixture=subject.RECOVERY_APPLY_FIXTURE)
+ def test_opt_in_saved_playback_installs_runtime_in_existing_owner(self):
+  self.prepare_playback()
+  result=self.install()
+  for source,name in (subject.RECOVERY_APPLY_MODULE,subject.RECOVERY_PLAYBACK_MODULE):
+   self.assertIn(self.ui/name,result.paths)
+   self.assertEqual((self.ui/name).read_bytes(),(ROOT/source).read_bytes())
+  manifest=(self.lab/'ui.xml').read_text()
+  self.assertLess(manifest.index('ui/motion_playback.lua'),manifest.index('ui/authority_recovered_client_motion.lua'))
+  control=(self.ui/'authority_two_x4_participant_probe.lua').read_text()
+  self.assertEqual(control.count("SetScript('onUpdate'"),1)
+  self.assertIn('saved_playback_fixture=cfg.authority_client_motion_saved_playback_fixture',control)
+  self.assertLess(control.index('client playback STOP required before pause'),control.index("assert(state:submit('isolated-client'"))
+  self.assertFalse((self.md/'authority_saved_motion_apply.xml').exists())
+  result.redact()
+ def test_saved_playback_rejects_context_conflicts_before_mutation(self):
+  self.prepare_playback()
+  files=(self.ui/'config.lua',self.lab/'ui.xml',self.ui/'authority_two_x4_participant_probe.lua',self.ui/'authority_download_load_probe.lua')
+  before=[path.read_bytes() for path in files]
+  valid=dict(self.settings)
+  for change in ({'saved_playback_fixture':None},{'saved_playback_fixture':'other'},
+                 {'saved_apply_fixture':subject.RECOVERY_APPLY_FIXTURE},{'index':1317},
+                 {'indices':[1318]}):
+   with self.subTest(change=change):
+    self.settings=dict(valid,**change)
+    with self.assertRaises(ValueError):self.install()
+    self.assertEqual([path.read_bytes() for path in files],before)
+    self.assertFalse((self.ui/'motion_playback.lua').exists())
+  self.settings=valid
+  self.status=('ready','c'*32,10082,'d'*64)
+  with self.assertRaises(ValueError):self.install()
+  self.assertEqual([path.read_bytes() for path in files],before)
+ def test_saved_playback_runtime_and_pre_dispatch_pause_fence(self):
+  self.prepare_playback();self.install()
+  with tempfile.TemporaryDirectory() as directory:
+   library=Path(directory)/'abi.so'
+   subprocess.run(['cc','-O2','-shared','-fPIC','tests/fixtures/saved_motion_apply_abi.c','-o',str(library)],cwd=ROOT,check=True,capture_output=True)
+   environment=dict(os.environ,LD_PRELOAD=str(library))
+   for mode in ('good','bounded','uncertain','paused_initial','sector','index','sequence','source_time','bind2','context'):
+    with self.subTest(mode=mode):
+     result=subprocess.run(['luajit','tests/authority_recovered_client_playback.lua',mode],cwd=ROOT,capture_output=True,text=True,timeout=5,env=environment)
+     self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+   for mode in ('ready','stopped'):
+    with self.subTest(pause_mode=mode):
+     result=subprocess.run(['luajit','tests/authority_recovered_client_playback_pause.lua',str(self.ui/'authority_two_x4_participant_probe.lua'),mode],cwd=ROOT,capture_output=True,text=True,timeout=5,env=environment)
+     self.assertEqual(result.returncode,0,result.stdout+result.stderr)
  def test_saved_apply_combines_with_player_sector_after_bound(self):
   self.status=('ready',subject.RECOVERY_APPLY_EPOCH,10082,'d'*64)
   loader=self.ui/'authority_download_load_probe.lua'

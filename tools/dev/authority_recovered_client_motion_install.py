@@ -1,4 +1,7 @@
-"""Add a once-only client motion probe to an owned private recovery overlay.
+"""Add an opt-in client motion probe to an owned private recovery overlay.
+
+The saved_playback_fixture option enables bounded-evidence sustained playback;
+the default and separately enabled saved_apply fixture behavior are unchanged.
 
 No game, helper, listener or socket is started. The caller owns the fourth UDP
 FD handoff, all process/checkpoint/STOP fences, final log checks and redaction.
@@ -33,6 +36,7 @@ RECOVERY_APPLY_FIXTURE='recovery_enh_870'
 RECOVERY_APPLY_EPOCH='4ba7be438ebb04ec5bb85fdb95b5a488'
 RECOVERY_APPLY_MODULE=('src/authority/lua/saved_motion_apply.lua','saved_motion_apply.lua')
 RECOVERY_APPLY_MD='authority_saved_motion_apply.xml'
+RECOVERY_PLAYBACK_MODULE=('src/authority/lua/motion_playback.lua','motion_playback.lua')
 
 
 def read_ticket_token(config, field, *, prefix=''):
@@ -107,13 +111,18 @@ def install(case,profile,status,settings):
         raise ValueError('observed saved registry required')
     fields={'port','lease','attempt','generation','nonce','router_generation','timeout'}
     if (type(settings) is not dict or
-        set(settings)-{'player_sector','saved_apply_fixture'} not in (fields|{'index'},fields|{'indices'})):
+        set(settings)-{'player_sector','saved_apply_fixture','saved_playback_fixture'} not in (fields|{'index'},fields|{'indices'})):
         raise ValueError('invalid client motion settings')
     saved_apply_fixture=settings.get('saved_apply_fixture')
     if 'saved_apply_fixture' in settings and (
         saved_apply_fixture != RECOVERY_APPLY_FIXTURE or status[1] != RECOVERY_APPLY_EPOCH or
         settings.get('index') != 1318 or 'indices' in settings):
         raise ValueError('invalid recovery saved-apply fixture')
+    saved_playback_fixture=settings.get('saved_playback_fixture')
+    if 'saved_playback_fixture' in settings and (
+        saved_playback_fixture != RECOVERY_APPLY_FIXTURE or status[1] != RECOVERY_APPLY_EPOCH or
+        settings.get('index') != 1318 or 'indices' in settings or 'saved_apply_fixture' in settings):
+        raise ValueError('invalid recovery saved-playback fixture')
     player_sector=settings.get('player_sector')
     if 'player_sector' in settings:
         if (type(player_sector) is not dict or set(player_sector) not in
@@ -190,6 +199,9 @@ def install(case,profile,status,settings):
         ctl.count("SetScript('onUpdate'")!=1 or load_text.count("SetScript('onUpdate'")!=1 or
         'X4LAN_RECOVERED_CLIENT_LOAD_READY' in load_text):
         raise ValueError('client owner hooks missing or ambiguous')
+    submission_hook="  assert(state:submit('isolated-client',epoch,tonumber(id),op))\n"
+    if saved_playback_fixture is not None and ctl.count(submission_hook)!=1:
+        raise ValueError('client pause submission hook missing or ambiguous')
     modules=MODULES if player_sector is None else (*MODULES[:-1],PLAYER_SECTOR_MODULE,MODULES[-1])
     md_names=MD if player_sector is None else (*MD,PLAYER_SECTOR_MD)
     if saved_apply_fixture is not None:
@@ -199,6 +211,12 @@ def install(case,profile,status,settings):
         if (any(path.is_symlink() or not path.is_file() for path in apply_sources) or
             'ui/'+RECOVERY_APPLY_MODULE[1] in manifest_files):
             raise ValueError('saved apply overlay source or manifest is invalid')
+    if saved_playback_fixture is not None:
+        playback_modules=(RECOVERY_APPLY_MODULE,RECOVERY_PLAYBACK_MODULE)
+        for source,name in playback_modules:
+            if ((ROOT/source).is_symlink() or not (ROOT/source).is_file() or 'ui/'+name in manifest_files):
+                raise ValueError('saved playback overlay source or manifest is invalid')
+        modules=(*modules[:-1],*playback_modules,modules[-1])
     if player_sector is not None:
         sector_sources=(ROOT/PLAYER_SECTOR_MODULE[0],ROOT/'tools/dev'/PLAYER_SECTOR_MD)
         if (any(path.is_symlink() or not path.is_file() for path in sector_sources) or
@@ -223,6 +241,8 @@ def install(case,profile,status,settings):
     for name in SECRET_FIELDS:config_add+=',authority_client_motion_'+name+'="'+settings[name]+'"'
     if saved_apply_fixture is not None:
         config_add+=',authority_client_motion_saved_apply_fixture="'+saved_apply_fixture+'"'
+    if saved_playback_fixture is not None:
+        config_add+=',authority_client_motion_saved_playback_fixture="'+saved_playback_fixture+'"'
     if player_sector is not None:
         for name in ('incarnation','nonce'):
             config_add+=',authority_client_motion_player_sector_'+name+'="'+player_sector[name]+'"'
@@ -244,6 +264,14 @@ def install(case,profile,status,settings):
         code=code.replace('    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
                           '    saved_apply_fixture=cfg.authority_client_motion_saved_apply_fixture,\n'
                           '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
+    if saved_playback_fixture is not None:
+        code=code.replace('    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
+                          '    saved_playback_fixture=cfg.authority_client_motion_saved_playback_fixture,\n'
+                          '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
+        # Reject pause before the existing engine state machine can dispatch it.
+        # The caller must obtain/drain STOPPED before requesting native pause.
+        pause_guard="  assert(op~='pause' or not client_motion or client_motion:state()=='stopped','client playback STOP required before pause')\n"
+        ctl=ctl.replace(submission_hook,pause_guard+submission_hook)
     if player_sector is not None:
         after_bound=',after_bound=true' if player_sector.get('after_bound') is True else ''
         code=code.replace('    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',

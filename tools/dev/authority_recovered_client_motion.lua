@@ -1,4 +1,4 @@
--- Private once-only client motion probe, with a separately opted-in setter.
+-- Private client motion probe; sustained playback requires an explicit fixture opt-in.
 -- The existing participant
 -- update owner calls tick; process, FD, checkpoint and STOPPED are external.
 local M={}
@@ -149,6 +149,13 @@ function M.new_x4(c)
    local key=string.format('%.0f',n);assert(not allowed[key]);allowed[key]=true
   end
  end
+ local saved_playback_fixture=c.saved_playback_fixture
+ assert(saved_playback_fixture==nil or (saved_playback_fixture=='recovery_enh_870' and
+  c.saved_apply_fixture==nil and c.epoch=='4ba7be438ebb04ec5bb85fdb95b5a488' and c.index==1318 and c.indices==nil))
+ if saved_playback_fixture then
+  assert(type(X4LAN_MOTION_PLAYBACK)=='table' and type(X4LAN_MOTION_PLAYBACK.new)=='function' and
+   type(X4LAN_SAVED_MOTION_APPLY)=='table' and type(X4LAN_SAVED_MOTION_APPLY.new_playback_x4)=='function')
+ end
  local saved_apply_fixture=c.saved_apply_fixture
  assert(saved_apply_fixture==nil or (saved_apply_fixture=='recovery_enh_870' and
   c.epoch=='4ba7be438ebb04ec5bb85fdb95b5a488' and c.index==1318 and c.indices==nil))
@@ -180,7 +187,8 @@ function M.new_x4(c)
  end
  -- At most one permitted saved ship is in scope. With a candidate list the
  -- first correlated BIND seals the index; an invalid attempt faults the owner.
- -- This one-shot diagnostic accepts one BIND. Ordinary motion is unchanged.
+ -- Saved apply is one-shot; playback explicitly permits newer XYZ BIND samples.
+ -- Existing ordinary binding behavior is unchanged.
  local bound_phase=sector_config and sector_config.after_bound and 'waiting_bind' or nil
  local expected_bound
  local apply_phase=saved_apply_fixture and 'waiting_bind' or nil
@@ -204,11 +212,94 @@ function M.new_x4(c)
   else message=message..'unavailable' end
   pcall(DebugError,message)
  end
+ -- Playback evidence is portable, fixed-schema and bounded to 66 records:
+ -- one guarded initial read, at most 64 summaries at <=1 Hz, one STOPPED.
+ -- BOUND remains binding/consumption only. The first BIND is never played.
+ local playback_sequence,playback_source_time,playback_expected_reply=nil,nil,nil
+ local playback_samples,playback_observations,playback_readbacks,playback_reports=0,0,0,0
+ local playback_controller,playback_latest,playback_next_report=nil,nil,nil
+ local playback_stopped_reported=false
+ local playback_drained=false
+ local playback_sector='cluster_06_sector001_macro'
+ local playback_phases={waiting=true,held=true,interpolated=true,extrapolated=true,frozen=true,['held-no-rate']=true}
+ local function finite(value)
+  return type(value)=='number' and value==value and math.abs(value)<math.huge
+ end
+ local function playback_log(kind,uncertain)
+  assert(playback_latest and (kind=='SUMMARY' or kind=='STOPPED'))
+  local value=playback_latest
+  local line=('[X4LAN] AUTH_CLIENT_PLAYBACK %s version=1 epoch=%s index=1318 sector=%s report=%d samples=%d observations=%d readbacks=%d source_sequence=%.0f phase=%s local_time=%.17g game_time=%.17g actual_x=%.17g actual_y=%.17g actual_z=%.17g target_x=%.17g target_y=%.17g target_z=%.17g error=%.17g'):format(
+   kind,c.epoch,playback_sector,playback_reports,playback_samples,playback_observations,playback_readbacks,
+   value.sequence,value.phase,value.local_time,value.game_time,value.actual.x,value.actual.y,value.actual.z,
+   value.target.x,value.target.y,value.target.z,value.error)
+  if kind=='STOPPED' then line=line..' uncertain='..(uncertain and '1' or '0')..' drained='..(playback_drained and '1' or '0') end
+  DebugError(line)
+ end
+ local function playback_record(event)
+  assert(type(event)=='table' and event.index==1318 and event.epoch==c.epoch and event.sector_macro==playback_sector)
+  assert(event.kind=='observation' or event.kind=='readback')
+  for _,pose in ipairs({event.actual,event.target}) do
+   assert(type(pose)=='table')
+   for _,axis in ipairs({'x','y','z'})do assert(finite(pose[axis]))end
+  end
+  assert(finite(event.local_time) and finite(event.game_time) and integer(event.source_sequence) and event.source_sequence>=1)
+  local phase=playback_latest.phase
+  if event.kind=='observation' then
+   assert(playback_phases[event.phase]);phase=event.phase;playback_observations=playback_observations+1
+  else playback_readbacks=playback_readbacks+1 end
+  local dx,dy,dz=event.actual.x-event.target.x,event.actual.y-event.target.y,event.actual.z-event.target.z
+  playback_latest={actual={x=event.actual.x,y=event.actual.y,z=event.actual.z},
+   target={x=event.target.x,y=event.target.y,z=event.target.z},sequence=event.source_sequence,phase=phase,
+   local_time=event.local_time,game_time=event.game_time,error=math.sqrt(dx*dx+dy*dy+dz*dz)}
+  if playback_reports<64 and event.local_time>=playback_next_report then
+   playback_reports=playback_reports+1;playback_next_report=event.local_time+1;playback_log('SUMMARY')
+  end
+  return true
+ end
+ local playback_adapter={new=function(options)
+  assert(saved_playback_fixture and not playback_controller and not C.IsGamePaused() and options.guard()==true)
+  local actual=options.read()
+  assert(not C.IsGamePaused() and options.guard()==true and type(actual)=='table')
+  for _,axis in ipairs({'x','y','z'})do assert(finite(actual[axis]))end
+  local local_time,game_time=options.clock(),options.game()
+  assert(finite(local_time) and local_time>=0 and finite(game_time) and game_time>=0 and
+   not C.IsGamePaused() and options.guard()==true)
+  DebugError(('[X4LAN] AUTH_CLIENT_PLAYBACK INITIAL version=1 epoch=%s index=1318 sector=%s source_sequence=%.0f local_time=%.17g game_time=%.17g x=%.17g y=%.17g z=%.17g'):format(
+   c.epoch,playback_sector,playback_sequence,local_time,game_time,actual.x,actual.y,actual.z))
+  assert(not C.IsGamePaused() and options.guard()==true)
+  playback_latest={actual={x=actual.x,y=actual.y,z=actual.z},target={x=actual.x,y=actual.y,z=actual.z},
+   sequence=playback_sequence,phase='waiting',local_time=local_time,game_time=game_time,error=0}
+  playback_next_report=local_time+1
+  playback_controller=assert(X4LAN_MOTION_PLAYBACK.new(options))
+  local first=true
+  return {push=function(_,snapshot,arrival)
+    if first then
+     assert(snapshot.sequence==playback_sequence and snapshot.frame==playback_sector)
+     first=false;return true -- Enrollment only; never buffer its arbitrary target.
+    end
+    return playback_controller:push(snapshot,arrival)
+   end,
+   tick=function()return playback_controller:tick()end,
+   stop=function()
+    playback_drained=playback_controller:state()=='stale' and not playback_controller:outcome_uncertain()
+    return playback_controller:stop()
+   end,
+   state=function()return playback_controller:state()end,
+   outcome_uncertain=function()return playback_controller:outcome_uncertain()end}
+ end}
+ local function playback_stopped()
+  if not playback_controller or playback_stopped_reported then return end
+  playback_stopped_reported=true
+  playback_log('STOPPED',playback_controller:outcome_uncertain())
+ end
  local checked_net={send=function(_,value)
   if type(value)=='string' and value:sub(1,2)=='R|' then
    local fields={};for item in (value..'|'):gmatch('(.-)|')do fields[#fields+1]=item end
+   if saved_playback_fixture and fields[4]=='BOUND' then
+    assert(value==playback_expected_reply);playback_expected_reply=nil
+   end
    if fields[4]=='BOUND' and (bound_phase or apply_phase) then
-    if bound_phase then assert(bound_phase=='waiting_ack' and value==expected_bound) end
+    if bound_phase and (not saved_playback_fixture or bound_phase~='sent') then assert(bound_phase=='waiting_ack' and value==expected_bound) end
     if apply_phase then assert(apply_phase=='binding' and value==apply_identity.bound_reply) end
     local sent=net:send(value)
     if sent==true then
@@ -244,6 +335,16 @@ function M.new_x4(c)
   assert(fields[1]=='M' and fields[2]==c.lease and fields[3]==c.attempt)
   if fields[4]=='BIND' then
    assert(#fields==18 and token(fields[5]) and fields[6]==c.epoch and fields[7]==c.generation and allowed[fields[8]])
+   if saved_playback_fixture then
+    assert(fields[8]=='1318' and fields[10]==playback_sector and not playback_expected_reply)
+    local sequence,source_time=tonumber(fields[9]),tonumber(fields[12])
+    assert(fields[9]:match('^[1-9]%d*$') and #fields[9]<=16 and integer(sequence) and sequence<=9007199254740991 and
+     string.format('%.0f',sequence)==fields[9] and (not playback_sequence or sequence>playback_sequence) and
+     finite(source_time) and source_time>=0 and source_time<=1e12 and
+     (not playback_source_time or source_time>playback_source_time))
+    playback_sequence,playback_source_time=sequence,source_time;playback_samples=playback_samples+1
+    playback_expected_reply=table.concat({'R',c.lease,c.attempt,'BOUND',unpack(fields,5,11)},'|')
+   end
    if saved_apply_fixture then
     assert(apply_phase=='waiting_bind' and fields[10]=='cluster_06_sector001_macro')
     apply_identity={sequence=fields[9],digest=fields[11],
@@ -253,9 +354,11 @@ function M.new_x4(c)
    if locked==nil then locked=fields[8]end
    assert(fields[8]==locked)
    if bound_phase then
-    assert(bound_phase=='waiting_bind')
+    assert(bound_phase=='waiting_bind' or (saved_playback_fixture and bound_phase=='sent'))
+    if bound_phase=='waiting_bind' then
     expected_bound=table.concat({'R',c.lease,c.attempt,'BOUND',unpack(fields,5,11)},'|')
     bound_phase='waiting_ack'
+    end
    end
   elseif saved_apply_fixture and (fields[4]=='PREFLIGHT' or fields[4]=='APPLY') then
    assert(#fields==10 and token(fields[5]) and fields[6]==c.epoch and fields[7]==c.generation and
@@ -288,7 +391,7 @@ function M.new_x4(c)
   end
  end
  return M.new({enabled=true,epoch=c.epoch,nonce=c.nonce,router_generation=c.router_generation,player_sector=player_sector,
-  after_stopped=saved_apply_fixture and report_timing or nil,
+  after_stopped=saved_playback_fixture and playback_stopped or (saved_apply_fixture and report_timing or nil),
   guard=environment,running=function()return not C.IsGamePaused()end,
   router_factory=function(o)
    local options={enabled=true,max_generations=1,max_tracks=1,
@@ -301,7 +404,7 @@ function M.new_x4(c)
   owner_factory=function(o)
    local options={enabled=true,net=checked_net,lease=c.lease,attempt=c.attempt,
     epoch=c.epoch,generation=c.generation,nonce=c.nonce,router_generation=c.router_generation,event_router=o.router,
-    timeout=c.timeout,max_age=c.timeout,max_tracks=1,expected_save_path=c.expected_save_path,
+    timeout=c.timeout,max_age=saved_playback_fixture and math.min(c.timeout,1) or c.timeout,max_tracks=1,expected_save_path=c.expected_save_path,
     resolve=X4LAN_RESOLVE_STRING,binding=X4LAN_REPLICA_MOTION_BINDING,buffer=X4LAN_MOTION_BUFFER,
     saved_baseline={enabled=true,baseline=c.baseline,binding=X4LAN_SAVED_BASELINE_MOTION_BINDING,
      guard=function(e,n)return environment() and not C.IsGamePaused() and e==c.epoch and n==c.baseline end},
@@ -309,6 +412,11 @@ function M.new_x4(c)
    if saved_apply_fixture then
     options.saved_apply={enabled=true,fixture=saved_apply_fixture,module=X4LAN_SAVED_MOTION_APPLY,
      log=function(line)DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_APPLY '..line);return true end}
+   end
+   if saved_playback_fixture then
+    options.saved_playback={enabled=true,fixture=saved_playback_fixture,module=X4LAN_SAVED_MOTION_APPLY,
+     playback=playback_adapter,max_step=50,record=playback_record,
+     buffer_options={delay=.15,horizon=.35,stale=.75}}
    end
    return X4LAN_MOTION_CLIENT_OWNER.new_x4(options)
   end,
@@ -322,6 +430,7 @@ function M.new_x4(c)
    elseif type(reason)=='string' and reason:match('^router_') then
     known=safe_fault('router',reason:sub(8))==reason
    end
+   if playback_controller then playback_controller:stop() end
    DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR'..(known and ' reason='..reason or ''))
    report_timing()
   end})
