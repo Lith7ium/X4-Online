@@ -16,6 +16,52 @@ from lockstep.launcher import joinfiles  # noqa: E402
 
 
 class TransferTests(unittest.TestCase):
+    def test_interrupted_publication_tracks_and_withdraws_its_own_offer(self):
+        for withdrawal_fails in (False, True):
+            with self.subTest(withdrawal_fails=withdrawal_fails), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / 'source.xml.gz'
+                source.write_bytes(gzip.compress(b'<savegame><world/></savegame>'))
+                (root / 'store').mkdir()
+                store = CheckpointStore(root / 'store')
+                checkpoint = store.publish(source)
+                service = joinfiles.FileService('a' * 32, slots=(2,)).start()
+                try:
+                    other = SaveOffers(service, store).offer(checkpoint)
+                    offers = SaveOffers(service, store)
+                    actual_offer = service.offer
+                    interrupted = KeyboardInterrupt('publication interrupted')
+                    published_name = []
+
+                    def publish_then_interrupt(name, path, sha):
+                        self.assertIn(name, offers.names)
+                        actual_offer(name, path, sha)
+                        published_name.append(name)
+                        raise interrupted
+
+                    with patch.object(service, 'offer', side_effect=publish_then_interrupt):
+                        if withdrawal_fails:
+                            with patch.object(service, 'withdraw', side_effect=OSError('withdraw failed')):
+                                with self.assertRaises(KeyboardInterrupt) as caught:
+                                    offers.offer(checkpoint)
+                        else:
+                            with self.assertRaises(KeyboardInterrupt) as caught:
+                                offers.offer(checkpoint)
+                    self.assertIs(caught.exception, interrupted)
+                    name, = published_name
+                    self.assertNotEqual(name, other.name)
+                    self.assertIn(other.name, service.offered)
+                    if withdrawal_fails:
+                        self.assertIn(name, service.offered)
+                        self.assertIn(name, offers.names)
+                        self.assertTrue(any('withdrawal failed' in note for note in interrupted.__notes__))
+                        offers.invalidate()
+                    self.assertNotIn(name, service.offered)
+                    self.assertNotIn(name, offers.names)
+                    self.assertIn(other.name, service.offered)
+                finally:
+                    service.close()
+
     def test_withdraw_interrupts_started_download_and_keeps_other_offers(self):
         for operation in ('revoke', 'invalidate', 'replace'):
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp:

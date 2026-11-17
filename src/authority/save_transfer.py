@@ -56,12 +56,31 @@ class SaveOffers:
                     raise ValueError('save offer IDs exhausted')
                 name = f'j{next_id}.xml.gz'
                 self.service._authority_offer_id = next_id + 1
-            size, digest = self.service.offer(name, checkpoint.path, checkpoint.sha256)
-            if size != checkpoint.size:
-                self.service.withdraw(name)
-                raise ValueError('stored checkpoint size changed')
-            self.names.add(name)
-            return SaveOffer(name, digest, size, checkpoint.checkpoint_id)
+            try:
+                # Record ownership before the service can expose this name.
+                # A failed withdrawal leaves it available to invalidate().
+                self.names.add(name)
+                size, digest = self.service.offer(name, checkpoint.path, checkpoint.sha256)
+                if size != checkpoint.size:
+                    raise ValueError('stored checkpoint size changed')
+                return SaveOffer(name, digest, size, checkpoint.checkpoint_id)
+            except BaseException as error:
+                try:
+                    self.service.withdraw(name)
+                except BaseException as withdrawal_error:
+                    try:
+                        error.add_note('offer withdrawal failed: ' + type(withdrawal_error).__name__)
+                    except BaseException:
+                        pass
+                else:
+                    try:
+                        self.names.discard(name)
+                    except BaseException as cleanup_error:
+                        try:
+                            error.add_note('offer ownership cleanup failed: ' + type(cleanup_error).__name__)
+                        except BaseException:
+                            pass
+                raise
 
     def invalidate(self):
         """Withdraw offers and interrupt active transfers; admission fencing still applies."""
