@@ -113,6 +113,47 @@ class WorldTests(unittest.TestCase):
         self.assertEqual(self.participants.actions,
                          [('resume', (a,)), ('pause', (a,)), ('resume', (a, b))])
 
+    def test_rejoin_after_last_disconnect_uses_confirmed_checkpoint(self):
+        first_connection = self.world.join('player-a')
+        self.step('pause')
+        self.step('save')
+        first_offer = self.world.offer_load(first_connection)
+        self.confirm(first_offer)
+        self.step('resume')
+
+        self.world.disconnect(first_connection)
+        self.step('pause')
+        self.step('save')
+        confirmed = self.store.latest_confirmed()
+        self.assertNotEqual(confirmed.checkpoint_id, first_offer.save.checkpoint_id)
+        baseline_id = self.world.session.baseline_id
+        self.assertEqual(self.world.session.players, ())
+        self.assertEqual(self.world.session.state, 'paused')
+        self.assertIsNone(self.world.session.pending)
+
+        returning_connection = self.world.join('player-a')
+        self.assertNotEqual(returning_connection, first_connection)
+        self.assertEqual(self.world.session.state, 'paused')
+        self.assertIsNone(self.world.session.pending)
+        offer = self.world.offer_load(returning_connection)
+        self.assertEqual(offer.baseline_id, baseline_id)
+        self.assertEqual(offer.save.checkpoint_id, confirmed.checkpoint_id)
+        self.assertEqual(offer.save.sha256, confirmed.sha256)
+        self.assertEqual(offer.save.size, confirmed.size)
+        downloaded = receive('127.0.0.1', self.service.port, 'a' * 32, 2, offer.save,
+                             self.root / 'returning-client', retries=0, timeout=3)
+        self.assertEqual(downloaded.read_bytes(), confirmed.path.read_bytes())
+        self.assertEqual(gzip.decompress(downloaded.read_bytes()), b'<savegame><tick>2</tick></savegame>')
+        self.assertEqual(self.world.session.ready_players, ())
+
+        self.confirm(offer)  # Trusted synthetic confirmation; no X4 load occurred.
+        self.assertEqual(self.world.session.ready_players, ((returning_connection, 'player-a'),))
+        self.step('resume')
+        self.assertEqual(self.world.session.state, 'running')
+        self.assertEqual(self.engine.actions, ['pause', 'save', 'resume', 'pause', 'save', 'resume'])
+        self.assertEqual(self.participants.actions,
+                         [('resume', (first_connection,)), ('resume', (returning_connection,))])
+
     def test_existing_client_pause_failure_prevents_save(self):
         a = self.world.join('a')
         self.step('pause'); self.step('save')
