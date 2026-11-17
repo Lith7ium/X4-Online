@@ -509,6 +509,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     if client_motion is not None and (not participant.keep_worker or witness_guard_ready is None):
         raise ValueError('client motion requires retained witness join')
     participant.cancel_check = cancel_check
+    if hasattr(participant, '_diagnostic_server_guard'):
+        participant._diagnostic_server_guard = check_server
     deadline = participant.run_deadline
     participant.checkpoint = checkpoint
     participant.target = recovery_target

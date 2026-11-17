@@ -436,6 +436,29 @@ def finish_recovery_lock(lockbox, remaining, services_stopped, errors):
         except BaseException as error: errors.append('lock cleanup: '+type(error).__name__)
 
 
+
+class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
+    """Fence every recovered-server participant exchange with its owner guard."""
+
+    def __init__(self, host, *, enabled, timeout, guard_process):
+        if not callable(guard_process):
+            raise ValueError('participant process guard required')
+        super().__init__(host, enabled=enabled, timeout=timeout)
+        self._guard_process = guard_process
+
+    def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None):
+        if check is not None:
+            raise RuntimeError('unexpected nested participant guard')
+        return super()._exchange(conn, peer, others, raw, expected, deadline,
+                                 check=self._guard_process, validate_answer=validate_answer)
+
+    def _quiet(self, peers, deadline):
+        self._guard_process()
+        result = super()._quiet(peers, deadline)
+        self._guard_process()
+        return result
+
+
 def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1):
     """Accept and pump local peers until deadline, including while world is empty.
 
@@ -602,6 +625,12 @@ def run(args):
         client_sector=diagnostic_client_sector(args,pair_delivery)
         guard_timing=diagnostic_guard_timing(args,source_enabled)
         long_motion=diagnostic_long_motion(args,witness_join,source_enabled,client_motion)
+        owner_diagnostic = getattr(args, 'diagnostic_single_owner', False)
+        if (type(owner_diagnostic) is not bool or
+                (owner_diagnostic and (not getattr(args, 'diagnostic_client', False) or source_enabled or
+                                       witness_phase or getattr(args, 'registry_status', False) or
+                                       getattr(args, 'registry_enroll', False)))):
+            raise ValueError('single-owner diagnostic requires one load-only diagnostic client')
         tls_certificate = getattr(args, 'diagnostic_tls_certificate', None)
         tls_private_key = getattr(args, 'diagnostic_tls_private_key', None)
         if ((tls_certificate is None) != (tls_private_key is None) or
@@ -789,18 +818,12 @@ def run(args):
         session = TrustedMarkerLoadSession(world, enabled=True)
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True)
         host = ExperimentalLocalHost(world, control, service, enabled=True)
-        class GuardedParticipants(ExperimentalTCPParticipants):
-            def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None):
-                if check is not None: raise RuntimeError('unexpected nested participant guard')
-                return super()._exchange(conn, peer, others, raw, expected, deadline,
-                                         check=verify_process, validate_answer=validate_answer)
-            def _quiet(self, peers, deadline):
-                verify_process(); result = super()._quiet(peers, deadline); verify_process(); return result
         overlap_guard = [None]
         def verify_process():
             if overlap_guard[0] is None: return check()
             return overlap_guard[0]()
-        world._participants = GuardedParticipants(host, enabled=True, timeout=120)
+        world._participants = RecoveredGuardedParticipants(host, enabled=True, timeout=120,
+                                                          guard_process=verify_process)
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
         # Guard every synchronous engine call, including potentially long save operations.
@@ -880,7 +903,12 @@ def run(args):
                 if guard_timing: guard.enable_timing()
             if source_enabled:overlap_guard[0]=verify_diagnostic
             for index in range(count):
-                diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory,keep_worker=source_enabled)
+                if owner_diagnostic:
+                    from authority_recovered_owner_client import RecoveredOwnerClient
+                    diagnostic = RecoveredOwnerClient(deadline, source_store.directory)
+                    diagnostic._owner_guard_slot = overlap_guard
+                else:
+                    diagnostic = diagnostic_client.ServerClient(deadline, source_store.directory, keep_worker=source_enabled)
                 diagnostics.append(diagnostic)
                 diagnostic_out = out if count == 1 else out/('diagnostic-%02d' % (index+1))
                 if count != 1: diagnostic_out.mkdir(mode=0o700)
@@ -1075,6 +1103,7 @@ def main():
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     parser.add_argument('--diagnostic-tls-certificate',type=Path,help='private local diagnostic TLS certificate')
     parser.add_argument('--diagnostic-tls-private-key',type=Path,help='private local diagnostic TLS key')
+    parser.add_argument('--diagnostic-single-owner',action='store_true',help='private single-owner load-only diagnostic')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')
