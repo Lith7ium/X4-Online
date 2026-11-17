@@ -222,6 +222,34 @@ class IndependentStageTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CLIValidationTests(unittest.TestCase):
+    def test_ctrl_c_preserves_cleanup_failure_and_ordinary_cancellation(self):
+        sys.path.insert(0, str(ROOT/'tools/dev'))
+        import authority_client_stage as cli
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key_file, token_file = root/'key', root/'token'
+            key_file.write_bytes(b'a'*64)
+            token_file.write_bytes(b'b'*32)
+            arguments = ['authority_client_stage.py', '--host', '127.0.0.1', '--port', '1',
+                '--fingerprint', '0'*64, '--shared-key-file', str(key_file),
+                '--file-token-file', str(token_file), '--slot', '1', '--out', str(root/'new')]
+            for cleanup_note in (None, 'worker_cleanup_failed', 'tunnel_cleanup_failed'):
+                async def interrupted_stage(**options):
+                    asyncio.get_running_loop().call_soon(signal.raise_signal, signal.SIGINT)
+                    try:
+                        await asyncio.sleep(30)
+                    except asyncio.CancelledError as error:
+                        if cleanup_note is not None:
+                            error.add_note(cleanup_note)
+                        raise
+                output = io.StringIO()
+                with self.subTest(cleanup_note=cleanup_note), patch.object(sys, 'argv', arguments), \
+                        patch.object(cli, 'stage_client_connection', side_effect=interrupted_stage), \
+                        contextlib.redirect_stdout(output):
+                    self.assertEqual(cli.main(), 1)
+                expected = 'cleanup_failed' if cleanup_note else 'cancelled'
+                self.assertEqual(json.loads(output.getvalue()), {'status': 'failed', 'error_class': expected})
+
     def test_trailing_or_oversized_credentials_never_start_staging(self):
         sys.path.insert(0, str(ROOT/'tools/dev'))
         import authority_client_stage as cli

@@ -20,6 +20,22 @@ def _read_secret_file(path, width):
     return raw.rstrip(b'\r\n').decode('ascii')
 
 
+def _cleanup_failed(error):
+    return (isinstance(error, RuntimeError) and error.args == ('cleanup_failed',)) or any(
+        note in {'worker_cleanup_failed', 'tunnel_cleanup_failed'}
+        for note in getattr(error, '__notes__', ()))
+
+
+async def _run_stage(**options):
+    try:
+        return await stage_client_connection(**options)
+    except asyncio.CancelledError as error:
+        # Preserve cleanup failure before asyncio.run translates Ctrl-C to KeyboardInterrupt.
+        if _cleanup_failed(error):
+            raise RuntimeError('cleanup_failed') from None
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', required=True)
@@ -35,7 +51,7 @@ def main():
     try:
         shared_key = bytes.fromhex(_read_secret_file(arguments.shared_key_file, 64))
         file_token = _read_secret_file(arguments.file_token_file, 32)
-        result = asyncio.run(stage_client_connection(server_host=arguments.host, server_port=arguments.port,
+        result = asyncio.run(_run_stage(server_host=arguments.host, server_port=arguments.port,
             server_fingerprint=arguments.fingerprint, shared_key=shared_key, file_token=file_token,
             file_slot=arguments.slot, new_directory=arguments.out,
             deadline=time.monotonic()+arguments.timeout, keepalive_interval=arguments.keepalive_interval))
@@ -43,10 +59,7 @@ def main():
         print(json.dumps({'status': 'failed', 'error_class': 'cancelled'}))
         return 1
     except Exception as error:
-        cleanup_failed = (isinstance(error, RuntimeError) and error.args == ('cleanup_failed',)) or any(
-            note in {'worker_cleanup_failed', 'tunnel_cleanup_failed'}
-            for note in getattr(error, '__notes__', ()))
-        print(json.dumps({'status': 'failed', 'error_class': 'cleanup_failed' if cleanup_failed else 'staging_failed'}))
+        print(json.dumps({'status': 'failed', 'error_class': 'cleanup_failed' if _cleanup_failed(error) else 'staging_failed'}))
         return 1
     print(json.dumps(result))
     return 0
