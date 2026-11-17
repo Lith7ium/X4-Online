@@ -74,6 +74,37 @@ sentinel, was left unchanged. Native Windows, real junctions and X4 were not
 tested by that run. Its private output is
 `.local/fresh-profile-wine-20261117-01/`.
 
+## Windows fixture overlay installer
+
+`experimental_windows_fixture_overlay.install_fixture_overlay` can populate an
+absent `extensions/x4_lan_lab` inside a caller-owned new disposable Windows
+view. It assembles the existing load, marker, identity-fixture and local UDP
+participant probes. The caller supplies a marker-bound offer, the expected
+profile-45841 save path, a local participant port and lease, and an explicit
+Windows network DLL path with an independently trusted SHA-256. The expected
+marker is not written to the client configuration. The returned file hashes
+are a snapshot for the caller to guard; they do not guard files by themselves.
+
+This installer is **only for diagnostic saves containing the two existing
+identity-fixture ships and checkpoint marker**. It is not a general-world
+installer or launcher; the fixture probe will reject saves without those ships.
+The supplied save path is checked only for syntax: a path ending in
+`45841/save` can name an ordinary profile. Before installation and X4 startup,
+the supervisor must independently establish the physical identity of the
+intended private profile. It must own the view, profile and their ancestors,
+protect the staged save, ensure files remain unchanged, and bind observations
+to the same live X4 process. The participant UDP probe may listen before the
+marker and identity checks complete. The supervisor must withhold commands
+until those observations are correlated and admission is confirmed.
+
+The generated configuration contains the ticket and lease in plaintext. The
+supervisor must protect it with private ACLs and clean up its owned copy after
+X4 stops. Filesystem checks cannot fence concurrent replacement. On failure
+after creation, a partial extension remains for inspection; no existing
+extension is deleted or overwritten. Save paths are currently ASCII only.
+The focused tests use synthetic files on Linux; this installer has not been
+used with a Windows X4 process and does not establish gameplay or Internet use.
+
 ## Opt-in Linux recovered-server diagnostic
 
 `tools/dev/authority_recovered_loopback_server.py` accepts
