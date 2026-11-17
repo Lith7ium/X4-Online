@@ -125,21 +125,22 @@ remote CPU/RAM requirement, independent Steam startup, or hosting acceptance.
 
 Retaining a CPU Vulkan implementation and a virtual display is technically
 compatible with a GPU-free Linux target in principle. Removing all graphics
-libraries is not itself required by absence of GPU hardware. The recommended
-next investigation is to preserve resource lifetimes while suppressing scene
-rendering; choosing that as the server execution model remains under discussion
-with the user. Also distinguish an administrable Linux server from a managed
+libraries is not itself required by absence of GPU hardware. The user has now
+approved **GPU-free Linux with internal graphics libraries** as the next
+development stage. Preserve resource lifetimes while suppressing scene
+rendering; a stable implementation is still to be demonstrated.
+Also distinguish an administrable Linux server from a managed
 game-server plan: the reviewed [Nitrado FAQ](https://server.nitrado.net/faqs/index/)
 and [4NetPlayers FTP documentation](https://www.4netplayers.com/en/wiki/allgemein/ftp-area/)
 describe supported-game files/mods, not a general promise of arbitrary
 executables or system dependencies. No provider prohibition or acceptance is
 inferred from that documentation gap.
 
-Before selecting the next server execution path, the user has been
-asked whether software Vulkan/a virtual display may remain internally while
-scene rendering is removed, or whether all such dependencies must go. Keep
-that decision pending until answered. The retired submission-discard layer
-does not preserve copies or query semantics and must not be reused unchanged.
+Software Vulkan and a virtual display may remain internally under this decision.
+It does not authorize treating the current native experiment as a stable server
+or claiming support for a hosting provider. The retired submission-discard
+layer does not preserve copies or query semantics and must not be reused
+unchanged.
 
 Any decision to adopt sector-wide ownership, change the ownership of economy
 or combat, or commit to a new server execution model must be discussed with
