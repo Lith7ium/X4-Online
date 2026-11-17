@@ -214,3 +214,13 @@ are reported as unavailable; they do not change the existing guard. The two
 extra clock reads add a small measurement overhead. The observation contains
 no lease, nonce, request, digest, or exception text and does not measure the
 full source-to-client age or Internet latency. It has not yet been run in X4.
+
+The existing `--diagnostic-guard-timing` option also records a bounded
+breakdown of the full and saved-checkpoint guards by diagnostic phase and
+Python call site. Each row contains only selected code locations, call count
+and cumulative local wall time; no arguments or frame locals are recorded.
+The breakdown preserves the existing guard calls and their ordering. Nested
+guard times can overlap and must not be added together as independent costs;
+the stack describes where a guard was called, not what work inside it caused
+the delay. `guard_call_sites_dropped` reports calls omitted after the 128-row
+limit. This breakdown has only been exercised offline, not in X4.

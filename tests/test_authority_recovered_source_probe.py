@@ -137,6 +137,65 @@ class Probe(unittest.TestCase):
         self.assertEqual(diagnostics.snapshot()['pull_attempts'],2)
         self.assertEqual(diagnostics.snapshot()['prevalidated_samples'],2)
         self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'],0)
+
+    def test_opt_in_guard_callsites_preserve_operations_and_measure_failures(self):
+        event_sequences = []
+        for enabled in (False, True):
+            events, kwargs, bind = self.context()
+            clock = [1.0]
+            kwargs['guard'].deadline = 1000
+            diagnostics = subject.SourceProbeDiagnostics(include_guard_callsites=enabled)
+            kwargs['diagnostics'] = diagnostics
+            def verify():
+                events.append('verify')
+                clock[0] += 2
+            def checkpoint_guard():
+                events.append('checkpoint')
+                clock[0] += 3
+                return True
+            kwargs['verify'] = verify
+            kwargs['guard'].check.side_effect = checkpoint_guard
+            with patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]), \
+                 patch.object(subject.time, 'sleep'), patch.object(subject, 'ExperimentalTCPJobDelivery'), \
+                 patch.object(subject, 'ExperimentalTCPMotion'), \
+                 patch.object(subject, 'bind_running_source_motion', side_effect=bind), \
+                 patch.object(subject.os, 'stat', return_value=SimpleNamespace(st_dev=1, st_ino=2)):
+                subject.run(**kwargs)
+            progress = diagnostics.snapshot()
+            event_sequences.append(events)
+            if not enabled:
+                self.assertNotIn('guard_call_sites', progress)
+                continue
+            rows = progress['guard_call_sites']
+            self.assertEqual(progress['guard_call_sites_dropped'], 0)
+            for kind, count, seconds in (
+                    ('full', progress['full_guard_calls'], progress['full_guard_seconds']),
+                    ('saved_checkpoint', progress['saved_checkpoint_guard_calls'],
+                     progress['saved_checkpoint_guard_seconds'])):
+                matches = [row for row in rows if row['guard'] == kind]
+                self.assertEqual(sum(row['calls'] for row in matches), count)
+                self.assertEqual(sum(row['seconds'] for row in matches), seconds)
+                self.assertTrue(all(row['stack'] and row['phase'] for row in matches))
+            self.assertTrue(any(row['phase'] == 'bind_source' and row['guard'] == 'saved_checkpoint'
+                                for row in rows))
+            self.assertNotIn('lease', repr(rows))
+        self.assertEqual(event_sequences[0], event_sequences[1])
+
+        _, kwargs, _ = self.context()
+        diagnostics = subject.SourceProbeDiagnostics(include_guard_callsites=True)
+        kwargs['diagnostics'] = diagnostics
+        kwargs['verify'] = Mock(side_effect=RuntimeError('guard failure'))
+        with self.assertRaisesRegex(RuntimeError, 'guard failure'):
+            subject.run(**kwargs)
+        self.assertEqual(diagnostics.snapshot()['guard_call_sites'][0]['guard'], 'full')
+
+    def test_guard_callsite_capacity_is_bounded(self):
+        diagnostics = subject.SourceProbeDiagnostics(include_guard_callsites=True)
+        for line in range(diagnostics._MAX_CALL_SITES + 3):
+            diagnostics.record_guard_call('full', ('phase', (('file', 'call', line),)), 1)
+        progress = diagnostics.snapshot()
+        self.assertEqual(len(progress['guard_call_sites']), diagnostics._MAX_CALL_SITES)
+        self.assertEqual(progress['guard_call_sites_dropped'], 3)
     def test_unconfirmed_source_stop_never_closes_or_authorizes_guard_shutdown(self):
         events,kwargs,bind=self.context(stop=False)
         with patch.object(subject,'ExperimentalTCPJobDelivery'),patch.object(subject,'ExperimentalTCPMotion'), \

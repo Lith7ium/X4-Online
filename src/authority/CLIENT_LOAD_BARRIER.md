@@ -63,6 +63,17 @@ owner has no production launcher integration and does not establish gameplay. Fo
 real wire and file-service components with simulated X4 observations and
 controller results; they do not establish native Windows or Internet behavior.
 
+`lockstep.launcher.profile.prepare_fresh` is a separate helper for a future
+launcher: it requires an exclusively controlled existing root and creates only
+an absent disposable profile, without deleting or overwriting an existing one.
+The caller remains responsible for the root's ancestors and for preventing
+concurrent directory replacement. It is not yet wired into an authority
+launcher. In one isolated Windows Python 3.14.8/Wine run, a synthetic new
+profile was created and an existing synthetic profile, including its save
+sentinel, was left unchanged. Native Windows, real junctions and X4 were not
+tested by that run. Its private output is
+`.local/fresh-profile-wine-20261117-01/`.
+
 ## Opt-in Linux recovered-server diagnostic
 
 `tools/dev/authority_recovered_loopback_server.py` accepts
@@ -101,7 +112,7 @@ these tests nor the earlier run establish Windows, Internet or gameplay support.
 
 On 2026-11-17 an isolated native Linux attempt planned with two X4 instances
 and the single-owner TLS option was stopped during server startup after
-prolonged lack of progress before Vulkan initialization. The client did not start, so this
+prolonged lack of progress before any Vulkan initialization log entry. The client did not start, so this
 attempt provides no real-X4 evidence for the owner or TLS path. The cause remains
 unknown. The supervisor reported its owned processes stopped without cleanup
 errors; the test lock and temporary private key were absent afterward, and no
@@ -110,6 +121,17 @@ X4 process remained. The local artifacts are under
 `.local/owner-real-tls-20261117-evidence01/`. These results do not establish
 Windows, Internet, gameplay, or persistent multiplayer behavior.
 
+A second instrumented attempt, `.local/owner-startup-observed-20261117-01/`,
+was stopped after more than four minutes without server-log progress. It also
+did not start a client. Six observations recorded waiting threads and an X11
+display whose connected DP-2 output reported DPMS off; these observations do
+not establish why X4 stalled. The run reported cleanup and temporary-key
+removal; no X4 process or endpoint remained. Separate X11 and Vulkan queries
+succeeded in an X4-like isolated namespace, but did not start X4 or prove that
+X4 could create and present a swapchain.
+
 The associated repository check reported 4,623 tests without failures and
 56 skips; it was incomplete and must not be presented as a complete passing
-check.
+check. A later check covering the diagnostic timing and fresh-profile helper
+ran 4,632 tests without test failures, but still skipped 56 checks and therefore
+remains incomplete.

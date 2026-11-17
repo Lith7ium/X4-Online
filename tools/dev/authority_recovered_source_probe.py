@@ -9,6 +9,7 @@ import copy
 import math
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -22,7 +23,19 @@ from authority_tcp_native_worker import check_process
 class SourceProbeDiagnostics:
     """Non-secret progress and guard costs; never performs a guard itself."""
 
-    def __init__(self):
+    _TRACE_FILES = frozenset({
+        'authority_recovered_source_probe.py', 'experimental_source_motion_ipc.py',
+        'experimental_tcp_motion.py', 'experimental_tcp_job_delivery.py',
+        'experimental_tcp_control.py', 'experimental_tcp_latest_motion.py',
+    })
+    _MAX_CALL_SITES = 128
+
+    def __init__(self, *, include_guard_callsites=False):
+        if type(include_guard_callsites) is not bool:
+            raise ValueError('guard callsite option must be boolean')
+        self.include_guard_callsites = include_guard_callsites
+        self.guard_call_sites = {}
+        self.guard_call_sites_dropped = 0
         self.started_at = time.monotonic()
         self.phase_started_at = self.started_at
         self.phase = 'initializing'
@@ -40,6 +53,39 @@ class SourceProbeDiagnostics:
         self.prevalidated_samples = 0
         self.confirmed_client_receipts = 0
 
+    def guard_call_site(self):
+        """Capture only code locations, never frame locals or callback values."""
+        if not self.include_guard_callsites:
+            return None
+        try:
+            frame = sys._getframe(1)
+            locations = []
+            while frame is not None and len(locations) < 8:
+                filename = os.path.basename(frame.f_code.co_filename)
+                if filename in self._TRACE_FILES:
+                    locations.append((filename, frame.f_code.co_name, frame.f_lineno))
+                frame = frame.f_back
+            return self.phase, tuple(locations)
+        except Exception:
+            return None
+
+    def record_guard_call(self, kind, site, seconds):
+        # Timing is supplemental and must not replace a guard exception.
+        if site is None:
+            return
+        try:
+            key = (kind, *site)
+            if key not in self.guard_call_sites:
+                if len(self.guard_call_sites) >= self._MAX_CALL_SITES:
+                    self.guard_call_sites_dropped += 1
+                    return
+                self.guard_call_sites[key] = {'calls': 0, 'seconds': 0.0}
+            row = self.guard_call_sites[key]
+            row['calls'] += 1
+            row['seconds'] += seconds
+        except Exception:
+            pass
+
     def enter(self, phase):
         now = time.monotonic()
         self.phase_seconds[self.phase] = self.phase_seconds.get(self.phase, 0.0) + now - self.phase_started_at
@@ -50,7 +96,7 @@ class SourceProbeDiagnostics:
         now = time.monotonic()
         phase_seconds = dict(self.phase_seconds)
         phase_seconds[self.phase] = phase_seconds.get(self.phase, 0.0) + now - self.phase_started_at
-        return {'phase': self.phase, 'elapsed_seconds': now - self.started_at,
+        result = {'phase': self.phase, 'elapsed_seconds': now - self.started_at,
                 'phase_seconds': phase_seconds, 'full_guard_calls': self.full_guard_calls,
                 'full_guard_seconds': self.full_guard_seconds,
                 'saved_checkpoint_guard_calls': self.saved_checkpoint_guard_calls,
@@ -62,6 +108,16 @@ class SourceProbeDiagnostics:
                 'last_pull_seconds': self.last_pull_seconds,
                 'prevalidated_samples': self.prevalidated_samples,
                 'confirmed_client_receipts': self.confirmed_client_receipts}
+        if self.include_guard_callsites:
+            result['guard_call_sites'] = [
+                {'guard': kind, 'phase': phase,
+                 'stack': [{'file': filename, 'function': function, 'line': line}
+                           for filename, function, line in locations],
+                 **dict(timing)}
+                for (kind, phase, locations), timing in sorted(self.guard_call_sites.items())
+            ]
+            result['guard_call_sites_dropped'] = self.guard_call_sites_dropped
+        return result
 
 
 def perform_saved_apply(source, sample, received_at, *, active_guard, checked_operation,
@@ -216,11 +272,14 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             verify()
         else:
             diagnostics.full_guard_calls += 1
+            site = diagnostics.guard_call_site()
             started_at = time.monotonic()
             try:
                 verify()
             finally:
-                diagnostics.full_guard_seconds += time.monotonic() - started_at
+                elapsed = time.monotonic() - started_at
+                diagnostics.full_guard_seconds += elapsed
+                diagnostics.record_guard_call('full', site, elapsed)
         check_deadline()
         return True
 
@@ -260,11 +319,14 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         if diagnostics is None:
             return guard.check() is True
         diagnostics.saved_checkpoint_guard_calls += 1
+        site = diagnostics.guard_call_site()
         started_at = time.monotonic()
         try:
             return guard.check() is True
         finally:
-            diagnostics.saved_checkpoint_guard_seconds += time.monotonic() - started_at
+            elapsed = time.monotonic() - started_at
+            diagnostics.saved_checkpoint_guard_seconds += elapsed
+            diagnostics.record_guard_call('saved_checkpoint', site, elapsed)
 
     staged_samples = []
     sample_received_at = []

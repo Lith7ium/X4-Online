@@ -301,12 +301,13 @@ def finish_source_diagnostic(active, active_clients, guard_context, *, verify, p
     return observation, client_result
 
 
-def run_source_probe_with_progress(result, probe, **kwargs):
+def run_source_probe_with_progress(result, probe, *, include_guard_callsites=False, **kwargs):
     """Retain non-secret progress even when the diagnostic raises."""
     import authority_recovered_source_probe
     if type(result) is not dict or not callable(probe):
         raise ValueError('source progress requires a result and probe')
-    diagnostics = authority_recovered_source_probe.SourceProbeDiagnostics()
+    diagnostics = authority_recovered_source_probe.SourceProbeDiagnostics(
+        include_guard_callsites=include_guard_callsites)
     try:
         return probe(diagnostics=diagnostics, **kwargs)
     finally:
@@ -948,6 +949,7 @@ def run(args):
                                        'source_operation': 600 if long_motion else 300,
                                        'tcp_send': 480 if long_motion else 240, 'client_bind': client_motion_timeout}
                         return run_source_probe_with_progress(result,authority_recovered_source_probe.run,sock=source_sock,
+                            include_guard_callsites=guard_timing,
                             settings=source_context,index=source_index,baseline=saved,guard=guard,pump=pump,
                             active=active,host=host,world=world,identity=identity,verify=verify_diagnostic,
                             verify_process=check,candidate_indices=source_candidates,client_motion=client_motion,
