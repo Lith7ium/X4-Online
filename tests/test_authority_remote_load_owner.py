@@ -128,6 +128,11 @@ class OwnerTest(unittest.TestCase):
             with parent.makefile('rb',buffering=0) as reader:
                 event=json.loads(reader.readline());self.assertEqual(event['event'],'staged')
                 self.assertEqual((root/'save/save_009.xml.gz').read_bytes(),data)
+                download = root/'download/save.xml.gz'
+                target = root/'save/save_009.xml.gz'
+                self.assertEqual(download.read_bytes(), data)
+                self.assertFalse(os.path.samefile(download, target))
+                self.assertEqual(target.stat().st_mode & 0o777, 0o400)
                 time.sleep(1.25)
                 parent.sendall(b'{"command":"claim"}\n')
                 payload,control,flags,_=parent.recvmsg(1,socket.CMSG_SPACE(array.array('i').itemsize))

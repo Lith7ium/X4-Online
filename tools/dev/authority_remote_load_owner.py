@@ -17,6 +17,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
+from authority.client_save_staging import copy_offered_save
 from authority.trusted_load_messages import encode_bound_offer
 from authority_tcp_native_worker import read_line, send_frame, parse_json
 
@@ -42,9 +43,9 @@ def run(tcp, ipc):
     try:
         bound = client.request_offer()
         source = client.download(config['download'])
-        # A private directory is required; no overwrite if a target appears.
-        os.link(source, target, follow_symlinks=False)
-        os.unlink(source)
+        # The client process starts only after staging has completed. Keep the
+        # target read-only before recording its fingerprint for the later claim.
+        copy_offered_save(source, target, bound.offer, pump=client.poll)
         target.chmod(0o400)
         client.verify_staged(target)
         send_frame(ipc, json.dumps({'event':'staged','offer':encode_bound_offer(bound).decode('ascii')},

@@ -28,11 +28,16 @@ TCP, Unix FD passing, process fencing and profiles are for a controlled Linux
 loopback experiment, not a Windows client, Internet launch path or gameplay.
 
 Offline tests use real localhost sockets and helper subprocesses but simulated
-X4 events.
+X4 events. The owner now copies the download to a new save slot, makes the
+copy read-only, and verifies it before requesting the load. The separate
+download remains in the private output directory and requires additional
+space. A failed copy may leave an incomplete private target for inspection.
+This revised copy path has not yet been exercised in native X4.
 
 ## Bounded native observation, 2026-11-16
 
-The isolated Linux/Linux run `.local/authority-remote-load-pair-01` reports
+The earlier isolated Linux/Linux run `.local/authority-remote-load-pair-01`,
+which staged with a hard link rather than the current copy path, reports
 successful checkpoint transfer, trusted client admission, TCP participant
 commands and confirmed server/client resume. Its result reports clean helper
 exit, no remaining owned processes and confirmed owned-process cleanup. These
