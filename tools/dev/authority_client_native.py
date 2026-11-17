@@ -207,7 +207,7 @@ def run(args, *, playback_driver=None):
     result = dict(success=False, scope='one private Linux native client; cooperative load/control; no gameplay proof',
         exact_loaded_file_proven=False, admission_state='not_attempted', server_pause_confirmations=0,
         server_resume_confirmations=0, owned_cleanup_confirmed=False, archived_identity_fixture_installed=False)
-    processes, lockbox, handlers, cleanup_errors = [], [], {}, []
+    processes, lockbox, handlers, cleanup_errors, evidence_errors = [], [], {}, [], []
     participant = watch = target = ticket = playback = None
     protected = {}
     resources_stopped = False
@@ -348,12 +348,21 @@ def run(args, *, playback_driver=None):
                         if playback is not None:
                             playback.verify_registry()
                             playback.records()
+                        result['final_native_evidence_valid'] = True
+                    except BaseException:
+                        result['success'] = False
+                        result['final_native_evidence_valid'] = False
+                        evidence_errors.append('final_native_evidence_invalid')
+                    # A failed observation does not establish a live resource.
+                    # Input integrity remains a separate release precondition
+                    # and must still be checked when receipt validation fails.
+                    try:
                         if live.sha(target) != ticket['sha256'] or any(
                                 live.sha(path) != digest for path, digest in protected.items()):
                             raise ValueError('final_native_evidence_changed')
                     except BaseException:
                         result['success'] = False
-                        cleanup_errors.append('final_native_evidence_invalid')
+                        cleanup_errors.append('final_native_inputs_invalid')
                 if playback is not None:
                     try:
                         playback.close(native_stopped=resources_stopped)
@@ -392,6 +401,8 @@ def run(args, *, playback_driver=None):
                 cleanup_errors.append('steam_identity_unavailable')
             if lockbox:
                 download.finish_owned_lock(*lockbox[0], resources_stopped and not cleanup_errors, cleanup_errors)
+            if evidence_errors:
+                result.update(success=False, evidence_errors=evidence_errors)
             if cleanup_errors:
                 result.update(success=False, cleanup_errors=cleanup_errors)
             result['phase'] = 'finished'
