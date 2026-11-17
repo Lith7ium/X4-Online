@@ -43,7 +43,7 @@ class Checkpoint:
 
 
 def _read_regular(path, limit):
-    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
     fd = os.open(path, flags)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -84,7 +84,7 @@ def _validate_save(path):
     parser.ExternalEntityRefHandler = reject
     total = 0
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
         with os.fdopen(fd, 'rb') as raw:
             if not stat.S_ISREG(os.fstat(raw.fileno()).st_mode):
                 raise CheckpointError('save is not a regular file')
@@ -105,7 +105,7 @@ def _validate_save(path):
 
 
 def _file_digest(path):
-    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
     with os.fdopen(fd, 'rb') as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise CheckpointError('save is not a regular file')
@@ -150,6 +150,8 @@ class CheckpointStore:
 
         Metadata alone does not prove that X4 wrote the marker into the save.
         That requires an independently observed native load.
+        If an error occurs after replacing CURRENT, the new pointer may already
+        be visible even though its directory update was not confirmed durable.
         """
         if marker is not None and (not isinstance(marker, str) or not _MARKER.fullmatch(marker)):
             raise CheckpointError('invalid checkpoint marker')
@@ -163,7 +165,7 @@ class CheckpointStore:
         pointer_temp = None
         try:
             target = stage / 'save.xml.gz'
-            fd = os.open(source, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+            fd = os.open(source, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
             with os.fdopen(fd, 'rb') as incoming, target.open('xb') as outgoing:
                 before = os.fstat(incoming.fileno())
                 if not stat.S_ISREG(before.st_mode):

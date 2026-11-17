@@ -2,7 +2,9 @@
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -133,6 +135,96 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(len(list(self.store_dir.glob('checkpoint-*'))), 2)
         self.assertFalse(list(self.store_dir.glob('.staging-*')))
         self.assertFalse(list(self.store_dir.glob('.current-*')))
+
+    def test_publish_sync_failure_after_replace_can_leave_new_current_visible(self):
+        self.write_save()
+        previous = self.store.publish(self.source)
+        self.store.confirm(previous)
+        self.write_save(b'<savegame><different/></savegame>')
+        from authority import checkpoints
+        real_sync_dir = checkpoints._sync_dir
+        calls = 0
+
+        def fail_after_pointer_replace(path):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise OSError('directory sync failed')
+            real_sync_dir(path)
+
+        with mock.patch.object(checkpoints, '_sync_dir', side_effect=fail_after_pointer_replace):
+            with self.assertRaisesRegex(OSError, 'directory sync failed'):
+                self.store.publish(self.source)
+        self.assertEqual(calls, 3)
+        current = self.store.latest()
+        self.assertNotEqual(current, previous)
+        self.assertEqual(current.sha256, hashlib.sha256(self.source.read_bytes()).hexdigest())
+        self.assertEqual(self.store.latest_confirmed(), previous)
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo') and getattr(os, 'O_NONBLOCK', 0),
+                         'FIFO and nonblocking open required')
+    def test_fifo_inputs_are_rejected_without_blocking(self):
+        # Separate processes enforce a deadline even if a regression blocks in open().
+        script = r'''
+import gzip
+import os
+from pathlib import Path
+import sys
+import tempfile
+from unittest import mock
+
+sys.path.insert(0, sys.argv[1])
+from authority.checkpoints import CheckpointError, CheckpointStore, _file_digest, _validate_save
+
+case = sys.argv[2]
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    store_dir = root / 'store'
+    store_dir.mkdir()
+    source = root / 'incoming.gz'
+    source.write_bytes(gzip.compress(b'<savegame/>'))
+    store = CheckpointStore(store_dir)
+    checkpoint = store.publish(source)
+    store.confirm(checkpoint)
+    targets = {
+        'current': store_dir / 'CURRENT',
+        'confirmed': store_dir / 'CONFIRMED',
+        'manifest': checkpoint.path.parent / 'manifest.json',
+        'digest': checkpoint.path,
+        'validate': checkpoint.path,
+        'source': source,
+    }
+    target = targets[case]
+    target.unlink()
+    os.mkfifo(target)
+    try:
+        if case == 'current':
+            store.latest()
+        elif case == 'confirmed':
+            store.latest_confirmed()
+        elif case == 'manifest':
+            store.get(checkpoint.checkpoint_id)
+        elif case == 'digest':
+            _file_digest(target)
+        elif case == 'validate':
+            _validate_save(target)
+        elif case == 'source':
+            # Model replacement after the preliminary path type check.
+            with mock.patch.object(Path, 'is_file', return_value=True):
+                store.publish(source)
+    except CheckpointError:
+        pass
+    else:
+        raise AssertionError('FIFO was accepted')
+'''
+        source_dir = Path(__file__).resolve().parents[1] / 'src'
+        for case in ('current', 'confirmed', 'manifest', 'digest', 'validate', 'source'):
+            with self.subTest(case=case):
+                result = subprocess.run(
+                    [sys.executable, '-c', script, str(source_dir), case],
+                    capture_output=True, text=True, timeout=5,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_invalid_deflate_preserves_current_and_confirmed_checkpoint(self):
         self.write_save()
