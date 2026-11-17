@@ -753,6 +753,22 @@ registered components; CURRENT was not the confirmed checkpoint, and the
 result reported no owned X4 processes remaining. This remains a single-ship
 Linux loopback observation, without visible motion or gameplay proof.
 
+A separate read-only, one-pass inspection of the confirmed source checkpoint
+`checkpoint-f3bfb3fc65ad4a93b199230755601f62` matched the selected forward
+and reverse registry entries with recognized saved ship components. Index 687
+was recorded as `JQO-690`, an Argon fighter in
+`cluster_14_sector001_macro`; index 1318 was `ENH-870`, an Antigone transport
+in `cluster_06_sector001_macro`. In particular, index 1318 in this saved
+registry is not the `WRG-830` fixture observed in the separate census save.
+The source was pinned by its confirmed/current pointers, manifest, size and
+SHA-256 during this scan. The private script, focused synthetic checks and
+captured output are in `.local/witness-target-one-pass-01`.
+
+This parser checked only these two entries and its recognized component-ID
+format; it did not establish a full registry bijection, continuous path
+integrity, or runtime, historical or cross-process ship identity. It does not
+authorize applying the census fixture's setter to this checkpoint.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
