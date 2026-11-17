@@ -27,7 +27,7 @@ The external process-incarnation guard is a caller assertion, not proof of
 PID/socket ownership or checkpoint identity. Guard and FFI/MD samples are not
 atomic and report only a point-in-time sector observation. This module does not detect map viewport sectors, establish portable
 sector identity across processes, implement subscriptions or expiry, determine
-ships in a sector, or transmit any data. It has not run natively in X4.
+ships in a sector, or transmit any data.
 
 The private recovered-client motion installer also accepts an explicit
 `player_sector` pair of fresh incarnation and nonce tokens. When installed,
@@ -43,7 +43,7 @@ The caller must independently generate and fence the
 process incarnation, ensure exclusive event ownership and validate the final
 log and process lifetime. A log line is provisional if later checks fail;
 no PID, shared sector identity, map viewport, high-attention assignment or
-native game behavior is established by these offline tests.
+native game behavior is established by the offline tests alone.
 
 The recovered-server supervisor provides a separate default-off
 `--diagnostic-client-sector` option only with one-client pair delivery. It
@@ -56,7 +56,18 @@ client STOP, owned-process exit and final log checks. The output describes a
 point-in-time local observation, not process authentication or portable sector
 identity. Filesystem and process checks are sampled; the log fence assumes an
 exclusive writer and cannot prove exact emission time or exclude an old-byte
-rewrite while the file grows. This mode is untested in native X4.
+rewrite while the file grows.
+
+One isolated Linux loopback run, `.local/authority-client-sector-once-01`,
+observed `cluster_14_sector001_macro` on one client after the motion binding.
+The diagnostic reached its complete phase and both workers confirmed STOP.
+The supervisor's control flow shows that the sector finalization returned before
+the subsequent departure save failed registry validation. The original result
+file omitted the finalized sector because it was copied only after that save;
+the observation was reconstructed from the logs and control flow. Later runs
+retain finalized intermediate sector evidence even when departure fails. This
+single local observation does not establish shared sector identity, two-player
+visibility, a working subscription, or Internet and Windows behavior.
 
 If construction fails after partial listener registration, the listener or
 router claim may remain installed. The caller must fence and properly stop the
