@@ -30,6 +30,9 @@ MD=('authority_checkpoint_marker.xml','authority_ship_registry.xml','authority_s
 UI=('authority_checkpoint_marker_probe.lua','authority_registry_resolve_string.lua','authority_sector_read_probe.lua')
 # Optional experiment-specific checks run under signal fencing before publication.
 result_finalizer=None
+# Explicit private experiments may continue once the ordered read completes.
+# As with result_finalizer, callers must restore this module hook after use.
+observation_callback=None
 NUMBER=r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
 DONE=re.compile(r'DONE slot=([12]) pilot=(present|absent) order=([\w-]{1,96}) state=(started|critical|other|none) game=('+NUMBER+r') x=('+NUMBER+r') y=('+NUMBER+r') z=('+NUMBER+r')\Z',re.ASCII)
 
@@ -286,6 +289,27 @@ def run(args):
                     if (time.monotonic()>=deadline or load.game_identity(proc,started,game)!=seen or
                         live.steam_identity(home,user.pw_uid)!=steam):
                         raise RuntimeError('identity or deadline changed during final live log check')
+                    if observation_callback is not None:
+                        if not callable(observation_callback): raise ValueError('invalid observation callback')
+                        def guard():
+                            check_cancel()
+                            if (time.monotonic()>=deadline or load.game_identity(proc,started,game)!=seen or
+                                live.steam_identity(home,user.pw_uid)!=steam):
+                                raise RuntimeError('experiment process, Steam identity or deadline changed')
+                            if stable_read(target,origin['size'],collect=False)[:2]!=target_identity:
+                                raise ValueError('experiment source save changed')
+                            if any(stable_read(path,1<<20,collect=False)[:2]!=identity for path,identity in protected.items()):
+                                raise ValueError('experiment protected configuration changed')
+                            if archive._path_fingerprints(store_dir)!=before:
+                                raise ValueError('experiment source archive changed')
+                            check_live_prefix(profile/'engine-output.log',log_snapshot)
+                            return True
+                        guard()
+                        extension=observation_callback(profile=profile, out=out, game=game, identity=seen,
+                                                       deadline=deadline, guard=guard)
+                        guard()
+                        if type(extension) is not dict: raise ValueError('experiment callback must return a result')
+                        result['experiment']=extension
                     result.update(observed);result['success']=True;break
                 time.sleep(poll_interval)
     except BaseException as error:

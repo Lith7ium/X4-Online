@@ -66,10 +66,15 @@ local object binding and return exactly true only once the sample is accepted;
 it receives a copy, and mutation, false, exception, timeout or reentrancy
 faults the connection. An `accepted` TCP receipt is a callback assertion, not a
 position application or game-side readback. Earlier recipient effects cannot be
-rolled back. This synchronous test interface is not yet connected to the
-asynchronous MD/FFI binding module or to a motion buffer/setter. The surrounding
-supervisor must fence every involved process on indeterminate failure and retain
-profile locks through confirmed cleanup.
+rolled back. The separate opt-in `ExperimentalParticipantMotionIPC` bridges this
+synchronous callback to the asynchronous X4 MD/FFI binding and motion buffer.
+Its `BOUND` response confirms that binding and buffering, not a position write.
+A separate experimental one-shot operation can request a guarded write and
+readback; it is not continuous movement replication. See
+`tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md` and
+`tools/dev/AUTHORITY-CLIENT-TO-SERVER-APPLY-PAIR.md` for the native results and
+their limits. The surrounding supervisor must fence every involved process on
+indeterminate failure and retain profile locks through confirmed cleanup.
 
 The tests use admitted loopback TCP sockets and synthetic consumers, including
 two clients and interleaving with existing job delivery. They do not establish

@@ -30,13 +30,22 @@ class RegistryEvidenceError(ValueError):
 
 
 def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None,
-           include_sector_parents=False, include_mapping_fingerprint=False):
+           include_sector_parents=False, include_mapping_fingerprint=False,
+           expected_components=None):
     if (not isinstance(checkpoint, Checkpoint) or not isinstance(expected_epoch, str)
             or not EPOCH.fullmatch(expected_epoch) or type(expected_count) is not int
             or not 1 <= expected_count <= MAX_ENTRIES):
         raise RegistryEvidenceError('invalid verification request')
     if type(include_mapping_fingerprint) is not bool:
         raise RegistryEvidenceError('invalid mapping fingerprint option')
+    if expected_components is not None:
+        if (type(expected_components) is not dict or not expected_components
+                or any(type(index) is not int or not 1 <= index <= expected_count
+                       or type(component) is not str
+                       or not re.fullmatch(r'[1-9a-f][0-9a-f]{0,15}', component)
+                       for index, component in expected_components.items())
+                or len(set(expected_components.values())) != len(expected_components)):
+            raise RegistryEvidenceError('invalid expected component mapping')
     if expected_rows is not None:
         if (not isinstance(expected_rows, (list, tuple)) or len(expected_rows) != expected_count
                 or any(not isinstance(row, tuple) or len(row) != 2 or type(row[0]) is not int
@@ -161,6 +170,9 @@ def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None,
         if (len(set(forward.values())) != expected_count
                 or any(reverse.get(component) != index for index, component in forward.items())):
             raise RegistryEvidenceError('tables are not one-to-one inverses')
+        if expected_components is not None and any(
+                forward.get(index) != component for index, component in expected_components.items()):
+            raise RegistryEvidenceError('saved component mapping differs from expected')
         if type(include_sector_parents) is not bool:
             raise RegistryEvidenceError('invalid sector analysis option')
         wanted = set(forward.values())

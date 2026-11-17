@@ -13,18 +13,33 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
 from authority.checkpoints import Checkpoint
 from authority.marker_evidence import _parse, verify_saved_marker
+import authority_registry_save_evidence as registry
 from authority_registry_save_evidence import COMPONENT, DECIMAL, EPOCH
 
 
 class PlayerFixtureEvidenceError(ValueError): pass
 
 
-def verify(checkpoint, epoch, marker):
+def verify(checkpoint, epoch, marker, *, registry_count=None, fixture_indices=None):
+    """Verify saved fixtures, optionally including their registry slot mapping.
+
+    ``fixture_indices`` is the pair of confirmed registry indices in fixture
+    slot order. Both options must be supplied together. Component identities
+    stay local to this verification and are never returned.
+    """
     if not isinstance(checkpoint, Checkpoint) or not isinstance(epoch,str) or not EPOCH.fullmatch(epoch):
         raise PlayerFixtureEvidenceError('invalid checkpoint or epoch')
     if (not isinstance(marker,str) or not re.fullmatch(r'[0-9a-f]{32}',marker)
             or checkpoint.marker != marker):
         raise PlayerFixtureEvidenceError('invalid marker')
+    if (registry_count is None) != (fixture_indices is None):
+        raise PlayerFixtureEvidenceError('registry count and fixture indices must be supplied together')
+    if registry_count is not None and (
+            type(registry_count) is not int or not 2 <= registry_count <= registry.MAX_ENTRIES
+            or type(fixture_indices) not in (tuple, list) or len(fixture_indices) != 2
+            or any(type(index) is not int or not 1 <= index <= registry_count for index in fixture_indices)
+            or fixture_indices[0] == fixture_indices[1]):
+        raise PlayerFixtureEvidenceError('invalid fixture registry mapping request')
     verify_saved_marker(checkpoint, marker, script_name='X4AuthorityPlayerFixtureMarker', cue_name='MarkerState')
     wanted = {'X4AuthorityPlayerSectorFixture':{'$ready','$pending','$faulted','$epoch','$sector1','$sector2','$ship1','$ship2'},
               'X4AuthoritySectorReferenceFixture':{'$epoch','$sector1','$sector2'}}
@@ -100,6 +115,10 @@ def verify(checkpoint, epoch, marker):
         match=COMPONENT.fullmatch(sector_parents[0].get('id',''))
         if not match or format(int(match.group(1),16),'x')!=sector:
             raise PlayerFixtureEvidenceError('ship is not in its saved sector')
+    if registry_count is not None:
+        registry.verify(checkpoint, epoch, registry_count,
+                        expected_components=dict(zip(fixture_indices, ships)))
     return {'saved_slots_checked':2,'saved_owner_class_sector_checked':True,
+            'saved_registry_slot_mapping_checked':registry_count is not None,
             'runtime_seat_proven':False,'positions_proven':False,'collision_free_proven':False,
             'exact_loaded_file_proven':False}

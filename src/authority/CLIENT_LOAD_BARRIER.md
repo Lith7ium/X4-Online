@@ -264,6 +264,36 @@ test-directory assumptions, no X4 process remained afterward. This attempt did
 not establish a working display, the reason for the stall, or game networking.
 Its local result is `.local/private-x4-menu-real-20261117-01/result.json`.
 
+A later isolated menu attempt captured bounded debugger stacks of both owned
+X4 processes. The private X11 window tree reported `X4 - Startup error`;
+the resolved stacks show the parent in `SDL_ShowSimpleMessageBox` waiting for
+its dialog child, and the child waiting for X11 events in SDL's message-box
+loop. The dialog text was not captured, so its cause remains unknown. The
+debugger detach, private PID-namespace cleanup and Xauthority removal were
+reported confirmed. This is evidence only for the private display/Steam/IPC
+environment used by that attempt, not for the earlier desktop startup stalls.
+See `.local/private-x4-menu-gdb-real-20261117-03/result.json` for the local
+result; the raw debugger output is private.
+A follow-up captured the dialog in the same private display environment. Its
+visible text says the Steam client is required and asks for Steam to be started.
+This explains the observed wait in that isolated environment, where Steam IPC
+was hidden. It does not establish the cause of the earlier desktop stalls.
+The follow-up reported debugger detach and private cleanup confirmed; its
+local result and screenshot are in `.local/private-x4-menu-gdb-real-20261117-04/`.
+A further private-display attempt exposed the running Steam installation
+read-only and shared the host IPC namespace and `/dev/shm`, while keeping its
+network and PID namespaces private. X4 still displayed the Steam-client error.
+This does not identify whether the remaining network or PID isolation, or
+another missing resource, prevented Steam initialization. The result reports
+confirmed debugger detach and private cleanup, with unchanged Steam process
+identity: `.local/private-x4-menu-steam-real-20261117-01/result.json`.
+With host networking also exposed and the display listener verified as the
+private Xwayland instance, one further X4 attempt still displayed the same
+Steam-client error. The PID namespace remained private. Steam identity and
+private cleanup were reported confirmed; this does not prove that PID
+isolation caused the failure. The local result is
+`.local/private-x4-menu-hostnet-real-20261117-01/result.json`.
+
 An additional synthetic display probe with a process-wide file-size limit
 terminated Cage with `SIGXFSZ`. The observed test PIDs exited, but the result
 directory was removed before an empty-namespace receipt could be retained and

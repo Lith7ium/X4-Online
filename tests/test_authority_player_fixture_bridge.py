@@ -34,6 +34,39 @@ class FixtureBridgeTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'live-readback gate'):self.bridge.save()
             request.assert_not_called()
 
+    def test_opted_in_fixture_save_uses_existing_marker_dispatch_once(self):
+        self.bridge._pending_save = None
+        self.bridge._pending_marker = None
+        with patch.object(self.bridge, '_request', return_value=8) as request:
+            path = self.bridge.save_fixture_experiment(enabled=True)
+            self.assertEqual(path, self.bridge._source)
+            self.assertEqual(self.bridge._pending_save, 8)
+            marker = self.bridge.pending_marker
+            self.assertRegex(marker, r'^[0-9a-f]{32}$')
+            request.assert_called_once_with('save', 'native_event_only', marker=marker)
+            with self.assertRaisesRegex(RuntimeError, 'already attempted'):
+                self.bridge.save_fixture_experiment(enabled=True)
+            request.assert_called_once()
+
+    def test_fixture_save_requires_opt_in_and_no_pending_save(self):
+        with patch.object(self.bridge, '_request') as request:
+            with self.assertRaisesRegex(ValueError, 'explicit opt-in'):
+                self.bridge.save_fixture_experiment()
+            with self.assertRaisesRegex(RuntimeError, 'previous save'):
+                self.bridge.save_fixture_experiment(enabled=True)
+            request.assert_not_called()
+            self.assertFalse(self.bridge._fixture_save_attempted)
+
+    def test_uncertain_fixture_save_fences_future_attempts(self):
+        self.bridge._pending_save = None
+        with patch.object(self.bridge, '_request', side_effect=TimeoutError('uncertain')) as request:
+            with self.assertRaises(TimeoutError):
+                self.bridge.save_fixture_experiment(enabled=True)
+            self.assertTrue(self.bridge._poisoned)
+            with self.assertRaisesRegex(RuntimeError, 'already attempted'):
+                self.bridge.save_fixture_experiment(enabled=True)
+            request.assert_called_once()
+
     def test_distinct_test_marker_does_not_replace_archived_script(self):
         marker=ET.parse(ROOT/'tools/dev/authority_player_fixture_marker.xml').getroot()
         old=ET.parse(ROOT/'tools/dev/authority_checkpoint_marker.xml').getroot()
@@ -76,6 +109,18 @@ class FixtureBridgeTest(unittest.TestCase):
             with self.assertRaises(TimeoutError): self.bridge.checkpoint_published(self.cp)
             with self.assertRaisesRegex(RuntimeError,'fenced'):self.bridge.checkpoint_published(self.cp)
             self.assertEqual(verify.call_count,1);self.assertEqual(exchange.call_count,1)
+
+    def test_interrupted_confirmation_fences_bridge_before_exchange_can_guard(self):
+        with patch.object(subject.fixture, 'verify', return_value={'saved_slots_checked': 2,
+                'saved_owner_class_sector_checked': True}), patch.object(
+                self.bridge, '_exchange', side_effect=KeyboardInterrupt) as exchange:
+            with self.assertRaises(KeyboardInterrupt):
+                self.bridge.checkpoint_published(self.cp)
+            self.assertTrue(self.bridge._poisoned)
+            self.assertEqual(self.bridge._pending_save, 7)
+            with self.assertRaisesRegex(RuntimeError, 'fenced'):
+                self.bridge.checkpoint_published(self.cp)
+            exchange.assert_called_once()
 
     def test_mismatched_manifest_or_save_identity_never_confirms(self):
         self.info.sha256='0'*64
