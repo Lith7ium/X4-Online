@@ -229,11 +229,53 @@ class PlaybackTests(unittest.TestCase):
                 self.assertFalse((root/'playback-stopped.json').exists())
                 with self.assertRaisesRegex(RuntimeError, 'native_fence_required'):
                     controller.close(native_stopped=False)
-                with self.assertRaisesRegex(RuntimeError, 'worker_failed'):
-                    controller.close(native_stopped=True)
+                controller.close(native_stopped=True)
                 self.assertTrue(controller.evidence['worker_joined'])
+                self.assertTrue(controller.evidence['cleanup_confirmed'])
+                controller.installation.redact.assert_called_once()
+                self.assertEqual(controller.evidence['failure_code'], 'ipc_foreign_ready')
+                with self.assertRaisesRegex(RuntimeError, 'worker_failed'):
+                    controller.poll()
             finally:
                 peer.close(); controller.sock.close()
+
+    def test_queued_failure_cleanup_preserves_failure_and_redacts_after_native_fence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); controller = self.controller(root)
+            controller.messages.put_nowait(dict(stopped_confirmed=True, native_position_changed=True))
+            controller.messages.put_nowait(dict(failure_phase='stop', failure_type='ValueError',
+                                                failure_code='native_playback_faulted'))
+            controller.close(native_stopped=True)
+            self.assertEqual(controller.sock.fileno(), -1)
+            self.assertTrue(controller.evidence['worker_joined'])
+            self.assertTrue(controller.evidence['configuration_redacted'])
+            self.assertTrue(controller.evidence['cleanup_confirmed'])
+            self.assertEqual(controller.evidence['failure_code'], 'native_playback_faulted')
+            controller.installation.redact.assert_called_once()
+            self.assertFalse((root/'playback-stopped.json').exists())
+            with self.assertRaisesRegex(RuntimeError, 'worker_failed'):
+                controller.finish()
+
+    def test_actual_redaction_failure_remains_a_cleanup_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); controller = self.controller(root)
+            controller.installation.redact.side_effect = OSError('private detail')
+            controller.messages.put_nowait(dict(failure_phase='stop', failure_type='ValueError',
+                                                failure_code='native_playback_faulted'))
+            with self.assertRaises(OSError):
+                controller.close(native_stopped=True)
+            self.assertTrue(controller.evidence['worker_joined'])
+            self.assertNotIn('cleanup_confirmed', controller.evidence)
+            self.assertEqual(controller.evidence['failure_code'], 'native_playback_faulted')
+
+    def test_failure_codes_are_allowlisted_and_never_echo_exception_text(self):
+        self.assertEqual(subject.failure_details(ValueError('native_playback_faulted')),
+                         dict(failure_type='ValueError', failure_code='native_playback_faulted'))
+        self.assertEqual(subject.failure_details(RuntimeError('foreign motion stop response')),
+                         dict(failure_type='RuntimeError', failure_code='ipc_foreign_stop'))
+        details = subject.failure_details(RuntimeError('PRIVATE token and packet'))
+        self.assertEqual(details, dict(failure_type='RuntimeError', failure_code='other_failure'))
+        self.assertNotIn('PRIVATE', json.dumps(details))
 
     def test_real_udp_worker_enrollment_path_stop_and_main_thread_polling(self):
         with tempfile.TemporaryDirectory() as directory:

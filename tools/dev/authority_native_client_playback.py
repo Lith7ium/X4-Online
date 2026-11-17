@@ -39,6 +39,47 @@ TAG = b'[X4LAN] AUTH_CLIENT_PLAYBACK '
 MAX_LOG = 8 * 1024 * 1024
 
 
+_ERROR_CODES = {
+    'motion IPC state or deadline failed': 'ipc_state_or_deadline_failed',
+    'motion IPC guard failed': 'ipc_guard_failed',
+    'motion X4 peer ownership changed': 'ipc_peer_ownership_changed',
+    'motion IPC socket failure': 'ipc_socket_failed',
+    'invalid motion IPC packet': 'ipc_invalid_packet',
+    'unexpected queued motion IPC response': 'ipc_unexpected_response',
+    'foreign motion READY': 'ipc_foreign_ready',
+    'motion peer ownership unconfirmed': 'ipc_peer_unconfirmed',
+    'motion IPC binding response mismatch': 'ipc_binding_response_mismatch',
+    'motion IPC send failed': 'ipc_send_failed',
+    'motion stop dispatch failed': 'ipc_stop_dispatch_failed',
+    'foreign motion stop response': 'ipc_foreign_stop',
+    'motion IPC cannot stop': 'ipc_stop_unavailable',
+    'motion IPC cannot close': 'ipc_close_unavailable',
+}
+for _code in (
+    'playback_worker_fenced', 'playback_protected_file_changed',
+    'playback_initial_not_observed', 'playback_stop_summary_missing',
+    'native_playback_movement_unconfirmed', 'native_playback_faulted',
+    'playback_log_replaced', 'playback_log_truncated_or_rewritten',
+    'playback_log_changed', 'playback_log_line_too_long',
+    'invalid_playback_log', 'invalid_playback_record',
+    'invalid_playback_log_number', 'duplicate_or_late_playback_record',
+    'foreign_playback_record', 'regressed_playback_clock',
+    'duplicate_playback_initial', 'invalid_playback_summary',
+    'too_many_playback_summaries', 'invalid_playback_report_counter',
+    'uncertain_native_playback_stop', 'invalid_playback_driver_plan',
+    'unbounded_playback_driver_plan', 'insufficient_playback_driver_samples',
+):
+    _ERROR_CODES[_code] = _code
+
+
+def failure_details(error):
+    """Only fixed codes/types cross the diagnostic boundary; never raw text."""
+    name = next((kind.__name__ for kind in (KeyboardInterrupt, TimeoutError, ValueError, OSError, RuntimeError)
+                 if isinstance(error, kind)), 'other_failure')
+    message = error.args[0] if len(error.args) == 1 and type(error.args[0]) is str else None
+    return {'failure_type': name, 'failure_code': _ERROR_CODES.get(message, 'other_failure')}
+
+
 def read_config(path, args, driver):
     """Reject unknown lineage/fields and compatibility conflicts before mutation."""
     if path is None:
@@ -352,11 +393,11 @@ class Playback:
             self.release.wait()
             ipc.close()
         except BaseException as error:
-            self.messages.put_nowait(dict(failure_phase=phase, failure_type=type(error).__name__))
+            self.messages.put_nowait(dict(failure_phase=phase, **failure_details(error)))
         finally:
             ipc = None
 
-    def poll(self):
+    def _drain_messages(self, *, publish_stopped):
         while True:
             try:
                 message = self.messages.get_nowait()
@@ -365,7 +406,7 @@ class Playback:
             self.evidence.update(message)
             if 'failure_phase' in message:
                 self.failure = RuntimeError('native_playback_worker_failed')
-            if message.get('stopped_confirmed'):
+            if publish_stopped and message.get('stopped_confirmed'):
                 temporary = self.out/'playback-stopped.tmp'
                 with temporary.open('x', encoding='utf-8') as stream:
                     json.dump(self.evidence, stream)
@@ -374,6 +415,9 @@ class Playback:
                 # destination; the host never sees a partially written receipt.
                 os.link(temporary, self.out/'playback-stopped.json')
                 temporary.unlink()
+
+    def poll(self):
+        self._drain_messages(publish_stopped=True)
         if self.failure is not None:
             raise self.failure
         return self.stopped.is_set()
@@ -401,5 +445,10 @@ class Playback:
                 raise RuntimeError('native_playback_worker_not_joined')
         self.sock.close()
         self.evidence['worker_joined'] = True
-        self.poll()
+        # Operational failures remain visible to poll/finish and the result.
+        # They are not teardown failures and must not prevent post-fence
+        # redaction. Do not publish a new readiness flag after native teardown.
+        self._drain_messages(publish_stopped=False)
         self.installation.redact()
+        self.evidence['configuration_redacted'] = True
+        self.evidence['cleanup_confirmed'] = True
