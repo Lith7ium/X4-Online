@@ -230,7 +230,8 @@ Run order. Stop at the first failure and keep the logs.
  B) X4MP_SCHED=fixed30, same render settings. 10 min.
  C) X4MP_SCHED=fixed30 X4MP_RENDER_INTERVAL_MS=never
     X4MP_SCHED_MAX_RENDER_GAP_MS=10000. 30 min, with a client connected.
- D) Optional: X4MP_SCHED_MAX_RENDER_GAP_MS=0 with `never` (truly no renders).
+ D) Optional: X4MP_SCHED_MAX_RENDER_GAP_MS=0 with `never` (no scheduled or
+    gap-forced renders; the catch-up cap still forces a render, even here).
     10 min.
 Expected log lines:
   X4MP_AGENT VERIFIED build=23660954 version=9.00 (611726) sites=25 pid=...

@@ -16,6 +16,9 @@ details or treat the recollection as a benchmark.
 The server should ultimately perform simulation without producing graphics.
 The current full-X4 launch path still initializes graphics. A private or
 virtual display does not demonstrate that rendering has stopped.
+The user explicitly selected **a graphics-free, GPU-free server trial first**,
+ahead of the first playable multiplayer flow. This authorizes isolated native
+investigation; it does not establish that a fully renderless engine is feasible.
 
 Existing observations:
 
@@ -51,11 +54,31 @@ preparation on the same MoveWorker, with drawing/presentation on the main
 thread. Its render-only frames skip simulation while retaining graphics, so
 that feature cannot simply be used as a simulation-only mode.
 
-The next rendering investigation should map the corresponding Linux
-preparation, submission and synchronization boundaries. Skipping presentation
-alone does not establish that scene preparation and GPU work stop; skipping
-an entire worker would also remove simulation or IPC callbacks. No render
-patch or new native run has been authorized by this note.
+The repository also retains a more directly applicable Rust implementation in
+`src/rust/x4mp-agent`, documented in `reports/SIM-DECOUPLE-SCHEDULER.txt`.
+It preserves the first FrameState flag read and the render-list flip, redirects
+only the second read to an owned decision byte, and uses X4's native no-draw
+branch. The earlier implementation froze because it also suppressed the flip;
+the corrected version now has a bounded native observation, with recurring
+vertex-buffer failures that block stable-server acceptance. It retains
+renderer initialization, resource processing and render
+preparation. Skipping presentation alone would not establish absence of GPU
+work; skipping an entire worker would remove simulation or IPC callbacks.
+
+The first bounded trial reuses this agent with software Vulkan for startup,
+no GPU device access, and at most about 1,200 skipped draws at fixed20. This is
+a precursor to renderless operation, not proof of renderless startup. Both
+the Rust agent and the authority native gate patch the fixed-dt sites, so they
+must not be combined. `never` plus render-gap zero still forces a draw after
+the configured catch-up cap (maximum 3,600 steps); it is not an unlimited
+no-render mode. Do not silently remove that bound for this trial.
+
+[The completed observation](../reports/AUTHORITY-NO-GPU-20261117.md) reached
+1,217 skipped-draw steps at 20 Hz with continued UI/MD callbacks. Steady X4 CPU
+averaged 83.60% of one logical CPU; no saturated thread appeared in that short
+window. This is a new-world observation on this machine, not a capacity claim
+for Silver's hardware. Dynamic mesh updates failed repeatedly after several
+seconds: investigate graphics allocation retirement before another native run.
 
 ## Sector ownership proposal
 
@@ -87,10 +110,17 @@ stopping local AI, accepting results or transferring a live simulation.
 
 ## Immediate work and decision boundary
 
-Use the existing evidence before new native runs. First attribute the bounded
-IPC failure path with an offline test and fixed timing counters; do not remove
-guards or increase deadlines merely to make a test pass. Locate existing
-Linux rendering/simulation separation work before proposing a native patch.
+The bounded IPC diagnostic work below and the first GPU-free trial are
+complete. Their observations do not satisfy stable-server acceptance.
+Continue to measure world progress against wall time, CPU, and UI/MD callbacks;
+retain startup and cleanup evidence. Do not remove guards or increase
+deadlines merely to make a test pass.
+
+Before selecting the next server execution path, the user has been
+asked whether software Vulkan/a virtual display may remain internally while
+scene rendering is removed, or whether all such dependencies must go. Keep
+that decision pending until answered. The retired submission-discard layer
+does not preserve copies or query semantics and must not be reused unchanged.
 
 Any decision to adopt sector-wide ownership, change the ownership of economy
 or combat, or commit to a new server execution model must be discussed with

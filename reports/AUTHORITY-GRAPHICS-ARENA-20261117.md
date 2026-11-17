@@ -79,3 +79,28 @@ semaphores. Then identify an existing callable retirement wrapper, or establish
 that an authored split is required. No safe new native probe is authorized by
 this note. Preserved semaphore pairing and advancing UI/MD counters do not prove
 graphics-resource lifetime correctness or stable server acceptance.
+
+## Retired Vulkan discard layer
+
+The original layer is available from Git at
+`6de08eed^:src/native/vk-discard/vk_discard.c`; it was removed during the
+lockstep repository cleanup. It has not been restored or enabled by this work.
+Its submit hooks remove **all** submitted command buffers, including copies,
+compute and image layout transitions, while forwarding semaphores and fences.
+Present passes through, and query reads are replaced by successful zero
+results. Enabling the ordinary X4 frame path alongside this layer would retain
+arena rotation, but it does not preserve graphics-transfer semantics.
+
+The cached enable flag has no post-bootstrap arming mechanism. The historical
+synthetic test prints buffer-fill results without asserting the expected fill;
+its exit status alone is insufficient. Query availability handling also has
+an unchecked write: a 16-byte result buffer with a 32-byte stride can pass the
+test of `offset + word` and then write at byte 24. Availability is incorrectly
+placed at the end of stride padding. No native reuse is justified by these
+tests, and the layer must not be restored unchanged as a reliable server path.
+
+An outstanding user decision now distinguishes retaining software Vulkan and
+a virtual display for resource management from removing those dependencies
+entirely. The former still needs a sound way to suppress scene rendering while
+preserving copies, completion and queries; the latter requires substantially
+more engine separation. Neither path has been selected by this note.
