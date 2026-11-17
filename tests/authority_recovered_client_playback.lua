@@ -1,6 +1,6 @@
 -- Actual recovered runtime/router/owner/binder/playback; fake X4 ABI and MD.
 local ffi=require('ffi')
-ffi.cdef[[void TestSetRecoveryCode(bool);int TestWrites(void);int TestReads(void);void TestPause(bool);void TestZone(uint64_t);]]
+ffi.cdef[[void TestSetRecoveryCode(bool);int TestWrites(void);int TestReads(void);void TestPause(bool);void TestZone(uint64_t);void TestDrift(float);]]
 ffi.C.TestSetRecoveryCode(true)
 local mode=arg[1]
 local now=1
@@ -17,7 +17,11 @@ function GetComponentData(reference,...)
  if keys[1]=='macro' and tonumber(reference)==43 then return 'cluster_06_sector001_macro' end
  error('unexpected read')
 end
-function DebugError(line)logs[#logs+1]=line end
+local error_observer
+function DebugError(line)
+ logs[#logs+1]=line
+ if error_observer and line:find('AUTH_RECOVERED_CLIENT_MOTION ERROR',1,true)then error_observer()end
+end
 function X4LAN_RECOVERED_CLIENT_LOAD_READY()return true end
 local net={send=function(_,value)output[#output+1]=value;return true end,
  pending=function()return #input>0 end,receive=function()return table.remove(input,1)end}
@@ -66,7 +70,7 @@ assert(client:state()=='ready' and ffi.C.TestWrites()==0 and ffi.C.TestReads()>0
 assert(#logs==1 and logs[1]:find('AUTH_CLIENT_PLAYBACK INITIAL version=1 ',1,true))
 assert(logs[1]:find(' x=0 y=0 z=0',1,true) and output[#output]:find('|BOUND|',1,true))
 assert(client:tick() and ffi.C.TestWrites()==0)
-if mode~='good' and mode~='bounded' and mode~='uncertain' and mode~='docking' and mode~='fixture' and mode~='zone' then
+if mode~='good' and mode~='bounded' and mode~='uncertain' and mode~='docking' and mode~='fixture' and mode~='zone' and mode~='distance' then
  local invalid=packet(2,5,.2)
  if mode=='sector' then invalid[10]='other_sector'
  elseif mode=='index' then invalid[8]='1317'
@@ -80,6 +84,38 @@ if mode~='good' and mode~='bounded' and mode~='uncertain' and mode~='docking' an
  return
 end
 now=1.2;send(2,5,.2);assert(client:tick() and ffi.C.TestWrites()==1)
+if mode=='distance' then
+ now=1.3;ffi.C.TestDrift(100)
+ local reads_at_error
+ error_observer=function()
+  reads_at_error=ffi.C.TestReads()
+  ffi.C.TestDrift(999);now=50
+  assert(not client:tick()) -- Reentry cannot change the captured failing observation.
+  error('logger failed after changing native state')
+ end
+ assert(not client:tick() and client:state()=='failed' and ffi.C.TestWrites()==1)
+ assert(reads_at_error and ffi.C.TestReads()==reads_at_error)
+ assert(not client:tick())
+ local failures=0
+ for _,line in ipairs(logs)do
+  if line:find('AUTH_CLIENT_PLAYBACK FAILURE ',1,true)then
+   failures=failures+1;assert(#line<1024)
+   local fields={}
+   for key,value in line:gmatch('([%w_]+)=([^ ]+)')do fields[key]=value end
+   assert(fields.version=='1' and fields.stage=='distance' and fields.phase=='held')
+   assert(tonumber(fields.source_sequence)==2 and tonumber(fields.latest_source_time)==.2)
+   assert(tonumber(fields.local_time)==1.3 and tonumber(fields.game_time)==10)
+   assert(tonumber(fields.actual_x)==100 and tonumber(fields.target_x)==5)
+   assert(tonumber(fields.actual_y)==0 and tonumber(fields.actual_z)==0)
+   assert(tonumber(fields.target_y)==0 and tonumber(fields.target_z)==0)
+   assert(tonumber(fields.correction_distance)==95 and fields.uncertain=='0')
+   assert(fields.readbacks==nil) -- This is a pre-write observation, not a new readback.
+   for _,secret in ipairs({lease,attempt,generation,nonce,'actor_key','logger failed'})do assert(not line:find(secret,1,true))end
+  end
+ end
+ assert(failures==1)
+ return
+end
 if mode=='docking' or mode=='fixture' or mode=='zone' then
  now=1.3
  if mode=='zone' then ffi.C.TestZone(0)end

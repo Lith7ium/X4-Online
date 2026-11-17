@@ -220,13 +220,13 @@ function M.new_x4(c)
   else message=message..'unavailable' end
   pcall(DebugError,message)
  end
- -- Playback evidence is portable, fixed-schema and bounded to 66 records:
- -- one guarded initial read, at most 64 summaries at <=1 Hz, one STOPPED.
+ -- Playback evidence is portable, fixed-schema and bounded to 67 records:
+ -- one guarded initial read, at most 64 summaries at <=1 Hz, one STOPPED, one distance FAILURE.
  -- BOUND remains binding/consumption only. The first BIND is never played.
  local playback_sequence,playback_source_time,playback_expected_reply=nil,nil,nil
  local playback_samples,playback_observations,playback_readbacks,playback_reports=0,0,0,0
  local playback_controller,playback_latest,playback_next_report=nil,nil,nil
- local playback_stopped_reported=false
+ local playback_stopped_reported,playback_failure_reported=false,false
  local playback_drained=false
  local playback_sector='cluster_06_sector001_macro'
  local playback_phases={waiting=true,held=true,interpolated=true,extrapolated=true,frozen=true,['held-no-rate']=true}
@@ -250,7 +250,7 @@ function M.new_x4(c)
    assert(type(pose)=='table')
    for _,axis in ipairs({'x','y','z'})do assert(finite(pose[axis]))end
   end
-  assert(finite(event.local_time) and finite(event.game_time) and integer(event.source_sequence) and event.source_sequence>=1)
+  assert(finite(event.latest_source_time) and finite(event.local_time) and finite(event.game_time) and integer(event.source_sequence) and event.source_sequence>=1)
   local phase=playback_latest.phase
   if event.kind=='observation' then
    assert(playback_phases[event.phase]);phase=event.phase;playback_observations=playback_observations+1
@@ -258,11 +258,25 @@ function M.new_x4(c)
   local dx,dy,dz=event.actual.x-event.target.x,event.actual.y-event.target.y,event.actual.z-event.target.z
   playback_latest={actual={x=event.actual.x,y=event.actual.y,z=event.actual.z},
    target={x=event.target.x,y=event.target.y,z=event.target.z},sequence=event.source_sequence,phase=phase,
-   local_time=event.local_time,game_time=event.game_time,error=math.sqrt(dx*dx+dy*dy+dz*dz)}
+   local_time=event.local_time,game_time=event.game_time,latest_source_time=event.latest_source_time,
+   error=math.sqrt(dx*dx+dy*dy+dz*dz)}
   if playback_reports<64 and event.local_time>=playback_next_report then
    playback_reports=playback_reports+1;playback_next_report=event.local_time+1;playback_log('SUMMARY')
   end
   return true
+ end
+ -- Build the complete line before STOP or any logging callback can reenter.
+ -- This is the measured pre-write observation, never an invented readback.
+ local function playback_failure_line(reason,diagnostic)
+  if playback_failure_reported or reason~='owner_playback' or not diagnostic or
+     diagnostic.stage~='distance' or not playback_latest then return nil end
+  playback_failure_reported=true
+  local value=playback_latest
+  if not finite(value.latest_source_time) or not finite(value.error) then return nil end
+  local uncertain=playback_controller and playback_controller:outcome_uncertain()==true
+  return ('[X4LAN] AUTH_CLIENT_PLAYBACK FAILURE version=1 stage=distance epoch=%s index=1318 sector=%s source_sequence=%.0f latest_source_time=%.17g phase=%s local_time=%.17g game_time=%.17g actual_x=%.17g actual_y=%.17g actual_z=%.17g target_x=%.17g target_y=%.17g target_z=%.17g correction_distance=%.17g uncertain=%d'):format(
+   c.epoch,playback_sector,value.sequence,value.latest_source_time,value.phase,value.local_time,value.game_time,
+   value.actual.x,value.actual.y,value.actual.z,value.target.x,value.target.y,value.target.z,value.error,uncertain and 1 or 0)
  end
  local playback_adapter={new=function(options)
   assert(saved_playback_fixture and not playback_controller and not C.IsGamePaused() and options.guard()==true)
@@ -430,6 +444,7 @@ function M.new_x4(c)
   end,
   fault=function(reason,diagnostic)
    local retained=diagnostic and playback_diagnostic(diagnostic.stage,diagnostic.native_stage)
+   local failure_line=playback_failure_line(reason,retained)
    -- safe_fault produces only the static codes above. Wrapper-owned reasons
    -- are also literals; unexpected values fall back to the original message.
    local wrapper_reasons={state=true,tick=true,sector_event=true}
@@ -445,7 +460,8 @@ function M.new_x4(c)
     retained=retained or playback_diagnostic(nil,nil)
     detail=' stage='..retained.stage..' native_stage='..retained.native_stage
    end
-   DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR'..(known and ' reason='..reason or '')..detail)
+   pcall(DebugError,'[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR'..(known and ' reason='..reason or '')..detail)
+   if failure_line then pcall(DebugError,failure_line)end
    report_timing()
   end})
 end

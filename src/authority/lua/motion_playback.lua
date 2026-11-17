@@ -184,7 +184,8 @@ function M.new(options)
     yaw=actual.yaw, pitch=actual.pitch, roll=actual.roll}
    target = copy_pose(target)
    record({kind='observation', actual=copy_pose(actual), target=copy_pose(target),
-    source_sequence=rendered.source_sequence, phase=rendered.phase, local_time=now, game_time=game_time}, 'observation_record')
+    source_sequence=rendered.source_sequence, latest_source_time=last_source,
+    phase=rendered.phase, local_time=now, game_time=game_time}, 'observation_record')
    stage = 'distance'
    local step = distance(actual, target)
    assert(finite(step) and step <= configuration.max_step, 'correction too large')
