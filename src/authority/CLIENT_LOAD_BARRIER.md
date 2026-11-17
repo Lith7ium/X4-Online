@@ -279,6 +279,13 @@ direct worker now reports separate fixed diagnostic categories without packet
 contents or tokens; its process-level result remains intentionally generic.
 A subsequent check ran 4,681 tests without test failures, but still skipped 56
 checks and therefore remains incomplete under the repository's check policy.
+After preparing locally available pinned X4 executables, Zig, the wire-crypto
+library and game schemas, an expanded check ran the same 4,681 tests without
+test failures and with 27 skips. It remains incomplete: some checks require
+Windows, while others need reference files not available in the partial local
+view. The local prerequisite details and log are in
+`.local/check-prerequisites-20261117-01/` and
+`.local/check-expanded-prerequisites-20261117.log`.
 
 The associated repository check reported 4,623 tests without failures and
 56 skips; it was incomplete and must not be presented as a complete passing
