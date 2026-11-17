@@ -208,85 +208,128 @@ class ExperimentalTCPParticipantClient:
         receipt.update(kind='motion_receipt', status='accepted', sample_sha256=sample_digest)
         self._out = json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode() + b'\n'
 
-    def _motion_apply(self,command):
+    def _motion_apply(self, command):
         from .experimental_tcp_motion import motion_value, motion_digest
-        fields={'version','kind','connection_handle','session_epoch','incarnation','request_id','sample'}
-        if (self._apply_motion_once is None or self._motion_write_attempted or set(command)!=fields or
-            type(command.get('version')) is not int or command['version']!=1 or
-            type(command.get('connection_handle')) is not int or command['connection_handle']!=self._handle or
-            command.get('session_epoch')!=self._epoch or type(command.get('incarnation')) is not str or
-            command['incarnation']!=self._motion_incarnation):raise ValueError('one-shot motion apply unavailable')
-        sample=motion_value(command['sample']);key=(sample['epoch'],sample['generation'],sample['index'])
-        prior=self._motion_tracks.get(key);digest=motion_digest(sample)
-        if (type(command.get('request_id')) is not int or command['request_id']!=sample['sequence'] or
-            prior is None or prior['closed'] or prior['sequence']!=sample['sequence'] or prior['digest']!=digest or
-            self._motion_preflight!=(key,sample['sequence'],digest)):
+        fields = {'version', 'kind', 'connection_handle', 'session_epoch',
+                  'incarnation', 'request_id', 'sample'}
+        if (self._apply_motion_once is None or self._motion_write_attempted or set(command) != fields or
+                type(command.get('version')) is not int or command['version'] != 1 or
+                type(command.get('connection_handle')) is not int or command['connection_handle'] != self._handle or
+                command.get('session_epoch') != self._epoch or type(command.get('incarnation')) is not str or
+                command['incarnation'] != self._motion_incarnation):
+            raise ValueError('one-shot motion apply unavailable')
+        sample = motion_value(command['sample'])
+        track_key = (sample['epoch'], sample['generation'], sample['index'])
+        previous_track = self._motion_tracks.get(track_key)
+        digest = motion_digest(sample)
+        if (type(command.get('request_id')) is not int or command['request_id'] != sample['sequence'] or
+                previous_track is None or previous_track['closed'] or previous_track['sequence'] != sample['sequence'] or
+                previous_track['digest'] != digest or self._motion_preflight != (track_key, sample['sequence'], digest)):
             raise ValueError('motion apply differs from last confirmed sample')
-        self._quiet();self._motion_write_attempted=True;candidate=copy.deepcopy(sample)
-        accepted=self._apply_motion_once(candidate)
-        self._within();self._quiet()
-        if motion_digest(candidate)!=digest or accepted is not True:raise RuntimeError('motion readback not confirmed')
-        reply={k:command[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
-        reply.update(kind='motion_applied_receipt',status='applied',sample_sha256=digest)
-        self._out=json.dumps(reply,sort_keys=True,separators=(',', ':'),allow_nan=False).encode()+b'\n'
+        self._quiet()
+        self._motion_write_attempted = True
+        candidate = copy.deepcopy(sample)
+        accepted = self._apply_motion_once(candidate)
+        self._within()
+        self._quiet()
+        if motion_digest(candidate) != digest or accepted is not True:
+            raise RuntimeError('motion readback not confirmed')
+        reply = {
+            key: command[key] for key in
+            ('version', 'connection_handle', 'session_epoch', 'incarnation', 'request_id')
+        }
+        reply.update(kind='motion_applied_receipt', status='applied', sample_sha256=digest)
+        self._out = json.dumps(reply, sort_keys=True, separators=(',', ':'), allow_nan=False).encode() + b'\n'
 
-    def _motion_preflight_command(self,command):
+    def _motion_preflight_command(self, command):
         from .experimental_tcp_motion import motion_value, motion_digest
-        fields={'version','kind','connection_handle','session_epoch','incarnation','request_id','sample'}
-        self._motion_preflight=None
-        if (self._preflight_motion is None or self._motion_write_attempted or set(command)!=fields or
-            type(command.get('version')) is not int or command['version']!=1 or
-            type(command.get('connection_handle')) is not int or command['connection_handle']!=self._handle or
-            command.get('session_epoch')!=self._epoch or type(command.get('incarnation')) is not str or
-            command['incarnation']!=self._motion_incarnation):raise ValueError('motion preflight unavailable')
-        sample=motion_value(command['sample']);key=(sample['epoch'],sample['generation'],sample['index'])
-        prior=self._motion_tracks.get(key);digest=motion_digest(sample)
-        if (type(command.get('request_id')) is not int or command['request_id']!=sample['sequence'] or
-            prior is None or prior['closed'] or prior['sequence']!=sample['sequence'] or prior['digest']!=digest):
+        fields = {'version', 'kind', 'connection_handle', 'session_epoch',
+                  'incarnation', 'request_id', 'sample'}
+        self._motion_preflight = None
+        if (self._preflight_motion is None or self._motion_write_attempted or set(command) != fields or
+                type(command.get('version')) is not int or command['version'] != 1 or
+                type(command.get('connection_handle')) is not int or command['connection_handle'] != self._handle or
+                command.get('session_epoch') != self._epoch or type(command.get('incarnation')) is not str or
+                command['incarnation'] != self._motion_incarnation):
+            raise ValueError('motion preflight unavailable')
+        sample = motion_value(command['sample'])
+        track_key = (sample['epoch'], sample['generation'], sample['index'])
+        previous_track = self._motion_tracks.get(track_key)
+        digest = motion_digest(sample)
+        if (type(command.get('request_id')) is not int or command['request_id'] != sample['sequence'] or
+                previous_track is None or previous_track['closed'] or previous_track['sequence'] != sample['sequence'] or
+                previous_track['digest'] != digest):
             raise ValueError('motion preflight differs from last confirmed sample')
-        self._quiet();candidate=copy.deepcopy(sample);status=self._preflight_motion(candidate)
-        self._within();self._quiet()
-        if motion_digest(candidate)!=digest or status not in ('NEAR','READY'):raise RuntimeError('motion preflight not confirmed')
-        if status=='READY':self._motion_preflight=(key,sample['sequence'],digest)
-        reply={k:command[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id')}
-        reply.update(kind='motion_preflight_receipt',status=status.lower(),sample_sha256=digest)
-        self._out=json.dumps(reply,sort_keys=True,separators=(',', ':'),allow_nan=False).encode()+b'\n'
+        self._quiet()
+        candidate = copy.deepcopy(sample)
+        status = self._preflight_motion(candidate)
+        self._within()
+        self._quiet()
+        if motion_digest(candidate) != digest or status not in ('NEAR', 'READY'):
+            raise RuntimeError('motion preflight not confirmed')
+        if status == 'READY':
+            self._motion_preflight = (track_key, sample['sequence'], digest)
+        reply = {
+            key: command[key] for key in
+            ('version', 'connection_handle', 'session_epoch', 'incarnation', 'request_id')
+        }
+        reply.update(kind='motion_preflight_receipt', status=status.lower(), sample_sha256=digest)
+        self._out = json.dumps(reply, sort_keys=True, separators=(',', ':'), allow_nan=False).encode() + b'\n'
 
-    def _authority_motion_pull(self,command):
+    def _authority_motion_pull(self, command):
         from .experimental_tcp_client_authority_motion import grant_value
         from .experimental_tcp_motion import motion_value, motion_digest
-        fields={'version','kind','connection_handle','session_epoch','incarnation','request_id','grant'}
-        if (self._authority_grant is None or set(command)!=fields or type(command.get('version')) is not int or command['version']!=1 or
-            json.dumps(self._authority_grant,sort_keys=True,separators=(',',':'))!=self._authority_grant_wire or
-            type(command.get('connection_handle')) is not int or command['connection_handle']!=self._handle or
-            command.get('session_epoch')!=self._epoch or command.get('incarnation')!=self._authority_grant['incarnation'] or
-            self._job_incarnation is not None and self._job_incarnation!=command['incarnation'] or
-            self._motion_incarnation is not None and self._motion_incarnation!=command['incarnation'] or
-            type(command.get('request_id')) is not int or command['request_id']!=self._authority_request+1 or
-            command['request_id']>MAX_INTEGER or grant_value(command.get('grant'))!=self._authority_grant):
+        fields = {'version', 'kind', 'connection_handle', 'session_epoch',
+                  'incarnation', 'request_id', 'grant'}
+        if (self._authority_grant is None or set(command) != fields or
+                type(command.get('version')) is not int or command['version'] != 1 or
+                json.dumps(self._authority_grant, sort_keys=True, separators=(',', ':')) != self._authority_grant_wire or
+                type(command.get('connection_handle')) is not int or command['connection_handle'] != self._handle or
+                command.get('session_epoch') != self._epoch or
+                command.get('incarnation') != self._authority_grant['incarnation'] or
+                self._job_incarnation is not None and self._job_incarnation != command['incarnation'] or
+                self._motion_incarnation is not None and self._motion_incarnation != command['incarnation'] or
+                type(command.get('request_id')) is not int or command['request_id'] != self._authority_request + 1 or
+                command['request_id'] > MAX_INTEGER or grant_value(command.get('grant')) != self._authority_grant):
             raise ValueError('invalid authority pull command')
+
         def guard():
-            probe=copy.deepcopy(self._authority_grant);state=(self._authority_request,self._authority_sequence,self._authority_time)
-            if (self._authority_guard(probe) is not True or json.dumps(probe,sort_keys=True,separators=(',',':'))!=self._authority_grant_wire or
-                json.dumps(self._authority_grant,sort_keys=True,separators=(',',':'))!=self._authority_grant_wire or
-                state!=(self._authority_request,self._authority_sequence,self._authority_time)):
+            grant_copy = copy.deepcopy(self._authority_grant)
+            previous_state = (self._authority_request, self._authority_sequence, self._authority_time)
+            if (self._authority_guard(grant_copy) is not True or
+                    json.dumps(grant_copy, sort_keys=True, separators=(',', ':')) != self._authority_grant_wire or
+                    json.dumps(self._authority_grant, sort_keys=True, separators=(',', ':')) != self._authority_grant_wire or
+                    previous_state != (self._authority_request, self._authority_sequence, self._authority_time)):
                 raise RuntimeError('authority grant guard changed')
             self._within()
-        self._quiet();guard();self._authority_request=command['request_id']
-        raw=self._pull_authority_motion();sample=None if raw is None else motion_value(raw)
-        digest=None if sample is None else motion_digest(sample);guard();self._quiet()
+
+        self._quiet()
+        guard()
+        self._authority_request = command['request_id']
+        raw_sample = self._pull_authority_motion()
+        sample = None if raw_sample is None else motion_value(raw_sample)
+        digest = None if sample is None else motion_digest(sample)
+        guard()
+        self._quiet()
         if sample is not None:
-            if motion_digest(raw)!=digest:raise ValueError('authority sample changed during guard')
-            if (sample['epoch']!=self._authority_grant['epoch'] or sample['generation']!=self._authority_grant['generation'] or
-                sample['index']!=self._authority_grant['index'] or sample['sector_macro']!=self._authority_grant['sector_macro'] or
-                sample['sequence']!=self._authority_sequence+1 or
-                (self._authority_time is None and sample['velocity'] is not None) or
-                (self._authority_time is not None and sample['source_time']<=self._authority_time)):
+            if motion_digest(raw_sample) != digest:
+                raise ValueError('authority sample changed during guard')
+            if (sample['epoch'] != self._authority_grant['epoch'] or
+                    sample['generation'] != self._authority_grant['generation'] or
+                    sample['index'] != self._authority_grant['index'] or
+                    sample['sector_macro'] != self._authority_grant['sector_macro'] or
+                    sample['sequence'] != self._authority_sequence + 1 or
+                    (self._authority_time is None and sample['velocity'] is not None) or
+                    (self._authority_time is not None and sample['source_time'] <= self._authority_time)):
                 raise ValueError('foreign or stale authority sample')
-            self._authority_sequence=sample['sequence'];self._authority_time=sample['source_time']
-        reply={k:command[k] for k in ('version','connection_handle','session_epoch','incarnation','request_id','grant')}
-        reply.update(kind='authority_motion_result',sample=sample,sample_sha256=digest)
-        self._out=json.dumps(reply,sort_keys=True,separators=(',', ':'),allow_nan=False).encode()+b'\n'
+            self._authority_sequence = sample['sequence']
+            self._authority_time = sample['source_time']
+        reply = {
+            key: command[key] for key in
+            ('version', 'connection_handle', 'session_epoch', 'incarnation', 'request_id', 'grant')
+        }
+        reply.update(kind='authority_motion_result', sample=sample, sample_sha256=digest)
+        self._out = json.dumps(reply, sort_keys=True, separators=(',', ':'), allow_nan=False).encode() + b'\n'
 
     def poll(self, timeout=0):
         """Pump bounded I/O once; True means a receipt was sent to the socket."""
