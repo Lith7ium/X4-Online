@@ -93,7 +93,7 @@ class IndependentStageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fixture.world.session.players, ())
         self.assertEqual(self.fixture.world.session.ready_players, ())
 
-    async def test_sync_session_native_staging_real_tls_and_thread_cleanup(self):
+    async def test_native_staging_real_tls_simulated_load_activation_and_cleanup(self):
         from authority import experimental_client_session as session
         sys.path.insert(0, str(ROOT/'tools/dev'))
         import authority_client_native as native
@@ -108,13 +108,50 @@ class IndependentStageTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(path, target)
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), bound.offer.sha256)
                 self.assertEqual(path.stat().st_size, bound.offer.size)
-                # Exercise the real owner's next legal state, without native claims/admission.
-                owner.load_requested(bound.offer.attempt_id)
+                # X4 observations/controllers are simulated; TLS, owner and host are real.
+                attempt = bound.offer.attempt_id
+                owner.load_requested(attempt)
+                owner.loaded_marker(attempt, bound.marker)
+                owner.paused(attempt, True)
+                class SimulatedController:
+                    def pause(self, handles): return True
+                    def resume(self, handles): return True
+                owner.activate(attempt, SimulatedController())
+                owner.poll()
                 self.assertTrue(any(thread.name == 'authority-client-tls' for thread in threading.enumerate()))
             self.assertFalse(any(thread.name == 'authority-client-tls' for thread in threading.enumerate()))
         with patch.object(session, '_listener', side_effect=subject._listener):
             await asyncio.to_thread(operation)
+        self.assertIn(('resume', (1,)), self.fixture.participants.calls)
         self.assertTrue(all(listener.fileno() == -1 for listener in self.listeners))
+        await asyncio.sleep(.08)
+        self.assertEqual(self.fixture.world.session.ready_players, ())
+        self.assertEqual(self.fixture.world.session.players, ())
+
+    async def test_native_staging_metadata_change_rejected_at_real_owner_claim(self):
+        from authority import experimental_client_session as session
+        sys.path.insert(0, str(ROOT/'tools/dev'))
+        import authority_client_native as native
+        options = self.options()
+        directory = options.pop('new_directory')
+        target = self.root/'changed-profile/save_009.xml.gz'
+        target.parent.mkdir()
+        def operation():
+            with session.client_connection(**options) as owner:
+                bound = owner.request_offer()
+                native.stage_offered_save(owner, directory, target)
+                target.chmod(0o400)  # Deliberate simulated mutation, never part of native staging.
+                attempt = bound.offer.attempt_id
+                owner.load_requested(attempt)
+                owner.loaded_marker(attempt, bound.marker)
+                owner.paused(attempt, True)
+                class SimulatedController:
+                    def pause(self, handles): return True
+                    def resume(self, handles): return True
+                with self.assertRaisesRegex(ValueError, '^staged save changed during load attempt$') as raised:
+                    owner.activate(attempt, SimulatedController())
+                self.assertEqual(native.error_code(raised.exception), 'staged_save_changed_during_load')
+        await asyncio.to_thread(operation)
         await asyncio.sleep(.08)
         self.assertEqual(self.fixture.world.session.ready_players, ())
         self.assertEqual(self.fixture.world.session.players, ())

@@ -86,7 +86,9 @@ def stage_offered_save(owner, new_directory, target):
     """Download, then copy and verify through the owner's single transition.
 
     copy_to_new_slot requires the downloaded state and itself verifies the
-    completed target before advancing to staged. X4 must not be running yet.
+    completed target before advancing to staged. Do not mutate its metadata
+    after verification: the owner rechecks its full fingerprint at claim time.
+    X4 must not be running yet; its later read-only bind protects game writes.
     """
     downloaded = owner.download(new_directory)
     return owner.copy_to_new_slot(downloaded, target)
@@ -172,6 +174,20 @@ def validate_environment(args):
     return out, game, auth.resolve(strict=True), library, user, home, steam
 
 
+def error_code(error):
+    """Map only known failures to fixed, credential-free diagnostic codes."""
+    known_codes = {'native_client_deadline', 'owned_launcher_stopped', 'owned_x4_changed',
+        'owned_x4_disappeared', 'steam_identity_changed', 'protected_configuration_changed',
+        'owned_loaded_state_unconfirmed', 'no_server_control_confirmed', 'insufficient_active_budget',
+        'participant_socket_not_owned', 'tls_startup_timeout', 'tls_startup_failed', 'tls_bridge_failed',
+        'client_cleanup_failed', 'tls_cleanup_failed', 'private_content_configuration_differs',
+        'archived_fixture_differs', 'native_library_copy_changed'}
+    code = error.args[0] if len(error.args) == 1 and type(error.args[0]) is str else None
+    if code == 'staged save changed during load attempt':
+        return 'staged_save_changed_during_load'
+    return code if code in known_codes else 'operation_failed'
+
+
 def run(args):
     out, game, auth, library, user, home, steam = validate_environment(args)
     shared_key = bytes.fromhex(stage_cli._read_secret_file(args.shared_key_file, 64))
@@ -203,7 +219,6 @@ def run(args):
                 result['phase'] = 'download'
                 target = profile/'save'/snapshot.SLOT
                 stage_offered_save(owner, out/'download', target)
-                target.chmod(0o400)
                 ticket = ticket_for(bound)
                 process_identity = None
                 next_context_check = 0
@@ -325,15 +340,8 @@ def run(args):
         result.setdefault('failure_phase', result['phase'])
         error_type = next((kind.__name__ for kind in (KeyboardInterrupt, TimeoutError, ValueError, OSError, RuntimeError)
                            if isinstance(error, kind)), 'other_failure')
-        known_codes = {'native_client_deadline', 'owned_launcher_stopped', 'owned_x4_changed',
-            'owned_x4_disappeared', 'steam_identity_changed', 'protected_configuration_changed',
-            'owned_loaded_state_unconfirmed', 'no_server_control_confirmed', 'insufficient_active_budget',
-            'participant_socket_not_owned', 'tls_startup_timeout', 'tls_startup_failed', 'tls_bridge_failed',
-            'client_cleanup_failed', 'tls_cleanup_failed', 'private_content_configuration_differs',
-            'archived_fixture_differs', 'native_library_copy_changed'}
-        code = error.args[0] if len(error.args) == 1 and type(error.args[0]) is str else None
         result.update(success=False, error_class='native_client_failed', error_type=error_type,
-                      error_code=code if code in known_codes else 'operation_failed')
+                      error_code=error_code(error))
         if any(note.endswith('cleanup_failed') for note in getattr(error, '__notes__', ())):
             cleanup_errors.append('client_connection_cleanup_failed')
         if error.args in (('client_cleanup_failed',), ('tls_cleanup_failed',)):
