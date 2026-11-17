@@ -331,6 +331,29 @@ individual player factions and separate player accounts are later features.
 NPC factions remain part of the simulated world and the ship census. The
 shared account is a requirement, not implemented or validated synchronization.
 
+The earlier LAN Lab checkout (`../../x4-lan-lab`, inspected at `6e17f9a`)
+contains a narrower host-executed trade experiment. Its
+[`trade_game.lua`](../../x4-lan-lab/extension/x4_lan_lab/ui/trade_game.lua)
+captures baskets from the map trade menu, while
+[`x4lan_trade.xml`](../../x4-lan-lab/extension/x4_lan_lab/md/x4lan_trade.xml)
+checks docking, stock, funds, capacity and prices, and uses `faction.player`
+as the co-op account. [`x4lan.market.trade.xml`](../../x4-lan-lab/extension/x4_lan_lab/aiscripts/x4lan.market.trade.xml)
+executes transfers and observes cargo and balances. The
+[6.0.0 verification report](../../x4-lan-lab/reports/release-6.0.0-checks.txt)
+records four actual purchases and sales from two ships against one player
+account in a real Linux host X4, with a synthetic UDP counterpart. The guest
+was tested separately against a synthetic host; this is not a real two-game
+cross-platform trade or evidence of Authority-server synchronization.
+
+That experiment supports only two fixture stations and six wares. Its station
+setup changes ownership, offers and stock; **do not apply it to ordinary
+stations**. Its guest `Apply` adjusts local money and cargo and must not be
+reused as general-universe reconciliation. A native basket can finish partly:
+`PARTIAL` or an uncertain result has no demonstrated rollback and must not be
+resubmitted as a fresh transaction. Real NPC markets, saved-world recovery,
+duplicate handling across restart and synchronization of the company account
+remain unproven for the Authority approach.
+
 The first full development check ran 3,020 tests: one diagnostic-classification
 test failed and 56 tests were skipped because platform-specific executables,
 native libraries or other prerequisites were unavailable. The classification
