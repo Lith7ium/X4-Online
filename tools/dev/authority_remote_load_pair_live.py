@@ -65,7 +65,8 @@ class RemoteParticipant(native.TCPMarkedParticipant):
             child.close()
             self.client_tcp.close(); self.client_tcp = None
             target = profile/'save'/native.marked.base.snapshot.SLOT
-            config = {'file_port':service.port, 'file_token':service.token, 'deadline':remote_owner_deadline(self.run_deadline),
+            file_port = getattr(self, 'diagnostic_file_port', service.port)
+            config = {'file_port':file_port, 'file_token':service.token, 'deadline':remote_owner_deadline(self.run_deadline),
                       'download':str(out/'download'), 'target':str(target)}
             self.remote_ipc.settimeout(min(1, native.marked.remaining(self.run_deadline)))
             self.remote_ipc.sendall(json.dumps(config, separators=(',',':')).encode('ascii')+b'\n')

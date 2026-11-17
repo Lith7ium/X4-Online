@@ -2,10 +2,16 @@
 local cfg=X4LAN_CONFIG
 if not cfg or cfg.authority_download_load~=true then return end
 local ffi=require('ffi');ffi.cdef[[const char* GetSaveFolderPath(void);]]
+local function normalize_path(path)
+ assert(type(path)=='string' and not path:find('\0',1,true))
+ local normalized=path:gsub('\\','/'):gsub('/+$','')
+ assert(normalized~='')
+ return normalized
+end
 local function profile()
  assert(cfg.test_profile=='45841')
  local p=ffi.C.GetSaveFolderPath();assert(p~=nil and p~=ffi.NULL)
- assert(ffi.string(p):gsub('\\','/'):gsub('/+$','')==cfg.authority_load_save_path)
+ assert(normalize_path(ffi.string(p))==normalize_path(cfg.authority_load_save_path))
 end
 local t=cfg.authority_ticket
 local fields={'world_epoch','connection_handle','baseline_id','load_generation','checkpoint_id','sha256','attempt_id','slot'}

@@ -133,6 +133,12 @@ class ServerClient(combined.RecoveredRemoteParticipant):
     """Reuse the paired runner without ever closing the server's control."""
     cancel_check = None
 
+    def pump_loading(self):
+        link = getattr(self, 'diagnostic_tls_link', None)
+        if link is not None:
+            link.check()
+        return super().pump_loading()
+
     def prepare_client_motion(self, case, profile, status, request, ticket):
         """Install one private, bounded candidate probe before protected binds."""
         import authority_recovered_client_motion_install as motion_install
@@ -514,10 +520,32 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     client_out = out/'client'; client_out.mkdir(mode=0o700)
     case, profile, binds, lock = base.snapshot.prepare_case(client_out, game, home)
     if any((profile/'save').iterdir()): raise ValueError('private client profile not empty')
-    participant.client_tcp = socket.create_connection(listener.getsockname(), timeout=min(1, recovery.marked.remaining(deadline)))
-    accepted, address = listener.accept()
-    if address != participant.client_tcp.getsockname() or address[0] != '127.0.0.1':
-        accepted.close(); raise ValueError('unexpected diagnostic peer')
+    tls_certificate = getattr(args, 'diagnostic_tls_certificate', None)
+    tls_private_key = getattr(args, 'diagnostic_tls_private_key', None)
+    tls_guard_active = [False]
+    if (tls_certificate is None) != (tls_private_key is None):
+        raise ValueError('both diagnostic TLS certificate and private key are required')
+    if tls_certificate is not None:
+        if participant.keep_worker or client_motion is not None:
+            raise ValueError('diagnostic TLS currently supports the load-only client')
+        from authority_diagnostic_tls_link import DiagnosticTLSLink
+        link = DiagnosticTLSLink(participant)
+        participant.diagnostic_tls_link = link
+        participant.client_tcp, accepted = link.start(tls_certificate, tls_private_key, service.port, deadline)
+        participant.diagnostic_file_port = link.file_port
+        tls_guard_active[0] = True
+        original_check_server = check_server
+        def check_server():
+            if tls_guard_active[0]:
+                link.check()
+            original_check_server()
+            if tls_guard_active[0]:
+                link.check()
+    else:
+        participant.client_tcp = socket.create_connection(listener.getsockname(), timeout=min(1, recovery.marked.remaining(deadline)))
+        accepted, address = listener.accept()
+        if address != participant.client_tcp.getsockname() or address[0] != '127.0.0.1':
+            accepted.close(); raise ValueError('unexpected diagnostic peer')
     participant.server_tcp = accepted
     try:
         handle = host.adopt(accepted)
@@ -649,6 +677,7 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                 if client_motion is not None and not participant.motion_stop_confirmed:
                     raise RuntimeError('client motion STOP was not confirmed')
                 participant.cleanup_diagnostic()
+                tls_guard_active[0] = False
                 remaining = base.snapshot.stop_owned(proc, started)
                 if remaining: raise RuntimeError('diagnostic client X4 stop unconfirmed')
                 matches = [index for index, record in enumerate(processes)
@@ -671,6 +700,13 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                 participant.redact()
                 participant.config = None
                 record_client_evidence(result, ticket, participant.marker, client_identity, server_identity)
+                if tls_certificate is not None:
+                    result['diagnostic_tls'] = {
+                        'control_and_file_channels': True,
+                        'local_loopback_only': True,
+                        'internet_tested': False,
+                        'windows_tested': False,
+                    }
                 if sector_evidence is not None:
                     result['client_sector_observation'] = sector_evidence
                 return result

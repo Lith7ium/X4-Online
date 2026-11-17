@@ -545,6 +545,9 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                         if world.session.state != 'running': raise RuntimeError('remaining client resume failed')
                         result.update(intermediate_checkpoint_confirmed=True, remaining_client_resumed=True,
                                       server_state='running', pending_operation=None)
+                diagnostic_tls_link = getattr(self, 'diagnostic_tls_link', None)
+                if diagnostic_tls_link is not None:
+                    diagnostic_tls_link.expect_departure()
                 self.ipc.settimeout(min(1, marked.remaining(deadline)))
                 self.ipc.sendall(b'{"command":"stop"}\n')
                 if json.loads(read_line(self.ipc, deadline)) != {'event':'stopped'}:

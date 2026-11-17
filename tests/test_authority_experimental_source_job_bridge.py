@@ -21,6 +21,7 @@ class SourceBridgeTest(unittest.TestCase):
         self.addCleanup(self.base.doCleanups)
         self.epoch,self.generation,self.attempt,self.lease=(x*32 for x in 'abcd')
         self.errors=[];self.stop=threading.Event();self.thread=None;self.releases=[]
+        self.finished_packets_sent=threading.Event()
         self.addCleanup(self.finish)
 
     def finish(self):
@@ -90,7 +91,9 @@ class SourceBridgeTest(unittest.TestCase):
                             count='2' if mode=='bad_finished' else '1'
                             finished=('S|'+self.lease+'|'+self.attempt+'|FINISHED|'+self.epoch+'|'+self.generation+'|'+count).encode()
                             sock.send(finished)
-                            if mode=='duplicate_finished':sock.send(finished)
+                            if mode=='duplicate_finished':
+                                sock.send(finished)
+                                self.finished_packets_sent.set()
                             break
                         if mode!='two_events' or rearmed==2:break
                         event['sequence']=2;event['index']=10056
@@ -151,8 +154,11 @@ class SourceBridgeTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError):bridge.run_one(allow_finished=True)
                 self.assertEqual(bridge.state,'failed');return
             elif mode=='duplicate_finished':
+                # Both datagrams must already be queued: the bridge's quiet
+                # check is a point-in-time check, not a future-packet fence.
+                self.assertTrue(self.finished_packets_sent.wait(2),'duplicate FINISHED was not sent')
                 with self.assertRaises(RuntimeError):bridge.run_one(allow_finished=True)
-                self.assertEqual(bridge.state,'failed');return
+                self.assertEqual(bridge.state,'failed');self.assertTrue(self.base.case.host._failed);return
             elif mode in ('bad_finished','unexpected_finished'):
                 with self.assertRaises(ValueError):bridge.run_one(allow_finished=mode=='bad_finished')
                 self.assertEqual(bridge.state,'failed');return

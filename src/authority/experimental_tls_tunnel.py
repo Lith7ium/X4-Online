@@ -228,6 +228,137 @@ async def _accepted_stream(conn, *, ssl_context=None):
     return reader, asyncio.StreamWriter(transport, protocol, reader, loop)
 
 
+def _validate_server_context(context):
+    if not isinstance(context, ssl.SSLContext) or context.protocol != ssl.PROTOCOL_TLS_SERVER:
+        raise ValueError('server TLS context required')
+    if context.minimum_version < ssl.TLSVersion.TLSv1_2:
+        raise ValueError('TLS 1.2 or newer required')
+
+
+def _validate_server_identity(host, fingerprint):
+    if (type(host) is not str or not host or len(host) > 253 or
+            type(fingerprint) is not str or not re.fullmatch(r'[0-9a-f]{64}', fingerprint)):
+        raise ValueError('server host and lowercase SHA-256 fingerprint required')
+
+
+def _client_context():
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE  # pin verification follows before authentication
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
+async def _server_authenticate(reader, shared_key, services):
+    auth = await asyncio.wait_for(reader.readexactly(len(_MAGIC) + 33), _CONNECT_TIMEOUT)
+    service = auth[-1]
+    if (auth[:len(_MAGIC)] != _MAGIC or
+            not hmac.compare_digest(auth[len(_MAGIC):-1], shared_key) or
+            service not in services):
+        raise ValueError('tunnel authentication failed')
+    return service
+
+
+async def _client_authenticate(reader, writer, fingerprint, shared_key, service):
+    certificate = writer.get_extra_info('ssl_object').getpeercert(binary_form=True)
+    if not certificate or not hmac.compare_digest(hashlib.sha256(certificate).hexdigest(), fingerprint):
+        raise ValueError('server fingerprint mismatch')
+    writer.write(_MAGIC + shared_key + bytes([service]))
+    await asyncio.wait_for(writer.drain(), _CONNECT_TIMEOUT)
+    if await asyncio.wait_for(reader.readexactly(1), _CONNECT_TIMEOUT) != b'\x01':
+        raise ValueError('tunnel authentication failed')
+
+
+def _validate_connected_loopback(sock):
+    if (type(sock) is not socket.socket or sock.family != socket.AF_INET or
+            sock.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM or
+            sock.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) or
+            sock.getsockname()[0] != '127.0.0.1' or sock.getpeername()[0] != '127.0.0.1'):
+        raise ValueError('connected IPv4 loopback TCP socket required')
+    sock.setblocking(False)
+
+
+def _validate_distinct_connections(first, second):
+    if first is second or first.fileno() == second.fileno():
+        raise ValueError('distinct socket connections required')
+    endpoints = (first.getsockname(), first.getpeername())
+    other = (second.getsockname(), second.getpeername())
+    if endpoints == other or endpoints == other[::-1]:
+        raise ValueError('distinct socket connections required')
+
+
+async def relay_connected_server(*, tls_socket, backend_socket, ssl_context, shared_key, idle_timeout=300):
+    """Run one private CONTROL relay; close both sockets after coroutine start.
+
+    The caller owns the sockets until this coroutine first runs and must close
+    them if it never starts. Establish and correlate socket pairs before then.
+    This does not authenticate other processes on the local machine.
+    """
+    tls_writer = raw_writer = None
+    try:
+        _validate_options(shared_key, 1, idle_timeout)
+        _validate_server_context(ssl_context)
+        _validate_connected_loopback(tls_socket)
+        _validate_connected_loopback(backend_socket)
+        _validate_distinct_connections(tls_socket, backend_socket)
+        tls_reader, tls_writer = await _accepted_stream(tls_socket, ssl_context=ssl_context)
+        await _server_authenticate(tls_reader, shared_key, {_CONTROL})
+        raw_reader, raw_writer = await asyncio.wait_for(
+            asyncio.open_connection(sock=backend_socket), _CONNECT_TIMEOUT)
+        tls_writer.write(b'\x01')
+        await asyncio.wait_for(tls_writer.drain(), _CONNECT_TIMEOUT)
+        await _relay(raw_reader, raw_writer, tls_reader, tls_writer, idle_timeout)
+    finally:
+        try:
+            await _close_writer(raw_writer)
+        finally:
+            try:
+                await _close_writer(tls_writer)
+            finally:
+                try:
+                    if type(tls_socket) is socket.socket:
+                        tls_socket.close()
+                finally:
+                    if type(backend_socket) is socket.socket:
+                        backend_socket.close()
+
+
+async def relay_connected_client(*, raw_socket, tls_socket, server_hostname,
+                                 server_fingerprint, shared_key, idle_timeout=300):
+    """Run one private CONTROL relay; close both sockets after coroutine start.
+
+    The caller owns the sockets until this coroutine first runs and must close
+    them if it never starts. Establish and correlate socket pairs before then.
+    """
+    raw_writer = tls_writer = None
+    try:
+        _validate_options(shared_key, 1, idle_timeout)
+        _validate_server_identity(server_hostname, server_fingerprint)
+        _validate_connected_loopback(raw_socket)
+        _validate_connected_loopback(tls_socket)
+        _validate_distinct_connections(raw_socket, tls_socket)
+        raw_reader, raw_writer = await _accepted_stream(raw_socket)
+        tls_reader, tls_writer = await asyncio.wait_for(
+            asyncio.open_connection(sock=tls_socket, ssl=_client_context(),
+                                    server_hostname=server_hostname,
+                                    ssl_handshake_timeout=_CONNECT_TIMEOUT), _CONNECT_TIMEOUT)
+        await _client_authenticate(tls_reader, tls_writer, server_fingerprint, shared_key, _CONTROL)
+        await _relay(raw_reader, raw_writer, tls_reader, tls_writer, idle_timeout)
+    finally:
+        try:
+            await _close_writer(raw_writer)
+        finally:
+            try:
+                await _close_writer(tls_writer)
+            finally:
+                try:
+                    if type(raw_socket) is socket.socket:
+                        raw_socket.close()
+                finally:
+                    if type(tls_socket) is socket.socket:
+                        tls_socket.close()
+
+
 async def start_server(*, listener, ssl_context, shared_key, control_port, file_port,
                        max_connections=8, idle_timeout=300):
     """Start an authenticated gateway to two fixed server-local TCP ports.
@@ -236,10 +367,7 @@ async def start_server(*, listener, ssl_context, shared_key, control_port, file_
     operator's certificate and private key; callers distribute its fingerprint.
     """
     _validate_options(shared_key, max_connections, idle_timeout)
-    if not isinstance(ssl_context, ssl.SSLContext) or ssl_context.protocol != ssl.PROTOCOL_TLS_SERVER:
-        raise ValueError('server TLS context required')
-    if ssl_context.minimum_version < ssl.TLSVersion.TLSv1_2:
-        raise ValueError('TLS 1.2 or newer required')
+    _validate_server_context(ssl_context)
     destinations = {_CONTROL: _port(control_port), _FILE: _port(file_port)}
     _validate_listener(listener, loopback=False)
     tunnel = RunningTunnel([listener], max_connections)
@@ -248,12 +376,7 @@ async def start_server(*, listener, ssl_context, shared_key, control_port, file_
         tls_writer = raw_writer = None
         try:
             tls_reader, tls_writer = await _accepted_stream(conn, ssl_context=ssl_context)
-            auth = await asyncio.wait_for(tls_reader.readexactly(len(_MAGIC) + 33), _CONNECT_TIMEOUT)
-            service = auth[-1]
-            if (auth[:len(_MAGIC)] != _MAGIC or
-                    not hmac.compare_digest(auth[len(_MAGIC):-1], shared_key) or
-                    service not in destinations):
-                return
+            service = await _server_authenticate(tls_reader, shared_key, destinations)
             raw_reader, raw_writer = await asyncio.wait_for(
                 asyncio.open_connection('127.0.0.1', destinations[service]), _CONNECT_TIMEOUT)
             tls_writer.write(b'\x01')
@@ -272,18 +395,12 @@ async def start_client(*, control_listener, file_listener, server_host, server_p
     """Start two local endpoints using pinned TLS to one remote gateway."""
     _validate_options(shared_key, max_connections, idle_timeout)
     _port(server_port)
-    if (type(server_host) is not str or not server_host or len(server_host) > 253 or
-            type(server_fingerprint) is not str or
-            not re.fullmatch(r'[0-9a-f]{64}', server_fingerprint)):
-        raise ValueError('server host and lowercase SHA-256 fingerprint required')
+    _validate_server_identity(server_host, server_fingerprint)
     if control_listener is file_listener:
         raise ValueError('separate local listeners required')
     _validate_listener(control_listener, loopback=True)
     _validate_listener(file_listener, loopback=True)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE  # pin verification follows before authentication
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context = _client_context()
     tunnel = RunningTunnel([control_listener, file_listener], max_connections)
 
     async def handle(conn, service):
@@ -294,13 +411,7 @@ async def start_client(*, control_listener, file_listener, server_host, server_p
                 asyncio.open_connection(server_host, server_port, ssl=context,
                                         server_hostname='', ssl_handshake_timeout=_CONNECT_TIMEOUT),
                 _CONNECT_TIMEOUT)
-            certificate = tls_writer.get_extra_info('ssl_object').getpeercert(binary_form=True)
-            if not certificate or not hmac.compare_digest(hashlib.sha256(certificate).hexdigest(), server_fingerprint):
-                raise ValueError('server fingerprint mismatch')
-            tls_writer.write(_MAGIC + shared_key + bytes([service]))
-            await asyncio.wait_for(tls_writer.drain(), _CONNECT_TIMEOUT)
-            if await asyncio.wait_for(tls_reader.readexactly(1), _CONNECT_TIMEOUT) != b'\x01':
-                raise ValueError('tunnel authentication failed')
+            await _client_authenticate(tls_reader, tls_writer, server_fingerprint, shared_key, service)
             await _relay(raw_reader, raw_writer, tls_reader, tls_writer, idle_timeout)
         finally:
             await _close_writer(raw_writer)

@@ -602,6 +602,12 @@ def run(args):
         client_sector=diagnostic_client_sector(args,pair_delivery)
         guard_timing=diagnostic_guard_timing(args,source_enabled)
         long_motion=diagnostic_long_motion(args,witness_join,source_enabled,client_motion)
+        tls_certificate = getattr(args, 'diagnostic_tls_certificate', None)
+        tls_private_key = getattr(args, 'diagnostic_tls_private_key', None)
+        if ((tls_certificate is None) != (tls_private_key is None) or
+                (tls_certificate is not None and
+                 (not getattr(args, 'diagnostic_client', False) or source_enabled))):
+            raise ValueError('diagnostic TLS requires one load-only diagnostic client and both certificate files')
         case, profile, binds, lock = snapshot.prepare_case(out, game, home)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage)
@@ -1067,6 +1073,8 @@ def main():
     parser.add_argument('--diagnostic-saved-apply',action='store_true',help='private one-shot ENH-870 preflight and possible write; not gameplay')
     parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
+    parser.add_argument('--diagnostic-tls-certificate',type=Path,help='private local diagnostic TLS certificate')
+    parser.add_argument('--diagnostic-tls-private-key',type=Path,help='private local diagnostic TLS key')
     diagnostic_options = parser.add_mutually_exclusive_group()
     diagnostic_options.add_argument('--diagnostic-client', action='store_true',
                         help='start one private Linux diagnostic client before serving other loopback clients')

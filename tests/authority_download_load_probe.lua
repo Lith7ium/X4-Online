@@ -20,3 +20,25 @@ frame();frame();assert(refresh==1 and loaded==1 and #logs==1 and logs[1]:find('l
 menu=false;valid=true;dofile('tools/dev/authority_download_load_probe.lua');frame();frame();frame()
 assert(pauses==1 and #logs==1);paused=true;frame();frame()
 assert(#logs==2 and logs[2]:find('pause_observed|',1,true))
+
+-- A Windows path can use different separator spellings on each side. The
+-- probe still requires an exact match after only this normalization.
+local function check_path(actual,configured,accepted)
+ menu=true;valid=false;paused=false;logs={};loaded=0;refresh=0
+ C.GetSaveFolderPath=function() return actual end
+ X4LAN_CONFIG.authority_load_save_path=configured
+ dofile('tools/dev/authority_download_load_probe.lua')
+ frame();frame()
+ if accepted then
+  assert(refresh==1 and loaded==1 and #logs==1 and logs[1]:find('load_requested|',1,true))
+ else
+  assert(refresh==0 and loaded==0 and #logs==1 and logs[1]=='[X4LAN] AUTH_DOWNLOAD_LOAD ERROR')
+ end
+end
+check_path('C:\\Users/Player\\45841/save\\','C:/Users\\Player/45841\\save///',true)
+check_path('C:\\Users\\Player\\45841\\save','C:/Users/Other/45841/save',false)
+check_path('C:\\Users\\Player\\45841\\save','c:/Users/Player/45841/save',false)
+check_path('','',false)
+check_path('/','/',false)
+check_path('/private/save',nil,false)
+check_path('/private/save','/private/save\0unexpected',false)

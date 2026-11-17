@@ -2,9 +2,10 @@
 
 This optional transport connects the existing control and file TCP services to
 local client ports over one direct, pinned TLS endpoint. It is an isolated
-transport experiment, not a complete X4 host or Windows launcher. It has only
-been exercised over local sockets with simulated participants or echo backends.
-A native Windows client, an Internet route, X4 gameplay and multiplayer save recovery remain
+transport experiment, not a complete X4 host or Windows launcher. Local tests
+include simulated participants, echo backends, and one real Linux X4 client
+joining a real Linux X4 server for a load-only diagnostic. A native Windows
+client, an Internet route, X4 gameplay and multiplayer save recovery remain
 unverified.
 For the previous tunnel protocol version 1 (commit `835a083`), Windows Python
 3.14.8 under Wine exchanged data successfully with a Linux loopback peer on
@@ -40,6 +41,34 @@ recorded network capture or per-channel handshake trace. The client load,
 pause observations, and participant controls were simulated. This run did not
 establish an actual client X4 load, Windows operation, an Internet connection,
 or gameplay.
+
+On 2026-11-17, a separate load-only diagnostic used a real Linux X4 server and
+real Linux X4 client with private profiles on the same machine. The local driver
+`.local/authority_real_client_tls_once_20261117.py` enabled
+`--diagnostic-client`, `--diagnostic-tls-certificate`, and
+`--diagnostic-tls-private-key`; the output is
+`.local/authority-real-client-tls-once-01/`. The diagnostic connects both the
+control and save-file channels through TLS on loopback. This routing follows
+from the configured socket and file-port paths and the successful run; no
+independent packet capture was recorded.
+
+An independent inspection found the client log's load request, checkpoint marker
+and pause observation in that order. The server log's recovery marker matched
+its source manifest. The offered checkpoint and staged client file each measured
+25,790,099 bytes and matched the ticket's SHA-256. The final checkpoint had a
+different ID and marker, and its 25,950,130-byte file matched the final SHA-256;
+`CURRENT` and `CONFIRMED` pointed to its matching manifest. The original server
+and client X4 process instances were no longer present, and the result reported
+owned-process cleanup and removal of the temporary private key. The observations
+do not prove the exact file X4 read. This run did not test motion, gameplay,
+Windows, the Internet, or recovery after a server restart.
+
+The offline full check for these changes ran 4,593 tests: one failure in
+`test_duplicate_finished_fences_host` and 56 skips. The failure reported that an
+expected `RuntimeError` was not raised in the existing UDP job-bridge test. Its
+exact cause is unconfirmed. A race in that test was subsequently fixed and the
+targeted test passed; the full check was not repeated, so it is not a passing
+validation of the final tree.
 
 The server listens on an explicitly chosen IPv4 address. Each connection uses
 TLS 1.2 or later, then a shared 32-byte random key and a fixed service selector.
