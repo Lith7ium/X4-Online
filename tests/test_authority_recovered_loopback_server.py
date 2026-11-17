@@ -35,6 +35,72 @@ from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
 
 
 class WitnessJoinModeTests(unittest.TestCase):
+    def test_finalized_sector_survives_later_save_failure_without_implying_success(self):
+        sector = {
+            'sector_macro': 'sector_a',
+            'participant_id': 'peer_1',
+            'motion_sample_sha256': 'a' * 64,
+            'point_in_time_only': True,
+            'cross_process_sector_identity_proven': False,
+        }
+        client_result = {'client_sector_observation': sector, 'client_ticket': 'private'}
+        active = SimpleNamespace(finish=Mock(return_value=client_result))
+        source_result = {
+            'source_stopped_before_disconnect': True,
+            'client_motion_receipts_confirmed': True,
+            'client_worker_stop_confirmed': True,
+            'client_receipt_sample_sha256': ['a' * 64],
+            'pair_delivery': True,
+            'pair_sample_velocity_present': True,
+        }
+        supervisor_result = {'success': False}
+        clients = []
+        try:
+            _, finished = MODULE.finish_source_diagnostic(
+                active, clients, [('guard', 'baseline', 'pump')], verify=lambda: None,
+                probe=lambda *_: source_result, verify_after=lambda: None,
+                require_client_receipts=True, pair_delivery=True,
+                sector_intermediate_result=supervisor_result)
+            self.assertIs(finished, client_result)
+            raise ValueError('registered components missing')  # subsequent departure save
+        except ValueError as error:
+            supervisor_result['error'] = str(error)
+        self.assertEqual(clients, [])
+        active.finish.assert_called_once_with()
+        self.assertEqual(supervisor_result, {
+            'success': False,
+            'error': 'registered components missing',
+            'client_sector_intermediate': {
+                'stage': 'client_finalized_before_departure_save', **sector,
+            },
+        })
+        self.assertNotIn('private', json.dumps(supervisor_result))
+
+    def test_sector_intermediate_is_opt_in_and_requires_completed_finish(self):
+        observation = {'source_stopped_before_disconnect': True}
+        client_result = {'client_sector_observation': {'sector_macro': 'sector_a'}}
+        active = SimpleNamespace(finish=Mock(return_value=client_result))
+        _, finished = MODULE.finish_source_diagnostic(
+            active, [], [('guard', 'baseline', 'pump')], verify=lambda: None,
+            probe=lambda *_: observation)
+        self.assertIs(finished, client_result)
+
+        result = {'success': False}
+        active.finish.side_effect = RuntimeError('client finish failed')
+        pair_observation = {
+            **observation, 'client_motion_receipts_confirmed': True,
+            'client_worker_stop_confirmed': True,
+            'client_receipt_sample_sha256': ['a' * 64],
+            'pair_delivery': True, 'pair_sample_velocity_present': True,
+        }
+        with self.assertRaisesRegex(RuntimeError, 'client finish failed'):
+            MODULE.finish_source_diagnostic(
+                active, [], [('guard', 'baseline', 'pump')], verify=lambda: None,
+                probe=lambda *_: pair_observation, verify_after=lambda: None,
+                require_client_receipts=True, pair_delivery=True,
+                sector_intermediate_result=result)
+        self.assertEqual(result, {'success': False})
+
     def test_client_sector_requires_explicit_pair_delivery(self):
         self.assertFalse(MODULE.diagnostic_client_sector(SimpleNamespace(), False))
         self.assertTrue(MODULE.diagnostic_client_sector(SimpleNamespace(diagnostic_client_sector=True), True))

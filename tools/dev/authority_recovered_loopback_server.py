@@ -219,11 +219,14 @@ def diagnostic_guard_timing(args, source_enabled):
 
 
 def finish_source_diagnostic(active, active_clients, guard_context, *, verify, probe,
-                             verify_after=None, require_client_receipts=False, pair_delivery=False):
+                             verify_after=None, require_client_receipts=False, pair_delivery=False,
+                             sector_intermediate_result=None):
     """Fence a retained client until the source probe has cooperatively stopped."""
     if (active_clients or len(guard_context)!=1 or not callable(verify) or not callable(probe) or
             (verify_after is not None and not callable(verify_after)) or type(require_client_receipts) is not bool or
-            type(pair_delivery) is not bool or (pair_delivery and not require_client_receipts)):
+            type(pair_delivery) is not bool or (pair_delivery and not require_client_receipts) or
+            (sector_intermediate_result is not None and
+             (type(sector_intermediate_result) is not dict or not pair_delivery))):
         raise ValueError('single source diagnostic context required')
     active_clients.append(active)
     verify()
@@ -243,7 +246,20 @@ def finish_source_diagnostic(active, active_clients, guard_context, *, verify, p
                                'two client receipts and worker stop required')
     (verify if verify_after is None else verify_after)()
     active_clients.remove(active)
-    return observation,active.finish()
+    client_result = active.finish()
+    if sector_intermediate_result is not None:
+        sector = client_result['client_sector_observation']
+        # Publish only the already finalized, explicitly public fields; the
+        # enclosing run and its departure save have not yet succeeded.
+        sector_intermediate_result['client_sector_intermediate'] = {
+            'stage': 'client_finalized_before_departure_save',
+            'sector_macro': sector['sector_macro'],
+            'participant_id': sector['participant_id'],
+            'motion_sample_sha256': sector['motion_sample_sha256'],
+            'point_in_time_only': sector['point_in_time_only'],
+            'cross_process_sector_identity_proven': sector['cross_process_sector_identity_proven'],
+        }
+    return observation, client_result
 
 
 def run_source_probe_with_progress(result, probe, **kwargs):
@@ -865,7 +881,8 @@ def run(args):
                     result['source_diagnostic'],diagnostic_result=finish_source_diagnostic(
                         diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source,
                         verify_after=verify_motion_stopped if client_motion else None,
-                        require_client_receipts=client_motion,pair_delivery=pair_delivery)
+                        require_client_receipts=client_motion,pair_delivery=pair_delivery,
+                        sector_intermediate_result=result if client_sector else None)
                 if count != 1:
                     baseline = diagnostic_client.settle_departure(host, world, control, diagnostic.server_tcp, deadline, verify_diagnostic,
                         diagnostic_result['client_ticket'], diagnostic_result['client_loaded_marker'])
