@@ -117,6 +117,20 @@ processes; complete cleanup is not confirmed. The local results are in
 creator termination during `CreateProcessW`, establish general process-tree
 containment or cleanup, or make the existing X4 process owner safe to use.
 
+A further private Wine probe, `.local/windows-job-death-wine-20261117-01/`,
+tested abrupt termination of a synthetic job creator after it had started a
+job member and that member's child. The Windows-Python observer reported that
+it held and validated both process handles before terminating its own creator;
+it then observed both process handles signal without its individual-process
+fallback. Job membership and transfer of process handles without the job
+handle follow from the reviewed probe path; no independent OS trace was taken.
+The Windows-Python portion reported success, but the Linux wrapper reported
+failure because the prefix-process scan was incomplete, even though it found
+no visible matching processes. The private wineserver stop and wait reported
+no error; complete cleanup is not confirmed. This was not native Windows or X4
+and did not test creator death during `CreateProcessW`, Steam interactions,
+general process-tree containment, or recovery of a real profile.
+
 ## Windows fixture overlay installer
 
 `experimental_windows_fixture_overlay.install_fixture_overlay` can populate an
@@ -222,6 +236,32 @@ This demonstrates only those generic socket operations; it does not establish
 X11 transport selection or authentication, Steam/UDP connectivity, Vulkan
 presentation, or X4 operation. The cleanup result depends on the experiment's
 explicit exclusive PID-namespace membership assumption.
+
+An optional Linux diagnostic guard now checks a host-network UDP socket inherited
+by a process in another network namespace. It pins the process and both
+connected socket endpoints, samples their identities and checks for matching
+IPv4 and IPv4-mapped IPv6 flows. The synthetic tests exercise bidirectional
+datagrams and competing sockets. The guard assumes cooperative ownership and
+does not prevent changes between checks; its caller must fence the session on
+failure. It is not connected to the X4 launcher or game bridge. Passing a file
+descriptor through the sandbox was also exercised with a synthetic process, but
+X4 startup, Steam connectivity and socket adoption remain untested.
+
+A separate private Cage/Xwayland menu attempt used a fresh profile with an
+empty read-only save directory and hid the installed extensions. X4 started,
+but no engine log or start-menu receipt appeared within 120 seconds. Its
+stdout reported a closed X connection during shutdown; that does not explain
+the earlier stall. The private PID-namespace reaper reported cleanup, and the
+save directory remained empty. Under the experiment's exclusive-namespace and
+test-directory assumptions, no X4 process remained afterward. This attempt did
+not establish a working display, the reason for the stall, or game networking.
+Its local result is `.local/private-x4-menu-real-20261117-01/result.json`.
+
+The repository check for the guard ran 4,664 tests with one error in a separate
+source-motion UDP-peer ownership test and 56 skipped checks. The error message
+does not distinguish a mismatched packet from a failed ownership check. A single
+targeted rerun passed, but the original failure remains unexplained. The full
+check did not pass.
 
 The associated repository check reported 4,623 tests without failures and
 56 skips; it was incomplete and must not be presented as a complete passing
