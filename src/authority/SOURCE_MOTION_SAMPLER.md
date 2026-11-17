@@ -112,3 +112,20 @@ session, job owner, gate, sampler and local IPC together against simulated
 host/MD, network and X4 ABI. It establishes routing and confirmation ordering
 offline, not native X4 operation, cross-process frame equality, movement
 application or a complete client/server integration.
+
+## Local pair diagnostic
+
+The recovered source owner has an experimental opt-in that takes two local
+reads from one explicitly selected saved-baseline actor during an outstanding
+PULL. A separate sampler and reserved request prefix keep the diagnostic pair
+apart from the normal sampler. After the pair has completed and stopped, the
+normal sampler produces the PULL's single response; pair values are not sent
+as that response. The owner faults on late pair events and does not acknowledge
+STOP while a pair read remains pending. Existing host and save guards are not
+removed by this diagnostic.
+
+The optional report describes a position-derived rate per source game second,
+not native X4 velocity. Tests exercise the Lua owners with simulated X4 and
+transport. The recovery installer and supervisor do not yet expose this option,
+and the diagnostic has not been run natively or demonstrated smooth movement,
+cross-process identity or frame equivalence, or velocity delivery to a client.
