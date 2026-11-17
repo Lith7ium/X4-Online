@@ -313,12 +313,15 @@ impl Log {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
+        let record = format!("{stamp:.3} pid={} {text}\n", std::process::id());
         match &mut self.0 {
             Some(file) => {
-                let _ = writeln!(file, "{stamp:.3} {text}");
+                let _ = file.write_all(record.as_bytes());
                 let _ = file.flush();
             }
-            None => eprintln!("{text}"),
+            None => {
+                let _ = std::io::stderr().lock().write_all(record.as_bytes());
+            }
         }
     }
 }
@@ -541,6 +544,32 @@ fn log_phase(log: &mut Log, phase: sched_live::Phase) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_record_has_current_pid_and_intact_payload() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("x4mp-agent-log-{}-{unique}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let _cleanup = Cleanup(directory.clone());
+        let path = directory.join("agent.log");
+        let payload = "X4MP_AGENT SCHED state=armed steps=1200 renders=0";
+        let mut log = Log::open(&path);
+        assert!(log.0.is_some());
+        log.line(payload);
+        drop(log);
+        let record = fs::read_to_string(path).unwrap();
+        let (stamp, rest) = record.split_once(' ').unwrap();
+        assert!(stamp.parse::<f64>().unwrap() > 0.0);
+        assert_eq!(rest, format!("pid={} {payload}\n", std::process::id()));
+        assert_eq!(record.lines().count(), 1);
+    }
 
     #[test]
     fn covered_requires_one_range_to_contain_the_whole_span() {
