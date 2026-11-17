@@ -1,11 +1,14 @@
 -- Private once-only read-only client motion probe. The existing participant
 -- update owner calls tick; process, FD, checkpoint and STOPPED are external.
 local M={}
+local player_sector_event_claimed=false
+local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
 function M.new(c)
  if type(c)~='table' or c.enabled~=true then return nil,'disabled' end
  local fixed={};for k,v in pairs(c)do fixed[k]=v end;c=fixed
  for _,name in ipairs({'guard','running','router_factory','owner_factory','fault'})do assert(type(c[name])=='function',name)end
- local failed,busy=false,false;local router,owner
+ local failed,busy=false,false;local router,owner,sector_reader
+ local sector_phase,sector_staged='disabled',nil
  local function fail(reason)
   if not failed then failed=true;pcall(c.fault,reason)end
   return false
@@ -13,12 +16,63 @@ function M.new(c)
  local function context()
   local ok,v=pcall(c.guard);return not failed and ok and v==true
  end
+ local function stop_sector_reader()
+  if sector_phase=='disabled' then return true end
+  if sector_phase~='done' then return false end
+  local ok,closed=pcall(sector_reader.close,sector_reader)
+  if not ok or closed~=true or sector_reader:state()~='closed' or not context() then return false end
+  sector_phase='closed';return true
+ end
  router=assert(c.router_factory({guard=context,fault=function()fail('router')end}))
  assert(router:start() and context())
  owner=assert(c.owner_factory({router=router,guard=context,stop=function()
-  return context() and c.running()==true and router:state()=='active'
+  return context() and c.running()==true and router:state()=='active' and stop_sector_reader()
  end,fault=function()fail('owner')end}))
- assert(router:attach(c.router_generation,c.nonce,c.epoch,owner) and owner:start() and context())
+ if c.player_sector==nil then
+  assert(router:attach(c.router_generation,c.nonce,c.epoch,owner) and owner:start() and context())
+ else
+  assert(router:attach(c.router_generation,c.nonce,c.epoch,owner) and context())
+  local p=c.player_sector
+  assert(type(p)=='table' and token(c.epoch) and token(p.incarnation) and token(p.nonce) and
+   c.epoch~=p.incarnation and c.epoch~=p.nonce and p.incarnation~=p.nonce and
+   type(p.factory)=='function' and type(p.register)=='function' and type(p.report)=='function')
+  local incarnation,nonce,factory,register,report=p.incarnation,p.nonce,p.factory,p.register,p.report
+  sector_phase='idle'
+  local function sector_guard(value)
+   if value~=incarnation or not context() then return false end
+   local ok,running=pcall(c.running)
+   local status,phase=pcall(owner.state,owner)
+   return ok and running==true and status and phase~='stopped' and context()
+  end
+  sector_reader=assert(factory({epoch=c.epoch,incarnation=incarnation,nonce=nonce,guard=sector_guard,
+   complete=function(result)
+    if sector_phase~='pending' or sector_staged~=nil or type(result)~='table' or getmetatable(result)~=nil or
+     result.epoch~=c.epoch or result.incarnation~=incarnation or result.sequence~=1 or
+     type(result.sector_macro)~='string' or not result.sector_macro:match('^[A-Za-z0-9_]+$') or
+     #result.sector_macro>128 then return false end
+    for key in pairs(result)do if key~='epoch' and key~='incarnation' and key~='sequence' and key~='sector_macro' then return false end end
+    sector_staged={epoch=result.epoch,incarnation=result.incarnation,sequence=result.sequence,sector_macro=result.sector_macro}
+    return true
+   end}))
+  assert(type(sector_reader.begin)=='function' and type(sector_reader.event)=='function' and
+   type(sector_reader.tick)=='function' and type(sector_reader.state)=='function' and type(sector_reader.close)=='function')
+  assert(register(function(value)
+   if busy or failed or sector_phase~='pending' then return fail('sector_event')end
+   busy=true
+   local ok=pcall(function()
+    assert(sector_guard(incarnation) and sector_reader:event(value)==true and
+     sector_reader:state()=='idle' and sector_staged and sector_guard(incarnation))
+    local staged=sector_staged;local macro=staged.sector_macro
+    assert(report(staged)==true and sector_guard(incarnation) and sector_reader:state()=='idle' and
+     getmetatable(staged)==nil and staged.epoch==c.epoch and staged.incarnation==incarnation and
+     staged.sequence==1 and staged.sector_macro==macro)
+    for key in pairs(staged)do assert(key=='epoch' or key=='incarnation' or key=='sequence' or key=='sector_macro')end
+    sector_staged=nil;sector_phase='done'
+   end)
+   busy=false;if not ok then return fail('sector_event')end;return true
+  end)==true and context())
+  assert(owner:start() and context())
+ end
  local api={}
  function api:tick()
   if busy or failed then return fail('state')end
@@ -28,6 +82,13 @@ function M.new(c)
    local phase=owner:state()
    assert(phase=='stopped' or c.running()==true)
    assert(owner:tick()==true and context() and router:state()=='active')
+   if sector_reader then
+    if sector_phase=='idle' then
+     assert(owner:state()~='stopped' and c.running()==true)
+     sector_phase='pending';assert(sector_reader:begin()==true)
+    elseif sector_phase=='pending' then assert(sector_reader:tick()==true)
+    else assert(sector_phase=='done' or sector_phase=='closed')end
+   end
   end)
   busy=false;if not ok then return fail('tick')end;return true
  end
@@ -37,7 +98,6 @@ end
 function M.new_x4(c)
  if type(c)~='table' or c.enabled~=true then return nil,'disabled' end
  local fixed={};for k,v in pairs(c)do fixed[k]=v end;c=fixed
- local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
  local function integer(v)return type(v)=='number' and v==v and v%1==0 end
  assert(type(c.expected_save_path)=='string' and c.expected_save_path:sub(1,1)=='/' and c.expected_save_path:sub(-11)=='/45841/save' and
   integer(c.port) and c.port>=1 and c.port<=65535 and integer(c.baseline) and c.baseline>=1 and c.baseline<=200000 and
@@ -59,6 +119,15 @@ function M.new_x4(c)
  local seen={}
  for _,key in ipairs({'lease','attempt','epoch','generation','nonce','router_generation'})do
   local v=c[key];assert(token(v) and not seen[v]);seen[v]=true
+ end
+ local sector_config
+ if c.player_sector~=nil then
+  local p=c.player_sector
+  assert(type(p)=='table' and getmetatable(p)==nil and token(p.incarnation) and token(p.nonce))
+  for key in pairs(p)do assert(key=='incarnation' or key=='nonce')end
+  assert(p.incarnation~=p.nonce and not seen[p.incarnation] and not seen[p.nonce])
+  sector_config={incarnation=p.incarnation,nonce=p.nonce}
+  assert(type(X4LAN_PLAYER_SECTOR_INTEREST)=='table' and type(X4LAN_PLAYER_SECTOR_INTEREST.new_x4)=='function')
  end
  local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);const char* GetSaveFolderPath(void);]]
  local C=ffi.C;local netlib=X4LAN_LOCAL_UDP_MODULE.load(ffi.os,package.loadlib)
@@ -88,7 +157,23 @@ function M.new_x4(c)
   else assert(fields[4]=='STOP' and #fields==7)end
   return value
  end}
- return M.new({enabled=true,epoch=c.epoch,nonce=c.nonce,router_generation=c.router_generation,
+ local player_sector
+ if sector_config then
+  player_sector={incarnation=sector_config.incarnation,nonce=sector_config.nonce,
+   factory=function(o)
+    o.enabled=true;o.timeout=c.timeout;o.expected_save_path=c.expected_save_path;o.resolve=X4LAN_RESOLVE_STRING
+    return X4LAN_PLAYER_SECTOR_INTEREST.new_x4(o)
+   end,
+   register=function(callback)
+    assert(not player_sector_event_claimed);player_sector_event_claimed=true
+    return RegisterEvent('X4AuthorityPlayerSectorInterest.Result',function(_,value)callback(value)end)~=false
+   end,
+   report=function(result)
+    DebugError('[X4LAN] AUTH_CLIENT_SECTOR observed sector='..result.sector_macro)
+    return true
+   end}
+ end
+ return M.new({enabled=true,epoch=c.epoch,nonce=c.nonce,router_generation=c.router_generation,player_sector=player_sector,
   guard=environment,running=function()return not C.IsGamePaused()end,
   router_factory=function(o)
    return X4LAN_CLIENT_MOTION_EVENT_ROUTER.new_x4({enabled=true,max_generations=1,max_tracks=1,

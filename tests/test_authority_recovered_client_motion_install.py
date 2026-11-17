@@ -61,6 +61,9 @@ class Install(unittest.TestCase):
   self.assertEqual(manifest.count('ui/local_udp_module.lua'),1)
   self.assertLess(manifest.index('ui/local_udp_module.lua'),manifest.index('ui/authority_recovered_client_motion.lua'))
   self.assertLess(manifest.index('ui/local_udp_module.lua'),manifest.index('ui/authority_two_x4_participant_probe.lua'))
+  self.assertNotIn('ui/player_sector_interest.lua',manifest)
+  self.assertFalse((self.md/'authority_player_sector_interest.xml').exists())
+  self.assertNotIn('player_sector=',installed)
   self.assertIn('state==\'done\' and not failed',(self.ui/'authority_download_load_probe.lua').read_text())
   if shutil.which('luajit'):
    for p in (self.ui/'authority_two_x4_participant_probe.lua',self.ui/'authority_download_load_probe.lua',*(self.ui/name for _,name in subject.MODULES)):
@@ -83,6 +86,8 @@ class Install(unittest.TestCase):
  def test_ticket_token_encodings_and_ambiguity(self):
   for value in ('e'*32,load.lua_literal('e'*32)[1:-1]):
    self.assertEqual(subject.read_ticket_token('authority_ticket={world_epoch="'+value+'"}','world_epoch'),'e'*32)
+  for value in ('checkpoint-'+'6'*32,load.lua_literal('checkpoint-'+'6'*32)[1:-1]):
+   self.assertEqual(subject.read_ticket_token('ticket={checkpoint_id="'+value+'"}','checkpoint_id',prefix='checkpoint-'),'6'*32)
   for text in ('world_epoch="'+r'\999'*32+'"', 'world_epoch="'+r'\097'*31+'"',
                'world_epoch="'+r'\122'*32+'"', 'world_epoch="'+'e'*32+'",world_epoch="'+'f'*32+'"'):
    with self.subTest(text=text),self.assertRaises(ValueError):subject.read_ticket_token('ticket={'+text+'}','world_epoch')
@@ -108,11 +113,51 @@ class Install(unittest.TestCase):
   shutil.copyfile(ROOT/'tools/dev/authority_registry_witness.xml',md/'authority_registry_witness.xml')
   motion_socket=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
   self.addCleanup(motion_socket.close);motion_socket.bind(('127.0.0.1',0))
-  settings=dict(self.settings,port=motion_socket.getsockname()[1])
+  settings=dict(self.settings,port=motion_socket.getsockname()[1],
+                player_sector={'incarnation':'9'*32,'nonce':'0'*32})
   installation=subject.install(case,profile,self.status,settings)
   self.assertTrue(all(path.is_file() for path in installation.paths))
   self.assertIn(ui/'local_udp_module.lua',participant.protected(case))
+  manifest=(lab/'ui.xml').read_text()
+  self.assertEqual(manifest.count('ui/player_sector_interest.lua'),1)
+  self.assertLess(manifest.index('ui/player_sector_interest.lua'),manifest.index('ui/authority_recovered_client_motion.lua'))
+  self.assertIn(ui/'player_sector_interest.lua',installation.paths)
+  self.assertIn(md/'authority_player_sector_interest.xml',installation.paths)
+  self.assertEqual((ui/'player_sector_interest.lua').read_bytes(),(ROOT/subject.PLAYER_SECTOR_MODULE[0]).read_bytes())
+  self.assertEqual((md/'authority_player_sector_interest.xml').read_bytes(),(ROOT/'tools/dev'/subject.PLAYER_SECTOR_MD).read_bytes())
+  control=(ui/'authority_two_x4_participant_probe.lua').read_text()
+  self.assertIn('player_sector={incarnation=cfg.authority_client_motion_player_sector_incarnation,nonce=cfg.authority_client_motion_player_sector_nonce}',control)
+  self.assertEqual(control.count("SetScript('onUpdate'"),1)
   installation.redact();participant.redact()
+  redacted=(ui/'config.lua').read_text()
+  for name,value in settings['player_sector'].items():
+   self.assertNotIn(value,redacted)
+   self.assertIn('authority_client_motion_player_sector_'+name+'="redacted"',redacted)
+ def test_player_sector_context_refuses_collisions_and_ambiguous_registry(self):
+  loader=self.ui/'authority_download_load_probe.lua'
+  original=loader.read_text()
+  hook='  local check={'
+  registry="  registry_status=assert(X4LAN_RECOVERY_REGISTRY_STATUS.new({nonce='"+'8'*32+"',expected='example'}))\n"
+  self.assertEqual(original.count(hook),1)
+  loader.write_text(original.replace(hook,registry+hook))
+  files=(self.ui/'config.lua',self.lab/'ui.xml',self.ui/'authority_two_x4_participant_probe.lua',loader)
+  before=[p.read_bytes() for p in files]
+  self.settings['player_sector']={'incarnation':'9'*32,'nonce':'0'*32}
+  invalid=[None,{}, {'incarnation':'9'*32,'nonce':'9'*32},
+           {'incarnation':'9'*32,'nonce':'0'*31}, {'incarnation':'9'*32,'nonce':'0'*32,'extra':1}]
+  invalid += [{'incarnation':'9'*32,'nonce':token} for token in
+              ('1'*32,'2'*32,'3'*32,'4'*32,'5'*32,'c'*32,'a'*32,'e'*32,'f'*32,'8'*32,'6'*32)]
+  for value in invalid:
+   with self.subTest(value=value):
+    self.settings['player_sector']=value
+    with self.assertRaises(ValueError):self.install()
+    self.assertEqual([p.read_bytes() for p in files],before)
+    self.assertFalse((self.ui/'player_sector_interest.lua').exists())
+  self.settings['player_sector']={'incarnation':'9'*32,'nonce':'0'*32}
+  loader.write_text(original.replace(hook,registry+registry+hook))
+  before=[p.read_bytes() for p in files]
+  with self.assertRaises(ValueError):self.install()
+  self.assertEqual([p.read_bytes() for p in files],before)
  def test_loader_missing_changed_or_misordered_is_rejected_before_mutation(self):
   loader=self.ui/'local_udp_module.lua';manifest=self.lab/'ui.xml'
   original_loader=loader.read_bytes();original_manifest=manifest.read_text()
