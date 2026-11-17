@@ -13,9 +13,14 @@ import os,select,socket,time
 p=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);p.connect(('127.0.0.1',int(os.environ['P'])))
 j=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);j.connect(('127.0.0.1',int(os.environ['J'])))
 m=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);m.connect(('127.0.0.1',int(os.environ['M'])))
-p.send(('HELLO|'+'5'*32+'|'+'e'*32).encode());end=time.monotonic()+20
-while time.monotonic()<end:
- for s in select.select([p,j,m],[],[],.05)[0]:
+parent_control = int(os.environ['TEST_PARENT_CONTROL_FD'])
+p.send(('HELLO|'+'5'*32+'|'+'e'*32).encode())
+while True:
+ ready = select.select([p,j,m,parent_control],[],[],.05)[0]
+ if parent_control in ready:
+  assert os.read(parent_control,1) == b''
+  break
+ for s in ready:
   v=s.recv(769).decode().split('|')
   if s is p:
    assert v[0]=='CMD' and v[-1]=='resume'
@@ -33,19 +38,31 @@ while time.monotonic()<end:
    m.send(('|'.join(['R','8'*32,'9'*32,kind]+fields)).encode())
 '''
 class Worker(unittest.TestCase):
+ def start_standin(self, script, **environment):
+  # EOF on this parent's pipe owns lifetime; no timer can invalidate queued HELLO.
+  process = subprocess.Popen([sys.executable, '-c', script], stdin=subprocess.PIPE,
+      env=dict(os.environ, TEST_PARENT_CONTROL_FD='0', **environment))
+  self.addCleanup(self.stop_standin, process)
+  return process
+
+ @staticmethod
+ def stop_standin(process):
+  if process.stdin is not None:
+   process.stdin.close()
+  try:
+   process.wait(timeout=3)
+  except subprocess.TimeoutExpired:
+   process.kill()
+   process.wait(timeout=3)
+
  def case(self,status):
   import tempfile
   temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);log=Path(temp.name)/'ops'
   cc,cj,ca,sc,sj,sm=[udp() for _ in range(6)]
   for s in (cc,cj,ca,sc,sj,sm):self.addCleanup(s.close)
   x,y=socket.socketpair();self.addCleanup(x.close);self.addCleanup(y.close)
-  fake=subprocess.Popen([sys.executable,'-c',SCRIPT],env=dict(os.environ,P=str(cc.getsockname()[1]),J=str(cj.getsockname()[1]),A=str(ca.getsockname()[1])))
-  server=subprocess.Popen([sys.executable,'-c',SERVER],env=dict(os.environ,P=str(sc.getsockname()[1]),J=str(sj.getsockname()[1]),M=str(sm.getsockname()[1]),LOG=str(log),STATUS='NEAR' if status=='NEAR' else ('NEAR_SECOND' if status=='STREAM_SKIP' else 'READY')))
-  def cleanup():
-   for proc in (fake,server):
-    if proc.poll() is None:proc.terminate()
-    proc.wait(timeout=3)
-  self.addCleanup(cleanup)
+  fake=self.start_standin(SCRIPT,P=str(cc.getsockname()[1]),J=str(cj.getsockname()[1]),A=str(ca.getsockname()[1]))
+  server=self.start_standin(SERVER,P=str(sc.getsockname()[1]),J=str(sj.getsockname()[1]),M=str(sm.getsockname()[1]),LOG=str(log),STATUS='NEAR' if status=='NEAR' else ('NEAR_SECOND' if status=='STREAM_SKIP' else 'READY'))
   c={'version':1,'epoch':'e'*32,'lease':'b'*32,'attempt':'c'*32,'generation':'d'*32,
      'participant_lease':'f'*32,'job_epoch':'a'*32,'client_process':identity(fake),'server_process':identity(server),
      'deadline':time.monotonic()+18,'authority_lease':'1'*32,'authority_attempt':'2'*32,'incarnation':'3'*32,
@@ -142,6 +159,37 @@ class Worker(unittest.TestCase):
  def test_stream_observes_two_samples_in_order(self):self.case('STREAM')
  def test_stream_skips_near_without_write(self):self.case('STREAM_SKIP')
  def test_stream_failure_never_retries(self):self.case('STREAM_FAIL')
+ def test_parent_owns_standins_beyond_old_expiry_and_reaps_on_eof(self):
+  import tempfile, select
+  with tempfile.TemporaryDirectory() as directory:
+   participant_sockets = []
+   processes = []
+   for script in (SCRIPT, SERVER):
+    participant, job, motion = [udp() for _ in range(3)]
+    for connection in (participant, job, motion):self.addCleanup(connection.close)
+    environment = dict(P=str(participant.getsockname()[1]), J=str(job.getsockname()[1]))
+    if script == SCRIPT:
+     environment['A'] = str(motion.getsockname()[1])
+    else:
+     environment.update(M=str(motion.getsockname()[1]), LOG=str(Path(directory)/'operations'))
+    process = self.start_standin(script, **environment)
+    participant.settimeout(3)
+    self.assertEqual(select.select([participant], [], [], 3)[0], [participant])
+    participant_sockets.append((participant, identity(process)))
+    processes.append(process)
+   # Real elapsed time and live /proc UDP/FD checks: the old helpers closed their
+   # sockets after 20 seconds, even when a parent still held an unread HELLO.
+   time.sleep(21)
+   for process, (participant, process_identity) in zip(processes, participant_sockets):
+    hello, peer = participant.recvfrom(769)
+    self.assertTrue(hello.startswith(b'HELLO|'))
+    self.assertIsNone(process.poll())
+    self.assertTrue(worker.client.socket_owner(peer, participant.getsockname(), process_identity))
+    participant.sendto(b'CMD|lease|epoch|1|1|resume', peer)
+    self.assertEqual(participant.recvfrom(769), (b'RECEIPT|lease|epoch|1|1|confirmed', peer))
+    self.stop_standin(process)
+    self.assertEqual(process.returncode, 0)
+
  def test_ready_applies_only_second_sample(self):self.case('READY')
  def test_near_never_applies(self):self.case('NEAR')
  def test_participant_failure_after_preflight_never_applies(self):self.case('FAIL_THREAD')

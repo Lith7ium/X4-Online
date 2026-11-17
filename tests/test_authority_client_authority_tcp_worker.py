@@ -12,9 +12,16 @@ p=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);p.connect(('127.0.0.1',int(os.
 j=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);j.connect(('127.0.0.1',int(os.environ['J'])))
 a=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);a.connect(('127.0.0.1',int(os.environ['A'])))
 epoch='a'*32;lease='b'*32;attempt='c'*32;gen='d'*32;world='e'*32;pl='f'*32;al='1'*32;at='2'*32
-p.send(('HELLO|'+pl+'|'+world).encode());seq=0;polls=0;end=time.monotonic()+20
-while time.monotonic()<end:
- for s in select.select([p,j,a],[],[],.05)[0]:
+parent_control = os.environ.get('TEST_PARENT_CONTROL_FD')
+parent_control = int(parent_control) if parent_control is not None else None
+end = time.monotonic()+20 if parent_control is None else None
+p.send(('HELLO|'+pl+'|'+world).encode());seq=0;polls=0
+while end is None or time.monotonic()<end:
+ ready = select.select([p,j,a] + ([parent_control] if parent_control is not None else []),[],[],.05)[0]
+ if parent_control is not None and parent_control in ready:
+  assert os.read(parent_control,1) == b''
+  break
+ for s in ready:
   v=s.recv(769).decode().split('|')
   if s is p:
    assert v[0]=='CMD' and v[-1]=='resume'
