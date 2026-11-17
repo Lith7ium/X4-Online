@@ -20,6 +20,23 @@ Windows integration must reuse applicable native/LAN pieces while replacing
 the Linux-specific supervisor boundary; portable Python alone is not proof of
 Windows operation.
 
+The inspected LAN working copy provides a concrete next movement adapter:
+`../x4-playtest7/extension/x4_lan_lab/ui/coop_game.lua` plays buffered poses on
+each frame, checks actual engine position before skipping a correction, and
+refreshes a short-lived MD velocity command. Its paired `md/x4lan_coop.xml`
+releases constant velocity on expiry or identity/context changes and rejects
+unsupported coordinate bases. Porting the setter alone would lose these
+conditions. NPC playback in `ui/universe_game.lua` instead repeatedly applies
+buffered poses; it does not use that native velocity bridge.
+
+The authority motion buffer already reconstructs positions and translation
+derivatives, but `motion_client_owner.lua` currently creates hold-only tracks
+and never calls their render method. `saved_motion_apply.lua` is a bounded
+fixture position setter, preserving current orientation. Sending velocity is
+therefore insufficient until repeated playback, coordinate conversion, clock
+behavior and native-controller interference are addressed together. This is
+a reuse finding, not a new native movement result.
+
 ## Performance question
 
 The relevant question is the capacity of **one authoritative X4 instance on a
