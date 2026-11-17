@@ -54,13 +54,14 @@ unsupported coordinate bases. Porting the setter alone would lose these
 conditions. NPC playback in `ui/universe_game.lua` instead repeatedly applies
 buffered poses; it does not use that native velocity bridge.
 
-The authority motion buffer already reconstructs positions and translation
-derivatives, but `motion_client_owner.lua` currently creates hold-only tracks
-and never calls their render method. `saved_motion_apply.lua` is a bounded
-fixture position setter, preserving current orientation. Sending velocity is
-therefore insufficient until repeated playback, coordinate conversion, clock
-behavior and native-controller interference are addressed together. This is
-a reuse finding, not a new native movement result.
+The new opt-in [client playback path](AUTHORITY-CLIENT-PLAYBACK.md) connects
+the buffer to repeated XYZ corrections and actual-position readback under the
+existing owner. It accounts for delayed binding, stale samples, pause and STOP.
+The default binding path remains hold-only. The native factory preserves
+fixture/player/context guards and local orientation; its integration tests use
+a fake engine. Installer/CLI wiring and a real native playback run remain next.
+Sending velocity alone still does not establish native-controller suppression,
+remote orientation, visual smoothness or complete movement synchronization.
 
 ## Performance question
 
