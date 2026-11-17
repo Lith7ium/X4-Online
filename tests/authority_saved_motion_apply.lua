@@ -34,7 +34,22 @@ local function rig(mode)
   assert(not owner:tick() and writes==0 and #out==2);return
  end
  local pre_id=('9'):rep(32)
+ if mode=='preflight_after_sample_expired' then now=4 end
  input[1]=table.concat({'M',lease,attempt,'PREFLIGHT',pre_id,epoch,generation,'1318','1',digest},'|')
+ if mode=='preflight_after_sample_expired' then
+  -- BIND has been acknowledged, but the sample is older than max_age=2.
+  assert(not owner:tick())
+  assert(faults[1]=='preflight_begin_guard')
+  assert(writes==0 and #logs==0 and #out==2)
+  assert(owner:state()=='failed')
+  assert(input[1]==nil) -- The failed attempt consumed the original request.
+  input[1]=table.concat({'M',lease,attempt,'PREFLIGHT',pre_id,epoch,generation,'1318','1',digest},'|')
+  assert(not owner:tick() and owner:state()=='failed')
+  input[1]=table.concat({'M',lease,attempt,'APPLY',apply_id,epoch,generation,'1318','1',digest},'|')
+  assert(not owner:tick() and owner:state()=='failed')
+  assert(writes==0 and #logs==0 and #out==2 and #faults==1)
+  return
+ end
  assert(owner:tick() and callbacks.last_id==pre_id..'-pre' and writes==0)
  callbacks.apply(nil,pre_id..'-pre|ok')
  if mode=='pre_far' then assert(owner:state()=='failed' and writes==0 and #out==2 and faults[1]=='preflight_pre_distance' and #logs==1 and logs[1]:match(' 90 FAR$'));return end
@@ -100,5 +115,14 @@ local function rig(mode)
   (not immediate or (logs[4]:match('^IMMEDIATE ') and logs[5]:match('^POST_OBSERVED '))) and logs[immediate and 6 or 4]:match('^READBACK '))
  input[1]=table.concat({'M',lease,attempt,'APPLY',apply_id,epoch,generation,'1318','1',digest},'|');assert(not owner:tick() and writes==1)
 end
-for _,mode in ipairs({'ok','immediate_ok','immediate_bad','immediate_fault','immediate_time','stale','wrong_digest','wrong_event','baseline_lost','write_error','reentrant','stale_after_write','bad_readback','dispatch_error','inspect_error','short_distance','pre_near','pre_far','pre_boundary_5','pre_boundary_50','rebind_invalidates','replay_preflight','apply_without_preflight','near_rebind_ready','second_preflight_same_sample'})do rig(mode)end
+local modes = {
+ 'ok', 'immediate_ok', 'immediate_bad', 'immediate_fault', 'immediate_time',
+ 'stale', 'wrong_digest', 'wrong_event', 'baseline_lost', 'write_error',
+ 'reentrant', 'stale_after_write', 'bad_readback', 'dispatch_error',
+ 'inspect_error', 'short_distance', 'pre_near', 'pre_far', 'pre_boundary_5',
+ 'pre_boundary_50', 'preflight_after_sample_expired', 'rebind_invalidates',
+ 'replay_preflight', 'apply_without_preflight', 'near_rebind_ready',
+ 'second_preflight_same_sample',
+}
+for _, mode in ipairs(modes) do rig(mode) end
 print('one-shot saved motion apply tests passed')

@@ -185,3 +185,16 @@ STOP, while its result reported no owned X4 processes remaining. The generic
 fault does not distinguish a local age failure from a transport, MD, router
 or other failure; the cause remains unknown. The result does not establish a
 common frame, visible movement, Windows, Internet or gameplay.
+
+For a subsequent private run, the client wrapper records a local timing
+observation after successfully sending BOUND and after receiving the matching
+PREFLIGHT. It logs their difference, rounded down to milliseconds, only after
+the existing error message or after the owner reaches STOPPED. Since the
+owner's age starts before BOUND is sent, this is a lower bound on its sample
+age at the later preflight guard, assuming a monotonic local clock. A value
+above the configured maximum can establish that the sample had expired; a
+smaller value cannot rule that out. Missing, invalid, or backwards observations
+are reported as unavailable; they do not change the existing guard. The two
+extra clock reads add a small measurement overhead. The observation contains
+no lease, nonce, request, digest, or exception text and does not measure the
+full source-to-client age or Internet latency. It has not yet been run in X4.

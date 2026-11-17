@@ -118,7 +118,12 @@ function M.new(c)
     else assert(sector_phase=='waiting_bound' or sector_phase=='done' or sector_phase=='closed')end
    end
   end)
-  busy=false;if not ok then return fail('tick')end;return true
+  busy=false;if not ok then return fail('tick')end
+  if c.after_stopped then
+   local checked,phase=pcall(owner.state,owner)
+   if checked and phase=='stopped' then pcall(c.after_stopped) end
+  end
+  return true
  end
  function api:state()return failed and 'failed' or owner:state()end
  return api
@@ -180,6 +185,25 @@ function M.new_x4(c)
  local expected_bound
  local apply_phase=saved_apply_fixture and 'waiting_bind' or nil
  local apply_identity,apply_request
+ -- Timing is diagnostic only: invalid readings do not change guard logic.
+ -- Clock reads add overhead. Logging follows the error message after failure,
+ -- or runs after the owner reaches STOPPED, outside its active operation.
+ local bound_sent_at,preflight_received_at,timing_reported
+ local function timing_clock()
+  local ok,value=pcall(GetCurRealTime)
+  if not ok or type(value)~='number' or value~=value or value<0 or value>1e12 then return nil end
+  return value
+ end
+ local function report_timing()
+  if not saved_apply_fixture or timing_reported then return end
+  timing_reported=true
+  local message='[X4LAN] AUTH_RECOVERED_CLIENT_MOTION TIMING bound_to_preflight_lower_bound_seconds='
+  if bound_sent_at and preflight_received_at and preflight_received_at>=bound_sent_at then
+   -- Round down: this remains a lower bound on the age checked by the owner.
+   message=message..('%.3f'):format(math.floor((preflight_received_at-bound_sent_at)*1000)/1000)
+  else message=message..'unavailable' end
+  pcall(DebugError,message)
+ end
  local checked_net={send=function(_,value)
   if type(value)=='string' and value:sub(1,2)=='R|' then
    local fields={};for item in (value..'|'):gmatch('(.-)|')do fields[#fields+1]=item end
@@ -189,7 +213,7 @@ function M.new_x4(c)
     local sent=net:send(value)
     if sent==true then
      if bound_phase then bound_phase='sent' end
-     if apply_phase then apply_phase='bound' end
+     if apply_phase then apply_phase='bound';bound_sent_at=timing_clock() end
     end
     return sent
    elseif apply_phase and fields[4]=='PREFLIGHTED' then
@@ -236,7 +260,8 @@ function M.new_x4(c)
   elseif saved_apply_fixture and (fields[4]=='PREFLIGHT' or fields[4]=='APPLY') then
    assert(#fields==10 and token(fields[5]) and fields[6]==c.epoch and fields[7]==c.generation and
     fields[8]=='1318' and apply_identity and fields[9]==apply_identity.sequence and fields[10]==apply_identity.digest)
-   if fields[4]=='PREFLIGHT' then assert(apply_phase=='bound');apply_phase='preflighting'
+   if fields[4]=='PREFLIGHT' then
+    assert(apply_phase=='bound');preflight_received_at=timing_clock();apply_phase='preflighting'
    else assert(apply_phase=='ready');apply_phase='applying' end
    apply_request=fields[5]
   else assert(fields[4]=='STOP' and #fields==7)end
@@ -263,6 +288,7 @@ function M.new_x4(c)
   end
  end
  return M.new({enabled=true,epoch=c.epoch,nonce=c.nonce,router_generation=c.router_generation,player_sector=player_sector,
+  after_stopped=saved_apply_fixture and report_timing or nil,
   guard=environment,running=function()return not C.IsGamePaused()end,
   router_factory=function(o)
    local options={enabled=true,max_generations=1,max_tracks=1,
@@ -297,6 +323,7 @@ function M.new_x4(c)
     known=safe_fault('router',reason:sub(8))==reason
    end
    DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR'..(known and ' reason='..reason or ''))
+   report_timing()
   end})
 end
 X4LAN_RECOVERED_CLIENT_MOTION=M

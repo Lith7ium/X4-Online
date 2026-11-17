@@ -119,7 +119,8 @@ class Install(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    lib=Path(tmp)/'abi.so'
    subprocess.run(['cc','-O2','-shared','-fPIC','tests/fixtures/saved_motion_apply_abi.c','-o',str(lib)],cwd=ROOT,check=True,capture_output=True)
-   for mode in ('good','sector','apply_first','wrong_sequence','preflight_fault','repeat_preflight','repeat_apply'):
+   for mode in ('good','sector','apply_first','wrong_sequence','preflight_fault','repeat_preflight','repeat_apply',
+                'timing_fault','timing_success','timing_expired','timing_clock_error','timing_clock_infinite','timing_clock_backwards','timing_log_throws'):
     with self.subTest(mode=mode):
      subprocess.run(['luajit','tests/authority_recovered_client_saved_apply.lua',mode],cwd=ROOT,check=True,capture_output=True,timeout=5,env=dict(os.environ,LD_PRELOAD=str(lib)))
  def test_refusals_do_not_mutate_input_files(self):
