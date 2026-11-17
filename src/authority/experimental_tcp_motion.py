@@ -57,7 +57,7 @@ class ExperimentalTCPMotion:
     """Share the job owner's socket lease; callbacks own real game binding."""
     def __init__(self, delivery, *, enabled=False, min_interval=1/60, max_tracks=100000, allow_apply=False):
         if (enabled is not True or type(delivery) is not ExperimentalTCPJobDelivery or
-            type(allow_apply) is not bool or type(min_interval) not in (int,float) or not math.isfinite(min_interval) or not 1/240 <= min_interval <= 10 or
+            type(allow_apply) is not bool or type(min_interval) not in (int,float) or not 1/240 <= min_interval <= 10 or not math.isfinite(min_interval) or
             type(max_tracks) is not int or not 1 <= max_tracks <= 100000):
             raise ValueError('invalid enabled motion owner')
         delivery._host._check()

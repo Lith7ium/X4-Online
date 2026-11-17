@@ -60,6 +60,17 @@ class MotionTCP(unittest.TestCase):
     def sample(seq=1,frame='sector_a',t=1,velocity=None):
         return {'version':1,'epoch':'b'*32,'generation':'c'*32,'index':10055,'sequence':seq,
                 'sector_macro':frame,'source_time':t,'x':1,'y':2,'z':3,'velocity':velocity}
+    def test_huge_min_interval_is_rejected_without_claiming_owner(self):
+        delivery = ExperimentalTCPJobDelivery(self.case.host, enabled=True)
+        for interval in (10**1000, -(10**1000), float('inf'), float('nan')):
+            with self.subTest(interval_type=type(interval), negative=interval < 0):
+                with self.assertRaisesRegex(ValueError, 'invalid enabled motion owner'):
+                    ExperimentalTCPMotion(delivery, enabled=True, min_interval=interval)
+                self.assertIsNone(getattr(delivery, '_motion_owner', None))
+                self.assertFalse(self.case.host._failed)
+        owner = ExperimentalTCPMotion(delivery, enabled=True, min_interval=1/60)
+        self.assertIs(delivery._motion_owner, owner)
+
     def test_two_clients_shared_delivery_motion_transition_and_despawn(self):
         self.setup_pair();first=self.sample();self.assertTrue(self.motion.send(first))
         self.assertEqual(len(self.received),2)
