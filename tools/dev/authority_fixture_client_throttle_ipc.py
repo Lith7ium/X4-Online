@@ -11,6 +11,7 @@ from authority.experimental_participant_job_ipc import _LOCK, _OWNERS
 from authority_tcp_job_client_live import socket_owner
 from authority_tcp_native_worker import check_process
 
+TIMING_NAMES = ('external_guard', 'socket_owner', 'pump')
 TOKEN = re.compile(r'[0-9a-f]{32}\Z')
 NUMBER = re.compile(r'[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z')
 
@@ -18,7 +19,7 @@ NUMBER = re.compile(r'[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z
 class ThrottleUnconfirmed(RuntimeError):
     """An attempt may have reached X4; stop the owned disposable process."""
     def __init__(self, message=None, *, attempted, started, stopped, phase='unknown', error_class='other_error',
-                 started_phase_datagram_received=False, stopped_phase_datagram_received=False, elapsed_ms=0):
+                 started_phase_datagram_received=False, stopped_phase_datagram_received=False, elapsed_ms=0, work_timing=None):
         # The optional message is ignored for compatibility with older callers.
         super().__init__('fixture throttle unconfirmed')
         self.attempted, self.started, self.stopped = attempted, started, stopped
@@ -27,6 +28,8 @@ class ThrottleUnconfirmed(RuntimeError):
         self.started_phase_datagram_received = started_phase_datagram_received
         self.stopped_phase_datagram_received = stopped_phase_datagram_received
         self.elapsed_ms = elapsed_ms
+        self.work_timing = ({name: {'calls': 0, 'elapsed_ms': 0} for name in TIMING_NAMES}
+                            if work_timing is None else work_timing)
 
 
 def pulse(sock, *, process, lease, attempt, epoch, generation, nonce, slot,
@@ -58,6 +61,31 @@ def pulse(sock, *, process, lease, attempt, epoch, generation, nonce, slot,
     started_phase_datagram_received = stopped_phase_datagram_received = False
     phase = 'waiting_ready'
     peer = None
+    work_timing = {name: {'calls': 0, 'elapsed_ms': 0} for name in TIMING_NAMES}
+    work_seconds = {name: 0.0 for name in TIMING_NAMES}
+    def observe_clock():
+        # Diagnostics must never replace a protocol/guard exception.
+        try:
+            value = time.monotonic()
+            return value if math.isfinite(value) else None
+        except BaseException:
+            return None
+    def measured(name, callback, *args):
+        # Direct callback time only; pump time includes its own nested guards.
+        work_timing[name]['calls'] += 1
+        before = observe_clock()
+        try:
+            return callback(*args)
+        finally:
+            try:
+                after = observe_clock()
+                if before is not None and after is not None and after >= before:
+                    elapsed_seconds = work_seconds[name] + (after - before)
+                    elapsed_ms = int(elapsed_seconds * 1000)
+                    work_seconds[name] = elapsed_seconds
+                    work_timing[name]['elapsed_ms'] = elapsed_ms
+            except BaseException:
+                pass
     def check():
         if time.monotonic() >= deadline: raise TimeoutError('throttle deadline')
         if threading.get_ident() != thread or sock.fileno() != fd:
@@ -66,21 +94,21 @@ def pulse(sock, *, process, lease, attempt, epoch, generation, nonce, slot,
         if (current.st_dev, current.st_ino) != fd_identity:
             raise RuntimeError('throttle socket descriptor changed')
         check_process(dict(identity))
-        if guard() is not True or running() is not True or sock.getsockname() != local:
+        if measured('external_guard', guard) is not True or running() is not True or sock.getsockname() != local:
             raise RuntimeError('throttle context changed')
-        if peer is not None and socket_owner(peer, local, dict(identity)) is not True:
+        if peer is not None and measured('socket_owner', socket_owner, peer, local, dict(identity)) is not True:
             raise RuntimeError('throttle peer ownership changed')
         check_process(dict(identity))
         current = os.fstat(fd)
         if sock.fileno() != fd or (current.st_dev, current.st_ino) != fd_identity:
             raise RuntimeError('throttle socket descriptor changed after peer check')
-        if guard() is not True or running() is not True or sock.getsockname() != local:
+        if measured('external_guard', guard) is not True or running() is not True or sock.getsockname() != local:
             raise RuntimeError('throttle context changed after peer check')
         current = os.fstat(fd)
         if (threading.get_ident() != thread or sock.fileno() != fd or
                 (current.st_dev, current.st_ino) != fd_identity):
             raise RuntimeError('throttle socket or owner changed during guard')
-        if peer is not None and socket_owner(peer, local, dict(identity)) is not True:
+        if peer is not None and measured('socket_owner', socket_owner, peer, local, dict(identity)) is not True:
             raise RuntimeError('throttle peer changed during guard')
         if time.monotonic() >= deadline: raise TimeoutError('throttle deadline')
     def receive(expected, *, next_receipt_allowed=False):
@@ -122,7 +150,7 @@ def pulse(sock, *, process, lease, attempt, epoch, generation, nonce, slot,
                     raise ValueError('unexpected throttle packet')
                 check()
                 return stop_time
-            pump()
+            measured('pump', pump)
             check()
     with _LOCK:
         if sock in _OWNERS: raise ValueError('throttle socket already owned')
@@ -153,11 +181,18 @@ def pulse(sock, *, process, lease, attempt, epoch, generation, nonce, slot,
         elif isinstance(error, OSError): error_class = 'os_error'
         elif isinstance(error, Exception): error_class = 'other_error'
         else: error_class = 'interrupted'
-        elapsed_ms = max(0, int((time.monotonic() - began) * 1000))
+        elapsed_ms = 0
+        try:
+            ended = observe_clock()
+            if ended is not None:
+                elapsed_ms = max(0, int((ended - began) * 1000))
+        except BaseException:
+            pass
         raise ThrottleUnconfirmed(
             attempted=attempted, started=started, stopped=stopped, phase=phase,
             error_class=error_class, started_phase_datagram_received=started_phase_datagram_received,
-            stopped_phase_datagram_received=stopped_phase_datagram_received, elapsed_ms=elapsed_ms) from None
+            stopped_phase_datagram_received=stopped_phase_datagram_received, elapsed_ms=elapsed_ms,
+            work_timing=work_timing) from None
     finally:
         with _LOCK:
             _OWNERS.pop(sock, None)

@@ -192,6 +192,98 @@ class ThrottleIPCTest(unittest.TestCase):
             self.assertEqual(result, {'fixture_sample_write': {}})
             self.assertEqual(str(error), 'fixture throttle unconfirmed')
 
+    def test_guard_budget_expires_before_queued_started_receipt_is_read(self):
+        # Real UDP receiver and valid protocol, with deterministic logical time.
+        now = [100.0]
+        guards_after_go = [0]
+        go_packets = []
+        self.peer.send(b'READY|' + self.suffix)
+        def guard():
+            if subject.select.select([self.peer], [], [], 0)[0]:
+                go_packets.append(self.peer.recv(1024))
+                self.peer.send(b'STARTED|' + self.suffix)
+                self.peer.send(b'STOPPED|' + self.suffix + b'|42.5')
+            if go_packets:
+                guards_after_go[0] += 1
+                if guards_after_go[0] == 3:
+                    now[0] += 3.25
+            return True
+        def owner(*args):
+            now[0] += .01
+            return True
+        self.settings['guard'] = guard
+        with patch.object(subject.time, 'monotonic', side_effect=lambda: now[0]), \
+                patch.object(subject, 'socket_owner', side_effect=owner):
+            with self.assertRaises(subject.ThrottleUnconfirmed) as caught:
+                subject.pulse(self.sock, **self.settings)
+        error = caught.exception
+        self.assertTrue(error.attempted)
+        self.assertFalse(error.started or error.stopped or error.started_phase_datagram_received)
+        self.assertEqual((error.phase, error.error_class), ('waiting_started', 'timeout'))
+        self.assertEqual(go_packets, [b'GO|' + self.suffix])
+        self.assertFalse(subject.select.select([self.peer], [], [], 0)[0])
+        self.assertEqual(self.sock.recvfrom(769, socket.MSG_PEEK)[0], b'STARTED|' + self.suffix)
+        self.assertNotIn(self.sock, subject._OWNERS)
+        timing = error.work_timing
+        self.assertGreater(timing['external_guard']['calls'], 0)
+        self.assertEqual(timing['external_guard']['elapsed_ms'], 3250)
+        self.assertGreater(timing['socket_owner']['calls'], 0)
+        self.assertGreater(timing['socket_owner']['elapsed_ms'], 0)
+        self.assertEqual(timing['pump'], {'calls': 0, 'elapsed_ms': 0})
+        result = {'fixture_sample_write': {}}
+        runner.record_fixture_throttle_uncertainty(result, error)
+        self.assertEqual(result['fixture_sample_write']['throttle_uncertain']['work_timing'], timing)
+
+    def test_pump_budget_is_attributed_on_timeout(self):
+        now = [100.0]
+        go_packets = []
+        self.peer.send(b'READY|' + self.suffix)
+        def guard():
+            if subject.select.select([self.peer], [], [], 0)[0]:
+                go_packets.append(self.peer.recv(1024))
+            return True
+        def pump():
+            now[0] += 3.25
+        self.settings.update(guard=guard, pump=pump)
+        with patch.object(subject.time, 'monotonic', side_effect=lambda: now[0]):
+            with self.assertRaises(subject.ThrottleUnconfirmed) as caught:
+                subject.pulse(self.sock, **self.settings)
+        error = caught.exception
+        self.assertTrue(error.attempted)
+        self.assertEqual(go_packets, [b'GO|' + self.suffix])
+        self.assertEqual(error.error_class, 'timeout')
+        self.assertEqual(error.work_timing['pump'], {'calls': 1, 'elapsed_ms': 3250})
+        self.assertEqual(error.work_timing['external_guard']['elapsed_ms'], 0)
+
+    def test_timing_clock_failure_preserves_original_guard_exception(self):
+        failed = [False]
+        def clock():
+            if failed[0]: raise ValueError('observer unavailable')
+            return 100.0
+        def guard():
+            failed[0] = True
+            raise RuntimeError('original private guard failure')
+        self.settings['guard'] = guard
+        with patch.object(subject.time, 'monotonic', side_effect=clock):
+            with self.assertRaises(subject.ThrottleUnconfirmed) as caught:
+                subject.pulse(self.sock, **self.settings)
+        error = caught.exception
+        self.assertEqual(error.error_class, 'runtime_error')
+        self.assertEqual(error.work_timing['external_guard'], {'calls': 1, 'elapsed_ms': 0})
+        self.assertEqual(error.elapsed_ms, 0)
+        self.assertFalse(error.attempted)
+
+    def test_runner_refuses_nonfixed_work_timing(self):
+        for value in ({'secret': {}},
+                      {name: {'calls': True, 'elapsed_ms': 0} for name in subject.TIMING_NAMES},
+                      {name: {'calls': 1, 'elapsed_ms': -1} for name in subject.TIMING_NAMES}):
+            error = subject.ThrottleUnconfirmed(attempted=False, started=False, stopped=False,
+                                                work_timing=value)
+            result = {'fixture_sample_write': {}}
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                runner.record_fixture_throttle_uncertainty(result, error)
+            self.assertEqual(result, {'fixture_sample_write': {}})
+
     def test_driver_path_without_x4(self):
         subprocess.run(['luajit','tests/authority_fixture_client_throttle_driver.lua'],cwd=ROOT,check=True,timeout=10)
 

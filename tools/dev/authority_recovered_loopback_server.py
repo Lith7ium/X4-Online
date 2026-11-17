@@ -46,7 +46,7 @@ from authority_control_cycle_evidence import read_cycle_evidence
 
 def record_fixture_throttle_uncertainty(result, error):
     """Persist only fixed, nonsecret evidence from the actual IPC failure."""
-    from authority_fixture_client_throttle_ipc import ThrottleUnconfirmed
+    from authority_fixture_client_throttle_ipc import ThrottleUnconfirmed, TIMING_NAMES
     if type(result) is not dict or type(result.get('fixture_sample_write')) is not dict or type(error) is not ThrottleUnconfirmed:
         raise ValueError('invalid fixture throttle diagnostic context')
     phases = {'unknown', 'waiting_ready', 'validating_ready', 'sending_go', 'waiting_started',
@@ -58,9 +58,16 @@ def record_fixture_throttle_uncertainty(result, error):
             any(type(getattr(error, name)) is not bool for name in flags) or
             type(error.elapsed_ms) is not int or error.elapsed_ms < 0):
         raise ValueError('invalid fixture throttle diagnostic values')
+    timing = error.work_timing
+    if (type(timing) is not dict or set(timing) != set(TIMING_NAMES) or
+            any(type(entry) is not dict or set(entry) != {'calls', 'elapsed_ms'} or
+                any(type(value) is not int or value < 0 for value in entry.values())
+                for entry in timing.values())):
+        raise ValueError('invalid fixture throttle work timing')
     result['fixture_sample_write']['throttle_uncertain'] = {
         **{name: getattr(error, name) for name in flags}, 'phase': error.phase,
-        'error_class': error.error_class, 'elapsed_ms': error.elapsed_ms}
+        'error_class': error.error_class, 'elapsed_ms': error.elapsed_ms,
+        'work_timing': {name: dict(timing[name]) for name in TIMING_NAMES}}
 
 
 def read_evidence(path, limit=65536):
