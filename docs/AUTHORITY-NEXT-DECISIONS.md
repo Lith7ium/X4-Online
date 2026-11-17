@@ -11,14 +11,34 @@ hosting providers about a test server. The approved GPU-free direction remains
 recorded below, but further rendering implementation and native server trials
 are deferred. No new Vulkan layer was written or tested before this change.
 
-The next client integration step is an independently launched connection using
-the existing pinned TLS transport and load owner. The first bounded increment
-will request and verify a checkpoint download without fabricating X4 load
-observations or claiming admission. Native process ownership, actual load and
-pause receipts, and sustained position/velocity application remain required.
+The first independent client increment is implemented in
+[`authority_client_stage.py`](../tools/dev/authority_client_stage.py), reusing
+the existing pinned TLS transport and load owner. It requests and verifies a
+checkpoint download, then disconnects without claiming admission. See
+[client staging](AUTHORITY-CLIENT-STAGING.md) for invocation and scope.
+Native process ownership, actual load and pause receipts, and sustained
+position/velocity application remain required.
 Windows integration must reuse applicable native/LAN pieces while replacing
 the Linux-specific supervisor boundary; portable Python alone is not proof of
 Windows operation.
+
+The focused staging suite passed **13 tests in 4.455 seconds**, using real local
+TLS and an owned subprocess against a simulated host. It covered rejected
+credentials, output bounds, failed exits and cancellation/cleanup, including
+SIGINT and a TERM-resistant helper. Retained output is
+`../x4-authority-throttle-timing-20261117/.local/client-staging-cancel-cleanup-20261117.log`.
+No X4, Windows, WAN or full-suite test was run for this increment. The earlier
+full-suite failure and missing prerequisites remain unresolved.
+
+The next integration must keep the same client owner and connection alive
+through native loading. A completed staging command has closed its offer
+connection and is not an admission handoff. Reuse the private-profile launch
+and ordered marker/load/pause observations from `authority_two_x4_live.py`
+and `authority_trusted_marked_live.py` in a client-only orchestration boundary.
+Keep the existing process identity, protected files and deadline checks;
+do not import the two-X4 supervisor's assumption of a locally owned server.
+Matching marker/load receipts support a cooperative claim, not independent
+proof of every byte X4 loaded.
 
 The inspected LAN working copy provides a concrete next movement adapter:
 `../x4-playtest7/extension/x4_lan_lab/ui/coop_game.lua` plays buffered poses on
