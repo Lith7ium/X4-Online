@@ -218,6 +218,11 @@ supported here by those checked records, not only its success flag.
 Two limitations affect the intervention itself. WAIT READY and
 ZERO_VELOCITY_REQUESTED both reported game time 7.21725, despite nested cue
 delays intended to separate them. The intended two-frame delay is **not proven**.
+Local `md.xsd` defines delays relative to cue activation or a preceding actions
+block; it does not guarantee separate UI frames for these nested child cues.
+A future timing probe should use sequential actions/delay blocks in one cue and
+require both increasing game time and a measured UI-update counter. The cause
+of the same-time receipts remains unknown from the schema alone.
 Also, equality with the captured current order does not establish its `started`
 state: the schema distinguishes an enabled `ready` order from a started script.
 Even `started` would not prove that `stop_moving` executed or that physics was
