@@ -4,6 +4,22 @@ Internal working assessment, 17 November 2026. This note records the user's
 clarifications and separates experiments from architecture decisions. It does
 not select a new architecture or claim playable multiplayer.
 
+## Current priority: independent clients
+
+The user subsequently redirected work to the clients while they contact
+hosting providers about a test server. The approved GPU-free direction remains
+recorded below, but further rendering implementation and native server trials
+are deferred. No new Vulkan layer was written or tested before this change.
+
+The next client integration step is an independently launched connection using
+the existing pinned TLS transport and load owner. The first bounded increment
+will request and verify a checkpoint download without fabricating X4 load
+observations or claiming admission. Native process ownership, actual load and
+pause receipts, and sustained position/velocity application remain required.
+Windows integration must reuse applicable native/LAN pieces while replacing
+the Linux-specific supervisor boundary; portable Python alone is not proof of
+Windows operation.
+
 ## Performance question
 
 The relevant question is the capacity of **one authoritative X4 instance on a
