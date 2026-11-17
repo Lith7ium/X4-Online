@@ -3,8 +3,8 @@
 This optional transport connects the existing control and file TCP services to
 local client ports over one direct, pinned TLS endpoint. It is an isolated
 transport experiment, not a complete X4 host or Windows launcher. It has only
-been exercised over local sockets with simulated participants and echo backends.
-A native Windows client, an Internet route, X4 gameplay and save recovery remain
+been exercised over local sockets with simulated participants or echo backends.
+A native Windows client, an Internet route, X4 gameplay and multiplayer save recovery remain
 unverified.
 For the previous tunnel protocol version 1 (commit `835a083`), Windows Python
 3.14.8 under Wine exchanged data successfully with a Linux loopback peer on
@@ -14,6 +14,32 @@ channels exchanged data before and after seven seconds of application inactivity
 with a two-second idle timeout. The local result is recorded in
 `.local/windows-python-tls-wine-01/result-v2.log`. Neither probe exercised native
 Windows, the Internet or X4.
+
+On 2026-11-17, one internal Linux diagnostic ran a native X4 server and a
+simulated client through the loopback TLS bridges. Its private output is
+`.local/authority-tls-native-server-01/`; the diagnostic driver is currently
+only the local artifact `.local/authority_tls_native_probe.py`, not a
+repository-provided command. The server and probe results reported success,
+one admitted connection, and the sequence pause, save, resume, pause, save.
+The final server state was reported as paused.
+
+The downloaded save's SHA-256 and size matched the offered checkpoint and
+its manifest. The offered and final checkpoint manifests carried different
+markers; the probe's offered marker matched its manifest. The successful run's
+evidence checker also validated the respective markers in the saved bytes.
+`CURRENT` and `CONFIRMED` agreed on the final checkpoint, and its manifest
+digest and saved-file SHA-256 matched the recorded values. The supervisor
+reported no owned processes remaining; after the run no X4, probe, or recovery
+supervisor process was observed. The private endpoint, test shared key, and
+test private key were absent from the output directory after cleanup.
+
+The driver routed control and file traffic through the two TLS client
+listeners and reported two TLS channels. That conclusion follows from the
+driver's execution path and reported success; there is no independently
+recorded network capture or per-channel handshake trace. The client load,
+pause observations, and participant controls were simulated. This run did not
+establish an actual client X4 load, Windows operation, an Internet connection,
+or gameplay.
 
 The server listens on an explicitly chosen IPv4 address. Each connection uses
 TLS 1.2 or later, then a shared 32-byte random key and a fixed service selector.
