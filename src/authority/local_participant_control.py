@@ -20,11 +20,14 @@ _MAX_QUEUED_PACKETS = 4096
 class LocalParticipantControl:
     """Synchronous WorldCoordinator participant adapter for exactly one handle."""
 
-    def __init__(self, *, enabled, timeout=130):
+    def __init__(self, *, enabled, timeout=130, wait_hook=None):
         if enabled is not True:
             raise ValueError('participant control requires explicit opt-in')
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 600:
             raise ValueError('invalid participant timeout')
+        if wait_hook is not None and not callable(wait_hook):
+            raise ValueError('participant wait hook must be callable')
+        self.wait_hook = wait_hook
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('127.0.0.1', 0))
         self.sock.settimeout(.25)
@@ -43,6 +46,7 @@ class LocalParticipantControl:
         self.epoch = epoch
         expected = f'HELLO|{self.lease}|{epoch}'.encode('ascii')
         while time.monotonic() < deadline:
+            if getattr(self, 'wait_hook', None) is not None: self.wait_hook()
             try:
                 data, peer = self.sock.recvfrom(769)
             except socket.timeout:
@@ -76,6 +80,7 @@ class LocalParticipantControl:
         try:
             self.sock.setblocking(False)
             for _ in range(_MAX_QUEUED_PACKETS):
+                if getattr(self, 'wait_hook', None) is not None: self.wait_hook()
                 if time.monotonic() >= deadline:
                     raise TimeoutError('participant deadline expired before command')
                 try:
@@ -92,6 +97,7 @@ class LocalParticipantControl:
             raise TimeoutError('participant deadline expired before command')
         self.sock.sendto(f'CMD|{prefix}|{operation}'.encode('ascii'), self.peer)
         while time.monotonic() < deadline:
+            if getattr(self, 'wait_hook', None) is not None: self.wait_hook()
             try:
                 data, peer = self.sock.recvfrom(769)
             except socket.timeout:

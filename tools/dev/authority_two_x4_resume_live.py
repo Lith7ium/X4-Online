@@ -36,7 +36,7 @@ class Participant(LocalParticipantControl):
         super().__init__(enabled=True)
         self.config = self.config_identity = None
 
-    def install(self, case):
+    def install(self, case, *, include_identity=True):
         lab = case/'extensions/x4_lan_lab'; ui = lab/'ui'
         udp_loader = ui/'local_udp_module.lua'
         udp_loader_data = local_udp_loader_bytes()
@@ -58,7 +58,7 @@ class Participant(LocalParticipantControl):
         config.write_text(text[:-2]+f',authority_participant_port={self.sock.getsockname()[1]},'
                           f'authority_participant_lease="{self.lease}"'+'}\n', encoding='ascii')
         files = [*extension.BASE_UI, 'ui/client_load_barrier.lua', 'ui/x4_client_load_engine.lua',
-                 'ui/authority_identity_probe.lua', 'ui/authority_download_load_probe.lua',
+                 *(['ui/authority_identity_probe.lua'] if include_identity else []), 'ui/authority_download_load_probe.lua',
                  'ui/authority_control_state.lua', 'ui/x4_control_engine.lua',
                  'ui/local_udp_module.lua',
                  'ui/authority_two_x4_participant_probe.lua']

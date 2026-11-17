@@ -12,6 +12,7 @@ import signal
 import ssl
 import sys
 import time
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -91,6 +92,79 @@ class IndependentStageTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(.08)  # Let the actual host observe EOF, without claiming.
         self.assertEqual(self.fixture.world.session.players, ())
         self.assertEqual(self.fixture.world.session.ready_players, ())
+
+    async def test_sync_session_real_tls_download_and_thread_cleanup(self):
+        from authority import experimental_client_session as session
+        options = self.options()
+        directory = options.pop('new_directory')
+        def operation():
+            with session.client_connection(**options) as owner:
+                bound = owner.request_offer()
+                path = owner.download(directory)
+                owner.verify_staged(path)
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), bound.offer.sha256)
+                self.assertTrue(any(thread.name == 'authority-client-tls' for thread in threading.enumerate()))
+            self.assertFalse(any(thread.name == 'authority-client-tls' for thread in threading.enumerate()))
+        with patch.object(session, '_listener', side_effect=subject._listener):
+            await asyncio.to_thread(operation)
+        self.assertTrue(all(listener.fileno() == -1 for listener in self.listeners))
+        await asyncio.sleep(.08)
+        self.assertEqual(self.fixture.world.session.ready_players, ())
+        self.assertEqual(self.fixture.world.session.players, ())
+
+    async def test_sync_session_startup_failure_closes_listeners_without_cleanup_failure(self):
+        from authority import experimental_client_session as session
+        options = self.options()
+        options.pop('new_directory')
+        async def refuse_start(**options):
+            raise ValueError('private startup details')
+        def operation():
+            with self.assertRaisesRegex(session.ClientConnectionError, '^tls_startup_failed$') as raised:
+                with session.client_connection(**options):
+                    self.fail('startup must fail')
+            self.assertFalse(getattr(raised.exception, '__notes__', ()))
+            self.assertFalse(any(thread.name == 'authority-client-tls' for thread in threading.enumerate()))
+        with patch.object(session, '_listener', side_effect=subject._listener), \
+                patch.object(session, 'start_client', side_effect=refuse_start):
+            await asyncio.to_thread(operation)
+        self.assertTrue(all(listener.fileno() == -1 for listener in self.listeners))
+
+    async def test_sync_session_cleanup_failure_preserves_original_and_joins_thread(self):
+        from authority import experimental_client_session as session
+        options = self.options()
+        options.pop('new_directory')
+        original_close = session._TLSBridgeThread.close
+        def fail_after_close(bridge):
+            original_close(bridge)
+            raise RuntimeError('private cleanup details')
+        def operation():
+            with self.assertRaisesRegex(ValueError, '^original$') as raised:
+                with session.client_connection(**options) as owner:
+                    owner.request_offer()
+                    raise ValueError('original')
+            self.assertIn('tls_cleanup_failed', raised.exception.__notes__)
+            self.assertFalse(any(thread.name == 'authority-client-tls' for thread in threading.enumerate()))
+        with patch.object(session._TLSBridgeThread, 'close', fail_after_close):
+            await asyncio.to_thread(operation)
+
+    async def test_tls_stop_before_loop_ready_does_not_leave_listeners_or_thread(self):
+        from authority import experimental_client_session as session
+        closed = threading.Event()
+        class Tunnel:
+            async def close(self): closed.set()
+        async def start(**options): return Tunnel()
+        def operation():
+            bridge = session._TLSBridgeThread({})
+            bridge.close()
+            bridge.thread.start()
+            bridge.thread.join(3)
+            self.assertFalse(bridge.thread.is_alive())
+            self.assertFalse(bridge.failed)
+            self.assertTrue(closed.is_set())
+        with patch.object(session, '_listener', side_effect=subject._listener), \
+                patch.object(session, 'start_client', side_effect=start):
+            await asyncio.to_thread(operation)
+        self.assertTrue(all(listener.fileno() == -1 for listener in self.listeners))
 
     async def test_verified_download_without_admission(self):
         result = await subject.stage_client_connection(**self.options())

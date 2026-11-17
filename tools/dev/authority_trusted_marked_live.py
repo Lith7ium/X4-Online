@@ -53,9 +53,19 @@ def observe_logs(server_log, client_log, ticket, marker):
         raise ValueError('fixture observations differ')
     if after[2] and not after[2].endswith(b'\n'):
         raise ValueError('client log incomplete')
-    watch = base.client.ReceiptWatch(client_log, ticket)
+    validate_client_receipts(after[2], ticket, marker)
+    if (file_evidence._read_regular(server_log, file_evidence.MAX_LOG, collect=True) != before or
+            file_evidence._read_regular(client_log, file_evidence.MAX_LOG, collect=True) != after):
+        raise ValueError('log changed during observation')
+
+
+def validate_client_receipts(data, ticket, marker):
+    """Require exactly request, inspected marker and observed pause, in order."""
+    if len(data) > file_evidence.MAX_LOG or (data and not data.endswith(b'\n')):
+        raise ValueError('client log incomplete or oversized')
+    watch = base.client.ReceiptWatch(None, ticket)
     rows = []
-    for line in after[2].splitlines():
+    for line in data.splitlines():
         if len(line) > watch.MAX_LINE: raise ValueError('client log line too long')
         if base.client.TAG in line:
             rows.append(('load', line.split(base.client.TAG, 1)[1].strip()))
@@ -65,9 +75,25 @@ def observe_logs(server_log, client_log, ticket, marker):
                 ('marker', b'load INSPECTED ' + marker.encode('ascii')),
                 ('load', watch.expected[1])]
     if rows != expected: raise ValueError('load and marker observations differ or are out of order')
-    if (file_evidence._read_regular(server_log, file_evidence.MAX_LOG, collect=True) != before or
-            file_evidence._read_regular(client_log, file_evidence.MAX_LOG, collect=True) != after):
-        raise ValueError('log changed during observation')
+
+
+
+def install_marked_load_probe(case):
+    """Add marker inspection without injecting the expected marker into X4."""
+    lab = case / 'extensions/x4_lan_lab'; ui = lab / 'ui'
+    shutil.copyfile(ROOT / 'src/authority/md/checkpoint_marker.xml', lab / 'md/authority_checkpoint_marker.xml')
+    shutil.copyfile(ROOT / 'tools/dev/authority_checkpoint_marker_probe.lua', ui / 'authority_checkpoint_marker_probe.lua')
+    config = ui / 'config.lua'; text = config.read_text(encoding='ascii')
+    if not text.endswith('}\n'): raise ValueError('unexpected client configuration')
+    config.write_text(text[:-2] + ', authority_marker_phase="load"}\n', encoding='ascii')
+    probe = ui / 'authority_download_load_probe.lua'; text = probe.read_text(encoding='utf-8')
+    hook = " elseif state=='observing' then\n"
+    if text.count(hook) != 1: raise ValueError('unexpected load probe')
+    probe.write_text(text.replace(hook, hook + '  if not X4LAN_AUTHORITY_MARKER_READY() then return end\n'), encoding='utf-8')
+    manifest = lab / 'ui.xml'; text = manifest.read_text(encoding='utf-8')
+    hook = '    <file name="ui/authority_download_load_probe.lua" />\n'
+    if text.count(hook) != 1: raise ValueError('unexpected UI manifest')
+    manifest.write_text(text.replace(hook, '    <file name="ui/authority_checkpoint_marker_probe.lua" />\n' + hook), encoding='utf-8')
 
 
 class GuardedEngine:
@@ -127,20 +153,7 @@ class MarkedParticipant(resume.Participant):
 
     def install(self, case):
         super().install(case)
-        lab = case / 'extensions/x4_lan_lab'; ui = lab / 'ui'
-        shutil.copyfile(ROOT / 'src/authority/md/checkpoint_marker.xml', lab / 'md/authority_checkpoint_marker.xml')
-        shutil.copyfile(ROOT / 'tools/dev/authority_checkpoint_marker_probe.lua', ui / 'authority_checkpoint_marker_probe.lua')
-        config = ui / 'config.lua'; text = config.read_text(encoding='ascii')
-        if not text.endswith('}\n'): raise ValueError('unexpected client configuration')
-        config.write_text(text[:-2] + ', authority_marker_phase="load"}\n', encoding='ascii')
-        probe = ui / 'authority_download_load_probe.lua'; text = probe.read_text(encoding='utf-8')
-        hook = " elseif state=='observing' then\n"
-        if text.count(hook) != 1: raise ValueError('unexpected load probe')
-        probe.write_text(text.replace(hook, hook + '  if not X4LAN_AUTHORITY_MARKER_READY() then return end\n'), encoding='utf-8')
-        manifest = lab / 'ui.xml'; text = manifest.read_text(encoding='utf-8')
-        hook = '    <file name="ui/authority_download_load_probe.lua" />\n'
-        if text.count(hook) != 1: raise ValueError('unexpected UI manifest')
-        manifest.write_text(text.replace(hook, '    <file name="ui/authority_checkpoint_marker_probe.lua" />\n' + hook), encoding='utf-8')
+        install_marked_load_probe(case)
 
     def protected(self, case):
         lab = case / 'extensions/x4_lan_lab'
