@@ -116,6 +116,25 @@ Continue to measure world progress against wall time, CPU, and UI/MD callbacks;
 retain startup and cleanup evidence. Do not remove guards or increase
 deadlines merely to make a test pass.
 
+The user clarified the deployment objective: the server must eventually run
+on rented game-server hardware, naming Nitrado and 4NetPlayers as examples.
+These are examples, not a selected product or authorization to rent/contact
+a provider. GPU-free operation and unattended deployment are therefore
+portability requirements. The short local observation does not establish a
+remote CPU/RAM requirement, independent Steam startup, or hosting acceptance.
+
+Retaining a CPU Vulkan implementation and a virtual display is technically
+compatible with a GPU-free Linux target in principle. Removing all graphics
+libraries is not itself required by absence of GPU hardware. The recommended
+next investigation is to preserve resource lifetimes while suppressing scene
+rendering; choosing that as the server execution model remains under discussion
+with the user. Also distinguish an administrable Linux server from a managed
+game-server plan: the reviewed [Nitrado FAQ](https://server.nitrado.net/faqs/index/)
+and [4NetPlayers FTP documentation](https://www.4netplayers.com/en/wiki/allgemein/ftp-area/)
+describe supported-game files/mods, not a general promise of arbitrary
+executables or system dependencies. No provider prohibition or acceptance is
+inferred from that documentation gap.
+
 Before selecting the next server execution path, the user has been
 asked whether software Vulkan/a virtual display may remain internally while
 scene rendering is removed, or whether all such dependencies must go. Keep
