@@ -93,16 +93,23 @@ class IndependentStageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fixture.world.session.players, ())
         self.assertEqual(self.fixture.world.session.ready_players, ())
 
-    async def test_sync_session_real_tls_download_and_thread_cleanup(self):
+    async def test_sync_session_native_staging_real_tls_and_thread_cleanup(self):
         from authority import experimental_client_session as session
+        sys.path.insert(0, str(ROOT/'tools/dev'))
+        import authority_client_native as native
         options = self.options()
         directory = options.pop('new_directory')
+        target = self.root/'native-profile/save_009.xml.gz'
+        target.parent.mkdir()
         def operation():
             with session.client_connection(**options) as owner:
                 bound = owner.request_offer()
-                path = owner.download(directory)
-                owner.verify_staged(path)
+                path = native.stage_offered_save(owner, directory, target)
+                self.assertEqual(path, target)
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), bound.offer.sha256)
+                self.assertEqual(path.stat().st_size, bound.offer.size)
+                # Exercise the real owner's next legal state, without native claims/admission.
+                owner.load_requested(bound.offer.attempt_id)
                 self.assertTrue(any(thread.name == 'authority-client-tls' for thread in threading.enumerate()))
             self.assertFalse(any(thread.name == 'authority-client-tls' for thread in threading.enumerate()))
         with patch.object(session, '_listener', side_effect=subject._listener):

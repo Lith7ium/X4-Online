@@ -82,6 +82,16 @@ def ticket_for(bound):
     return dict(ticket, slot='save_009')
 
 
+def stage_offered_save(owner, new_directory, target):
+    """Download, then copy and verify through the owner's single transition.
+
+    copy_to_new_slot requires the downloaded state and itself verifies the
+    completed target before advancing to staged. X4 must not be running yet.
+    """
+    downloaded = owner.download(new_directory)
+    return owner.copy_to_new_slot(downloaded, target)
+
+
 def verify_receipts(path, ticket, marker):
     before = marked.file_evidence._read_regular(path, marked.file_evidence.MAX_LOG, collect=True)
     marked.validate_client_receipts(before[2], ticket, marker)
@@ -191,11 +201,8 @@ def run(args):
                 result['phase'] = 'offer'
                 bound = owner.request_offer()
                 result['phase'] = 'download'
-                downloaded = owner.download(out/'download')
-                owner.verify_staged(downloaded)
                 target = profile/'save'/snapshot.SLOT
-                owner.copy_to_new_slot(downloaded, target)
-                owner.verify_staged(target)
+                stage_offered_save(owner, out/'download', target)
                 target.chmod(0o400)
                 ticket = ticket_for(bound)
                 process_identity = None
