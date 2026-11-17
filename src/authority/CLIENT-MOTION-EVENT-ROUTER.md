@@ -16,9 +16,11 @@ and route the local binder's `AddUITriggeredEvent` call through `issue`.
 own nonce, registry epoch and local generation remain the active association.
 The default owners still reserve/register their own listeners, and a module
 incarnation refuses mixing the default and externally routed modes. The
-external mode currently forbids the separately opted-in saved-position setter,
-whose event is not routed. No recovered-session installer currently selects
-this route.
+recovered-session installer selects the read-only Bind routes. A separate,
+explicit `saved_apply=true` router option can also register the saved-position
+Inspect event for an isolated setter experiment. This option requires a bounded
+`max_apply_requests` and an owner with an `apply_event` method; it is not enabled
+by the recovered-session installer and does not itself enable the setter.
 
 The outer owner supplies fresh, distinct 128-bit local generation and request
 nonce values for each activation, and the unchanged saved-registry epoch. It
@@ -41,6 +43,31 @@ Unknown and retired responses are not routed to the new owner. A sender's
 return and these checks are non-atomic; process and owner failure must fence the
 entire experimental session.
 
+When the optional Inspect route is enabled, `saved_motion_apply.new_x4`
+receives the router's issue callback and the full owner nonce. Its MD request
+ID is `<owner nonce>-<operation token>-pre` or `-post`; the writer and router
+both check the exact response. The router pins `apply_event` along with the
+other owner methods, permits one outstanding request across all routes, and
+bounds remembered operation tokens for the owner. `post` requires a previous
+`pre` from the same applying operation and the same local references; a
+preflight operation cannot authorize a later post. A refused response, stale
+nonce, duplicate request or event, changed method, wrong owner state, uncertain
+dispatch or guard failure fences the router. A possible game-side write is not
+retried or rolled back. An accepted Inspect response remains a local callback;
+it is not evidence of sustained position control.
+
+Reference equality here is intentionally conservative. The X4 converter can
+return userdata, and it has not been established that separately converted
+wrappers for the same native identity compare equal. Such wrappers can make a
+legitimate post inspection fail closed. The router rejects table references,
+but compares cdata and userdata shallowly; it relies on the cooperative X4
+adapter to supply valid local handles and not mutate their contents. The fake ABI test uses cdata and does
+not settle actual X4 behavior; no native run has checked the longer request ID,
+third-route serialization or delayed post. The existing one-ship fixture,
+profile, position, player, sector and process guards are unchanged. This route
+does not establish authority transfer, collision clearance, Windows, internet,
+or gameplay.
+
 The owner can be retired only with no outstanding request, local owner state
 `stopped`, and a successful caller-provided `retire_guard` that checks the real
 STOPPED handshake and its surrounding fences. A generation/nonce is never
@@ -52,6 +79,10 @@ its fault to the supervisor, even during a game pause. Transport lease rotation,
 TCP motion barrier/drain, FD handoff, stopped-owner cleanup, reactivation and
 cross-process ship/frame identity remain separate requirements.
 
+`tests/authority_client_motion_apply_router.lua` exercises the optional route,
+replays, stale generations, method changes and fencing.
+`tests/authority_client_motion_apply_router_x4.lua` composes the real Lua owner,
+binder and writer with a fake X4 ABI and simulated MD; no X4 process is run.
 `tests/authority_client_motion_event_router.lua` exercises routing, bounded
 state, stale and unknown callbacks, STOP fences and reentrancy with simulated
 owners and callbacks. `tests/authority_client_motion_router_x4.lua` composes

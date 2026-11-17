@@ -267,20 +267,23 @@ function M.new_x4(o)
  local router=c.event_router
  if router~=nil then
   assert(type(router)=='table' and type(router.issue)=='function' and type(router.owns)=='function' and token(c.router_generation,32) and
-   type(c.stop)=='function' and c.saved_apply==nil)
+   type(c.stop)=='function')
+  if c.saved_apply~=nil then
+   assert(type(router.supports_saved_apply)=='function' and router:supports_saved_apply()==true)
+  end
   assert(not registered and (external_router==nil or external_router==router),'motion event router already reserved')
   external_router=router
  else
   assert(not registered and external_router==nil,'motion event router already reserved');registered=true
  end
  local register=RegisterEvent;local native=c.binding.new_x4;c.clock=GetCurRealTime
- local owner,issue,owns
+ local owner,issue,owns,supports_apply
  if router then
-  issue,owns=router.issue,router.owns
+  issue,owns,supports_apply=router.issue,router.owns,router.supports_saved_apply
   local external=c.guard;assert(type(external)=='function')
   c.guard=function()
-   return owner~=nil and router.issue==issue and router.owns==owns and owns(router,c.router_generation,c.nonce,c.epoch,owner)==true and
-    external()==true and router.issue==issue and router.owns==owns and owns(router,c.router_generation,c.nonce,c.epoch,owner)==true
+   return owner~=nil and router.issue==issue and router.owns==owns and router.supports_saved_apply==supports_apply and owns(router,c.router_generation,c.nonce,c.epoch,owner)==true and
+    external()==true and router.issue==issue and router.owns==owns and router.supports_saved_apply==supports_apply and owns(router,c.router_generation,c.nonce,c.epoch,owner)==true
   end
   c.register=function()return true end
  else c.register=function(fn)return register('X4AuthorityReplicaMotionBind.Result',fn)~=false end end
@@ -309,9 +312,13 @@ function M.new_x4(o)
    (a.immediate_readback==nil or a.immediate_readback==true) and
    (a.observe_limit==nil or (integer(a.observe_limit) and a.observe_limit>=2 and a.observe_limit<=8 and a.immediate_readback==true)))
   local native_apply=a.module.new_x4;local apply_log=a.log
-  c.saved_apply={enabled=true,immediate_readback=a.immediate_readback,observe_limit=a.observe_limit,register=function(fn)return register('X4AuthoritySavedMotionApply.Result',fn)~=false end,
+  c.saved_apply={enabled=true,immediate_readback=a.immediate_readback,observe_limit=a.observe_limit,register=router and function()return true end or function(fn)return register('X4AuthoritySavedMotionApply.Result',fn)~=false end,
    factory=function(opt)
     opt.expected_save_path=c.expected_save_path;opt.test_profile='45841';opt.resolve=c.resolve;opt.log=apply_log
+    if router then
+     opt.request_nonce=c.nonce
+     opt.md_issue=function(screen,op,args)return issue(router,screen,op,args)end
+    end
     return native_apply(opt)
    end}
  end

@@ -15,6 +15,7 @@ function M.new(o)
  local c={};for k,v in pairs(o)do c[k]=v end
  for _,k in ipairs({'clock','game','guard','issue','inspect','write','log','fault'})do assert(type(c[k])=='function',k)end
  assert(finite(c.timeout) and c.timeout>1 and c.timeout<=30)
+ assert(c.request_nonce==nil or token(c.request_nonce,32))
  assert(c.readonly==nil or c.readonly==true)
  assert(c.immediate_readback==nil or c.immediate_readback==true)
  -- Separate experimental observation, never the delayed one-shot receipt.
@@ -45,7 +46,7 @@ function M.new(o)
   return ok and v==true and state==old and check()
  end
  local function request(phase)
-  local id=pending.request..'-'..phase;pending.id=id
+  local id=(c.request_nonce and c.request_nonce..'-' or '')..pending.request..'-'..phase;pending.id=id
   local old=state;local ok,v=pcall(c.issue,id,snapshot())
   return ok and v==true and state==old and check()
  end
@@ -148,6 +149,8 @@ function M.new_x4(o)
   local id=o.resolve.actor_u64(ConvertIDTo64Bit(x));assert(id and key(id)==text)
   return x,id
  end
+ assert(o.md_issue==nil or type(o.md_issue)=='function')
+ local md_issue=o.md_issue or AddUITriggeredEvent
  local external=o.guard
  c.guard=function()
   local p=C.GetSaveFolderPath()
@@ -163,7 +166,10 @@ function M.new_x4(o)
  end
  c.issue=function(id,p)
   local ar,a,sr,s,zr,z=ids(p);assert(a and s and z)
-  return AddUITriggeredEvent('X4AuthoritySavedMotionApply','Inspect',{request_id=id,epoch=p.epoch,index=p.index,actor=ar,sector=sr,zone=zr})~=false
+  local accepted = md_issue('X4AuthoritySavedMotionApply','Inspect',
+   {request_id=id,epoch=p.epoch,index=p.index,actor=ar,sector=sr,zone=zr})
+  if o.md_issue then return accepted == true end
+  return accepted ~= false
  end
  local function live(p)
   local ar,a,sr,s,zr,z=ids(p)
