@@ -267,16 +267,22 @@ function M.new_x4(c)
  end
  -- Build the complete line before STOP or any logging callback can reenter.
  -- This is the measured pre-write observation, never an invented readback.
- local function playback_failure_line(reason,diagnostic)
-  if playback_failure_reported or reason~='owner_playback' or not diagnostic or
-     diagnostic.stage~='distance' or not playback_latest then return nil end
-  playback_failure_reported=true
-  local value=playback_latest
-  if not finite(value.latest_source_time) or not finite(value.error) then return nil end
-  local uncertain=playback_controller and playback_controller:outcome_uncertain()==true
-  return ('[X4LAN] AUTH_CLIENT_PLAYBACK FAILURE version=1 stage=distance epoch=%s index=1318 sector=%s source_sequence=%.0f latest_source_time=%.17g phase=%s local_time=%.17g game_time=%.17g actual_x=%.17g actual_y=%.17g actual_z=%.17g target_x=%.17g target_y=%.17g target_z=%.17g correction_distance=%.17g uncertain=%d'):format(
-   c.epoch,playback_sector,value.sequence,value.latest_source_time,value.phase,value.local_time,value.game_time,
-   value.actual.x,value.actual.y,value.actual.z,value.target.x,value.target.y,value.target.z,value.error,uncertain and 1 or 0)
+ local function playback_failure_line(reason, diagnostic)
+  if playback_failure_reported or reason ~= 'owner_playback' or not diagnostic or
+     diagnostic.stage ~= 'distance' or not playback_latest then return nil end
+  playback_failure_reported = true
+  local observation = playback_latest
+  if not finite(observation.latest_source_time) or not finite(observation.error) then return nil end
+  local uncertain = playback_controller and playback_controller:outcome_uncertain() == true
+  local format = '[X4LAN] AUTH_CLIENT_PLAYBACK FAILURE version=1 stage=distance'
+   .. ' epoch=%s index=1318 sector=%s source_sequence=%.0f latest_source_time=%.17g'
+   .. ' phase=%s local_time=%.17g game_time=%.17g'
+   .. ' actual_x=%.17g actual_y=%.17g actual_z=%.17g'
+   .. ' target_x=%.17g target_y=%.17g target_z=%.17g correction_distance=%.17g uncertain=%d'
+  return format:format(c.epoch, playback_sector, observation.sequence,
+   observation.latest_source_time, observation.phase, observation.local_time, observation.game_time,
+   observation.actual.x, observation.actual.y, observation.actual.z,
+   observation.target.x, observation.target.y, observation.target.z, observation.error, uncertain and 1 or 0)
  end
  local playback_adapter={new=function(options)
   assert(saved_playback_fixture and not playback_controller and not C.IsGamePaused() and options.guard()==true)

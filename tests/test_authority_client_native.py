@@ -249,7 +249,7 @@ class NativeClientTests(unittest.TestCase):
                     evidence = dict(worker_joined=False)
                     def verify_registry(self): return True
                     def poll(self): pass
-                    def start(self, *args): self.fail('already started')
+                    def start(self, *args): raise AssertionError('already started')
                     def finish(self): return dict(self.evidence)
                     def records(self):
                         if scenario == 'changed_input':
