@@ -14,6 +14,14 @@ local function number(v,lo,hi)
 end
 local function name(v)return type(v)=='string' and #v>=1 and #v<=128 and v:match('^[A-Za-z0-9_]+$')~=nil end
 local function split(v)local p={};for s in (v..'|'):gmatch('(.-)|')do p[#p+1]=s end;return p end
+-- Fixed diagnostics only; external callback text never becomes log data.
+local playback_stages={}
+for word in ('state clock guard paused buffer_reset sample arrival sequence buffer_push read read_pose game_read game_value game_clock readback_record render render_frame observation_record distance write write_state'):gmatch('%S+')do playback_stages[word]=true end
+local native_stages={}
+for word in ('initial profile profile_recheck references actor sector zone player player_container docking fixture fixture_sector fixture_code validated position_read setter'):gmatch('%S+')do native_stages[word]=true end
+local function playback_diagnostic(stage,native_stage)
+ return {stage=playback_stages[stage] and stage or 'unknown',native_stage=native_stages[native_stage] and native_stage or 'unknown'}
+end
 function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  local c={};for k,v in pairs(o)do c[k]=v end
@@ -65,11 +73,12 @@ function M.new(o)
   end
   return success
  end
- local function fail(reason)
+ local function fail(reason,diagnostic)
   if state~='failed' then
+   local retained=diagnostic and playback_diagnostic(diagnostic.stage,diagnostic.native_stage)
    state='failed'
    stop_playback() -- Disable every writer before notifying the enclosing owner.
-   pcall(c.fault,reason,playback_uncertain)
+   pcall(c.fault,reason,playback_uncertain,retained)
   end
   return false
  end
@@ -303,7 +312,9 @@ function M.new(o)
      entry.playback_binding=identity
      entry.playback=assert(playback.factory({enabled=true,binding=identity,buffer=c.buffer,
       max_age=c.max_age,clock=c.clock,guard=function()return state~='failed' and state~='stopped' and check()end,
-      fault=function()fail('playback')end}))
+      fault=function(reason,uncertain,stage,native_stage)
+       fail('playback',playback_diagnostic(stage,native_stage))
+      end}))
      assert(type(entry.playback.push)=='function' and type(entry.playback.tick)=='function' and
       type(entry.playback.stop)=='function' and check())
     end

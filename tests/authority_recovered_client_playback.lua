@@ -1,6 +1,6 @@
 -- Actual recovered runtime/router/owner/binder/playback; fake X4 ABI and MD.
 local ffi=require('ffi')
-ffi.cdef[[void TestSetRecoveryCode(bool);int TestWrites(void);int TestReads(void);void TestPause(bool);]]
+ffi.cdef[[void TestSetRecoveryCode(bool);int TestWrites(void);int TestReads(void);void TestPause(bool);void TestZone(uint64_t);]]
 ffi.C.TestSetRecoveryCode(true)
 local mode=arg[1]
 local now=1
@@ -12,8 +12,8 @@ function ConvertStringToLuaID(value)return ffi.new('uint64_t',tonumber(value))en
 function ConvertIDTo64Bit(value)return value end
 function GetComponentData(reference,...)
  local keys={...}
- if keys[1]=='isdocked' then return false,false,false end
- if keys[1]=='macro' and tonumber(reference)==41 then return 'ship_arg_m_trans_container_02_b_macro','antigone' end
+ if keys[1]=='isdocked' then return mode=='docking' and now>1.2,false,false end
+ if keys[1]=='macro' and tonumber(reference)==41 then return mode=='fixture' and now>1.2 and 'wrong_macro' or 'ship_arg_m_trans_container_02_b_macro','antigone' end
  if keys[1]=='macro' and tonumber(reference)==43 then return 'cluster_06_sector001_macro' end
  error('unexpected read')
 end
@@ -66,7 +66,7 @@ assert(client:state()=='ready' and ffi.C.TestWrites()==0 and ffi.C.TestReads()>0
 assert(#logs==1 and logs[1]:find('AUTH_CLIENT_PLAYBACK INITIAL version=1 ',1,true))
 assert(logs[1]:find(' x=0 y=0 z=0',1,true) and output[#output]:find('|BOUND|',1,true))
 assert(client:tick() and ffi.C.TestWrites()==0)
-if mode~='good' and mode~='bounded' and mode~='uncertain' then
+if mode~='good' and mode~='bounded' and mode~='uncertain' and mode~='docking' and mode~='fixture' and mode~='zone' then
  local invalid=packet(2,5,.2)
  if mode=='sector' then invalid[10]='other_sector'
  elseif mode=='index' then invalid[8]='1317'
@@ -80,6 +80,19 @@ if mode~='good' and mode~='bounded' and mode~='uncertain' then
  return
 end
 now=1.2;send(2,5,.2);assert(client:tick() and ffi.C.TestWrites()==1)
+if mode=='docking' or mode=='fixture' or mode=='zone' then
+ now=1.3
+ if mode=='zone' then ffi.C.TestZone(0)end
+ assert(not client:tick() and client:state()=='failed' and ffi.C.TestWrites()==1)
+ local expected='AUTH_RECOVERED_CLIENT_MOTION ERROR reason=owner_playback stage=read native_stage='..mode
+ local found=false
+ for _,line in ipairs(logs)do
+  if line:find(expected,1,true)then found=true end
+  for _,secret in ipairs({lease,attempt,generation,nonce,'wrong_macro','actor_key'})do assert(not line:find(secret,1,true))end
+ end
+ assert(found,'missing fixed original native failure stage')
+ return
+end
 if mode=='bounded' then
  for sequence=3,150 do
   now=now+.6;send(sequence,sequence%2==0 and 5 or 6,sequence*.6)

@@ -156,6 +156,8 @@ local function native_callbacks(o)
   UniverseID GetPlayerOccupiedShipID(void);UniverseID GetPlayerContainerID(void);const char* GetObjectIDCode(UniverseID);
   UIPosRot GetObjectPositionInSector(UniverseID);void SetObjectSectorPos(UniverseID,UniverseID,UIPosRot);double GetCurrentGameTime(void);]]
  local C=ffi.C;local c={};for k,v in pairs(o)do c[k]=v end
+ local native_stage='initial'
+ c.failure_stage=function()return native_stage end
  local function key(v)local n=o.resolve.actor_u64(v);return n and tostring(n):gsub('ULL$','') or nil end
  local function ref(text)
   assert(natural(text));local x=ConvertStringToLuaID(text);local kind=type(x)
@@ -167,9 +169,11 @@ local function native_callbacks(o)
  local md_issue=o.md_issue or AddUITriggeredEvent
  local external=o.guard
  c.guard=function()
+  native_stage='profile'
   local p=C.GetSaveFolderPath()
   if p==nil or p==ffi.NULL or ffi.string(p):gsub('\\','/'):gsub('/+$','')~=o.expected_save_path or
      not C.IsPlayerValid() or C.IsGamePaused() or external()~=true then return false end
+  native_stage='profile_recheck'
   local q=C.GetSaveFolderPath()
   return q~=nil and q~=ffi.NULL and ffi.string(q):gsub('\\','/'):gsub('/+$','')==o.expected_save_path and C.IsPlayerValid() and not C.IsGamePaused()
  end
@@ -187,27 +191,38 @@ local function native_callbacks(o)
   return accepted ~= false
  end
  local function live(p)
+  native_stage='references'
   local ar,a,sr,s,zr,z=ids(p)
-  assert(c.guard() and C.IsValidComponent(a) and C.IsComponentOperational(a) and C.IsComponentClass(a,'ship'))
+  assert(c.guard())
+  native_stage='actor'
+  assert(C.IsValidComponent(a) and C.IsComponentOperational(a) and C.IsComponentClass(a,'ship'))
+  native_stage='sector'
   assert(C.IsValidComponent(s) and C.IsComponentClass(s,'sector') and C.GetContextByClass(a,'sector',false)==s)
+  native_stage='zone'
   assert(C.IsValidComponent(z) and C.IsComponentClass(z,'zone') and C.GetContextByClass(a,'zone',false)==z)
+  native_stage='player'
   local controlled,occupied,container=C.GetPlayerControlledShipID(),C.GetPlayerOccupiedShipID(),C.GetPlayerContainerID()
   assert(controlled~=a and occupied~=a and container~=a and container~=0 and C.IsValidComponent(container))
+  native_stage='player_container'
   local own=C.GetContextByClass(container,'ship',true)
   if own~=0 then assert(own~=a)else assert(C.GetContextByClass(container,'station',true)~=0)end
+  native_stage='docking'
   local docked,docking,stored=GetComponentData(ar,'isdocked','isdocking','isinternallystored')
   assert(docked==false and docking==false and stored==false)
+  native_stage='fixture'
   local macro,owner=GetComponentData(ar,'macro','owner');assert(macro==selected.macro and owner==selected.owner)
+  native_stage='fixture_sector'
   local sector_macro=GetComponentData(sr,'macro');assert(sector_macro==p.sector_macro)
+  native_stage='fixture_code'
   local code=C.GetObjectIDCode(a);assert(code~=nil and code~=ffi.NULL and ffi.string(code)==selected.code)
-  assert(c.guard());return a,s
+  assert(c.guard());native_stage='validated';return a,s
  end
  c.inspect=function(p)
-  local a=live(p);local x=C.GetObjectPositionInSector(a);assert(live(p)==a)
+  local a=live(p);native_stage='position_read';local x=C.GetObjectPositionInSector(a);assert(live(p)==a)
   return {x=tonumber(x.x),y=tonumber(x.y),z=tonumber(x.z),yaw=tonumber(x.yaw),pitch=tonumber(x.pitch),roll=tonumber(x.roll)}
  end
  c.write=function(p,t)
-  local a,s=live(p);C.SetObjectSectorPos(a,s,ffi.new('UIPosRot',t));assert(live(p)==a);return true
+  local a,s=live(p);native_stage='setter';C.SetObjectSectorPos(a,s,ffi.new('UIPosRot',t));assert(live(p)==a);return true
  end
  return c
 end
@@ -235,7 +250,12 @@ function M.new_playback_x4(options)
  return options.playback.new({enabled=true, buffer=options.buffer, frame=binding.sector_macro,
   clock=callbacks.clock, game=callbacks.game, paused=function() return ffi.C.IsGamePaused() end,
   guard=callbacks.guard, max_age=options.max_age, max_step=options.max_step,
-  buffer_options=options.buffer_options, fault=options.fault,
+  buffer_options=options.buffer_options,
+  fault=function(reason,uncertain,stage)
+   -- Capture before the observer can stop/reenter or alter callback state.
+   local native_stage=(stage=='read' or stage=='read_pose' or stage=='write' or stage=='guard') and callbacks.failure_stage() or nil
+   return options.fault(reason,uncertain,stage,native_stage)
+  end,
   record=function(event)
    event.index=binding.index
    event.epoch=binding.epoch

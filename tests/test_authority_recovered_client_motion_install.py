@@ -132,7 +132,7 @@ class Install(unittest.TestCase):
    library=Path(directory)/'abi.so'
    subprocess.run(['cc','-O2','-shared','-fPIC','tests/fixtures/saved_motion_apply_abi.c','-o',str(library)],cwd=ROOT,check=True,capture_output=True)
    environment=dict(os.environ,LD_PRELOAD=str(library))
-   for mode in ('good','bounded','uncertain','paused_initial','sector','index','sequence','source_time','bind2','context'):
+   for mode in ('good','bounded','uncertain','docking','fixture','zone','paused_initial','sector','index','sequence','source_time','bind2','context'):
     with self.subTest(mode=mode):
      result=subprocess.run(['luajit','tests/authority_recovered_client_playback.lua',mode],cwd=ROOT,capture_output=True,text=True,timeout=5,env=environment)
      self.assertEqual(result.returncode,0,result.stdout+result.stderr)

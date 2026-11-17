@@ -42,19 +42,22 @@ function M.new(options)
  local function new_buffer() return configuration.buffer.new(buffer_options) end
  local buffer = new_buffer()
  local state, busy, uncertain = 'waiting', false, false
+ local stage, failure_stage = 'state', nil
  local last_clock, last_game, last_sequence, last_source, last_arrival = nil, nil, 0, nil, nil
  local fresh_arrival, invalidated_at, previous_write = nil, nil, nil
  local api = {}
 
  local function fail(reason)
   if state ~= 'failed' then
+   failure_stage = stage -- Retain the first failure before callbacks can stop/reenter.
    state = 'failed' -- Disable writes before invoking any external callback.
-   pcall(configuration.fault, reason, uncertain)
+   pcall(configuration.fault, reason, uncertain, failure_stage)
   end
   return false
  end
 
  local function clock()
+  stage = 'clock'
   local value = configuration.clock()
   assert(finite(value) and value >= 0 and (not last_clock or value >= last_clock))
   last_clock = value
@@ -62,14 +65,17 @@ function M.new(options)
  end
 
  local function check()
+  stage = 'state'
   assert(state ~= 'failed' and state ~= 'stopped')
   local previous_state = state
   local now = clock()
+  stage = 'guard'
   assert(configuration.guard() == true and state == previous_state)
   assert(clock() >= now and state == previous_state)
  end
 
  local function invalidate(now, next_state)
+  stage = 'buffer_reset'
   buffer = new_buffer()
   fresh_arrival = nil
   invalidated_at = now
@@ -78,6 +84,7 @@ function M.new(options)
 
  local function paused(now)
   local previous_state = state
+  stage = 'paused'
   local value = configuration.paused()
   assert(type(value) == 'boolean' and state == previous_state)
   if value then
@@ -90,8 +97,9 @@ function M.new(options)
   return false
  end
 
- local function record(event)
+ local function record(event, operation)
   local previous_state = state
+  stage = operation
   assert(configuration.record(event) == true and state == previous_state)
   check()
  end
@@ -104,9 +112,12 @@ function M.new(options)
    local now = clock()
    if paused(now) then rejection='paused'; return end
    check()
+   stage = 'sample'
    assert(type(snapshot) == 'table' and snapshot.frame == configuration.frame)
+   stage = 'arrival'
    assert(finite(arrival) and arrival >= 0 and arrival <= now and
     (not last_arrival or arrival >= last_arrival))
+   stage = 'sequence'
    assert(type(snapshot.sequence) == 'number' and snapshot.sequence % 1 == 0 and
     snapshot.sequence > last_sequence and finite(snapshot.source_time) and
     (not last_source or snapshot.source_time > last_source))
@@ -114,6 +125,7 @@ function M.new(options)
    if now-arrival >= configuration.max_age or (invalidated_at and arrival <= invalidated_at) then
     rejection='expired'; return
    end
+   stage = 'buffer_push'
    assert(buffer:push(snapshot, arrival) == true)
    check()
    last_sequence, last_source, last_arrival = snapshot.sequence, snapshot.source_time, arrival
@@ -136,11 +148,18 @@ function M.new(options)
    check()
    if not fresh_arrival and not previous_write then return end
    local previous_state = state
-   local actual = copy_pose(configuration.read())
+   stage = 'read'
+   local observed = configuration.read()
+   stage = 'read_pose'
+   local actual = copy_pose(observed)
    assert(state == previous_state)
    check()
+   stage = 'game_read'
    local game_time = configuration.game()
-   assert(finite(game_time) and game_time >= 0 and (not last_game or game_time >= last_game))
+   stage = 'game_value'
+   assert(finite(game_time) and game_time >= 0)
+   stage = 'game_clock'
+   assert(not last_game or game_time >= last_game)
    last_game = game_time
    assert(state == previous_state)
    check()
@@ -148,7 +167,7 @@ function M.new(options)
     record({kind='readback', actual=copy_pose(actual), target=copy_pose(previous_write.target),
      source_sequence=previous_write.sequence, latest_source_time=previous_write.latest_source_time,
      local_time=now, game_time=game_time, elapsed=now-previous_write.local_time,
-     error=distance(actual, previous_write.target)})
+     error=distance(actual, previous_write.target)}, 'readback_record')
     previous_write = nil
     uncertain = false
    end
@@ -157,13 +176,16 @@ function M.new(options)
     invalidate(now, 'stale')
     return
    end
+   stage = 'render'
    local rendered = assert(buffer:render(now))
+   stage = 'render_frame'
    assert(rendered.frame == configuration.frame and #rendered.pose == 3)
    local target = {x=rendered.pose[1], y=rendered.pose[2], z=rendered.pose[3],
     yaw=actual.yaw, pitch=actual.pitch, roll=actual.roll}
    target = copy_pose(target)
    record({kind='observation', actual=copy_pose(actual), target=copy_pose(target),
-    source_sequence=rendered.source_sequence, phase=rendered.phase, local_time=now, game_time=game_time})
+    source_sequence=rendered.source_sequence, phase=rendered.phase, local_time=now, game_time=game_time}, 'observation_record')
+   stage = 'distance'
    local step = distance(actual, target)
    assert(finite(step) and step <= configuration.max_step, 'correction too large')
    if step == 0 then return end
@@ -172,7 +194,10 @@ function M.new(options)
    uncertain = true -- An exception can follow a partial native effect.
    previous_write = {target=copy_pose(target), sequence=rendered.source_sequence,
     latest_source_time=last_source, local_time=now}
-   assert(configuration.write(copy_pose(target), copy_pose(actual)) == true and state == 'active')
+   stage = 'write'
+   local written = configuration.write(copy_pose(target), copy_pose(actual))
+   stage = 'write_state'
+   assert(written == true and state == 'active')
    check()
   end)
   busy = false
@@ -190,6 +215,7 @@ function M.new(options)
  end
  function api:state() return state end
  function api:outcome_uncertain() return uncertain end
+ function api:failure_stage() return failure_stage end
  return api
 end
 

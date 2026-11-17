@@ -6,7 +6,14 @@ local player_sector_event_claimed=false
 local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
 -- Only static diagnostic codes may cross into X4's log. Never interpolate a
 -- callback's arbitrary text: it may contain wire data or control characters.
-local owner_reasons={start=true,late_packet=true,tick=true,apply_event=true,event=true}
+local owner_reasons={playback=true,start=true,late_packet=true,tick=true,apply_event=true,event=true}
+local playback_stages={}
+for word in ('state clock guard paused buffer_reset sample arrival sequence buffer_push read read_pose game_read game_value game_clock readback_record render render_frame observation_record distance write write_state'):gmatch('%S+')do playback_stages[word]=true end
+local native_stages={}
+for word in ('initial profile profile_recheck references actor sector zone player player_container docking fixture fixture_sector fixture_code validated position_read setter'):gmatch('%S+')do native_stages[word]=true end
+local function playback_diagnostic(stage,native_stage)
+ return {stage=playback_stages[stage] and stage or 'unknown',native_stage=native_stages[native_stage] and native_stage or 'unknown'}
+end
 local writer_reasons={begin_guard=true,dispatch_guard=true,dispatch_issue=true,pre_guard=true,pre_response=true,
  pre_inspect=true,pre_game=true,pre_distance=true,preflight_log=true,pre_intent=true,pre_write_marker=true,write=true,
  post_guard=true,post_response=true,immediate_inspect=true,immediate_game=true,immediate_log=true,post_inspect=true,
@@ -30,8 +37,9 @@ function M.new(c)
  for _,name in ipairs({'guard','running','router_factory','owner_factory','fault'})do assert(type(c[name])=='function',name)end
  local failed,busy=false,false;local router,owner,sector_reader
  local sector_phase,sector_staged,bound_ready='disabled',nil,nil
- local function fail(reason)
-  if not failed then failed=true;pcall(c.fault,reason)end
+ local function fail(reason,diagnostic)
+  local retained=diagnostic and playback_diagnostic(diagnostic.stage,diagnostic.native_stage)
+  if not failed then failed=true;pcall(c.fault,reason,retained)end
   return false
  end
  local function context()
@@ -48,7 +56,7 @@ function M.new(c)
  assert(router:start() and context())
  owner=assert(c.owner_factory({router=router,guard=context,stop=function()
   return context() and c.running()==true and router:state()=='active' and stop_sector_reader()
- end,fault=function(reason)fail(safe_fault('owner',reason))end}))
+ end,fault=function(reason,uncertain,diagnostic)fail(safe_fault('owner',reason),diagnostic)end}))
  if c.player_sector==nil then
   assert(router:attach(c.router_generation,c.nonce,c.epoch,owner) and owner:start() and context())
  else
@@ -420,7 +428,8 @@ function M.new_x4(c)
    end
    return X4LAN_MOTION_CLIENT_OWNER.new_x4(options)
   end,
-  fault=function(reason)
+  fault=function(reason,diagnostic)
+   local retained=diagnostic and playback_diagnostic(diagnostic.stage,diagnostic.native_stage)
    -- safe_fault produces only the static codes above. Wrapper-owned reasons
    -- are also literals; unexpected values fall back to the original message.
    local wrapper_reasons={state=true,tick=true,sector_event=true}
@@ -431,7 +440,12 @@ function M.new_x4(c)
     known=safe_fault('router',reason:sub(8))==reason
    end
    if playback_controller then playback_controller:stop() end
-   DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR'..(known and ' reason='..reason or ''))
+   local detail=''
+   if reason=='owner_playback' then
+    retained=retained or playback_diagnostic(nil,nil)
+    detail=' stage='..retained.stage..' native_stage='..retained.native_stage
+   end
+   DebugError('[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR'..(known and ' reason='..reason or '')..detail)
    report_timing()
   end})
 end

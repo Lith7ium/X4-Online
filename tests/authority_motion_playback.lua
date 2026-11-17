@@ -117,6 +117,31 @@ for _,mode in ipairs({'guard_lost','record_stop'}) do
  environment.now=1.2;assert(not controller:tick() and environment.writes==1)
 end
 
+-- First static stage survives observer reentrancy; write uncertainty is retained.
+for _,mode in ipairs({'clock','game_clock','read','write'})do
+ local captured
+ local controller,environment,actual,sample=rig(function(options,env,pose,get_controller)
+  options.fault=function(reason,uncertain,stage)
+   captured={reason=reason,uncertain=uncertain,stage=stage}
+   get_controller():stop();get_controller():push({},0)
+   error('observer failure must not replace original')
+  end
+  if mode=='write' then options.write=function()error('private native detail')end end
+ end)
+ assert(controller:push(sample(1,10),1))
+ if mode~='write' then
+  assert(controller:tick())
+  environment.now=1.1
+  if mode=='clock' then environment.now=.5
+  elseif mode=='game_clock' then environment.game=9
+  elseif mode=='read' then actual.x=nil end
+ end
+ assert(not controller:tick())
+ local expected=mode=='read' and 'read_pose' or mode
+ assert(captured.reason=='tick' and captured.stage==expected and controller:failure_stage()==expected)
+ assert(captured.uncertain and controller:outcome_uncertain())
+end
+
 -- Old buffer behavior remains strict unless deferred arrival is explicitly enabled.
 do
  local track=buffer.new({dimensions=3})
