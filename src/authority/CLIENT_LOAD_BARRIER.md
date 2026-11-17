@@ -191,6 +191,15 @@ exclusive PID-namespace membership assumption. It did not establish that
 Xauthority authentication was enforced, that a frame was presented, that the
 host monitor was unaffected, or that X4 can run in this display environment.
 
+Separately, `.local/private-unix-netns-20261117-02/` recorded a nonce-bound
+exchange over a private bind-mounted Unix pathname socket across network
+namespaces. A random host-namespace abstract-socket sentinel was unreachable
+from the private namespace, and the test reported process and socket cleanup.
+This demonstrates only those generic socket operations; it does not establish
+X11 transport selection or authentication, Steam/UDP connectivity, Vulkan
+presentation, or X4 operation. The cleanup result depends on the experiment's
+explicit exclusive PID-namespace membership assumption.
+
 The associated repository check reported 4,623 tests without failures and
 56 skips; it was incomplete and must not be presented as a complete passing
 check. A later check covering the diagnostic timing and fresh-profile helper
