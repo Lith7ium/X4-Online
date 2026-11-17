@@ -20,15 +20,20 @@ from authority_registry_save_evidence import COMPONENT, DECIMAL, EPOCH
 class PlayerFixtureEvidenceError(ValueError): pass
 
 
-def verify(checkpoint, epoch, marker, *, registry_count=None, fixture_indices=None):
+def verify(checkpoint, epoch, marker, *, registry_count=None, fixture_indices=None,
+           require_original_sector=True):
     """Verify saved fixtures, optionally including their registry slot mapping.
 
     ``fixture_indices`` is the pair of confirmed registry indices in fixture
     slot order. Both options must be supplied together. Component identities
-    stay local to this verification and are never returned.
+    stay local to this verification and are never returned. Set
+    ``require_original_sector=False`` only for a later experimental save in
+    which the two undocked fixtures may have moved to other valid sectors.
     """
     if not isinstance(checkpoint, Checkpoint) or not isinstance(epoch,str) or not EPOCH.fullmatch(epoch):
         raise PlayerFixtureEvidenceError('invalid checkpoint or epoch')
+    if type(require_original_sector) is not bool:
+        raise PlayerFixtureEvidenceError('invalid original-sector requirement')
     if (not isinstance(marker,str) or not re.fullmatch(r'[0-9a-f]{32}',marker)
             or checkpoint.marker != marker):
         raise PlayerFixtureEvidenceError('invalid marker')
@@ -113,7 +118,7 @@ def verify(checkpoint, epoch, marker, *, registry_count=None, fixture_indices=No
         sector_parents=[a for a in parents if a.get('class')=='sector']
         if len(sector_parents)!=1: raise PlayerFixtureEvidenceError('sector parent missing or ambiguous')
         match=COMPONENT.fullmatch(sector_parents[0].get('id',''))
-        if not match or format(int(match.group(1),16),'x')!=sector:
+        if not match or (require_original_sector and format(int(match.group(1),16),'x')!=sector):
             raise PlayerFixtureEvidenceError('ship is not in its saved sector')
     if registry_count is not None:
         registry.verify(checkpoint, epoch, registry_count,

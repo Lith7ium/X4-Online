@@ -18,6 +18,34 @@ import authority_recovered_loopback_server as supervisor
 
 
 class ServerClientTests(unittest.TestCase):
+    def test_tls_requires_both_credentials_and_supports_overlapping_clients(self):
+        options = SimpleNamespace(diagnostic_tls_certificate='cert', diagnostic_tls_private_key='key',
+                                  diagnostic_client=False, diagnostic_overlap=True)
+        self.assertEqual(supervisor.validate_diagnostic_tls(options, False), ('cert', 'key'))
+        with self.assertRaises(ValueError):
+            supervisor.validate_diagnostic_tls(options, True)
+        options.diagnostic_tls_private_key = None
+        with self.assertRaises(ValueError):
+            supervisor.validate_diagnostic_tls(options, False)
+        options.diagnostic_tls_private_key = 'key'
+        options.diagnostic_overlap = False
+        with self.assertRaises(ValueError):
+            supervisor.validate_diagnostic_tls(options, False)
+
+    def test_retained_tls_guards_client_context_before_and_after(self):
+        calls = []
+        link = SimpleNamespace(check=lambda: calls.append('tls'))
+        self.assertEqual(subject.verify_retained_tls(link, True, lambda: calls.append('client') or 7), 7)
+        self.assertEqual(calls, ['tls', 'client', 'tls'])
+        calls.clear()
+        self.assertEqual(subject.verify_retained_tls(link, False, lambda: calls.append('client') or 8), 8)
+        self.assertEqual(calls, ['client'])
+        broken = SimpleNamespace(check=Mock(side_effect=RuntimeError('gateway exited')))
+        verify = Mock()
+        with self.assertRaisesRegex(RuntimeError, 'gateway exited'):
+            subject.verify_retained_tls(broken, True, verify)
+        verify.assert_not_called()
+
     def test_witness_guard_pump_switch_fences_tcp_lease_and_never_pumps_after_switch(self):
         participant=SimpleNamespace(pump_loading=Mock())
         owner=subject.WitnessGuardPump(participant,time.monotonic()+5)

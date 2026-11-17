@@ -43,9 +43,11 @@ class TrustedMarkerLoadSession:
     a possible mutation faults the wrapper; the owner must fence outstanding
     operations and retire or safely settle the coordinator and offer service.
     """
-    def __init__(self, world, *, enabled=False):
+    def __init__(self, world, *, enabled=False, marker_script='X4AuthorityCheckpointMarker'):
         if enabled is not True:
             raise ValueError('trusted marker session requires explicit opt-in')
+        if marker_script not in ('X4AuthorityCheckpointMarker', 'X4AuthorityPlayerFixtureMarker'):
+            raise ValueError('unsupported marker script')
         self._inner = ExperimentalLoadSession(world)
         self._world = world
         self._lock = threading.Lock()
@@ -53,6 +55,7 @@ class TrustedMarkerLoadSession:
         self._markers = {}
         self._next_peer = 1
         self._failed = False
+        self._marker_script = marker_script
 
     def _live(self):
         if self._failed or self._inner._failed:
@@ -105,7 +108,7 @@ class TrustedMarkerLoadSession:
                 if baseline is None or baseline[1] != checkpoint:
                     raise ValueError('baseline is not the confirmed marked checkpoint')
                 if verify_saved_marker(checkpoint, checkpoint.marker,
-                        script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState') is not True:
+                        script_name=self._marker_script, cue_name='MarkerState') is not True:
                     raise ValueError('checkpoint marker not verified')
                 self._markers.pop(peer, None)
                 offer = self._inner.begin(peer)

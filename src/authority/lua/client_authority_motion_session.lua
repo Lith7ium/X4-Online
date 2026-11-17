@@ -90,6 +90,7 @@ function M.new_x4(o)
  c.reader_factory=function(x)
   x.enabled=true;x.epoch=c.epoch;x.generation=c.generation;x.index=c.index;x.baseline=c.baseline;x.sector=c.sector
   x.bootstrap_nonce=c.bootstrap_nonce;x.sampler_nonce=c.sampler_nonce;x.timeout=c.timeout;x.interval=c.interval
+  x.include_orientation=c.include_orientation
   x.bootstrap=c.bootstrap;x.sampler=c.sampler;x.descriptor=c.descriptor;x.resolve=c.resolve;x.expected_save_path=c.expected_save_path
   return reader_new(x)
  end

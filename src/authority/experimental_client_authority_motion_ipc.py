@@ -27,13 +27,13 @@ _SECTOR='cluster_115_sector001_macro'
 class ExperimentalClientAuthorityMotionIPC:
     """Exclusive synchronous request owner, fenced after every uncertainty."""
     def __init__(self,sock,*,enabled=False,lease,attempt,epoch,generation,incarnation,
-                 guard,validate_peer,grant,timeout=20):
+                 guard,validate_peer,grant,timeout=20,include_orientation=False):
         tokens=(lease,attempt,epoch,generation,incarnation)
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
             any(type(v) is not str or not _TOKEN.fullmatch(v) for v in tokens) or len(set(tokens))!=len(tokens) or
-            not all(callable(f) for f in (guard,validate_peer,grant)) or
+            not all(callable(f) for f in (guard,validate_peer,grant)) or type(include_orientation) is not bool or
             type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=120):
             raise ValueError('invalid client authority motion context')
         peer=sock.getpeername()
@@ -44,6 +44,7 @@ class ExperimentalClientAuthorityMotionIPC:
         self._sock=sock;self._peer=peer;self._local=sock.getsockname()
         self._lease=lease;self._attempt=attempt;self._epoch=epoch;self._generation=generation;self._incarnation=incarnation
         self._guard=guard;self._validate=validate_peer;self._grant=grant;self._timeout=float(timeout)
+        self._include_orientation=include_orientation
         self._owner=threading.get_ident();self._state='new';self._next=0;self._sequence=0;self._last_time=None
     @property
     def state(self):return self._state
@@ -58,12 +59,12 @@ class ExperimentalClientAuthorityMotionIPC:
         original_grant = self._grant
         original_context = (self._peer, self._local, self._lease, self._attempt, self._epoch,
                             self._generation, self._incarnation, self._timeout, self._owner,
-                            self._next, self._sequence, self._last_time)
+                            self._next, self._sequence, self._last_time, self._include_orientation)
 
         def context_unchanged():
             current_context = (self._peer, self._local, self._lease, self._attempt, self._epoch,
                                self._generation, self._incarnation, self._timeout, self._owner,
-                               self._next, self._sequence, self._last_time)
+                               self._next, self._sequence, self._last_time, self._include_orientation)
             return (self._sock is original_socket and self._guard is original_guard and
                     self._validate is original_peer_validator and self._grant is original_grant and
                     current_context == original_context and
@@ -131,16 +132,24 @@ class ExperimentalClientAuthorityMotionIPC:
             prefix=['S',self._lease,self._attempt]
             if parts==prefix+['NO_SAMPLE',self._epoch,self._generation,request]:
                 self._quiet(deadline,'pulling');self._state='ready';return None
-            if len(parts)!=17 or parts[:7]!=prefix+['SAMPLE',self._epoch,self._generation,request]:
+            kind='SAMPLE2' if self._include_orientation else 'SAMPLE'
+            if len(parts)!=(23 if self._include_orientation else 17) or parts[:7]!=prefix+[kind,self._epoch,self._generation,request]:
                 raise ValueError('client motion response mismatch')
             if parts[7]!=str(_INDEX) or not re.fullmatch(r'[1-9][0-9]{0,15}',parts[8]):
                 raise ValueError('client motion identity invalid')
-            numbers=parts[10:14];vel=parts[14:17]
-            fields=numbers+([] if vel==['-','-','-'] else vel)
+            numbers=parts[10:14]
+            orientation=parts[14:17] if self._include_orientation else []
+            vel=parts[17:20] if self._include_orientation else parts[14:17]
+            angular=parts[20:23] if self._include_orientation else []
+            fields=numbers+orientation+([] if vel==['-','-','-'] else vel)+([] if angular==['-','-','-'] else angular)
             if any(len(v)>32 or not _NUMBER.fullmatch(v) for v in fields):raise ValueError('client motion number invalid')
             t,x,y,z=map(float,numbers);rate=None if vel==['-','-','-'] else dict(zip(('x','y','z'),map(float,vel)))
-            value=motion_value({'version':1,'epoch':self._epoch,'generation':self._generation,'index':_INDEX,
-                'sequence':int(parts[8]),'sector_macro':parts[9],'source_time':t,'x':x,'y':y,'z':z,'velocity':rate})
+            sample={'version':2 if self._include_orientation else 1,'epoch':self._epoch,'generation':self._generation,'index':_INDEX,
+                'sequence':int(parts[8]),'sector_macro':parts[9],'source_time':t,'x':x,'y':y,'z':z,'velocity':rate}
+            if self._include_orientation:
+                sample['orientation']=dict(zip(('yaw','pitch','roll'),map(float,orientation)))
+                sample['angular_rate']=None if angular==['-','-','-'] else dict(zip(('yaw','pitch','roll'),map(float,angular)))
+            value=motion_value(sample)
             if (value['sector_macro']!=_SECTOR or value['sequence']!=self._sequence+1 or
                 (self._last_time is not None and value['source_time']<=self._last_time) or
                 (self._sequence==0 and value['velocity'] is not None)):

@@ -278,6 +278,16 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         return True
 
 
+def verify_retained_tls(link, active, verify):
+    """Check a retained participant's own TLS helpers around its context guard."""
+    if link is not None and active:
+        link.check()
+    result = verify()
+    if link is not None and active:
+        link.check()
+    return result
+
+
 def record_client_evidence(result, ticket, marker, client_identity, server_identity):
     """Record only noncredential correlation data after final checks succeed."""
     fields = recovery.base.client.FIELDS
@@ -445,7 +455,8 @@ def guarded_registry_observation(check, verify):
     return True
 
 
-def settle_departure(host, world, control, peer, deadline, check, ticket, marker):
+def settle_departure(host, world, control, peer, deadline, check, ticket, marker, *,
+                     marker_script='X4AuthorityCheckpointMarker'):
     """Observe EOF and require a fresh marked save before another client."""
     if peer not in control._peers:
         raise RuntimeError('diagnostic peer disappeared before EOF observation')
@@ -465,7 +476,7 @@ def settle_departure(host, world, control, peer, deadline, check, ticket, marker
     with world._offers.service.lock:
         if world._offers.service.offered:
             raise ValueError('file offers remain after diagnostic departure')
-    if verify_saved_marker(saved, saved.marker, script_name='X4AuthorityCheckpointMarker',
+    if verify_saved_marker(saved, saved.marker, script_name=marker_script,
                            cue_name='MarkerState') is not True:
         raise ValueError('departure checkpoint marker not verified')
     check()
@@ -491,7 +502,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
             processes, server_proc, server_started, server_identity, checkpoint,
             recovery_target, server_expected, recovery_watch, listener, host, service,
             world, session, control, check_server, server_out=None, expected_baseline=None, cancel_check=None,
-            check_base=None, check_server_base=None, witness_guard_ready=None, client_motion=None):
+            check_base=None, check_server_base=None, witness_guard_ready=None, client_motion=None,
+            fixture_scripts=None, fixture_slot=None):
     """Load one genuine local client, confirm admission/resume and disconnect.
 
     Must run on the server's owner/main thread; it registers its X4 in the
@@ -508,6 +520,9 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
         raise ValueError('witness guard requires retained witness join')
     if client_motion is not None and (not participant.keep_worker or witness_guard_ready is None):
         raise ValueError('client motion requires retained witness join')
+    if ((fixture_scripts is None and fixture_slot is not None) or
+            (fixture_scripts is not None and (type(fixture_slot) is not int or fixture_slot not in (1, 2)))):
+        raise ValueError('fixture scripts and player slot must be supplied together')
     participant.cancel_check = cancel_check
     if hasattr(participant, '_diagnostic_server_guard'):
         participant._diagnostic_server_guard = check_server
@@ -525,11 +540,12 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
     tls_certificate = getattr(args, 'diagnostic_tls_certificate', None)
     tls_private_key = getattr(args, 'diagnostic_tls_private_key', None)
     tls_guard_active = [False]
+    link = None
     if (tls_certificate is None) != (tls_private_key is None):
         raise ValueError('both diagnostic TLS certificate and private key are required')
     if tls_certificate is not None:
-        if participant.keep_worker or client_motion is not None:
-            raise ValueError('diagnostic TLS currently supports the load-only client')
+        if client_motion is not None:
+            raise ValueError('diagnostic TLS currently supports load-only clients')
         from authority_diagnostic_tls_link import DiagnosticTLSLink
         link = DiagnosticTLSLink(participant)
         participant.diagnostic_tls_link = link
@@ -573,12 +589,22 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
         verify_join_offer(ticket, participant.marker, baseline)
         registry_observation = (client_registry, secrets.token_hex(16), status)
     config = base.client.install_probe(case, profile, ticket)
-    recovery.marked.identity.inject(case, 'load')
+    if fixture_scripts is None:
+        recovery.marked.identity.inject(case, 'load')
     participant.install(case)
     protected = [config, case/'extensions/x4_lan_lab/ui.xml', profile/'content.xml', profile/'config.xml']
     protected += [case/'extensions/x4_lan_lab/ui'/name for name in
                   ('client_load_barrier.lua', 'x4_client_load_engine.lua', 'authority_download_load_probe.lua')]
     protected += participant.protected(case)
+    seat_nonce = None
+    if fixture_scripts is not None:
+        import authority_registered_player_seat_install as registered_seat
+        import authority_fixture_checkpoint_source as fixture_source
+        seat_nonce = secrets.token_hex(16)
+        epoch = fixture_source.fixture_save.base.archive.REGISTRY_EPOCH
+        for path in registered_seat.install(case, profile, slot=fixture_slot, nonce=seat_nonce,
+                epoch=epoch, timeout=min(120, args.timeout), scripts=fixture_scripts):
+            if path not in protected: protected.append(path)
     if registry_observation is not None:
         client_registry, nonce, status = registry_observation
         protected += client_registry.install(case, nonce, status)
@@ -642,7 +668,14 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                     sector_watch.poll();client_context(check)
                 return value
             def check_protected(): return registry_context(check_server)
-            def active_protected(): return registry_context(check_base)
+            def active_protected():
+                return verify_retained_tls(link, tls_guard_active[0], lambda: registry_context(check_base))
+            if seat_nonce is not None:
+                check_protected()
+                seat_observation = registered_seat.verify_log(profile/'engine-output.log', nonce=seat_nonce,
+                    slot=fixture_slot, ticket=ticket, marker=participant.marker)
+                check_protected()
+                result['fixture_player_seat'] = seat_observation
             if registry_observation is not None:
                 check_protected()
                 result['client_registry_status'] = {
@@ -678,6 +711,8 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                 # Reap helpers before X4 and keep the X4 registered on uncertainty.
                 if client_motion is not None and not participant.motion_stop_confirmed:
                     raise RuntimeError('client motion STOP was not confirmed')
+                if link is not None and participant.keep_worker:
+                    link.expect_departure()
                 participant.cleanup_diagnostic()
                 tls_guard_active[0] = False
                 remaining = base.snapshot.stop_owned(proc, started)
@@ -692,6 +727,11 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                     raise ValueError('final client inputs changed')
                 relative_log = Path('case/home/.config/EgoSoft/X4/45841/engine-output.log')
                 participant.verify_logs(out/'server'/relative_log, out/'client'/relative_log, ticket, participant.marker)
+                if seat_nonce is not None:
+                    final_seat = registered_seat.verify_log(out/'client'/relative_log, nonce=seat_nonce,
+                        slot=fixture_slot, ticket=ticket, marker=participant.marker)
+                    if final_seat != seat_observation:
+                        raise ValueError('fixture player seat evidence changed')
                 if registry_observation is not None:
                     client_registry.verify_log(out/'client'/relative_log, nonce, status, ticket, participant.marker)
                 if motion_watch is not None:

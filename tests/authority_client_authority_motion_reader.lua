@@ -7,6 +7,7 @@ local function rig(mode)
  local epoch,generation=('a'):rep(32),('b'):rep(32);local bnonce,snonce=('c'):rep(32),('d'):rep(32)
  local actor={};local rid,staged_copy,sampler_original
  reader=assert(reader_mod.new({enabled=true,epoch=epoch,generation=generation,index=1318,baseline=10054,sector='cluster_115_sector001_macro',
+  include_orientation=mode=='6d' or mode=='6d_mutation',
   bootstrap_nonce=bnonce,sampler_nonce=snonce,guard=function()
    if mode=='guard_mutation' and staged_copy then staged_copy.x=999 end
    if mode=='guard_original_mutation' and staged_copy and sampler_original then sampler_original.x=999 end
@@ -20,6 +21,7 @@ local function rig(mode)
    if mode=='metatable_mutation' then setmetatable(v,{}) end
    if mode=='extra_mutation' then v.extra=true end
    if mode=='rate_mutation' and v.velocity then v.velocity.x=999 end
+   if mode=='6d_mutation' then v.orientation.yaw=999 end
    output[#output+1]=v;return true
   end,
   bootstrap_factory=function(opt)
@@ -29,14 +31,15 @@ local function rig(mode)
     inspect=function()inspects=inspects+1;return not (mode=='bootstrap_late_failure' and inspects==2)end,complete=opt.complete})
   end,
   sampler_factory=function(opt)
-   local s=assert(sampler_mod.new({enabled=true,epoch=opt.epoch,generation=opt.generation,nonce=opt.nonce,
+   local s=assert(sampler_mod.new({enabled=true,epoch=opt.epoch,generation=opt.generation,nonce=opt.nonce,include_orientation=opt.include_orientation,
     clock=function()return now end,guard=function()return true end,binding_guard=function()return false end,
     saved_baseline_limit=opt.saved_baseline_limit,saved_baseline_guard=opt.saved_baseline_guard,
     actor_key=function(a)if a==actor then return '1' end end,fault=opt.fault,max_tracks=1,scan_budget=1,interval=.01,timeout=5,min_dt=.02,max_dt=1,
     reader_factory=function(row,a,request)
      assert(a==actor);return {start=function()rid=request;return true end,tick=function()return true end,response=function()
       return true,{epoch=epoch,index=row.index,sequence=nil,descriptor_atomic=false,sector_identity_proven=false,
-       sector_macro='cluster_115_sector001_macro',local_sector_key='2',game_before_pose=game,game_after_pose=game,x=game,y=1,z=2}
+       sector_macro='cluster_115_sector001_macro',local_sector_key='2',game_before_pose=game,game_after_pose=game,x=game,y=1,z=2,
+       yaw=game-10,pitch=0,roll=0}
      end}
     end}))
    local original=s.register;s.register=function(...)registrations=registrations+1;return original(...)end
@@ -50,13 +53,14 @@ local function rig(mode)
  if mode=='bootstrap_late_failure' then assert(not reader:event(response) and registrations==0);return end
  assert(reader:event(response) and registrations==1 and reader:state()=='sampling')
  assert(reader:tick() and rid==reader:expected_request());local accepted=reader:event(rid..'|sample')
- if mode=='reentrant' or mode=='position_mutation' or mode=='metatable_mutation' or mode=='extra_mutation' or mode=='guard_mutation' or mode=='guard_original_mutation' then assert(not accepted and reader:state()=='failed');return end
+ if mode=='reentrant' or mode=='position_mutation' or mode=='metatable_mutation' or mode=='extra_mutation' or mode=='guard_mutation' or mode=='guard_original_mutation' or mode=='6d_mutation' then assert(not accepted and reader:state()=='failed');return end
  assert(accepted)
  assert(#output==1 and output[1].index==1318 and output[1].sequence==1 and output[1].velocity==nil)
  game=10.5;now=1.5;assert(reader:tick());local second=reader:event(rid..'|sample')
  if mode=='rate_mutation' then assert(not second and reader:state()=='failed');return end
  assert(second);assert(#output==2 and output[2].sequence==2 and output[2].velocity.x==1 and output[2].velocity.y==0)
+ if mode=='6d' then assert(output[1].version==2 and output[1].orientation.yaw==0 and output[1].angular_rate==nil and output[2].angular_rate.yaw==1)end
  granted=false;assert(not reader:tick() and #output==2)
 end
-for _,mode in ipairs({'ok','wrong_id','grant_revoked','bootstrap_late_failure','reentrant','position_mutation','metatable_mutation','extra_mutation','guard_mutation','guard_original_mutation','rate_mutation'})do rig(mode)end
+for _,mode in ipairs({'ok','6d','6d_mutation','wrong_id','grant_revoked','bootstrap_late_failure','reentrant','position_mutation','metatable_mutation','extra_mutation','guard_mutation','guard_original_mutation','rate_mutation'})do rig(mode)end
 print('local client authority reader tests passed')

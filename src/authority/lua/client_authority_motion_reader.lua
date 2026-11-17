@@ -5,12 +5,30 @@ local M={}
 local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
 local function finite(v)return type(v)=='number' and v==v and v~=math.huge and v~=-math.huge end
 local function name(v)return type(v)=='string' and #v>0 and #v<=128 and v:match('^[A-Za-z0-9_]+$')~=nil end
+local function vector(v,axes,limit)
+ if type(v)~='table' then return false end
+ for _,axis in ipairs(axes)do if not finite(v[axis]) or math.abs(v[axis])>limit then return false end end
+ return true
+end
+local function clone(v)
+ if type(v)~='table' then return v end
+ local result={};for k,value in pairs(v)do result[k]=clone(value)end;return result
+end
+local function unchanged(value,expected)
+ if type(value)~=type(expected) then return false end
+ if type(value)~='table' then return value==expected end
+ if getmetatable(value)~=nil then return false end
+ for k in pairs(value)do if expected[k]==nil then return false end end
+ for k,v in pairs(expected)do if not unchanged(value[k],v) then return false end end
+ return true
+end
 function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  local c={};for k,v in pairs(o)do c[k]=v end
  assert(token(c.epoch) and token(c.generation) and token(c.bootstrap_nonce) and token(c.sampler_nonce))
  assert(c.epoch~=c.generation and c.bootstrap_nonce~=c.sampler_nonce and c.bootstrap_nonce:sub(1,16)~=c.sampler_nonce:sub(1,16))
  assert(c.index==1318 and c.baseline==10054 and c.sector=='cluster_115_sector001_macro')
+ assert(c.include_orientation==nil or type(c.include_orientation)=='boolean')
  for _,k in ipairs({'guard','authority','bootstrap_factory','sampler_factory','stage_sample','fault'})do assert(type(c[k])=='function',k)end
  local state,busy='new',false;local bootstrap,sampler,staged,actor,last_sequence,last_time=nil,nil,nil,nil,0,nil
  local api={}
@@ -25,13 +43,15 @@ function M.new(o)
   return ok3 and again==true and state==before
  end
  local function expect(v)
-  return type(v)=='table' and v.version==1 and v.epoch==c.epoch and v.generation==c.generation and
+  return type(v)=='table' and v.version==(c.include_orientation and 2 or 1) and v.epoch==c.epoch and v.generation==c.generation and
    v.index==c.index and type(v.sequence)=='number' and v.sequence==last_sequence+1 and
    v.sector_macro==c.sector and name(v.sector_macro) and finite(v.source_time) and v.source_time>=0 and
    (not last_time or v.source_time>last_time) and (last_sequence~=0 or v.velocity==nil) and
    finite(v.x) and finite(v.y) and finite(v.z) and math.abs(v.x)<=1e7 and math.abs(v.y)<=1e7 and math.abs(v.z)<=1e7 and
-   (v.velocity==nil or (type(v.velocity)=='table' and finite(v.velocity.x) and finite(v.velocity.y) and finite(v.velocity.z) and
-    math.abs(v.velocity.x)<=5000 and math.abs(v.velocity.y)<=5000 and math.abs(v.velocity.z)<=5000))
+   (v.velocity==nil or vector(v.velocity,{'x','y','z'},5000)) and
+   (not c.include_orientation or (vector(v.orientation,{'yaw','pitch','roll'},2*math.pi) and
+    (v.velocity==nil)==(v.angular_rate==nil) and
+    (v.angular_rate==nil or vector(v.angular_rate,{'yaw','pitch','roll'},2*math.pi))))
  end
  function api:start()
   if busy or state~='new' then return fail('start')end
@@ -42,7 +62,7 @@ function M.new(o)
      if state~='bootstrapping' or staged or index~=c.index or sector~=c.sector or a==nil or not check() then return false end
      staged={actor=a};return true
     end}))
-   sampler=assert(c.sampler_factory({epoch=c.epoch,generation=c.generation,nonce=c.sampler_nonce,
+   sampler=assert(c.sampler_factory({epoch=c.epoch,generation=c.generation,nonce=c.sampler_nonce,include_orientation=c.include_orientation,
     saved_baseline_limit=c.baseline,saved_baseline_guard=function(row,a)
      return state=='sampling' and row.epoch==c.epoch and row.index==c.index and row.classification=='saved_baseline' and
       actor~=nil and actor==a and check()
@@ -73,27 +93,19 @@ function M.new(o)
     local accepted,v=sampler:event(value);assert(accepted==true and state=='sampling' and check())
     if v~=nil then
      assert(expect(v))
-     local expected={version=1,epoch=v.epoch,generation=v.generation,index=v.index,sequence=v.sequence,sector_macro=v.sector_macro,
+     local expected={version=v.version,epoch=v.epoch,generation=v.generation,index=v.index,sequence=v.sequence,sector_macro=v.sector_macro,
       source_time=v.source_time,x=v.x,y=v.y,z=v.z}
-     local vx,vy,vz;if v.velocity then vx,vy,vz=v.velocity.x,v.velocity.y,v.velocity.z end
-     local rate=v.velocity and {x=vx,y=vy,z=vz} or nil
-     local copy={version=1,epoch=expected.epoch,generation=expected.generation,index=expected.index,sequence=expected.sequence,
-      sector_macro=expected.sector_macro,source_time=expected.source_time,x=expected.x,y=expected.y,z=expected.z,velocity=rate}
-     local function unchanged(t)
-      if type(t)~='table' or getmetatable(t)~=nil then return false end
-      for k in pairs(t)do if expected[k]==nil and k~='velocity' then return false end end
-      for k,x in pairs(expected)do if t[k]~=x or type(t[k])~=type(x) then return false end end
-      if vx==nil then return t.velocity==nil end
-      local r=t.velocity;if type(r)~='table' or getmetatable(r)~=nil or r.x~=vx or r.y~=vy or r.z~=vz or
-       type(r.x)~='number' or type(r.y)~='number' or type(r.z)~='number' then return false end
-      for k in pairs(r)do if k~='x' and k~='y' and k~='z' then return false end end
-      return true
+     if v.velocity then expected.velocity={x=v.velocity.x,y=v.velocity.y,z=v.velocity.z} end
+     if c.include_orientation then
+      expected.orientation={yaw=v.orientation.yaw,pitch=v.orientation.pitch,roll=v.orientation.roll}
+      if v.angular_rate then expected.angular_rate={yaw=v.angular_rate.yaw,pitch=v.angular_rate.pitch,roll=v.angular_rate.roll} end
      end
-     assert(unchanged(v) and unchanged(copy))
+     local copy=clone(expected)
+     assert(unchanged(v,expected) and unchanged(copy,expected))
      -- This callback is provisional until event() returns true. The owner
      -- must stage it locally and publish only after that successful return.
-     local accepted=c.stage_sample(copy);assert(accepted==true and state=='sampling' and unchanged(v) and unchanged(copy))
-     assert(check() and unchanged(v) and unchanged(copy))
+     local accepted=c.stage_sample(copy);assert(accepted==true and state=='sampling' and unchanged(v,expected) and unchanged(copy,expected))
+     assert(check() and unchanged(v,expected) and unchanged(copy,expected))
      last_sequence=expected.sequence;last_time=expected.source_time
     end
    end
@@ -121,6 +133,7 @@ function M.new_x4(o)
  end
  c.sampler_factory=function(x)
   x.enabled=true;x.max_tracks=1;x.scan_budget=1;x.interval=c.interval;x.timeout=c.timeout;x.min_dt=.02;x.max_dt=1
+  x.include_orientation=c.include_orientation
   x.descriptor=c.descriptor;x.resolve=c.resolve;x.expected_save_path=c.expected_save_path;x.guard=c.guard
   x.binding_guard=function()return false end;return s(x)
  end

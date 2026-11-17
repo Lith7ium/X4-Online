@@ -273,7 +273,8 @@ def run(participant_udp,job_udp,control,c,event,*,delivery_action=None,extra_gua
                         authority_bridge=bind_client_authority(authority_udp,process=process,lease=c['authority_lease'],
                             attempt=c['authority_attempt'],epoch=job_epoch,generation=c['generation'],
                             incarnation=authority_grant['incarnation'],token=authority_grant['token'],session_epoch=c['epoch'],
-                            guard=guard,running=lambda: resumed and guard(),grant=grant,timeout=min(20,deadline-time.monotonic()-5))
+                            guard=guard,running=lambda: resumed and guard(),grant=grant,timeout=min(20,deadline-time.monotonic()-5),
+                            include_orientation=c.get('include_orientation',False))
                         authority_bridge.register_saved()
                     if expected_jobs is None:
                         while not stop.is_set():adapter.poll(.1);guard()

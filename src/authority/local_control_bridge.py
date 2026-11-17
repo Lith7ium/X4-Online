@@ -20,7 +20,8 @@ _MAX_QUEUED_PACKETS = 4096
 
 class LocalControlBridge:
     def __init__(self, *, enabled, sock, peer, lease, world_epoch, profile, store,
-                 verify_checkpoint, timeout=130, marker_required=False):
+                 verify_checkpoint, timeout=130, marker_required=False,
+                 marker_script='X4AuthorityCheckpointMarker'):
         if enabled is not True:
             raise ValueError('local control bridge requires explicit opt-in')
         if (not _HEX.fullmatch(lease) or not _HEX.fullmatch(world_epoch)
@@ -32,7 +33,10 @@ class LocalControlBridge:
             raise ValueError('invalid local bridge configuration')
         if type(marker_required) is not bool:
             raise ValueError('invalid marker setting')
+        if marker_script not in ('X4AuthorityCheckpointMarker', 'X4AuthorityPlayerFixtureMarker'):
+            raise ValueError('unsupported marker script')
         self._marker_required = marker_required
+        self._marker_script = marker_script
         self._pending_marker = None
         profile = Path(profile)
         if profile.is_symlink() or profile.name != '45841' or not profile.is_dir():
@@ -136,7 +140,7 @@ class LocalControlBridge:
             raise ValueError('published checkpoint identity mismatch')
         if self._pending_marker is not None:
             verify_saved_marker(checkpoint, self._pending_marker,
-                                script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState')
+                                script_name=self._marker_script, cue_name='MarkerState')
         self._poisoned = False
         prefix = f'{self._lease}|{self._epoch}|{number}'
         self._exchange(f'VERIFY|{prefix}', f'VERIFIED|{prefix}')

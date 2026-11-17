@@ -27,7 +27,8 @@ _TOKENS=('epoch','lease','attempt','generation','participant_lease','job_epoch',
 
 def config(raw):
     c=parse_json(raw)
-    if type(c) is not dict or set(c)!=_FIELDS or type(c['version']) is not int or c['version']!=1:
+    if (type(c) is not dict or set(c)-{'include_orientation'}!=_FIELDS or type(c['version']) is not int or c['version']!=1 or
+        type(c.get('include_orientation',False)) is not bool):
         raise ValueError('invalid authority worker config')
     if any(type(c[k]) is not str or not _TOKEN.fullmatch(c[k]) for k in _TOKENS) or len({c[k] for k in _TOKENS})!=len(_TOKENS):
         raise ValueError('invalid authority context tokens')

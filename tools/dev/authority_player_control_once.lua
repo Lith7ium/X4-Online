@@ -7,6 +7,7 @@ function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(token(o.epoch) and token(o.nonce) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
  for _,n in ipairs({'guard','issue','validate','inspect'}) do assert(type(o[n])=='function') end
+ assert(o.allow_existing==nil or type(o.allow_existing)=='boolean')
  assert(o.teleport_phase==nil or type(o.teleport_phase)=='function')
  local teleport_phase=o.teleport_phase or function() end
  local phase='new';local mode='pre';local failed=false;local busy=false;local t0,last,pre_game,post_game,target,sector,owner
@@ -80,7 +81,14 @@ function M.new(o)
    if owner then assert(owner==oid) else owner=oid end
    local flags={p=='1',oc=='1',c=='1',sec=='1'}
    assert(o.inspect(target,sector,flags,owner)==true)
-   if expected=='0' then assert(not flags[1] and not flags[2] and not flags[3]);phase='teleport'
+   if expected=='0' then
+    if o.allow_existing and flags[1] and flags[2] and flags[3] and flags[4] then
+     -- The saved player is already in the intended seat: observe it twice,
+     -- without dispatching another teleport.
+     mode='post';phase='read_one'
+    else
+     assert(not flags[1] and not flags[2] and not flags[3]);phase='teleport'
+    end
    elseif not (flags[1] and flags[2] and flags[3] and flags[4]) then return done('inconclusive')
    elseif expected=='1' then phase='read_two'
    else return done('controlled') end

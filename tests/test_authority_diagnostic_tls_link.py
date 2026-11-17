@@ -83,6 +83,59 @@ class DiagnosticTLSLinkTests(unittest.TestCase):
                 link.check()
 
 
+    def test_two_links_keep_independent_control_and_file_channels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)
+            certificate, key = path / 'cert.pem', path / 'key.pem'
+            certificate.write_text(TEST_CERTIFICATE)
+            key.write_text(TEST_PRIVATE_KEY)
+            service = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            service.bind(('127.0.0.1', 0))
+            service.listen(2)
+            service.settimeout(5)
+            links = [DiagnosticTLSLink(Participant()) for _ in range(2)]
+            endpoints = []
+
+            def receive_exact(sock, length):
+                data = bytearray()
+                while len(data) < length:
+                    chunk = sock.recv(length - len(data))
+                    if not chunk:
+                        raise EOFError('TLS stream closed before message completed')
+                    data.extend(chunk)
+                return bytes(data)
+
+            try:
+                for link in links:
+                    client, server = link.start(certificate, key, service.getsockname()[1], time.monotonic() + 15)
+                    client.settimeout(5)
+                    server.settimeout(5)
+                    endpoints.append((client, server))
+                for index, (client, server) in enumerate(endpoints):
+                    message = ('client-%d' % index).encode('ascii')
+                    client.sendall(message)
+                    self.assertEqual(receive_exact(server, len(message)), message)
+                links[0].expect_departure()
+                endpoints[0][0].close()
+                self.assertEqual(endpoints[0][1].recv(1), b'')
+                self.assertTrue(links[1].check())
+                endpoints[1][1].sendall(b'still-active')
+                self.assertEqual(receive_exact(endpoints[1][0], 12), b'still-active')
+                file_client = socket.create_connection(('127.0.0.1', links[1].file_port), timeout=5)
+                file_server, _ = service.accept()
+                file_server.settimeout(5)
+                endpoints.append((file_client, file_server))
+                endpoints[-1][0].sendall(b'save')
+                self.assertEqual(receive_exact(endpoints[-1][1], 4), b'save')
+            finally:
+                for pair in endpoints:
+                    for endpoint in pair:
+                        endpoint.close()
+                for link in reversed(links):
+                    link._cleanup()
+                service.close()
+            self.assertTrue(all(helper.proc.poll() is not None for link in links for helper in link.helpers))
+
     def test_real_load_owner_hands_off_to_real_worker_then_stops(self):
         from authority.load_messages import Offer, Receipt
         from authority.trusted_marker_load_session import MarkerBoundOffer

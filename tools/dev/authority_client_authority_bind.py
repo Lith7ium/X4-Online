@@ -19,8 +19,8 @@ from authority_tcp_native_worker import check_process
 
 
 def bind_client_authority(sock,*,process,lease,attempt,epoch,generation,incarnation,token,session_epoch,
-                          guard,running,grant,timeout=20):
-    if (type(process) is not dict or not all(callable(f) for f in (guard,running,grant)) or
+                          guard,running,grant,timeout=20,include_orientation=False):
+    if (type(process) is not dict or type(include_orientation) is not bool or not all(callable(f) for f in (guard,running,grant)) or
         any(type(x) is not str or not re.fullmatch(r'[0-9a-f]{32}',x) for x in (lease,attempt,epoch,generation,incarnation,token)) or
         len({lease,attempt,epoch,generation,incarnation,token})!=6 or type(session_epoch) is not str or
         not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',session_epoch)):
@@ -44,7 +44,8 @@ def bind_client_authority(sock,*,process,lease,attempt,epoch,generation,incarnat
         if binding.handoff() is not sock:raise RuntimeError('client authority handoff differs')
         return ExperimentalClientAuthorityMotionIPC(sock,enabled=True,lease=lease,attempt=attempt,epoch=epoch,generation=generation,
             incarnation=incarnation,guard=lambda:context() and running() is True,validate_peer=peer,
-            grant=lambda e,g,i,n:e==epoch and g==generation and i==incarnation and n==1318 and granted(),timeout=timeout)
+            grant=lambda e,g,i,n:e==epoch and g==generation and i==incarnation and n==1318 and granted(),timeout=timeout,
+            include_orientation=include_orientation)
     except BaseException:
         if binding is not None:
             if binding.state!='handed_off':sock.close()

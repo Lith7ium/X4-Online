@@ -16,6 +16,22 @@ correlation faults the reader. The first velocity is unknown; later velocity,
 when available, is inferred from two positions per client game second. The
 sample and its times are non-atomic and carry no common-frame assertion.
 
+The optional `include_orientation` setting forwards the sampler's version 2
+orientation and angular rate through the same reader and local IPC. Both the
+private installer configuration and the Python binding must opt in together;
+the default remains version 1. As with LAN NAV2, rates are inferred from
+consecutive samples, and the first rate is unknown. This is still restricted
+to the fixture above and does not establish player identity, a cross-client
+coordinate frame, an X4 setter, or a sector handover. The test connecting the
+Lua sampler, UDP, participant and TCP owner simulates X4; it is not a native
+multiplayer test.
+
+For the existing isolated two-instance diagnostic,
+`authority_client_authority_pair_live.py --include-orientation` sets the
+same opt-in on the private installer and Python binding. Two-sample diagnostics
+also check the angular rate against the wrapped orientation difference. The
+flag does not start a game by itself and is not a general multiplayer option.
+
 This module installs no hooks, socket, transport, scheduler or server writer.
 An opt-in participant-session adapter is described below; it has not been
 validated in native X4 and does not implement client departure/handover. The user-approved policy is that another present

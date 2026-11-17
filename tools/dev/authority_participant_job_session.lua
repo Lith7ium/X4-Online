@@ -126,6 +126,7 @@ function X4LAN_PARTICIPANT_JOB_TICK()
      x.port~=cfg.authority_participant_port and x.port~=cfg.authority_job_client_port and x.port~=cfg.authority_motion_client_port)
     assert(token(x.lease) and token(x.attempt) and token(x.bootstrap_nonce) and token(x.sampler_nonce) and
      token(x.token) and token(x.incarnation) and x.lease~=x.attempt and x.token~=x.incarnation)
+    assert(x.include_orientation==nil or type(x.include_orientation)=='boolean')
     assert(type(X4LAN_CLIENT_AUTHORITY_MOTION_SESSION)=='table' and type(X4LAN_CLIENT_AUTHORITY_MOTION_READER)=='table' and
      type(X4LAN_AUTHORITY_SOURCE_MOTION_IPC)=='table' and type(X4LAN_SAVED_BASELINE_SOURCE_BOOTSTRAP)=='table' and
      type(X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER)=='table' and type(X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE)=='table')
@@ -137,6 +138,7 @@ function X4LAN_PARTICIPANT_JOB_TICK()
     client_authority=assert(X4LAN_CLIENT_AUTHORITY_MOTION_SESSION.new_x4({enabled=true,epoch=e,generation=g,index=1318,
      baseline=cfg.authority_job_client_baseline,sector='cluster_115_sector001_macro',lease=x.lease,attempt=x.attempt,
      bootstrap_nonce=x.bootstrap_nonce,sampler_nonce=x.sampler_nonce,timeout=x.timeout,interval=x.interval,net=auth_net,
+     include_orientation=x.include_orientation,
      reader=X4LAN_CLIENT_AUTHORITY_MOTION_READER,ipc=X4LAN_AUTHORITY_SOURCE_MOTION_IPC,
      bootstrap=X4LAN_SAVED_BASELINE_SOURCE_BOOTSTRAP,sampler=X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER,
      descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE,resolve=X4LAN_RESOLVE_STRING,expected_save_path=cfg.authority_load_save_path,

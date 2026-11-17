@@ -56,6 +56,7 @@ function M.new(o)
    assert(phase=='active');local prior=probe:state();assert(prior=='waiting_pre' or prior=='waiting_one' or prior=='waiting_two')
    local ok,r=probe:response(v);assert(ok and not failed)
    if prior=='waiting_pre' and probe:state()=='teleport' then o.log('BEFORE')
+   elseif prior=='waiting_pre' and probe:state()=='read_one' then o.log('EXISTING')
    elseif prior=='waiting_one' and probe:state()=='read_two' then locked=true;checked();o.log('FIRST')end
    if r then record(r)end
   end)

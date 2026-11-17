@@ -34,15 +34,20 @@ while time.monotonic()<end:
    seq+=1
    n=seq if os.environ.get('BAD')!='1' else seq+1
    vel=['-','-','-'] if seq==1 else ['1','0','0']
-   a.send(('|'.join(['S',al,at,'SAMPLE',epoch,gen,v[6],'1318',str(n),'cluster_115_sector001_macro',str(seq/10),str((seq-1)/10),'0','0']+vel)).encode())
+   prefix=['S',al,at,'SAMPLE2' if os.environ.get('ORIENTATION')=='1' else 'SAMPLE',epoch,gen,v[6],'1318',str(n),'cluster_115_sector001_macro',str(seq/10),str((seq-1)/10),'0','0']
+   if os.environ.get('ORIENTATION')=='1':
+    prefix += [str((seq-1)/10),'0','0']
+    angular=['-','-','-'] if seq==1 else ['1','0','0']
+    a.send(('|'.join(prefix+vel+angular)).encode())
+   else:a.send(('|'.join(prefix+vel)).encode())
   else:raise AssertionError(v)
 '''
 class Worker(unittest.TestCase):
- def case(self,bad=False,cli=False):
+ def case(self,bad=False,cli=False,orientation=False):
   p,j,a=udp(),udp(),udp()
   for s in (p,j,a):self.addCleanup(s.close)
   x,y=socket.socketpair();self.addCleanup(x.close);self.addCleanup(y.close)
-  fake=subprocess.Popen([sys.executable,'-c',SCRIPT],env=dict(os.environ,P=str(p.getsockname()[1]),J=str(j.getsockname()[1]),A=str(a.getsockname()[1]),BAD='1' if bad else '0'))
+  fake=subprocess.Popen([sys.executable,'-c',SCRIPT],env=dict(os.environ,P=str(p.getsockname()[1]),J=str(j.getsockname()[1]),A=str(a.getsockname()[1]),BAD='1' if bad else '0',ORIENTATION='1' if orientation else '0'))
   server=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'])
   def cleanup():
    for proc in (fake,server):
@@ -53,6 +58,7 @@ class Worker(unittest.TestCase):
      'participant_lease':'f'*32,'job_epoch':'a'*32,'client_process':identity(fake),'server_process':identity(server),
      'deadline':time.monotonic()+18,'authority_lease':'1'*32,'authority_attempt':'2'*32,'incarnation':'3'*32,
      'grant_token':'4'*32,'sample_count':2}
+  if orientation:c['include_orientation']=True
   c=worker.config(json.dumps(c).encode())
   if cli:
    fds=tuple(s.fileno() for s in (p,j,a,x))
@@ -72,7 +78,11 @@ class Worker(unittest.TestCase):
    self.assertTrue(result['client_authority_registered']);self.assertFalse(result['server_x4_motion_applied'])
    self.assertEqual([s['sequence'] for s in result['samples']],[1,2])
    self.assertIsNone(result['samples'][0]['velocity']);self.assertEqual(result['samples'][1]['velocity']['x'],1)
+   if orientation:
+    self.assertEqual(result['samples'][0]['version'],2)
+    self.assertEqual(result['samples'][1]['angular_rate']['yaw'],1)
  def test_real_socket_chain_with_two_samples(self):self.case()
+ def test_opt_in_sends_6d_samples_through_worker_and_binding(self):self.case(orientation=True)
  def test_foreign_sequence_fails_closed(self):self.case(True)
  def test_inherited_fds_cli_returns_one_frame(self):self.case(cli=True)
 if __name__=='__main__':unittest.main()

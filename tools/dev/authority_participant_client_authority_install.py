@@ -18,7 +18,8 @@ SCRIPTS=(('tools/dev/authority_job_descriptor_probe.lua','authority_job_descript
 
 def install(case,profile,ticket,settings,witnesses,authority):
     keys={'port','lease','attempt','bootstrap_nonce','sampler_nonce','token','incarnation','timeout','interval'}
-    if type(authority) is not dict or set(authority)!=keys:raise ValueError('explicit client authority required')
+    if (type(authority) is not dict or set(authority)-{'include_orientation'}!=keys or
+        type(authority.get('include_orientation',False)) is not bool):raise ValueError('explicit client authority required')
     names=('lease','attempt','bootstrap_nonce','sampler_nonce','token','incarnation')
     if any(type(authority[k]) is not str or not re.fullmatch(r'[0-9a-f]{32}',authority[k]) for k in names):raise ValueError('invalid authority token')
     vals=[authority[k] for k in names]+[settings.get(k) for k in ('participant_lease','lease','attempt','epoch','generation','nonce')]+[ticket.get('world_epoch')]
@@ -40,6 +41,7 @@ def install(case,profile,ticket,settings,witnesses,authority):
     # epoch/generation/index/token/incarnation; this overlay invents no grant.
     text=text[:-2]+(',authority_client_authority_test={enabled=true,port='+str(authority['port'])+','+props+
       ',timeout='+format(authority['timeout'],'.17g')+',interval='+format(authority['interval'],'.17g')+
+      ',include_orientation='+('true' if authority.get('include_orientation',False) else 'false')+
       ',grant=function(e,g,i,t,n,w) return type(X4LAN_CLIENT_AUTHORITY_TEST_GRANT)=="function" and X4LAN_CLIENT_AUTHORITY_TEST_GRANT(e,g,i,t,n,w)==true end}}\n')
     config.write_text(text,encoding='ascii');config.chmod(0o600)
     return files+[mdfile]+[ui/name for _,name in SCRIPTS]

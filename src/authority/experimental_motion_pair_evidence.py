@@ -20,6 +20,8 @@ def validate_pair(samples, *, epoch, generation, index, sector):
             raise ValueError('motion sample identity differs')
     if first['velocity'] is not None:
         raise ValueError('first velocity is unknown')
+    if first['version'] != second['version']:
+        raise ValueError('motion sample version changed')
     elapsed_seconds = second['source_time'] - first['source_time']
     if not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0:
         raise ValueError('motion source time did not advance')
@@ -32,4 +34,10 @@ def validate_pair(samples, *, epoch, generation, index, sector):
             if (not math.isfinite(estimate) or
                     not math.isclose(velocity[axis], estimate, rel_tol=1e-9, abs_tol=1e-9)):
                 raise ValueError('rate differs from source position difference')
+    if second['version'] == 2 and second['angular_rate'] is not None:
+        for axis in ('yaw','pitch','roll'):
+            delta = (second['orientation'][axis] - first['orientation'][axis] + math.pi) % (2 * math.pi) - math.pi
+            estimate = delta / elapsed_seconds
+            if not math.isclose(second['angular_rate'][axis], estimate, rel_tol=1e-9, abs_tol=1e-9):
+                raise ValueError('angular rate differs from orientation difference')
     return [first, second]

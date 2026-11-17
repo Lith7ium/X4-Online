@@ -2,7 +2,7 @@ local M=dofile('tools/dev/authority_player_control_once.lua');assert(M.new({enab
 local epoch,nonce=string.rep('a',32),string.rep('b',32);local request={}
 local function rig(which)
  local t,g,paused=1,3,true;local app;local issued={};local calls={};local inspections=0
- local o={enabled=true,epoch=epoch,nonce=nonce,timeout=10,
+ local o={enabled=true,epoch=epoch,nonce=nonce,timeout=10,allow_existing=which=='existing',
   guard=function(mode)assert(paused);calls[#calls+1]=mode;return t,(which=='jump' and mode=='post') and g+1 or g end,
   issue=function(s,op,a)issued[#issued+1]={s,op,a};if which=='reentrant' then app:refused() end;return true end,
   teleport_phase=function(stage) if which=='phase_slow' and stage=='INTENT_TELEPORT' then t=11 end;if which=='phase_reentrant' and stage=='INTENT_TELEPORT' then app:refused() end end,
@@ -33,3 +33,15 @@ local sv=rig('slow_validate');assert(sv:tick());local vok,vr=sv:created(created)
 local jump,ij=ready('jump');assert(not jump:tick() and jump:state()=='failed');assert(ij[#ij][2]~='Teleport')
 local ps,ips=ready('phase_slow');local psok,psr=ps:tick();assert(psok and psr.status=='inconclusive' and ips[#ips][2]~='Teleport')
 local pr,ipr=ready('phase_reentrant');assert(not pr:tick() and pr:state()=='failed' and ipr[#ipr][2]~='Teleport')
+-- An explicitly enabled existing seat must be observed twice and never teleported.
+local existing,issued=rig('existing')
+assert(existing:tick() and existing:created(created) and existing:tick())
+assert(existing:response(row(0,1,1,1,1)) and existing:state()=='read_one')
+assert(existing:tick() and existing:response(row(1,1,1,1,1)) and existing:tick())
+local existing_ok,existing_result=existing:response(row(2,1,1,1,1))
+assert(existing_ok and existing_result.status=='controlled')
+for _,item in ipairs(issued) do assert(item[2]~='Teleport') end
+local mixed=rig('existing');assert(mixed:tick() and mixed:created(created) and mixed:tick())
+assert(not mixed:response(row(0,1,1,0,1)) and mixed:state()=='failed')
+local disabled=rig();assert(disabled:tick() and disabled:created(created) and disabled:tick())
+assert(not disabled:response(row(0,1,1,1,1)) and disabled:state()=='failed')

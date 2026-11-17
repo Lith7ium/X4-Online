@@ -803,3 +803,43 @@ chosen index is revalidated by the normal source bootstrap before sampling; it
 is a momentary local observation, not a reservation, identity proof or client
 motion delivery. The candidate report and full selection-mode supervisor path
 have offline coverage only; no native X4 run has established their behavior.
+
+## Fixture overlap with two registered player ships
+
+An opt-in `--fixture-overlap --diagnostic-overlap` experiment used the
+confirmed registered-player checkpoint in one isolated Linux server and two
+local Linux X4 clients. In
+`.local/private-fixture-overlap-scope-real-20261117-01/overlap-runner/server/`,
+the supervisor reports both clients admitted and resumed, slot 1 already
+controlling registry entry 3 and slot 2 taking over entry 4. Each local X4 log
+contains the corresponding marker, seat and paused-load receipts. The server
+reports that its game time rose from 17.445157337000037 to 19.70671578900004
+while one participant remained, and that the last departure produced paused,
+confirmed checkpoint `checkpoint-b4d5164e8b05467b89342344ba8c002e`. The
+server result reports no owned processes remaining.
+
+The outer experiment did **not** finish successfully: its private display
+worker had a 780-second lifetime even though the overlap and checkpoint audit
+were allowed longer. The display exited during the outer audit, which was
+interrupted; the outer scope then reported process, display and Steam cleanup.
+This is a failure of the overall run. Later read-only verification must be
+reported separately; it cannot change that result. These are local fixture
+observations, not proof of continuous player control, synchronized movement,
+shared-world gameplay, Windows or an Internet connection. The fixture seat
+still requires its original sector references and undocked ships.
+
+A later, single read-only invocation of the existing overlap verifier completed
+against the retained artifacts. It checked the original source, both offered
+checkpoints and the final confirmed checkpoint, including the marker and the
+full four-entry fixture mapping. The final checkpoint SHA-256 was
+`6f054ea09e547bce16fcd4b624bb3d669b4c7aab14e8cee1f357614291f31fda`.
+Separate client-log checks confirmed the two local seat receipts. The verifier
+checked the recorded supervisor contract and identities, not an independent
+network capture. These post-run checks do not turn the interrupted outer run
+into a successful one.
+
+The development check for the fixture-overlap and client-authority changes
+ran 4,759 tests without a test failure and skipped 26. Repository policy treats
+skips as incomplete validation. The local log is
+`.local/check-fixture-overlap-client-motion-20261117.log`. Separate local MD
+schema validation passed for the registered-player control cue.

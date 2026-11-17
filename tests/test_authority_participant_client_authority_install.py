@@ -30,9 +30,12 @@ class ClientAuthorityInstall(unittest.TestCase):
    settings=dict(participant_port=1234,participant_lease='a'*32,job_port=1235,lease='b'*32,attempt='c'*32,epoch=archive.REGISTRY_EPOCH,generation='d'*32,nonce='e'*32,seed=7183,timeout=20)
    authority=dict(port=1236,lease='1'*32,attempt='2'*32,bootstrap_nonce='3'*32,sampler_nonce='4'*32,token='5'*32,incarnation='6'*32,timeout=15,interval=.1)
    with self.assertRaises(ValueError):m.install(case,profile,ticket,settings,{'cluster_01_sector001_macro':41},{**authority,'token':'a'*32})
+   with self.assertRaises(ValueError):m.install(case,profile,ticket,settings,{'cluster_01_sector001_macro':41},{**authority,'include_orientation':'true'})
+   authority['include_orientation']=True
    files=m.install(case,profile,ticket,settings,{'cluster_01_sector001_macro':41},authority)
    self.assertIn(ui/'client_authority_motion_session.lua',files);self.assertIn(md/'authority_job_descriptor_probe.xml',files)
    self.assertEqual((ui/'authority_download_load_probe.lua').read_text().count("SetScript('onUpdate'"),1)
    config=(ui/'config.lua').read_text();self.assertIn('X4LAN_CLIENT_AUTHORITY_TEST_GRANT',config)
    self.assertNotIn('function X4LAN_CLIENT_AUTHORITY_TEST_GRANT',config)
    self.assertIn('authority_client_authority_test={enabled=true',config)
+   self.assertIn('include_orientation=true',config)

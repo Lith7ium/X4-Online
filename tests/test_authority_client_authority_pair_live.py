@@ -34,6 +34,15 @@ class ClientAuthorityPair(unittest.TestCase):
                  {'samples':[result['samples'][0],{**result['samples'][1],'source_time':4.}]},
                  {'samples':[result['samples'][0],{**result['samples'][1],'velocity':{'x':9,'y':0,'z':0}}]}):
    with self.subTest(change=change),self.assertRaises(ValueError):self.c.validate_result({**result,**change})
+ def test_opt_in_requires_consistent_orientation_and_derived_angular_rate(self):
+  self.c.include_orientation=True
+  result=self.result()
+  first,second=result['samples']
+  result['samples']=[{**first,'version':2,'orientation':{'yaw':0.,'pitch':0.,'roll':0.},'angular_rate':None},
+   {**second,'version':2,'orientation':{'yaw':.5,'pitch':0.,'roll':0.},'angular_rate':{'yaw':1.,'pitch':0.,'roll':0.}}]
+  self.c.validate_result(result)
+  for change in ({**result['samples'][1],'angular_rate':{'yaw':2.,'pitch':0.,'roll':0.}},self.samples()[1]):
+   with self.subTest(change=change),self.assertRaises(ValueError):self.c.validate_result({**result,'samples':[result['samples'][0],change]})
  def test_local_marker_and_worker_result_must_match(self):
   self.c.result=self.result();self.c.tickets={'server':{},'client':{}}
   client=(b'[X4LAN] AUTH_PARTICIPANT_JOB RUNNING 3.037\n'
@@ -44,6 +53,7 @@ class ClientAuthorityPair(unittest.TestCase):
    for bad in (client.replace(b'4.5 2',b'4.5 9'),client+client,client.replace(b'RUNNING 3.037',b'RUNNING 4'),client+b'[X4LAN] AUTH_PARTICIPANT_JOB LOCAL_APPLIED 1 4\n'):
     with self.subTest(bad=bad),self.assertRaises(ValueError):self.c.verify_final({'server':b'normal\n','client':bad})
  def test_private_install_has_explicit_grant_and_one_update_per_role(self):
+  self.c.include_orientation=True
   with tempfile.TemporaryDirectory() as tmp,patch.object(self.c,'check_sources',return_value=True):
    for role in ('server','client'):
     case=Path(tmp)/role;profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
@@ -57,6 +67,7 @@ class ClientAuthorityPair(unittest.TestCase):
      self.assertIn(ui/'client_authority_test_grant.lua',files)
      self.assertIn('X4LAN_CLIENT_AUTHORITY_TEST_GRANT',(ui/'client_authority_test_grant.lua').read_text())
      self.assertIn('authority_client_authority_test={enabled=true',(ui/'config.lua').read_text())
+     self.assertIn('include_orientation=true',(ui/'config.lua').read_text())
     else:
      self.assertFalse((ui/'client_authority_test_grant.lua').exists())
      self.assertNotIn('authority_client_authority_test',(ui/'config.lua').read_text())
@@ -65,6 +76,9 @@ class ClientAuthorityPair(unittest.TestCase):
   cfg=self.c.worker_config(self.c.roles['client'],server,client,time.monotonic()+60)
   with patch.object(worker,'check_process',return_value=None):
    self.assertEqual(worker.config(json.dumps(cfg).encode()),cfg)
+   self.c.include_orientation=True;cfg=self.c.worker_config(self.c.roles['client'],server,client,time.monotonic()+60)
+   self.assertTrue(worker.config(json.dumps(cfg).encode())['include_orientation'])
+   with self.assertRaises(ValueError):worker.config(json.dumps({**cfg,'include_orientation':'true'}).encode())
    with self.assertRaises(ValueError):worker.config(json.dumps({**cfg,'incarnation':cfg['epoch']}).encode())
  def test_explicit_lifecycle_success_without_job_ack(self):
   details={'client_authority_registered':True,'client_authority_index':1318,'client_authority_sample_received':True,

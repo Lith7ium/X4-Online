@@ -47,12 +47,13 @@ class ClientAuthorityCoordinator(pair.Coordinator):
                       ROOT/'tools/dev/authority_multi_create_receiver.xml'})
         paths.update(archive.saved_state_script(name) for name in participant_install.BASE_MD)
         return tuple(sorted(paths))
-    def __init__(self,candidates,*,defer_source_ack=False,sample_count=1):
+    def __init__(self,candidates,*,defer_source_ack=False,sample_count=1,include_orientation=False):
         if type(sample_count) is not int or sample_count not in (1,2):raise ValueError('one or two samples required')
+        if type(include_orientation) is not bool:raise ValueError('orientation flag must be boolean')
         matches=[sector for sector,values in candidates.items() if INDEX in values]
         if matches!=[SECTOR]:raise ValueError('pinned census index/sector identity differs')
         super().__init__(candidates,defer_source_ack=defer_source_ack)
-        self.sample_count=sample_count;self.incarnation=self.fresh();self.grant_token=self.fresh()
+        self.sample_count=sample_count;self.include_orientation=include_orientation;self.incarnation=self.fresh();self.grant_token=self.fresh()
     def add_role(self,role):
         result=super().add_role(role)
         if role=='client':
@@ -76,7 +77,7 @@ class ClientAuthorityCoordinator(pair.Coordinator):
         else:
             authority={'port':r['authority'].getsockname()[1],'lease':r['authority_lease'],'attempt':r['authority_attempt'],
              'bootstrap_nonce':r['bootstrap_nonce'],'sampler_nonce':r['sampler_nonce'],'token':self.grant_token,
-             'incarnation':self.incarnation,'timeout':15,'interval':.1}
+             'incarnation':self.incarnation,'timeout':15,'interval':.1,'include_orientation':self.include_orientation}
             files=authority_install.install(case,profile,ticket,settings,self.witnesses,authority)
             ui=Path(case)/'extensions/x4_lan_lab/ui';grant=ui/'client_authority_test_grant.lua'
             literal=participant_install.base.base.lua_literal
@@ -88,10 +89,12 @@ class ClientAuthorityCoordinator(pair.Coordinator):
             manifest.write_text(transfer.once(manifest.read_text(),hook,'    <file name="ui/client_authority_test_grant.lua" />\n'+hook));files.append(grant)
         self.check_sources();return files
     def worker_config(self,r,server,client,deadline):
-        return {'version':1,'epoch':self.attempt,'lease':r['lease'],'attempt':r['attempt'],'generation':self.generation,
+        config={'version':1,'epoch':self.attempt,'lease':r['lease'],'attempt':r['attempt'],'generation':self.generation,
          'participant_lease':r['control_lease'],'job_epoch':archive.REGISTRY_EPOCH,'client_process':client,'server_process':server,
          'deadline':deadline,'authority_lease':r['authority_lease'],'authority_attempt':r['authority_attempt'],
          'incarnation':self.incarnation,'grant_token':self.grant_token,'sample_count':self.sample_count}
+        if self.include_orientation:config['include_orientation']=True
+        return config
     def run(self,context):
         if set(self.launches)!={'server','client'} or set(self.tickets)!={'server','client'}:raise RuntimeError('missing private pair')
         deadline=min(context['deadline']-5,time.monotonic()+110)
@@ -131,6 +134,7 @@ class ClientAuthorityCoordinator(pair.Coordinator):
         if type(samples) is not list or len(samples)!=self.sample_count:raise ValueError('client sample count differs')
         values=[motion_value(v) for v in samples]
         for n,v in enumerate(values,1):
+            if v['version']!=(2 if self.include_orientation else 1):raise ValueError('client sample version differs')
             if v['epoch']!=archive.REGISTRY_EPOCH or v['generation']!=self.generation or v['index']!=INDEX or v['sequence']!=n or v['sector_macro']!=SECTOR:
                 raise ValueError('client sample identity differs')
         if self.sample_count==1:
@@ -174,7 +178,7 @@ def run(args):
     args.defer_source_ack=True;args.two_clients=False;args.client_authority_index=INDEX;active=[None]
     original=(lifecycle.coordinator.CensusCoordinator,lifecycle.installer.install,lifecycle.owned.spawn_owned_gated,lifecycle.load_observation)
     def make(candidates,*,defer_source_ack=False):
-        active[0]=ClientAuthorityCoordinator(candidates,defer_source_ack=defer_source_ack,sample_count=args.sample_count);return active[0]
+        active[0]=ClientAuthorityCoordinator(candidates,defer_source_ack=defer_source_ack,sample_count=args.sample_count,include_orientation=args.include_orientation);return active[0]
     def install(case,profile,ticket,config,nonce,timeout,window):return active[0].install(case,profile,ticket,config,nonce,timeout,window)
     def spawn(command,log,processes):
         result=original[2](command,log,processes);role=Path(log).parent.name
@@ -202,6 +206,7 @@ def main():
     p.add_argument('--store',type=Path,default=archive.DEFAULT_STORE);p.add_argument('--display',required=True)
     p.add_argument('--timeout',type=float,default=300);p.add_argument('--window',type=float,default=60)
     p.add_argument('--seed',type=int,default=276944566);p.add_argument('--sample-count',type=int,choices=(1,2),default=1)
+    p.add_argument('--include-orientation',action='store_true',help='request experimental 6D samples from the fixture client')
     try:r=run(p.parse_args())
     except (OSError,ValueError,RuntimeError) as e:p.exit(1,'REFUSED: '+str(e)+'\n')
     print(json.dumps(r,indent=2));return 0 if r['success'] else 1
