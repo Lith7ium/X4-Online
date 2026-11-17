@@ -13,7 +13,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests')]
 
-from authority.experimental_tls_tunnel import start_client, start_server
+from authority.experimental_tls_tunnel import _relay, start_client, start_server
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY
 
 
@@ -62,7 +62,7 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         self.servers.append(server)
         return server.sockets[0].getsockname()[1]
 
-    async def make_pair(self, *, key=b'a' * 32, fingerprint=None, max_connections=8):
+    async def make_pair(self, *, key=b'a' * 32, fingerprint=None, max_connections=8, idle_timeout=5):
         control_port = await self.endpoint(b'control:')
         file_port = await self.endpoint(b'file:')
         host = listener()
@@ -70,7 +70,7 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         server = await start_server(listener=host, ssl_context=self.context,
                                     shared_key=b'a' * 32, control_port=control_port,
                                     file_port=file_port, max_connections=max_connections,
-                                    idle_timeout=5)
+                                    idle_timeout=idle_timeout)
         self.tunnels.append(server)
         control, files = listener(), listener()
         client_ports = control.getsockname()[1], files.getsockname()[1]
@@ -78,7 +78,7 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
                                     server_host='127.0.0.1', server_port=host_port,
                                     server_fingerprint=fingerprint or self.fingerprint,
                                     shared_key=key, max_connections=max_connections,
-                                    idle_timeout=5)
+                                    idle_timeout=idle_timeout)
         self.tunnels.append(client)
         return client_ports
 
@@ -98,10 +98,232 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.exchange(files, payload), b'file:' + payload)
         self.assertEqual(await self.exchange(control, b'command'), b'control:command')
 
+    async def test_idle_connection_remains_usable(self):
+        control, _ = await self.make_pair(idle_timeout=1)
+        reader, writer = await asyncio.open_connection('127.0.0.1', control)
+        await asyncio.sleep(2.5)
+        writer.write(b'after idle')
+        await writer.drain()
+        writer.write_eof()
+        self.assertEqual(await asyncio.wait_for(reader.read(), 3), b'control:after idle')
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_idle_half_closed_connection_can_still_receive(self):
+        async def delayed_backend(request, response):
+            data = await request.read()
+            await asyncio.sleep(2.5)
+            response.write(b'delayed:' + data)
+            await response.drain()
+            response.write_eof()
+            response.close()
+            await response.wait_closed()
+
+        backend = await asyncio.start_server(delayed_backend, '127.0.0.1', 0)
+        self.servers.append(backend)
+        host = listener()
+        host_port = host.getsockname()[1]
+        backend_port = backend.sockets[0].getsockname()[1]
+        server = await start_server(listener=host, ssl_context=self.context, shared_key=b'a' * 32,
+                                    control_port=backend_port, file_port=backend_port, idle_timeout=1)
+        self.tunnels.append(server)
+        control_listener, file_listener = listener(), listener()
+        control_port = control_listener.getsockname()[1]
+        client = await start_client(control_listener=control_listener, file_listener=file_listener,
+                                    server_host='127.0.0.1', server_port=host_port,
+                                    server_fingerprint=self.fingerprint, shared_key=b'a' * 32,
+                                    idle_timeout=1)
+        self.tunnels.append(client)
+        reader, writer = await asyncio.open_connection('127.0.0.1', control_port)
+        writer.write(b'before half close')
+        await writer.drain()
+        writer.write_eof()
+        self.assertEqual(await asyncio.wait_for(reader.read(), 5), b'delayed:before half close')
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_unresponsive_peer_is_closed_even_after_ping_is_sent(self):
+        ping_received = asyncio.Event()
+
+        async def silent_peer(reader, writer):
+            try:
+                await reader.readexactly(41)
+                writer.write(b'\x01')
+                await writer.drain()
+                self.assertEqual(await reader.readexactly(5), struct.pack('!BI', 3, 8))
+                await reader.readexactly(8)
+                ping_received.set()
+                await reader.read()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        peer = await asyncio.start_server(silent_peer, '127.0.0.1', 0, ssl=self.context)
+        self.servers.append(peer)
+        control, files = listener(), listener()
+        port = control.getsockname()[1]
+        client = await start_client(control_listener=control, file_listener=files,
+                                    server_host='127.0.0.1', server_port=peer.sockets[0].getsockname()[1],
+                                    server_fingerprint=self.fingerprint, shared_key=b'a' * 32,
+                                    idle_timeout=1)
+        self.tunnels.append(client)
+        reader, writer = await asyncio.open_connection('127.0.0.1', port)
+        await asyncio.wait_for(ping_received.wait(), 2)
+        self.assertEqual(await asyncio.wait_for(reader.read(), 3), b'')
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_heartbeat_response_does_not_block_tls_reader_behind_writer(self):
+        inbound_data_read = asyncio.Event()
+        raw_data_delivered = asyncio.Event()
+        allow_exit = asyncio.Event()
+
+        class RawReader:
+            async def read(self, size):
+                if not hasattr(self, 'sent'):
+                    self.sent = True
+                    return b'x'
+                await allow_exit.wait()
+                return b''
+
+        class RawWriter:
+            def write(self, data):
+                self.data = data
+                raw_data_delivered.set()
+            async def drain(self):
+                return
+
+        class TLSReader:
+            def __init__(self):
+                self.parts = iter((struct.pack('!BI', 3, 8), b'12345678',
+                                   struct.pack('!BI', 1, 1), b'y'))
+            async def readexactly(self, size):
+                part = next(self.parts, None)
+                if part is None:
+                    await allow_exit.wait()
+                    raise asyncio.IncompleteReadError(b'', size)
+                if part == struct.pack('!BI', 1, 1):
+                    inbound_data_read.set()
+                return part
+
+        class TLSWriter:
+            def write(self, data):
+                self.kind = data[0]
+            async def drain(self):
+                if self.kind == 1:
+                    await inbound_data_read.wait()
+
+        task = asyncio.create_task(_relay(RawReader(), RawWriter(), TLSReader(), TLSWriter(), 1))
+        try:
+            await asyncio.wait_for(raw_data_delivered.wait(), .5)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_invalid_heartbeat_response_closes_connection(self):
+        pong_sent = asyncio.Event()
+
+        async def wrong_pong(reader, writer):
+            try:
+                await reader.readexactly(41)
+                writer.write(b'\x01')
+                await writer.drain()
+                self.assertEqual(await reader.readexactly(5), struct.pack('!BI', 3, 8))
+                challenge = await reader.readexactly(8)
+                wrong_challenge = bytes([challenge[0] ^ 1]) + challenge[1:]
+                writer.write(struct.pack('!BI', 4, 8) + wrong_challenge)
+                await writer.drain()
+                pong_sent.set()
+                await reader.read()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        peer = await asyncio.start_server(wrong_pong, '127.0.0.1', 0, ssl=self.context)
+        self.servers.append(peer)
+        control, files = listener(), listener()
+        port = control.getsockname()[1]
+        client = await start_client(control_listener=control, file_listener=files,
+                                    server_host='127.0.0.1', server_port=peer.sockets[0].getsockname()[1],
+                                    server_fingerprint=self.fingerprint, shared_key=b'a' * 32,
+                                    idle_timeout=3)
+        self.tunnels.append(client)
+        reader, writer = await asyncio.open_connection('127.0.0.1', port)
+        await asyncio.wait_for(pong_sent.wait(), 3)
+        self.assertEqual(await asyncio.wait_for(reader.read(), 1), b'')
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_full_duplex_large_transfer_after_idle(self):
+        payload_from_client = b'c' * (4 * 1024 * 1024)
+        payload_from_server = b's' * (4 * 1024 * 1024)
+        received = asyncio.get_running_loop().create_future()
+
+        async def backend(reader, writer):
+            try:
+                async def send():
+                    await asyncio.sleep(1.3)
+                    writer.write(payload_from_server)
+                    await writer.drain()
+                    writer.write_eof()
+                _, client_bytes = await asyncio.gather(send(), reader.read())
+                received.set_result(client_bytes)
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        endpoint = await asyncio.start_server(backend, '127.0.0.1', 0)
+        self.servers.append(endpoint)
+        host = listener()
+        host_port = host.getsockname()[1]
+        endpoint_port = endpoint.sockets[0].getsockname()[1]
+        server = await start_server(listener=host, ssl_context=self.context, shared_key=b'a' * 32,
+                                    control_port=endpoint_port, file_port=endpoint_port, idle_timeout=1)
+        self.tunnels.append(server)
+        control, files = listener(), listener()
+        port = control.getsockname()[1]
+        client = await start_client(control_listener=control, file_listener=files,
+                                    server_host='127.0.0.1', server_port=host_port,
+                                    server_fingerprint=self.fingerprint, shared_key=b'a' * 32,
+                                    idle_timeout=1)
+        self.tunnels.append(client)
+        reader, writer = await asyncio.open_connection('127.0.0.1', port)
+
+        async def send():
+            await asyncio.sleep(1.3)
+            writer.write(payload_from_client)
+            await writer.drain()
+            writer.write_eof()
+
+        _, server_bytes = await asyncio.wait_for(asyncio.gather(send(), reader.read()), 10)
+        self.assertEqual(server_bytes, payload_from_server)
+        self.assertEqual(await asyncio.wait_for(received, 3), payload_from_client)
+        writer.close()
+        await writer.wait_closed()
+
     async def test_wrong_key_never_reaches_backend(self):
         control, _ = await self.make_pair(key=b'b' * 32)
         self.assertEqual(await self.exchange(control, b'command'), b'')
         self.assertEqual(self.backend_connections, [])
+
+    async def test_version_one_client_is_rejected_before_backend_connection(self):
+        backend_port = await self.endpoint(b'backend:')
+        host = listener()
+        host_port = host.getsockname()[1]
+        server = await start_server(listener=host, ssl_context=self.context, shared_key=b'a' * 32,
+                                    control_port=backend_port, file_port=backend_port)
+        self.tunnels.append(server)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        reader, writer = await asyncio.open_connection('127.0.0.1', host_port,
+                                                        ssl=context, server_hostname='')
+        writer.write(b'X4TUN01\0' + b'a' * 32 + b'\x01')
+        await writer.drain()
+        self.assertEqual(await asyncio.wait_for(reader.read(), 3), b'')
+        self.assertEqual(self.backend_connections, [])
+        writer.close()
+        await writer.wait_closed()
 
     async def test_wrong_fingerprint_sends_no_shared_key(self):
         received = asyncio.get_running_loop().create_future()
@@ -157,7 +379,7 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         reader, writer = await asyncio.open_connection('127.0.0.1', port, ssl=context, server_hostname='')
-        writer.write(b'X4TUN01\0' + b'a' * 32 + b'\x01')
+        writer.write(b'X4TUN02\0' + b'a' * 32 + b'\x01')
         await writer.drain()
         self.assertEqual(await asyncio.wait_for(reader.readexactly(1), 5), b'\x01')
         writer.write(frame)

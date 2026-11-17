@@ -13,17 +13,18 @@ import ipaddress
 import math
 from pathlib import Path
 import re
+import secrets
 import socket
 import ssl
 import struct
 
 
-_MAGIC = b'X4TUN01\0'
+_MAGIC = b'X4TUN02\0'
 _MAX_FRAME = 64 * 1024
 _CONNECT_TIMEOUT = 10.0
 _CLOSE_TIMEOUT = 2.0
 _HEADER = struct.Struct('!BI')
-_DATA, _EOF = 1, 2
+_DATA, _EOF, _PING, _PONG = 1, 2, 3, 4
 _CONTROL, _FILE = 1, 2
 
 
@@ -64,56 +65,94 @@ async def _close_writer(writer):
 
 
 async def _relay(raw_reader, raw_writer, tls_reader, tls_writer, idle_timeout):
-    """Relay bounded frames and preserve EOF independently in both directions."""
+    """Relay bounded frames, preserving half-closes and monitoring the peer."""
     loop = asyncio.get_running_loop()
-    last_progress = loop.time()
+    last_peer_progress = loop.time()
+    pending_ping = None
+    write_lock = asyncio.Lock()
+    pong_queue = asyncio.Queue(maxsize=1)
+    local_eof = asyncio.Event()
+    remote_eof = asyncio.Event()
+
+    async def send_frame(kind, payload=b''):
+        # Data and heartbeat writers share a TLS stream. Hold the lock through
+        # drain so backpressure cannot permit overlapping writes.
+        async with write_lock:
+            tls_writer.write(_HEADER.pack(kind, len(payload)) + payload)
+            await tls_writer.drain()
 
     async def from_raw():
-        nonlocal last_progress
         while True:
             chunk = await raw_reader.read(_MAX_FRAME)
-            tls_writer.write(_HEADER.pack(_DATA, len(chunk)) + chunk if chunk else
-                             _HEADER.pack(_EOF, 0))
-            await tls_writer.drain()
-            last_progress = loop.time()
+            await send_frame(_DATA if chunk else _EOF, chunk)
             if not chunk:
+                local_eof.set()
                 return
 
     async def to_raw():
-        nonlocal last_progress
+        nonlocal last_peer_progress, pending_ping
         while True:
             kind, length = _HEADER.unpack(await tls_reader.readexactly(_HEADER.size))
-            if kind == _EOF and length == 0:
+            if kind == _EOF and length == 0 and not remote_eof.is_set():
                 raw_writer.write_eof()
                 await raw_writer.drain()
-                last_progress = loop.time()
-                return
-            if kind != _DATA or not 1 <= length <= _MAX_FRAME:
+                remote_eof.set()
+            elif kind == _DATA and 1 <= length <= _MAX_FRAME and not remote_eof.is_set():
+                raw_writer.write(await tls_reader.readexactly(length))
+                await raw_writer.drain()
+            elif kind == _PING and length == 8:
+                challenge = await tls_reader.readexactly(length)
+                try:
+                    pong_queue.put_nowait(challenge)
+                except asyncio.QueueFull:
+                    raise ValueError('too many pending tunnel heartbeats') from None
+            elif kind == _PONG and length == 8 and pending_ping is not None:
+                response = await tls_reader.readexactly(length)
+                if not hmac.compare_digest(response, pending_ping):
+                    raise ValueError('invalid tunnel heartbeat')
+                pending_ping = None
+            else:
                 raise ValueError('invalid tunnel frame')
-            raw_writer.write(await tls_reader.readexactly(length))
-            await raw_writer.drain()
-            last_progress = loop.time()
+            last_peer_progress = loop.time()
+
+    async def send_pongs():
+        while True:
+            challenge = await pong_queue.get()
+            await send_frame(_PONG, challenge)
+
+    async def both_directions_finished():
+        await local_eof.wait()
+        await remote_eof.wait()
 
     async def watchdog():
+        nonlocal pending_ping
         while True:
-            await asyncio.sleep(min(1.0, idle_timeout))
-            if loop.time() - last_progress >= idle_timeout:
+            await asyncio.sleep(min(1.0, idle_timeout / 3))
+            idle = loop.time() - last_peer_progress
+            if idle >= idle_timeout:
                 raise TimeoutError('tunnel idle timeout')
+            if idle >= idle_timeout / 3 and pending_ping is None:
+                pending_ping = secrets.token_bytes(8)
+                # A blocked drain must not prevent the watchdog from enforcing
+                # the deadline, including when another writer holds the lock.
+                await asyncio.wait_for(send_frame(_PING, pending_ping), idle_timeout - idle)
 
     tasks = [asyncio.create_task(from_raw()), asyncio.create_task(to_raw())]
+    pong_sender = asyncio.create_task(send_pongs())
     timer = asyncio.create_task(watchdog())
+    finished = asyncio.create_task(both_directions_finished())
     try:
-        # A single EOF only closes one direction.  Keep relaying the other.
-        pending = set(tasks)
-        while pending:
-            completed, _ = await asyncio.wait(pending | {timer}, return_when=asyncio.FIRST_COMPLETED)
+        # Continue reading control frames after one direction half-closes.
+        pending = set(tasks) | {pong_sender, timer, finished}
+        while finished in pending:
+            completed, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             for task in completed:
                 task.result()
             pending.difference_update(completed)
     finally:
-        for task in [*tasks, timer]:
+        for task in [*tasks, pong_sender, timer, finished]:
             task.cancel()
-        await asyncio.gather(*tasks, timer, return_exceptions=True)
+        await asyncio.gather(*tasks, pong_sender, timer, finished, return_exceptions=True)
 
 
 class RunningTunnel:

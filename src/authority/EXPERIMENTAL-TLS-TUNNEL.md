@@ -3,14 +3,25 @@
 This optional transport connects the existing control and file TCP services to
 local client ports over one direct, pinned TLS endpoint. It is an isolated
 transport experiment, not a complete X4 host or Windows launcher. It has only
-been exercised with local sockets and simulated participants. A real Windows
-client, an Internet route, X4 gameplay and save recovery remain unverified.
+been exercised over local sockets with simulated participants and echo backends.
+A native Windows client, an Internet route, X4 gameplay and save recovery remain
+unverified.
+For the previous tunnel protocol version 1 (commit `835a083`), Windows Python
+3.14.8 under Wine exchanged data successfully with a Linux loopback peer on
+both service channels. A subsequent version 2 probe used Windows Python 3.14.8
+under Wine against a Linux loopback server with echo backends. Both service
+channels exchanged data before and after seven seconds of application inactivity
+with a two-second idle timeout. The local result is recorded in
+`.local/windows-python-tls-wine-01/result-v2.log`. Neither probe exercised native
+Windows, the Internet or X4.
 
 The server listens on an explicitly chosen IPv4 address. Each connection uses
 TLS 1.2 or later, then a shared 32-byte random key and a fixed service selector.
 The client checks SHA-256 of the exact DER-encoded server certificate before it
 sends the key. The server connects to its configured `127.0.0.1` backend only
-after authentication; no remote destination or port can be requested. Replacing
+after authentication; no remote destination or port can be requested. Tunnel
+protocol version 2 adds internal ping/pong frames and requires version 2 at both
+ends; it does not interoperate with the earlier version 1 tunnel. Replacing
 the certificate changes the fingerprint and requires a new trusted fingerprint
 on every client. Pin verification replaces normal CA, hostname, and certificate
 expiry checks. Transfer the fingerprint and key through a trusted channel.
@@ -32,8 +43,11 @@ a long-lived control connection and a simultaneous file connection; provision
 at least two slots per concurrent player. Excess accepted connections wait at
 most one per listener for a slot; additional connections wait in the bounded
 socket backlog. TLS handshake, authentication and backend connection each have
-a 10-second deadline. Connections with no complete frame progress for 300
-seconds close. Frames carry at most 64 KiB; EOF is signalled independently in
+a 10-second deadline. During application inactivity, tunnel peers exchange
+internal heartbeat frames with a fresh random challenge. Only valid received
+frames count as peer progress; a missing peer closes the connection after the
+configured idle timeout (300 seconds by default). Heavy backpressure can also
+reach this timeout. Frames carry at most 64 KiB; EOF is signalled independently in
 each direction so TCP half-closes do not truncate the opposite stream. These
 limits are experimental and do not replace admission, game state or transport
 identity checks.
