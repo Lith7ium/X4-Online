@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import select
 import socket
 import sys
 import tempfile
@@ -35,14 +36,17 @@ class RemoteLoadClientTests(unittest.TestCase):
             size=len(self.data),name='j1.xml.gz')
         self.bound=MarkerBoundOffer(self.offer,self.marker)
 
-    def connect(self, *, ack_attempt=None, after_ack=b'', offer=None, after_offer=b'', not_ready_count=0, offer_delay=0, io_timeout=2, keepalive_interval=None, wrong_alive=False):
+    def connect(self, *, ack_attempt=None, after_ack=b'', offer=None, after_offer=b'',
+                not_ready_count=0, offer_delay=0, io_timeout=2, keepalive_interval=None,
+                wrong_alive=False, ack_delay=0, close_after_claim=False, fragment_ack=False,
+                reject_post_claim_input=False):
         listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM);listener.bind(('127.0.0.1',0));listener.listen(1)
         listener.settimeout(3);client=socket.create_connection(listener.getsockname(),timeout=3)
         errors=[]; claims=[]; self.keepalives=[]
         def serve():
             try:
                 conn,_=listener.accept();conn.settimeout(3)
-                with conn, conn.makefile('rb') as stream:
+                with conn, conn.makefile('rb', buffering=0) as stream:
                     for _ in range(not_ready_count):
                         if stream.readline()!=offer_request(): raise AssertionError('unexpected offer request')
                         conn.sendall(b'{\"version\":1,\"kind\":\"not_ready\"}\n')
@@ -60,8 +64,20 @@ class RemoteLoadClientTests(unittest.TestCase):
                         line = stream.readline()
                     if not line: return
                     claims.append(decode_load_claim(line.rstrip(b'\n')))
+                    if close_after_claim: return
                     msg={'version':1,'kind':'accepted','attempt_id':ack_attempt or self.offer.attempt_id}
-                    conn.sendall(json.dumps(msg).encode()+b'\n'+after_ack)
+                    response = json.dumps(msg).encode() + b'\n' + after_ack
+                    if fragment_ack:
+                        midpoint = len(response) // 2
+                        conn.sendall(response[:midpoint])
+                        response = response[midpoint:]
+                    if ack_delay and reject_post_claim_input:
+                        readable, _, exceptional = select.select([conn], [], [conn], ack_delay)
+                        if readable or exceptional:
+                            raise AssertionError('unexpected client input while claim is pending')
+                    elif ack_delay:
+                        time.sleep(ack_delay)
+                    conn.sendall(response)
             except (OSError,ValueError,AssertionError) as error: errors.append(error)
             finally: listener.close()
         thread=threading.Thread(target=serve,daemon=True);thread.start()
@@ -146,6 +162,48 @@ class RemoteLoadClientTests(unittest.TestCase):
         self.assertEqual(claims[0].receipt.attempt_id,self.offer.attempt_id)
         self.assertEqual(claims[0].marker,self.marker);self.assertFalse(errors)
         with self.assertRaises(RuntimeError): obj.take_connection()
+
+    def test_fragmented_accepted_can_wait_past_io_timeout(self):
+        obj, claims, errors = self.connect(
+            ack_delay=.2, fragment_ack=True, io_timeout=.05, after_ack=b'next-command\n',
+            keepalive_interval=.05, reject_post_claim_input=True)
+        self.staged(obj)
+        self.observations(obj)
+        obj.claim(self.offer.attempt_id)
+        conn = obj.take_connection()
+        self.addCleanup(conn.close)
+        conn.settimeout(2)
+        subsequent_command = bytearray()
+        while not subsequent_command.endswith(b'\n'):
+            chunk = conn.recv(64)
+            if not chunk:
+                self.fail('connection closed before the subsequent command')
+            subsequent_command.extend(chunk)
+        self.assertEqual(subsequent_command, b'next-command\n')
+        self.assertEqual(len(claims), 1)
+        self.assertFalse(errors)
+
+    def test_accepted_wait_ends_at_absolute_deadline(self):
+        obj, claims, _ = self.connect(ack_delay=.3, io_timeout=.05)
+        self.staged(obj)
+        self.observations(obj)
+        obj._deadline = time.monotonic() + .1
+        with self.assertRaises(TimeoutError):
+            obj.claim(self.offer.attempt_id)
+        self.assertEqual(len(claims), 1)
+        with self.assertRaises(RuntimeError):
+            obj.take_connection()
+
+    def test_accepted_wait_reports_eof_without_waiting_for_deadline(self):
+        obj, claims, errors = self.connect(close_after_claim=True, io_timeout=.05)
+        self.staged(obj)
+        self.observations(obj)
+        start = time.monotonic()
+        with self.assertRaises(ConnectionError):
+            obj.claim(self.offer.attempt_id)
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual(len(claims), 1)
+        self.assertFalse(errors)
 
     def test_changed_save_and_wrong_marker_fault_attempt(self):
         for failure in ('changed','marker'):

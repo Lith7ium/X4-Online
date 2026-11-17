@@ -14,7 +14,9 @@ an exact copy in an exclusively controlled X4 save slot and passes that path to
 then reports the actual local load request, marker following X4's load event,
 and pause in order with the same attempt ID. `claim` rechecks the staged file,
 sends the cooperative assertion and requires an accepted response for that
-attempt. After `take_connection`, the caller owns the same stream; response
+attempt. Since the server can synchronously verify the checkpoint, the client
+waits for that response up to the same overall load deadline. After
+`take_connection`, the caller owns the same stream; response
 reading consumes no subsequent command. Invalid, stale or out-of-order actions
 by the owning thread after successful construction fault the attempt and close
 its stream. Rejected construction leaves the socket with the caller, and a
@@ -27,9 +29,8 @@ throughout. Checks are point-in-time: a successful claim does not prove X4 read
 the staged bytes, stayed paused, or that the peer is authentic. A timeout or
 failure after a claim was sent leaves host admission indeterminate; fence or
 settle the host-side session rather than assuming the claim was rejected.
-The existing download uses an inactivity timeout; a slow continuously active
-transfer can exceed the absolute deadline. The client rechecks the deadline
-after that call, but cannot preempt its filesystem or networking operations.
+The download caps socket waits by the absolute deadline, but cannot preempt
+DNS resolution, filesystem operations or callbacks already in progress.
 File-service requests use its existing shared-token HMAC and are not bound to
 the TCP control socket. Secrets must be passed by an appropriate private caller.
 

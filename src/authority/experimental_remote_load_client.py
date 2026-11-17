@@ -89,8 +89,8 @@ class ExperimentalRemoteLoadClient:
             self._fault(); raise
         finally: self._busy = False
 
-    def _wait(self, *, write=False, offer_response=False):
-        duration = self._remaining() if offer_response else min(self._remaining(), self._io_timeout)
+    def _wait(self, *, write=False, use_overall_deadline=False):
+        duration = self._remaining() if use_overall_deadline else min(self._remaining(), self._io_timeout)
         read, writable, exceptional = select.select([] if write else [self._conn],
             [self._conn] if write else [], [self._conn], duration)
         self._remaining()
@@ -105,11 +105,11 @@ class ExperimentalRemoteLoadClient:
             if sent <= 0: raise ConnectionError('control connection closed')
             view = view[sent:]
 
-    def _read_frame(self, *, offer_response=False):
+    def _read_frame(self, *, use_overall_deadline=False):
         # Never consume a subsequent participant command from the same stream.
         data = bytearray()
         while len(data) <= MAX_MESSAGE:
-            self._wait(offer_response=offer_response)
+            self._wait(use_overall_deadline=use_overall_deadline)
             try: chunk = self._conn.recv(1)
             except BlockingIOError: continue
             if not chunk: raise ConnectionError('control connection closed')
@@ -169,7 +169,7 @@ class ExperimentalRemoteLoadClient:
         with self._operation('new'):
             while True:
                 self._send(offer_request())
-                raw = self._read_frame(offer_response=True)
+                raw = self._read_frame(use_overall_deadline=True)
                 try:
                     reply = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs,
                                        parse_constant=_reject_constant)
@@ -243,13 +243,18 @@ class ExperimentalRemoteLoadClient:
             self._load.observe_pause(attempt,paused); self._state = 'paused'
 
     def claim(self, attempt):
+        """Submit one claim and wait within the overall deadline.
+
+        The server may synchronously verify the checkpoint before responding.
+        If the response is lost or late, host admission remains indeterminate.
+        """
         with self._operation('paused'):
             # Refuse an already queued response, EOF, or exceptional socket.
             readable, _, exceptional = select.select([self._conn], [], [self._conn], 0)
             if readable or exceptional: raise ConnectionError('unexpected input before claim')
             payload = encode_load_claim(self._load.make_claim(attempt, pump=self._pump if self._keepalive_interval is not None else None))
             self._send(payload+b'\n')
-            try: ack = json.loads(self._read_frame().decode('utf-8'), object_pairs_hook=_pairs, parse_constant=_reject_constant)
+            try: ack = json.loads(self._read_frame(use_overall_deadline=True).decode('utf-8'), object_pairs_hook=_pairs, parse_constant=_reject_constant)
             except (UnicodeError,json.JSONDecodeError,RecursionError) as error: raise ValueError('invalid accepted frame') from error
             if (type(ack) is not dict or set(ack) != {'version','kind','attempt_id'} or
                     type(ack['version']) is not int or ack['version'] != 1 or ack['kind'] != 'accepted' or
