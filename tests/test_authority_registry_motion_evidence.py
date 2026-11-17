@@ -44,4 +44,18 @@ class MotionEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'unmatched or stale'):
             evidence.validate(server,client,epoch=EPOCH,frame=FRAME)
 
+    def test_client_sequence_must_be_exactly_integral(self):
+        server, client = logs()
+        for marker in ('AUTHORITY_CONTINUOUS_WRITE', 'AUTHORITY_CONTINUOUS_OBSERVE'):
+            for sequence in ('1.9', '1.0000000000000000001', 'nan', 'inf'):
+                with self.subTest(marker=marker, sequence=sequence):
+                    changed = client.replace(f'{marker} seq=1 ', f'{marker} seq={sequence} ', 1)
+                    with self.assertRaisesRegex(ValueError, 'invalid client sequence'):
+                        evidence.validate(server, changed, epoch=EPOCH, frame=FRAME)
+
+        integral_decimal = client.replace('seq=1 ', 'seq=1.0 ')
+        result = evidence.validate(server, integral_decimal, epoch=EPOCH, frame=FRAME)
+        self.assertEqual(result['source_nudge_markers'], 3)
+        self.assertNotIn('source_controlled_setter_impulses', result)
+
 if __name__=='__main__': unittest.main()
