@@ -12,7 +12,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
@@ -69,6 +69,54 @@ class NativeClientTests(unittest.TestCase):
         finally:
             participant.close()
             peer.close()
+
+    def test_marker_registry_failure_prevents_load_assertions_and_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory)/'log'; log.write_bytes(self.log_bytes())
+            owner = SimpleNamespace(poll=lambda: None, load_requested=Mock(), activate=Mock())
+            participant = SimpleNamespace(enroll=Mock())
+            with self.assertRaisesRegex(ValueError, 'registry rejected'):
+                native.observe_and_activate(owner, participant,
+                    native.download.ReceiptWatch(log, self.ticket()), self.ticket(), 'd'*32,
+                    lambda **kwargs: True, lambda: None, {},
+                    registry_check=Mock(side_effect=ValueError('registry rejected')))
+            owner.load_requested.assert_not_called()
+            owner.activate.assert_not_called()
+            participant.enroll.assert_not_called()
+
+    def test_active_pause_requires_stopped_but_initial_local_pause_is_allowed(self):
+        participant = native.NativeParticipant(SimpleNamespace(), time.monotonic()+5, lambda **kwargs: True)
+        participant.playback = SimpleNamespace(before_pause=Mock(side_effect=RuntimeError('not stopped')))
+        try:
+            with patch.object(participant, '_peer_guard'), patch.object(native.Participant, 'request', return_value=True) as request:
+                participant.request('pause')
+                self.assertEqual(request.call_count, 1)
+                participant.playback.before_pause.assert_not_called()
+                participant.server_control = True
+                with self.assertRaisesRegex(RuntimeError, 'not stopped'):
+                    participant.request('pause')
+                self.assertEqual(request.call_count, 1)
+                participant.playback.before_pause.side_effect = None
+                participant.request('pause')
+                self.assertEqual(participant.confirmations['pause'], 1)
+        finally:
+            participant.close()
+
+    def test_main_forwards_argv_and_python_only_driver(self):
+        from contextlib import redirect_stdout
+        import io
+        callback = lambda initial: []
+        argv = ['--internal-native-client']
+        for name in ('game', 'out', 'shared-key-file', 'file-token-file', 'native-library'):
+            argv.extend(['--'+name, '/private/'+name])
+        for name, value in (('display', ':9'), ('host', '127.0.0.1'), ('fingerprint', 'a'*64),
+                            ('native-library-sha256', 'b'*64), ('port', '1'), ('slot', '1'),
+                            ('internal-saved-playback-config', '/private/playback.json')):
+            argv.extend(['--'+name, value])
+        with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+            self.assertEqual(native.main(argv, playback_driver=callback), 0)
+        self.assertIs(run.call_args.kwargs['playback_driver'], callback)
+        self.assertEqual(run.call_args.args[0].internal_saved_playback_config, Path('/private/playback.json'))
 
     def test_launch_failure_stops_owned_process_before_connection_and_lock_release(self):
         with tempfile.TemporaryDirectory() as directory:

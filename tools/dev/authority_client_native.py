@@ -30,6 +30,7 @@ import authority_trusted_marked_live as marked
 from authority_two_x4_resume_live import Participant
 from authority_tcp_job_client_live import socket_owner
 from authority_tcp_native_worker import check_process
+import authority_native_client_playback as native_playback
 import linux_gate_live as live
 import linux_snapshot_capture as snapshot
 
@@ -42,6 +43,7 @@ class NativeParticipant(Participant):
         self.loading = True
         self.process = None
         self.server_control = False
+        self.playback = None
         self.confirmations = {'pause': 0, 'resume': 0}
         self.wait_hook = self._wait
         self.sock.settimeout(.1)
@@ -65,6 +67,8 @@ class NativeParticipant(Participant):
         self._peer_guard()
 
     def request(self, operation):
+        if operation == 'pause' and self.server_control and self.playback is not None:
+            self.playback.before_pause()
         self._peer_guard()
         previous = self.timeout
         self.timeout = min(previous, marked.remaining(self.deadline), 30)
@@ -101,7 +105,7 @@ def verify_receipts(path, ticket, marker):
         raise ValueError('client_receipts_changed')
 
 
-def observe_and_activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result):
+def observe_and_activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result, *, registry_check=None):
     """No owner load assertion is made until complete native evidence is checked."""
     result['phase'] = 'load_receipts'
     while True:
@@ -110,6 +114,8 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
         if watch.poll() and watch.stage == 2:
             verify_loaded()
             verify_receipts(watch.path, ticket, marker)
+            if registry_check is not None:
+                registry_check()
             break
         time.sleep(.1)
     attempt = ticket['attempt_id']
@@ -123,6 +129,8 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
     participant.request('pause')
     verify_loaded()
     verify_receipts(watch.path, ticket, marker)
+    if registry_check is not None:
+        registry_check()
     guard(full=True)
     result.update(load_requested=True, loaded_marker_observed=True, pause_observed=True,
                   admission_state='indeterminate')
@@ -188,7 +196,9 @@ def error_code(error):
     return code if code in known_codes else 'operation_failed'
 
 
-def run(args):
+def run(args, *, playback_driver=None):
+    playback_scripts = native_playback.read_config(
+        getattr(args, 'internal_saved_playback_config', None), args, playback_driver)
     out, game, auth, library, user, home, steam = validate_environment(args)
     shared_key = bytes.fromhex(stage_cli._read_secret_file(args.shared_key_file, 64))
     file_token = stage_cli._read_secret_file(args.file_token_file, 32)
@@ -198,7 +208,7 @@ def run(args):
         exact_loaded_file_proven=False, admission_state='not_attempted', server_pause_confirmations=0,
         server_resume_confirmations=0, owned_cleanup_confirmed=False, archived_identity_fixture_installed=False)
     processes, lockbox, handlers, cleanup_errors = [], [], {}, []
-    participant = watch = target = ticket = None
+    participant = watch = target = ticket = playback = None
     protected = {}
     resources_stopped = False
     cleanup_attempted = False
@@ -267,6 +277,10 @@ def run(args):
                     with fixture_path.open('xb') as output:
                         output.write(fixture_bytes)
                     result['archived_identity_fixture_installed'] = True
+                if playback_scripts is not None:
+                    playback = native_playback.install(case, profile, bound, ticket, participant,
+                        playback_scripts, playback_driver, deadline, out)
+                    participant.playback = playback
                 paths = [config, lab/'ui.xml', profile/'content.xml', profile/'config.xml',
                     lab/'md/authority_checkpoint_marker.xml', lab/'ui/authority_checkpoint_marker_probe.lua',
                     *participant.protected(case)]
@@ -274,6 +288,8 @@ def run(args):
                     ('client_load_barrier.lua', 'x4_client_load_engine.lua', 'authority_download_load_probe.lua')]
                 if fixture_path is not None:
                     paths.append(fixture_path)
+                if playback is not None:
+                    paths.extend(playback.paths)
                 protected = {path: live.sha(path) for path in paths}
                 if live.sha(lab/'native/x4lan_net.so') != args.native_library_sha256:
                     raise ValueError('native_library_copy_changed')
@@ -294,14 +310,22 @@ def run(args):
                         raise ValueError('owned_loaded_state_unconfirmed')
 
                 observe_and_activate(owner, participant, watch, ticket, bound.marker,
-                    guard, verify_loaded, result)
+                    guard, verify_loaded, result,
+                    registry_check=playback.verify_registry if playback is not None else None)
                 active_until = time.monotonic()+args.active_seconds
                 if active_until >= deadline:
                     raise TimeoutError('insufficient_active_budget')
                 while time.monotonic() < active_until:
                     guard()
                     owner.poll(.1)
+                    if playback is not None:
+                        if playback.thread is None and participant.confirmations['resume']:
+                            guard(full=True)
+                            playback.start(participant.process, protected)
+                        playback.poll()
                 guard(full=True)
+                if playback is not None:
+                    result['playback'] = playback.finish()
                 result.update(server_pause_confirmations=participant.confirmations['pause'],
                               server_resume_confirmations=participant.confirmations['resume'])
                 if not sum(participant.confirmations.values()):
@@ -321,12 +345,21 @@ def run(args):
                     try:
                         watch.poll()
                         verify_receipts(watch.path, ticket, bound.marker)
+                        if playback is not None:
+                            playback.verify_registry()
+                            playback.records()
                         if live.sha(target) != ticket['sha256'] or any(
                                 live.sha(path) != digest for path, digest in protected.items()):
                             raise ValueError('final_native_evidence_changed')
                     except BaseException:
                         result['success'] = False
                         cleanup_errors.append('final_native_evidence_invalid')
+                if playback is not None:
+                    try:
+                        playback.close(native_stopped=resources_stopped)
+                    except BaseException:
+                        cleanup_errors.append('playback_cleanup_failed')
+                    result['playback'] = dict(playback.evidence)
                 if participant is not None:
                     result.update(server_pause_confirmations=participant.confirmations['pause'],
                                   server_resume_confirmations=participant.confirmations['resume'])
@@ -370,7 +403,7 @@ def run(args):
     return result
 
 
-def main():
+def main(argv=None, *, playback_driver=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--internal-native-client', action='store_true')
     for name in ('game', 'out', 'shared-key-file', 'file-token-file', 'native-library'):
@@ -386,8 +419,9 @@ def main():
     parser.add_argument('--archived-identity-fixture', type=Path)
     parser.add_argument('--archived-identity-fixture-sha256')
     parser.add_argument('--expected-content-sha256')
+    parser.add_argument('--internal-saved-playback-config', type=Path)
     try:
-        result = run(parser.parse_args())
+        result = run(parser.parse_args(argv), playback_driver=playback_driver)
     except (Exception, KeyboardInterrupt):
         result = dict(success=False, error_class='native_client_refused', exact_loaded_file_proven=False)
     print(json.dumps(result))
