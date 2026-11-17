@@ -740,6 +740,19 @@ owned X4 processes remained according to the result. This Linux loopback run
 does not establish visible movement, cross-process identity, smoothness,
 Windows or Internet operation, or successful world recovery.
 
+The subsequent one-shot delivery experiment
+(`.local/authority-local-pair-delivery-once-01`) sent the pair's second sample
+with sequence 2 and its known zero rate. One client receipt matched the sample
+digest after the client-local binding and buffer push; source and client worker
+STOP were confirmed. The two local reads were about 0.1137 X4 game seconds
+apart, and the complete pull took about 195 seconds of wall time. The latter is
+not a measurement of sample age at client acceptance. The receipt is not an
+independent buffer readback and does not prove that the rate was retained or
+applied. The overall run again failed after the final save with missing
+registered components; CURRENT was not the confirmed checkpoint, and the
+result reported no owned X4 processes remaining. This remains a single-ship
+Linux loopback observation, without visible motion or gameplay proof.
+
 The recovery-client overlay now uses the platform-specific local UDP library
 selector. An isolated cross-build with Zig 0.15.2 produced a Windows x86-64
 PE DLL exporting `luaopen_x4lan_net` (SHA-256
