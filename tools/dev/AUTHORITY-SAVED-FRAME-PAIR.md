@@ -74,4 +74,23 @@ references or generations survived a save/reload, or that this checkpoint is
 accepted by the separate witness-recovery supervisor. No checkpoint is saved
 or confirmed. The existing checks for the archive, private processes, pause,
 marker and staged files continue to apply. This option has focused offline
-tests only; no native X4 run with it is claimed here.
+tests as well as the single native observation below.
+
+The isolated Linux/Linux run `.local/authority-current-registry-frame-01`
+reported success with current script SHA-256
+`b39c8cfad274f74411cd2b518976f7d343c9c43666d8c9a8a8dc62b55443b0af`.
+Both logs recorded the saved marker and a pause observation before reporting
+the expected ship code, macro and faction at registry index 1318 in the
+expected sector. The comparator reported zero position difference for the ship
+and eleven shared station anchors, within its one-unit tolerance. The result
+reported no remaining owned processes and confirmed owned-process cleanup.
+The logs also contain read-only configuration-write errors, unavailable FSR3G
+queues and a missing extension signature; the run's success concerns only its
+stated load and frame checks.
+
+This is a point-in-time observation with the current script provided in the
+private overlays. It does not establish that the current script's changed cue
+actions executed, that X4 consumed the exact staged file, or that the two
+reported ships are independently proven to be the same runtime actor. It does
+not demonstrate a recovered multiplayer session, movement, Windows or Internet
+operation, or a successful new checkpoint.
