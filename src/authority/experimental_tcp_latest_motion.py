@@ -42,22 +42,31 @@ class LatestMotionPoll:
                 overflow.append(conn)
         for conn in overflow:self.control._drop(conn)
         survivors=[]
-        for conn, peer, key, data, expected, accepted, discarded, guard in entries:
-            if conn in overflow:continue
-            active = peer.get('motion_active')
-            if active is not None and active['key'] == key and active['sent'] == 0:
-                # Keep the original deadline: replacement must not let a slow
-                # connection defer its timeout indefinitely. Nothing has been
-                # sent, so the old receipt and guard can also be replaced.
-                active['discarded']()
-                obsolete_pending = peer['motion_pending'].pop(key, None)
-                if obsolete_pending is not None:
-                    obsolete_pending[3]()
-                active.update(data=data, expected=expected, accepted=accepted,
-                              discarded=discarded, guard=guard)
-            else:
-                peer['motion_pending'][key] = (data, expected, accepted, discarded, guard)
-            survivors.append(conn)
+        try:
+            for conn, peer, key, data, expected, accepted, discarded, guard in entries:
+                if conn in overflow:continue
+                active = peer.get('motion_active')
+                if active is not None and active['key'] == key and active['sent'] == 0:
+                    # Keep the original deadline so replacement cannot defer
+                    # the timeout. Nothing has been sent on this frame yet.
+                    active['discarded']()
+                    obsolete_pending = peer['motion_pending'].pop(key, None)
+                    if obsolete_pending is not None:
+                        obsolete_pending[3]()
+                    active.update(data=data, expected=expected, accepted=accepted,
+                                  discarded=discarded, guard=guard)
+                else:
+                    obsolete_pending = peer['motion_pending'].get(key)
+                    if obsolete_pending is not None:
+                        obsolete_pending[3]()
+                    # In-place replacement preserves FIFO order across tracks.
+                    peer['motion_pending'][key] = (data, expected, accepted, discarded, guard)
+                survivors.append(conn)
+        except BaseException as error:
+            # Track sequence is committed only after enqueue returns. A partial
+            # enqueue must never be sent under the old sequence state. Fence the
+            # whole control owner: callback effects may also be uncertain.
+            self.control._fatal(error)
         return frozenset(survivors)
 
     def barrier(self, *, world=False):
@@ -67,14 +76,17 @@ class LatestMotionPoll:
         else:
             if not self.blocked:self.generation += 1
             self.blocked = True
-        for peer in self.control._peers.values():
-            active = peer.get('motion_active')
-            if active is not None and active['sent'] == 0:
-                peer['motion_active'] = None
-                active['discarded']()
-            pending = peer.get('motion_pending', {})
-            for _, _, _, discarded, _ in pending.values(): discarded()
-            pending.clear()
+        try:
+            for peer in self.control._peers.values():
+                active = peer.get('motion_active')
+                if active is not None and active['sent'] == 0:
+                    peer['motion_active'] = None
+                    active['discarded']()
+                pending = peer.get('motion_pending', {})
+                for _, _, _, discarded, _ in pending.values(): discarded()
+                pending.clear()
+        except BaseException as error:
+            self.control._fatal(error)
         return not self.busy()
 
     def release(self, *, world=False):

@@ -18,6 +18,12 @@ a full peer is a temporary fail-safe; no interest or reconnect policy exists. A 
 configured callback accepted the sample. The owner remains responsible for
 choosing its timeout and fencing any unconfirmed game effects.
 
+An unsent sample replaced for the same track keeps its place in the per-peer
+queue; its discard callback runs before replacement. If a discard callback
+fails during replacement or a barrier, the control owner faults and closes all
+its peers: queue or reservation effects may already be partial. This differs
+from an ordinary slow-peer timeout or queue overflow.
+
 `ExperimentalLocalHost.tick` automatically fences new motion and discards
 unstarted samples while a pause/save/resume world operation is pending. A
 started request must complete or its peer must be dropped before the world

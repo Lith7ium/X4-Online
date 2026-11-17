@@ -48,6 +48,138 @@ class LatestMotionPollTest(unittest.TestCase):
         self.assertEqual([s['sequence'] for h,s,_ in self.case.received if h==1],[1,2])
         self.spin(lambda:self.control._motion_idle())
 
+    def test_replacing_pending_sample_discards_it_once(self):
+        self.motion.enqueue_latest(self.case.sample())
+        self.spin(lambda: len(self.case.received) >= 2)
+        member = [item for item in self.case.delivery.membership()
+                  if item['id'] == 'peer_2']
+        target = list(self.control._peers)[1]
+        peer = self.control._peers[target]
+        self.assertGreater(peer['motion_active']['sent'], 0)
+
+        self.motion.enqueue_latest(self.case.sample(2, t=2), recipients=member)
+        key = ('b' * 32, 'c' * 32, 10055)
+        data, expected, accepted, discard, guard = peer['motion_pending'][key]
+        discarded = []
+
+        def record_discard():
+            discarded.append(expected['request_id'])
+            discard()
+
+        peer['motion_pending'][key] = (data, expected, accepted, record_discard, guard)
+        self.motion.enqueue_latest(self.case.sample(3, t=3), recipients=member)
+        self.assertEqual(discarded, [2])
+        self.assertIsNone(self.control._reader_lease)
+        other_member = [item for item in self.case.delivery.membership()
+                        if item['id'] == 'peer_1']
+        self.motion.enqueue_latest(self.case.sample(4, t=4), recipients=other_member)
+        self.spin(lambda: any(handle == 1 and sample['sequence'] == 4
+                              for handle, sample, _ in self.case.received), timeout=.25)
+        self.spin(lambda: self.control._motion_idle())
+        self.assertEqual(discarded, [2])
+        self.assertEqual([sample['sequence'] for handle, sample, _ in self.case.received
+                          if handle == 2], [1, 3])
+
+    def test_pending_replacement_preserves_track_order(self):
+        member = [item for item in self.case.delivery.membership()
+                  if item['id'] == 'peer_2']
+        self.motion.enqueue_latest(self.case.sample(), recipients=member)
+        self.spin(lambda: any(handle == 2 for handle, _, _ in self.case.received))
+        self.motion.track('b' * 32, 'c' * 32, 10056)
+        self.motion.track('b' * 32, 'c' * 32, 10057)
+        first = self.case.sample()
+        first['index'] = 10056
+        second = self.case.sample()
+        second['index'] = 10057
+        self.motion.enqueue_latest(first, recipients=member)
+        self.motion.enqueue_latest(second, recipients=member)
+        replacement = self.case.sample(2, t=2)
+        replacement['index'] = 10056
+        self.motion.enqueue_latest(replacement, recipients=member)
+        self.spin(self.control._motion_idle, timeout=3)
+        self.assertEqual([(sample['index'], sample['sequence'])
+                          for handle, sample, _ in self.case.received if handle == 2],
+                         [(10055, 1), (10056, 2), (10057, 1)])
+
+    def test_pending_discard_failure_fences_control_after_prior_peer_mutation(self):
+        self.motion.enqueue_latest(self.case.sample())
+        self.spin(lambda: len(self.case.received) >= 2)
+        target = list(self.control._peers)[1]
+        self.motion.enqueue_latest(self.case.sample(2, t=2))
+        pending = self.control._peers[target]['motion_pending']
+        key = ('b' * 32, 'c' * 32, 10055)
+        earlier_peer = list(self.control._peers.values())[0]
+        data, expected, accepted, _, guard = pending[key]
+        observed_earlier_request = []
+
+        def fail_discard():
+            active = earlier_peer.get('motion_active')
+            if active is not None and active['sent'] == 0 and active['key'] == key:
+                observed_earlier_request.append(active['expected']['request_id'])
+            else:
+                observed_earlier_request.append(earlier_peer['motion_pending'][key][1]['request_id'])
+            raise RuntimeError('reservation cleanup failed')
+
+        pending[key] = (data, expected, accepted, fail_discard, guard)
+        with self.assertRaisesRegex(RuntimeError, 'control channel faulted'):
+            self.motion.enqueue_latest(self.case.sample(3, t=3))
+        self.assertEqual(observed_earlier_request, [3])
+        self.assertFalse(self.control._peers)
+        self.assertTrue(self.control._failed)
+        self.assertIsNone(self.control._reader_lease)
+        with self.assertRaisesRegex(RuntimeError, 'control unavailable'):
+            self.host.tick(0)
+        self.assertFalse(any(sample['sequence'] == 3 for _, sample, _ in self.case.received))
+
+    def test_active_discard_failure_fences_control(self):
+        target = list(self.control._peers)[0]
+        member = [item for item in self.case.delivery.membership() if item['id'] == 'peer_1']
+        original_send = socket.socket.send
+
+        def blocked_send(sock, data, *args, **kwargs):
+            if sock is target:
+                raise BlockingIOError()
+            return original_send(sock, data, *args, **kwargs)
+
+        self.motion.enqueue_latest(self.case.sample(), recipients=member)
+        with patch.object(socket.socket, 'send', blocked_send):
+            self.host.tick(.01)
+        active = self.control._peers[target]['motion_active']
+        self.assertEqual(active['sent'], 0)
+        reader_lease = object()
+
+        def fail_discard():
+            self.control._reader_lease = reader_lease
+            raise RuntimeError('reservation cleanup failed')
+
+        active['discarded'] = fail_discard
+        with self.assertRaisesRegex(RuntimeError, 'control channel faulted'):
+            self.motion.enqueue_latest(self.case.sample(2, t=2), recipients=member)
+        self.assertTrue(self.control._failed)
+        self.assertFalse(self.control._peers)
+        self.assertIs(self.control._reader_lease, reader_lease)
+
+    def test_barrier_discard_failure_fences_control(self):
+        self.motion.enqueue_latest(self.case.sample())
+        self.spin(lambda: len(self.case.received) >= 2)
+        self.motion.enqueue_latest(self.case.sample(2, t=2))
+        target = list(self.control._peers)[1]
+        pending = self.control._peers[target]['motion_pending']
+        key = ('b' * 32, 'c' * 32, 10055)
+        data, expected, accepted, _, guard = pending[key]
+
+        def fail_discard():
+            raise RuntimeError('reservation cleanup failed')
+
+        pending[key] = (data, expected, accepted, fail_discard, guard)
+        with self.assertRaisesRegex(RuntimeError, 'control channel faulted'):
+            self.control.motion_barrier()
+        self.assertTrue(self.control._failed)
+        self.assertFalse(self.control._peers)
+        self.assertIsNone(self.control._reader_lease)
+        with self.assertRaisesRegex(RuntimeError, 'control unavailable'):
+            self.host.tick(0)
+
     def test_unsent_active_frame_is_replaced_even_with_full_pending_queue(self):
         target = list(self.control._peers)[0]
         target_member = [member for member in self.case.delivery.membership()
