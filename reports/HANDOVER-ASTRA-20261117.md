@@ -1,5 +1,13 @@
 # X4 multiplayer: handover for Astra
 
+> Client-first continuation, 18 November: server graphics work is deferred at
+> the user's request. The independent native client now includes opt-in buffered
+> playback. Actual trials observed repeated movement but failed at a correction
+> exceeding 50 metres; the full playback/STOP cycle remains unproven. Start with
+> [the current client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md) and
+> [the playback guide](../docs/AUTHORITY-CLIENT-PLAYBACK.md). The original handover
+> below records the earlier checkpoint, not the current branch tip.
+
 ## Objective and decisions from the user
 
 The user wants one persistent X4 universe, managed by a central server on the

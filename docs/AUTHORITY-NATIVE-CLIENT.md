@@ -53,3 +53,11 @@ Owned X4 cleanup finishes before client/TLS release and lock removal. Cleanup
 failure prevents success and retains the private lock when cleanup is uncertain.
 Downloaded/partial files and private logs remain for inspection; outputs are never
 automatically deleted, reused or loaded into a normal profile.
+
+An additional private playback path is documented in
+[Buffered client playback](AUTHORITY-CLIENT-PLAYBACK.md). It requires an explicit
+pinned configuration and a Python driver callback; the default CLI above remains
+load/control only. Use a current, independently smoke-tested native UDP library:
+a digest pin alone does not establish the required `socket.pending` capability.
+See [the playback integration evidence](../reports/AUTHORITY-CLIENT-PLAYBACK-20261117.md)
+for the failed attempts and measured movement; they are not a passed gameplay test.

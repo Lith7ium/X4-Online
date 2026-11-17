@@ -3,8 +3,9 @@
 `motion_playback.lua` connects the existing motion buffer to repeated XYZ
 corrections. `motion_client_owner.lua` can drive it from its existing update
 loop after the saved-registry binding resolves. No additional update hook,
-socket reader or server coordinator is created. This is an implementation
-increment, not a native movement or playable-multiplayer result.
+socket reader or server coordinator is created. Native trials have
+measured partial movement, but the complete playback/STOP cycle has not passed;
+see the [integration report](../reports/AUTHORITY-CLIENT-PLAYBACK-20261117.md).
 
 ## Data and lifetime
 
@@ -71,9 +72,29 @@ exclusive. The recording callback must return true and should aggregate or
 rate-limit output; it receives observations/readbacks with portable track
 identity, never native actor handles.
 
-The installer and independent native CLI do not yet expose this playback
-configuration. They must install the module, enable it under the current owner
-hook and collect bounded evidence before a native test can be run.
+The recovered-client installer now accepts the explicit setting
+`saved_playback_fixture='recovery_enh_870'`. It installs the playback module
+under the existing update owner and restricts this diagnostic to saved registry
+index 1318 in the retained ENH-870 checkpoint. The first BIND resolves identity
+and records INITIAL from the native position; its arbitrary target is discarded.
+Only subsequent increasing XYZ samples enter playback. The runtime emits one
+INITIAL, up to 64 summaries at no more than one per second, and one STOPPED
+record. No native handles or connection credentials appear in those records.
+
+The independent Linux CLI exposes `--internal-saved-playback-config FILE` only
+with a Python `playback_driver` callback passed to `run` or `main`. This remains
+a private test interface, not a player-facing network motion service. The strict
+configuration pins the offered checkpoint, registry, complete content file and
+four archived saved MD scripts. Installation and ordered marked-registry checks
+precede admission. A worker owns the local motion UDP bridge; the main thread
+continues owning admission, native participant controls and lifecycle polling.
+The worker starts only after a confirmed server resume.
+
+After source silence, the controller reads back its last correction and reaches
+its hard one-second age limit. STOPPED must report drained state and no uncertain
+write before the private harness can request a server pause. Native process
+cleanup precedes worker release, join and configuration redaction. The default
+load/control client path remains unchanged.
 The existing native binder also requires a running game. Generic controller
 pause tests therefore do not establish that a native bind can span a pause;
 the runtime must stop/drain binding before pausing or implement explicit
@@ -114,11 +135,13 @@ explicit `load_gate='marker'` for the independent client's real marked-load
 probe. The default identity gate is unchanged. Marker mode rejects mixed
 identity probes/receipts and requires unique ordered load, inspected-marker,
 correlated paused registry and pause receipts. This helper has 13 passing
-focused tests; it is not yet wired into the native CLI.
+focused tests; the optional native playback path uses this gate.
 
-The next native experiment must deliver moving samples through the existing
-local motion IPC, measure actual positions, and acknowledge STOP before the
-server-driven pause. It must distinguish correction/readback success from
+The complete native experiment must acknowledge drained STOP before the
+server-driven pause. Current native trials have measured repeated movement but
+stopped at a correction exceeding the private 50-metre limit. Investigate that
+discrepancy and capture the last portable observation on failure before repeating
+the test; do not weaken the bound to conceal it. It must distinguish correction/readback success from
 AI suppression, visual smoothness and shared-world synchronization. Player
 controls, remote orientation, cross-sector transitions, Windows and Internet
 gameplay remain outstanding.
