@@ -60,4 +60,5 @@ pinned configuration and a Python driver callback; the default CLI above remains
 load/control only. Use a current, independently smoke-tested native UDP library:
 a digest pin alone does not establish the required `socket.pending` capability.
 See [the playback integration evidence](../reports/AUTHORITY-CLIENT-PLAYBACK-20261117.md)
-for the failed attempts and measured movement; they are not a passed gameplay test.
+for the failed attempts and bounded one-ship success with a private motion-control
+intervention; these are not a passed gameplay test.

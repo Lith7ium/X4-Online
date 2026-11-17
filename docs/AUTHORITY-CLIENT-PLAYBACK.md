@@ -3,9 +3,10 @@
 `motion_playback.lua` connects the existing motion buffer to repeated XYZ
 corrections. `motion_client_owner.lua` can drive it from its existing update
 loop after the saved-registry binding resolves. No additional update hook,
-socket reader or server coordinator is created. Native trials have
-measured partial movement, but the complete playback/STOP cycle has not passed;
-see the [integration report](../reports/AUTHORITY-CLIENT-PLAYBACK-20261117.md).
+socket reader or server coordinator is created. One bounded native playback/STOP/
+pause trial passed with a private Wait-plus-zero-velocity intervention. Default
+NPC playback still faults; see the
+[integration report](../reports/AUTHORITY-CLIENT-PLAYBACK-20261117.md).
 
 ## Data and lifetime
 
@@ -79,7 +80,9 @@ index 1318 in the retained ENH-870 checkpoint. The first BIND resolves identity
 and records INITIAL from the native position; its arbitrary target is discarded.
 Only subsequent increasing XYZ samples enter playback. The runtime emits one
 INITIAL, up to 64 summaries at no more than one per second, and one STOPPED
-record. No native handles or connection credentials appear in those records.
+record. A distance fault adds at most one captured FAILURE observation without
+another native read. No native handles or connection credentials appear in these
+records.
 
 The independent Linux CLI exposes `--internal-saved-playback-config FILE` only
 with a Python `playback_driver` callback passed to `run` or `main`. This remains
@@ -137,11 +140,15 @@ identity probes/receipts and requires unique ordered load, inspected-marker,
 correlated paused registry and pause receipts. This helper has 13 passing
 focused tests; the optional native playback path uses this gate.
 
-The complete native experiment must acknowledge drained STOP before the
-server-driven pause. Current native trials have measured repeated movement but
-stopped at a correction exceeding the private 50-metre limit. Investigate that
-discrepancy and capture the last portable observation on failure before repeating
-the test; do not weaken the bound to conceal it. It must distinguish correction/readback success from
+The native experiment must acknowledge drained STOP before the server-driven
+pause. Default playback and a private finite Wait alone failed when X4's actual
+position jumped more than 700 metres from the unchanged final target. A private
+Wait-plus-zero-linear-velocity contrast passed the complete bounded flow with an
+exact 20-metre endpoint and drained STOP. Neither the Wait script's running state
+nor the intended delay before the velocity request was proven; both MD receipts
+reported the same game time. General NPC control and restoration remain open.
+The intervention is not installed by the production path, and the 50-metre
+correction bound remains unchanged. Distinguish this one-ship result from
 AI suppression, visual smoothness and shared-world synchronization. Player
 controls, remote orientation, cross-sector transitions, Windows and Internet
 gameplay remain outstanding.

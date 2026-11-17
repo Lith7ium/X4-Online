@@ -11,7 +11,8 @@ recovered-client installer and independent Linux native client. One existing
 update owner drives playback. The private runtime first resolves the saved ship
 and observes its actual initial position without applying the enrolment target.
 Subsequent increasing XYZ samples include velocity for buffered prediction.
-Native orientation transfer, constant velocity and AI suppression are not added.
+The production path adds no native orientation transfer, constant-velocity
+override or AI suppression.
 
 The optional CLI path verifies the marked load and registry before claiming
 admission. A separate worker owns the local motion UDP bridge; the main thread
@@ -99,7 +100,7 @@ movement acceptance threshold was relaxed. Twenty-six affected tests passed in
 or throwing diagnostic observers. This enables a useful subsequent native test;
 it does not by itself correct the unknown cause from attempt 02.
 
-## Native attempt 03 and current boundary
+## Native attempt 03
 
 `.local/private-client-playback-native-20261118-03/` used the fixed diagnostics
 and cleanup, with the same current UDP library. On 18 November it again loaded,
@@ -134,15 +135,115 @@ saved NPC's AI. They are investigation inputs, not an adopted replacement for th
 registry design. Discuss a change to actor identity or simulation ownership with
 the user before adopting it.
 
+## Native attempt 04: actual position discontinuity
+
+Commit `5197fe0c` adds one fixed-schema distance-failure observation, captured
+before STOP or logging callbacks. It uses the existing pre-write observation,
+without another native read. Twenty-three affected component tests passed in
+0.476 seconds, including an error logger that changes the fake native position,
+reenters playback and throws. The recorded observation remains unchanged and
+appears once. Movement limits and simulation ownership are unchanged.
+
+`.local/private-client-playback-native-20261118-04/` repeated the same trajectory
+with this diagnostic. It loaded, admitted and resumed, then failed again. At
+game time 12.340859136 the actual position was
+`(-116447.15625, -6606.46630859375, 128369.34375)` and the target remained
+`(-116819.9609375, -7030.31640625, 128794.09375)`: exactly INITIAL plus the
+commanded 20 metres along X. The measured discrepancy was 706.431031882 metres,
+with source sequence 26, phase `extrapolated` and `uncertain=0`.
+
+This identifies a discontinuity in the position read from X4, rather than a
+jump in the computed target. It does not identify which engine activity moved
+the actor. The complete playback/STOP/pause test still failed. Owned process,
+helper, host, TLS and display cleanup were confirmed, and checkpoint and selected
+sources remained unchanged. The empty retained lock was independently reconciled;
+original failed results remain intact.
+
+Local X4 schema and installed `order.wait.xml` support a finite immediate Wait
+order on the existing ship. That is a candidate for one disposable interference
+diagnostic. Immediate orders restart the interrupted order afterward; they do
+not promise exact AI-stack restoration, physics suppression or immediate entry
+when the prior order is critical. No general client NPC policy has been adopted.
+
+## Native attempt 05: finite Wait is insufficient
+
+The private binder override in `.local/private-client-playback-native-20261118-05/`
+created one immediate Wait on the same verified saved ship, with a 15-second
+game-time timeout, no fidget/alignment and no attack response. A later callback
+observed the captured order as current before allowing binding and INITIAL.
+The default installer/runtime have no Wait feature. The override was installed
+before protected hashing, with pinned source bytes, a successful full MD schema
+validation and two focused real-installer tests. No ship was replaced or saved.
+
+X4 reported WAIT READY at game time 7.20536. Playback again failed: source
+sequence 26 targeted exactly INITIAL plus 20 metres, but the native position
+differed by 713.410317334 metres at game time 12.401091873. A confirmed finite
+Wait alone therefore did not prevent this discontinuity. The test ended before
+expiry observation; AI-state restoration was not tested or claimed.
+
+Commit `15d08e86` separates invalid final evidence from cleanup failures. Seven
+focused CLI tests passed, including seven evidence-failure/cleanup scenarios. Native05
+confirmed the intended failure path: evidence remains failed, native/helper/host/
+TLS/display cleanup and source integrity pass, and the original owned lock is
+released automatically. Unknown cleanup or changed inputs/Steam/lock identity
+still prevent release. The failed run was not reclassified as successful.
+
+An existing NPC constant-velocity experiment had used an invalid `0m / 1s`
+expression. Its correction uses the installed stock zero-vector expression;
+four affected tests passed. Its historical native result remains inconclusive.
+Stock game scripts also defer velocity assignment until two frames after a Wait
+order to avoid replacement of the velocity controller. This motivated the
+following private Wait-plus-zero-velocity contrast, without choosing a general
+NPC ownership mechanism.
+
+## Native attempt 06: bounded playback succeeds with a private override
+
+`.local/private-client-playback-native-20261118-06/` added one request for
+constant zero linear velocity to the private finite-Wait binder. It used the
+stock `vector.[0m, 0m, 0m]` syntax, left angular velocity untouched, and retained
+the same actor/registry/sector/zone/player/docking checks and movement bounds.
+The private XML/wrapper were separately pinned; XML well-formedness and two
+focused installer tests passed. No production NPC policy was installed.
+
+The bounded trial passed: native load/admission/resume, 25 delivered trajectory
+samples (26 received including enrolment), 752 observations and 644 readbacks,
+an exact INITIAL-plus-20-metre endpoint, and STOPPED with `drained=1 uncertain=0`.
+The final endpoint error was zero in the reported float coordinates. One native
+resume and one later native pause were confirmed; this does not establish a
+second native resume after that pause. Native, worker, host, TLS and display
+cleanup passed, no X4 process or test lock remained, and source checkpoint,
+selected pins and Steam identity stayed unchanged. A passing raw result is
+supported here by those checked records, not only its success flag.
+
+Two limitations affect the intervention itself. WAIT READY and
+ZERO_VELOCITY_REQUESTED both reported game time 7.21725, despite nested cue
+delays intended to separate them. The intended two-frame delay is **not proven**.
+Also, equality with the captured current order does not establish its `started`
+state: the schema distinguishes an enabled `ready` order from a started script.
+Even `started` would not prove that `stop_moving` executed or that physics was
+disabled. No expiry observation, velocity release, native velocity measurement
+or AI-state restoration occurred before process cleanup. The result supports
+this particular combined intervention; it does not isolate a universal cause
+or establish that either operation alone is sufficient.
+
+Startup read-only-config, unsigned-extension and FSR3 diagnostics remain in the
+engine log. No MD expression/order error was observed in this run. The result
+does not claim a clean renderer log or visual smoothness. The next useful work
+is to establish order execution/timing and reversible control of the same actor;
+repeating this unchanged successful trial would add little evidence.
+
 All runs here used one actual Linux client, a synthetic trajectory and synthetic
 host engine controls over loopback TLS. None tested a Windows client, WAN,
-native server, visual smoothness, remote orientation, AI suppression, cross-sector
-movement, trade, combat or boarding. The complete shared-world goal and earlier
+native server, visual smoothness, remote orientation, general AI suppression,
+cross-sector movement, trade, combat or boarding. The complete shared-world goal and earlier
 full-suite issues remain unresolved.
 
 Private manifests: `.local/authority-client-playback-reviewed-20261118-01.json`
-through `-03.json`; private runner/trajectory files:
+through `-06.json`; private runner/trajectory files:
 `.local/authority_client_playback_{trial,driver}_20261118.py`. Scope launchers for
-02/03 have matching suffixes. These files, binaries, saves and private credentials
-are not committed. Selected dependencies are checked before and after runs;
+02 through 06 have matching suffixes; 05/06 also pin separate private driver,
+binder and installer-wrapper variants. Their `wait-diagnostic-observation.json`
+records preserve the independently checked outcome and limits. These files,
+binaries, saves and private credentials are not committed. Selected dependencies
+are checked before and after runs;
 intermediate mutation and external cgroup migration are outside that evidence.
