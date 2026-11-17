@@ -15,6 +15,7 @@ sys.path.insert(0,str(ROOT/'src'))
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 import authority.experimental_remote_load_client as subject
 import authority.experimental_client_load as client_load
+import authority.client_save_staging as staging
 from authority.experimental_tcp_control import offer_request
 from authority.load_messages import Offer
 from authority.trusted_load_messages import decode_load_claim, encode_bound_offer
@@ -216,6 +217,103 @@ class RemoteLoadClientTests(unittest.TestCase):
         with self.assertRaises(ValueError): obj.poll()
         with self.assertRaises(RuntimeError): obj.download(self.root/'download')
         self.assertEqual(claims,[])
+
+    def test_copy_to_new_slot_can_complete_existing_load_protocol(self):
+        obj, claims, errors = self.connect()
+        obj.request_offer()
+        source = obj.download(self.root / 'download')
+        saves = self.root / 'save'; saves.mkdir()
+        target = saves / 'save_009.xml.gz'
+        self.assertEqual(obj.copy_to_new_slot(source, target), target)
+        self.assertEqual(target.read_bytes(), self.data)
+        self.assertEqual(source.read_bytes(), self.data)
+        self.observations(obj)
+        obj.claim(self.offer.attempt_id)
+        self.assertEqual(len(claims), 1)
+        self.assertFalse(errors)
+
+    def test_copy_never_replaces_an_existing_slot(self):
+        obj, claims, _ = self.connect()
+        obj.request_offer()
+        source = obj.download(self.root / 'download')
+        target = self.root / 'save_009.xml.gz'
+        target.write_bytes(b'previous save')
+        with self.assertRaises(FileExistsError):
+            obj.copy_to_new_slot(source, target)
+        self.assertEqual(target.read_bytes(), b'previous save')
+        self.assertEqual(source.read_bytes(), self.data)
+        self.assertEqual(claims, [])
+        with self.assertRaises(RuntimeError):
+            obj.copy_to_new_slot(source, self.root / 'save_010.xml.gz')
+
+    def test_copy_rejects_changed_source_and_leaves_its_created_file(self):
+        obj, claims, _ = self.connect()
+        obj.request_offer()
+        source = obj.download(self.root / 'download')
+        source.write_bytes(b'not the offered bytes')
+        target = self.root / 'save_009.xml.gz'
+        with self.assertRaises(ValueError):
+            obj.copy_to_new_slot(source, target)
+        self.assertTrue(target.exists())
+        self.assertEqual(source.read_bytes(), b'not the offered bytes')
+        self.assertEqual(claims, [])
+
+    def test_copy_checks_target_bytes_again_before_accepting_local_load(self):
+        obj, claims, _ = self.connect()
+        obj.request_offer()
+        source = obj.download(self.root / 'download')
+        target = self.root / 'save_009.xml.gz'
+        real_copy = subject.copy_offered_save
+        def copy_then_corrupt(*args, **kwargs):
+            result = real_copy(*args, **kwargs)
+            result.write_bytes(b'corrupted destination')
+            return result
+        with patch.object(subject, 'copy_offered_save', side_effect=copy_then_corrupt):
+            with self.assertRaises(ValueError):
+                obj.copy_to_new_slot(source, target)
+        self.assertEqual(target.read_bytes(), b'corrupted destination')
+        self.assertEqual(claims, [])
+
+    def test_copy_fsync_failure_leaves_file_and_faults_attempt(self):
+        obj, claims, _ = self.connect()
+        obj.request_offer()
+        source = obj.download(self.root / 'download')
+        target = self.root / 'save_009.xml.gz'
+        with patch.object(staging.os, 'fsync', side_effect=OSError('synthetic fsync failure')):
+            with self.assertRaises(OSError):
+                obj.copy_to_new_slot(source, target)
+        self.assertTrue(target.exists())
+        self.assertEqual(source.read_bytes(), self.data)
+        with self.assertRaises(RuntimeError):
+            obj.load_requested(self.offer.attempt_id)
+        self.assertEqual(claims, [])
+
+    def test_copy_pumps_keepalive_and_faults_if_deadline_expires(self):
+        obj, claims, _ = self.connect(keepalive_interval=.01)
+        obj.request_offer()
+        source = obj.download(self.root / 'download')
+        target = self.root / 'save_009.xml.gz'
+        real_write = staging._write_all
+        def slow_write(outgoing, block, pump):
+            time.sleep(.03)
+            real_write(outgoing, block, pump)
+        with patch.object(staging, '_write_all', side_effect=slow_write):
+            obj.copy_to_new_slot(source, target)
+        self.assertGreaterEqual(len(self.keepalives), 1)
+        self.observations(obj)
+        obj.claim(self.offer.attempt_id)
+        self.assertEqual(len(claims), 1)
+
+        other, other_claims, _ = self.connect()
+        other.request_offer()
+        other_source = other.download(self.root / 'another-download')
+        other._deadline = time.monotonic() + .01
+        other_target = self.root / 'save_010.xml.gz'
+        with patch.object(staging, '_write_all', side_effect=slow_write):
+            with self.assertRaises(TimeoutError):
+                other.copy_to_new_slot(other_source, other_target)
+        self.assertTrue(other_target.exists())
+        self.assertEqual(other_claims, [])
 
 
 if __name__=='__main__': unittest.main()

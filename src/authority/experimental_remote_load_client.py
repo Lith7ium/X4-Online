@@ -15,6 +15,7 @@ import threading
 import time
 
 from .experimental_client_load import ExperimentalClientLoad
+from .client_save_staging import copy_offered_save
 from .experimental_tcp_control import offer_request
 from .load_messages import MAX_MESSAGE, _pairs, _reject_constant
 from .save_transfer import SaveOffer, receive
@@ -211,6 +212,23 @@ class ExperimentalRemoteLoadClient:
         with self._operation('downloaded'):
             self._load.verify_staged(path, pump=self._pump if self._keepalive_interval is not None else None)
             self._state = 'staged'
+
+    def copy_to_new_slot(self, source, target):
+        """Copy to an absent X4 slot and verify it before local load.
+
+        The caller exclusively controls both directories and fences X4's save
+        scan until the copy completes. Failure can leave a partial or complete
+        file at target for the caller to inspect; no existing slot is replaced.
+        After failure the caller must keep X4 from scanning the target until any
+        incomplete file has been handled under its control. This does not start
+        X4 or establish that it loaded the staged bytes.
+        """
+        with self._operation('downloaded'):
+            pump = self._pump if self._keepalive_interval is not None else self._remaining
+            staged = copy_offered_save(source, target, self._bound.offer, pump=pump)
+            self._load.verify_staged(staged, pump=pump)
+            self._state = 'staged'
+            return staged
 
     def load_requested(self, attempt):
         with self._operation('staged'):
