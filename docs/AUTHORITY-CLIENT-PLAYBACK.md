@@ -21,7 +21,9 @@ guard's entry/exit while checking known process identities at every nested
 lookup. It is private-playback-only, restores normal checks before client
 teardown and leaves save checks/timeouts intact. It assumes exclusive private
 process ownership; transient extra processes between boundaries may be missed.
-Focused tests pass, but this correction has not yet been exercised with X4.
+Attempt 03 exercised this correction in X4 and substantially reduced binding
+time. It still timed out after prevalidating one source sample, with no confirmed
+client receipt. The current measurements and remaining limits are below.
 
 ## Data and lifetime
 
@@ -180,9 +182,18 @@ digest checks at the boundaries and retains other live guards. The ordinary
 save-check path remains unchanged outside this explicit mode.
 
 Real local TCP/UDP tests exercise this wiring with simulated engine edges.
-Native paired attempt 02 additionally reached client load after fresh checkpoint
-admission, but exhausted the diagnostic window before source sampling. Neither
-paired native attempt establishes client playback.
+Native paired attempt 03 exercised the optimized synchronous guards and reduced
+source binding from 34.062s to 2.787s and initial verification from 6.905s to
+1.272s. It still reached the source diagnostic deadline during collection
+(25.348s elapsed): one sample was prevalidated and zero client receipts were
+confirmed. This does not establish TCP transmission or native client refusal.
+The 24 checkpoint metadata checks took 12.718s, and 192 full guards took
+11.360s. Cleanup and source-pin checks passed. The optimization was exercised,
+but paired movement was not. Native08 remains the latest passing client playback
+with synthetic host controls. See the
+[offline clock-basis observation](../reports/AUTHORITY-MOTION-CLOCK-BASIS-20261118.md);
+the user's protocol decision is pending and no protocol change has been made.
+Paired native movement and Windows/Internet operation remain unproven.
 The switch does not install the private native08 NPC Wait/velocity override or
 release observer. A native paired runner still needs those pinned artifacts and
 must pass departure saving as well as movement/STOP/release observation. See

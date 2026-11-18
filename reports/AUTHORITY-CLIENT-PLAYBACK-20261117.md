@@ -7,13 +7,19 @@ The overall Windows/Linux Internet gameplay goal remains unmet.
 Current client increment, 18 November: both the independent bounded live-input
 path and an explicit paired-supervisor playback path are now wired in code.
 The paired path uses the existing retained TCP owner and fresh join checkpoint.
-Paired attempt 02 passed the corrected fresh-checkpoint preflight and launched
-the native client, which loaded the new join save and reported its marker,
-registry and paused state. It then failed before the first source sample:
-repeated harness checks exhausted the 60-second playback window during source
-registration. Native08 remains the latest successful native client playback,
-using synthetic host controls. No paired movement, Windows or Internet gameplay
-is established.
+Native paired attempt 03 exercised the synchronous-guard optimization: source
+binding fell from 34.062s to 2.787s and initial verification from 6.905s to
+1.272s. The run still hit the source diagnostic deadline in collection after
+25.348s, with one prevalidated sample and zero confirmed client receipts; it
+does not establish TCP transmission or a native client refusal. Its 24
+checkpoint metadata checks took 12.718s, 192 full guards 11.360s, and source
+collection 15.051s. Cleanup, Xauthority cleanup, and pinned-source preservation
+were confirmed. The optimization was exercised, but paired movement was not.
+Native08 remains the latest passing client playback, using synthetic host
+controls. Windows and Internet gameplay remain unproven. The separate offline
+[clock-basis observation](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md) records a
+playback errors under synthetic unequal clock rates; the user's protocol decision is pending and
+no protocol change has been made.
 
 ## Native paired attempts, 18 November
 
@@ -64,13 +70,25 @@ The existing real local UDP/TCP 26-sample fixture also passed with its actual
 checkpoint pump invoking the scope (earlier seven-test batch: 6.498s).
 Logs: `../x4-playback-discovery-scope-20261118/.local/discovery-scope-cancellation-focused-20261118.log`
 and `discovery-scope-focused-20261118-02.log` in the same directory. These are
-not X4 results. The correction still needs the next native paired attempt.
+not X4 results. Attempt 03 subsequently exercised the correction in X4.
+
+Attempt 03 again loaded the fresh join checkpoint and reported its marker,
+registry and paused state. The source returned one valid UDP sample, but
+`source diagnostic deadline` ended the first pull after 15.051s. No client
+Wait/playback/motion records or confirmed receipts followed the load/pause
+records. The retained counters do not distinguish pre-send checks from a TCP
+exchange already in progress, so neither TCP dispatch nor native refusal is
+established. Its 24 checkpoint requests invoked 225 client pump checks;
+repeated nested validation remains the next performance investigation.
+All owned processes were cleaned up; a subsequent read-only check found no
+X4 process or global X4 lock. Evidence:
+`.local/private-paired-playback-native-20261118-03/{result.json,trial-result.json,paired-server/result.json}`.
 
 A separate read-only code review tightened intermediate native readbacks:
 each SUMMARY now independently checks actual-to-target distance, and log reads
 must finish within the local/overall deadline with the guard still valid.
 All six tests in `tests.test_authority_paired_playback_evidence` passed. This
-change was integrated after attempt 02; that native attempt did not exercise it.
+change was integrated after attempt 02. Attempt 03 did not reach client readbacks.
 
 ## Paired source and client integration, 18 November
 

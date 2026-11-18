@@ -1,31 +1,21 @@
 # X4 multiplayer: handover for Astra
 
-> Client-first continuation, 18 November: server graphics work is deferred at
-> the user's request. The independent native client now includes opt-in buffered
-> playback. Default NPC motion still faults, but a private Wait-plus-zero-velocity
-> trial completed the bounded 20-metre playback/STOP/pause flow. A later trial
-> also established timing separation and observed the same NPC moving under its
-> exact prior order after releasing temporary control. General NPC control,
-> exact AI restoration and Windows/Internet gameplay remain unproven. A bounded
-> live-input path now preserves source samples and connects through the existing
-> admitted TCP owner. The shared supervisor now also wires an explicit bounded
-> source-to-client playback diagnostic through fresh checkpoint admission and
-> metadata guards between full digest boundaries. Paired native attempt 01
-> rejected a fresh registry mapping before client launch; the narrow correction
-> passed eight focused tests and retained-input preflight. Attempt 02 then loaded
-> the fresh checkpoint in the native client and observed marker/register/pause
-> receipts, but repeated diagnostic checks consumed its 60-second sampling window
-> during source registration. Zero source samples/client motion receipts were
-> recorded. Both runs confirmed source pins and owned-scope/Xauthority cleanup.
-> Native08 remains the latest successful native client playback, with synthetic
-> host controls. Repeated full process-list scans were identified in nested
-> guards. The paired-only correction now discovers both owned groups at each
-> synchronous guard's entry/exit and directly checks known identities inside;
-> transient extra processes between those boundaries may be missed. No timeout
-> was increased. Seven focused guard/lifecycle tests and the existing scoped
-> 26-sample loopback fixture passed; the next native paired attempt remains due. Intermediate readback/deadline checks were tightened separately
-> after native02, with six focused tests passing. General NPC control,
-> Windows/Internet gameplay and the overall goal remain unresolved. Start with
+> Client-first continuation, 18 November: server graphics work remains deferred.
+> The bounded live-input path and explicit fresh-checkpoint paired playback
+> diagnostic are wired through the admitted TCP owner. Native paired attempt 03
+> exercised the optimized synchronous guards, reducing source binding from
+> 34.062s to 2.787s and initial verification from 6.905s to 1.272s. It still
+> reached the source diagnostic deadline during collection after 25.348s: one
+> source sample was prevalidated and zero client receipts were confirmed. This
+> does not establish TCP transmission or native client refusal. Cleanup,
+> Xauthority cleanup and source-pin preservation passed; optimization was
+> exercised, but paired movement was not. Native08 remains the latest passing
+> client playback, with synthetic host controls. General NPC control, exact AI
+> restoration, paired movement, Windows/Internet gameplay and the overall goal
+> remain unproven. The offline
+> [clock-basis observation](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md) records a
+> playback errors under synthetic unequal clock rates; the user's decision is pending
+> and no protocol change has been made. Start with
 > [the current client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md) and
 > [the playback guide](../docs/AUTHORITY-CLIENT-PLAYBACK.md). The original handover
 > below records the earlier checkpoint, not the current branch tip.
