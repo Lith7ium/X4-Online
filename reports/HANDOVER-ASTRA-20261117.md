@@ -68,8 +68,16 @@ for an already-enumerated, bounded actor list. Its `universe_game.lua` scans
 ships in a sector; neither establishes all actor IDs visible in the current map
 viewport. The current authority player-sector reader likewise reports only a
 local sector. Do not substitute sector membership for the user's requested
-visibility-based interest policy. A concrete map discovery hook remains to be
-identified before that integration is implemented.
+visibility-based interest policy.
+
+The vanilla map source has since supplied a concrete candidate:
+`GetMapRenderedComponents` on the shown `MapMenu` holomap. The new opt-in,
+read-only `map_render_observation.lua` captures that raw list without the menu's
+selected/targeted/stored-object additions, preserving exact local uint64 IDs.
+Its focused offline test passed with real LuaJIT buffers and simulated engine
+calls. It has no network or automatic UI hook. Actual viewport/radar semantics
+and native operation are still unproven; see the
+[contract and next native check](../src/authority/MAP_RENDER_OBSERVATION.md).
 
 > Client-first continuation, 18 November: server graphics work remains deferred.
 > The bounded live-input path and explicit fresh-checkpoint paired playback
