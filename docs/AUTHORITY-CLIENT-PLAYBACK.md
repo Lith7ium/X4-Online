@@ -16,6 +16,13 @@ source sample or client motion receipt. Both runs confirmed source preservation
 and owned-scope cleanup. Native08 remains the latest successful client playback;
 paired native movement and Windows/Internet operation remain unproven.
 
+The follow-up correction batches full process discovery at each synchronous
+guard's entry/exit while checking known process identities at every nested
+lookup. It is private-playback-only, restores normal checks before client
+teardown and leaves save checks/timeouts intact. It assumes exclusive private
+process ownership; transient extra processes between boundaries may be missed.
+Focused tests pass, but this correction has not yet been exercised with X4.
+
 ## Data and lifetime
 
 The controller receives source-time positions and optional linear rates,

@@ -18,8 +18,12 @@
 > during source registration. Zero source samples/client motion receipts were
 > recorded. Both runs confirmed source pins and owned-scope/Xauthority cleanup.
 > Native08 remains the latest successful native client playback, with synthetic
-> host controls. Guard costs are the immediate investigation; no timeout was
-> increased. Intermediate readback/deadline checks were tightened separately
+> host controls. Repeated full process-list scans were identified in nested
+> guards. The paired-only correction now discovers both owned groups at each
+> synchronous guard's entry/exit and directly checks known identities inside;
+> transient extra processes between those boundaries may be missed. No timeout
+> was increased. Seven focused guard/lifecycle tests and the existing scoped
+> 26-sample loopback fixture passed; the next native paired attempt remains due. Intermediate readback/deadline checks were tightened separately
 > after native02, with six focused tests passing. General NPC control,
 > Windows/Internet gameplay and the overall goal remain unresolved. Start with
 > [the current client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md) and

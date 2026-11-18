@@ -42,7 +42,29 @@ Both failed attempts confirmed source/pin preservation, Steam identity and
 owned-process/Xauthority cleanup. Attempt 02 left no X4 executable process or
 global X4 lock. Evidence:
 `.local/private-paired-playback-native-20261118-02/{result.json,trial-result.json,paired-server/result.json}`.
-The remaining guard cost is under investigation; no timeout was increased.
+The follow-up audit found repeated full `/proc` discovery inside nested guards.
+Five harmless measurements with 478 current processes averaged 9.64ms per scan.
+Static call expansion estimates about 62 scans per aggregate source guard,
+consistent with its measured 0.724s average. This supports the diagnosis but
+is not native per-function timing attribution.
+
+The correction in `e0f6f9e1` uses full discovery at entry/exit of each synchronous
+aggregate guard, with fresh targeted launcher/X4 PID, start time, UID,
+executable, group and session checks inside. It is enabled only for paired
+playback and never spans a socket wait or the entire sampling window. It
+assumes exclusive ownership of the private process set: an extra X4 process
+that appears and exits between those boundaries can be missed. The normal
+path is restored before client teardown; protected-file and save checks and
+all timeouts are unchanged. `8f5530c9` also retains cancellation combined with
+an exit-check failure in the failed supervisor result.
+
+Seven final guard/lifecycle tests passed in 0.111s, including two harmless real
+Python process groups, identity changes, teardown, and cancellation/exit failure.
+The existing real local UDP/TCP 26-sample fixture also passed with its actual
+checkpoint pump invoking the scope (earlier seven-test batch: 6.498s).
+Logs: `../x4-playback-discovery-scope-20261118/.local/discovery-scope-cancellation-focused-20261118.log`
+and `discovery-scope-focused-20261118-02.log` in the same directory. These are
+not X4 results. The correction still needs the next native paired attempt.
 
 A separate read-only code review tightened intermediate native readbacks:
 each SUMMARY now independently checks actual-to-target distance, and log reads
