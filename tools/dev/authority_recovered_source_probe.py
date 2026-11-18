@@ -6,6 +6,7 @@ identity. Caller owns both X4 processes, all sockets, the checkpoint writer
 fence, log watching, and global failure cleanup.
 """
 import copy
+from contextlib import nullcontext
 import math
 import os
 import re
@@ -157,8 +158,10 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         diagnostic_timeouts=None, private_long_diagnostic=False, sector_poll=None, sector_stop=None,
         sector_arm=None, sector_incarnation=None, saved_apply_fixture=None, record_apply_intent=None,
         saved_playback_fixture=None, playback_sample_observer=None,
-        playback_begin=None, playback_checkpoint_check=None, playback_checkpoint_stop=None):
+        playback_begin=None, playback_checkpoint_check=None, playback_checkpoint_stop=None, playback_identity_scope=None):
     from authority_paired_playback_evidence import SAMPLE_COUNT, SAMPLE_INTERVAL, DRAIN_SECONDS
+    if playback_identity_scope is not None and (saved_playback_fixture is None or not callable(playback_identity_scope)):
+        raise ValueError('invalid playback identity scope')
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -188,7 +191,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or type(client_motion) is not bool
             or type(private_long_diagnostic) is not bool
             or (saved_playback_fixture is None and any(callback is not None for callback in
-                (playback_sample_observer, playback_begin, playback_checkpoint_check, playback_checkpoint_stop)))
+                (playback_sample_observer, playback_begin, playback_checkpoint_check, playback_checkpoint_stop, playback_identity_scope)))
             or (saved_playback_fixture is not None and
                 (saved_playback_fixture != 'recovery_enh_870' or index != 1318 or
                  settings['epoch'] != '4ba7be438ebb04ec5bb85fdb95b5a488' or
@@ -297,6 +300,10 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         return True
 
     def pump_guard():
+        with nullcontext() if playback_identity_scope is None else playback_identity_scope():
+            return pump_guard_body()
+
+    def pump_guard_body():
         # The enclosing source IPC rechecks its full context before and after
         # each saved-guard call. While the helper hashes, only process/log and
         # client liveness need pumping; re-hashing source on each IPC byte or

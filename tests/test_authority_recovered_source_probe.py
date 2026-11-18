@@ -1,5 +1,6 @@
 """Source probe lifecycle and explicit evidence scope; no X4 or sockets."""
 from pathlib import Path
+from contextlib import contextmanager
 import os
 import socket
 import sys
@@ -599,6 +600,21 @@ class Probe(unittest.TestCase):
                 deadline=time.monotonic()+25, check=Mock(side_effect=AssertionError('ordinary checkpoint check used')),
                 stop=Mock(side_effect=lambda: events.append(('guard_stop', time.monotonic())) or True))
             observed = []
+            scope_depth = [0]
+            scope_calls = []
+            @contextmanager
+            def identity_scope():
+                self.assertEqual(scope_depth[0], 0)
+                scope_depth[0] = 1
+                scope_calls.append('enter')
+                try:
+                    yield
+                finally:
+                    scope_depth[0] = 0
+                    scope_calls.append('exit')
+            def check_active(**_options):
+                self.assertEqual(scope_depth[0], 1)
+                return True
             def observe(sample):
                 self.assertIsNone(case.case.host._control._reader_lease)
                 self.assertFalse(case.case.host._busy)
@@ -611,7 +627,7 @@ class Probe(unittest.TestCase):
                 self.assertTrue(source_stopped())
                 events.append(('client_stop', time.monotonic()))
                 return True
-            active = SimpleNamespace(participant=SimpleNamespace(check_active=Mock(return_value=True),
+            active = SimpleNamespace(participant=SimpleNamespace(check_active=Mock(side_effect=check_active),
                 stop_motion_worker=Mock(side_effect=stop_worker)))
             pump = recovered_client.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()), time.monotonic()+25)
             result = subject.run(sock=sock, settings=settings, index=1318, baseline=baseline, guard=guard,
@@ -619,10 +635,14 @@ class Probe(unittest.TestCase):
                 identity=(os.getpid(), linux_gate_live.start_ticks(os.getpid())), verify=lambda:None,
                 verify_process=lambda:None, client_motion=True, verify_stopped=lambda:None,
                 saved_playback_fixture='recovery_enh_870', playback_sample_observer=observe,
+                playback_identity_scope=identity_scope,
                 playback_begin=lambda: events.append(('begin', time.monotonic())) or True,
-                playback_checkpoint_check=lambda: True,
+                playback_checkpoint_check=lambda: pump() or True,
                 playback_checkpoint_stop=lambda: events.append(('checkpoint_stop_hook', time.monotonic())) or guard.stop())
             self.assertEqual(observed, expected)
+            self.assertGreater(len(scope_calls), 0)
+            self.assertEqual(scope_calls, ['enter', 'exit']*(len(scope_calls)//2))
+            self.assertEqual(scope_depth[0], 0)
             self.assertEqual([row[1] for row in case.received], expected)
             self.assertEqual(result['client_receipt_sample_sha256'], [motion_digest(s) for s in expected])
             times = dict(events)

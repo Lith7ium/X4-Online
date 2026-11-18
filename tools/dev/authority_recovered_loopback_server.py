@@ -1398,7 +1398,13 @@ def run(args):
             baseline = None
             def cancel_diagnostic():
                 if stop[0]: raise InterruptedError('diagnostic cancelled')
+            playback_identity_scope = None
+            playback_identity_client = None
             def verify_diagnostic():
+                from authority_owned_game_discovery import retained_scope
+                with retained_scope(playback_identity_scope, playback_identity_client, active_clients):
+                    return verify_diagnostic_body()
+            def verify_diagnostic_body():
                 cancel_diagnostic()
                 verify()
                 if source_enabled:
@@ -1442,6 +1448,13 @@ def run(args):
                         **({'saved_apply_fixture':saved_apply_fixture} if saved_apply_fixture else {}),
                         **({'saved_playback_fixture':saved_playback_fixture} if saved_playback_fixture else {}),
                         **({'player_sector':True} if client_sector else {})} if client_motion else None))
+                if saved_playback_fixture:
+                    from authority_owned_game_discovery import OwnedGameDiscovery
+                    discovery = OwnedGameDiscovery(((proc, started, game, identity),
+                        (diagnostic_result.launcher, diagnostic_result.launcher_started,
+                         game, diagnostic_result.x4_identity)))
+                    playback_identity_scope = discovery.scope
+                    playback_identity_client = diagnostic_result
                 if source_enabled:
                     import authority_recovered_source_probe
                     expected_members=tuple(world.session.ready_players)
@@ -1471,6 +1484,7 @@ def run(args):
                                     deadline=min(deadline, time.monotonic() + 60))
                             playback_options = {'saved_playback_fixture': saved_playback_fixture,
                                 'playback_begin': begin_playback,
+                                'playback_identity_scope': playback_identity_scope,
                                 'playback_checkpoint_check': lambda: playback_window.check_checkpoint(guard),
                                 'playback_checkpoint_stop': lambda: playback_window.stop_checkpoint(guard),
                                 'playback_sample_observer': evidence.received}
@@ -1507,6 +1521,7 @@ def run(args):
                         require_client_receipts=client_motion,pair_delivery=pair_delivery,
                         saved_playback=saved_playback_fixture is not None,
                         sector_intermediate_result=result if client_sector else None)
+                playback_identity_scope = None
                 if count != 1:
                     baseline = diagnostic_client.settle_departure(host, world, control, diagnostic.server_tcp, deadline, verify_diagnostic,
                         diagnostic_result['client_ticket'], diagnostic_result['client_loaded_marker'])

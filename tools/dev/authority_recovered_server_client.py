@@ -651,13 +651,14 @@ def settle_departure(host, world, control, peer, deadline, check, ticket, marker
 class ActiveClient:
     """Retained diagnostic with explicit owner-driven finalization."""
     def __init__(self, participant, result, finish, sector_poll=None, sector_stop=None, sector_arm=None,
-                 *, save_target=None, save_digest=None, x4_identity=None):
+                 *, save_target=None, save_digest=None, x4_identity=None, launcher=None, launcher_started=None):
         self.participant, self.result, self._finish = participant, result, finish
         self._finished = False
         self.sector_poll, self.sector_stop = sector_poll, sector_stop
         self.sector_arm = sector_arm
         self.save_target, self.save_digest = save_target, save_digest
         self.x4_identity = x4_identity
+        self.launcher, self.launcher_started = launcher, launcher_started
 
     def finish(self):
         if self._finished: raise RuntimeError('diagnostic already finalized')
@@ -948,6 +949,6 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
                                     sector_owner.stop if sector_owner is not None else None,
                                     sector_owner.arm if sector_owner is not None else None,
                                     save_target=target, save_digest=ticket['sha256'],
-                                    x4_identity=client_identity)
+                                    x4_identity=client_identity, launcher=proc, launcher_started=started)
             return finish()
         time.sleep(.1)

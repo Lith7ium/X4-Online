@@ -110,6 +110,12 @@ def stage_download(service,store,checkpoint,out,profile):
 
 
 def game_identity(proc,started,game):
+    from authority_owned_game_discovery import scoped_identity
+    identity = scoped_identity(proc, started, game)
+    return _discover_game_identity(proc, started, game) if identity is None else identity
+
+
+def _discover_game_identity(proc,started,game):
     if proc.poll() is not None or live.start_ticks(proc.pid)!=started: raise RuntimeError('owned launcher changed')
     identities=[]
     for pid in snapshot.owned_group_members(proc.pid,started):
