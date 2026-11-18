@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 import warnings
 from unittest.mock import patch
@@ -16,6 +17,8 @@ class FakeJob:
     def __init__(self):
         self.calls = []
         self.live = True
+        self.in_owned_job = True
+        self.pid = 123
         self.stop_result = True
 
     def start(self, command, cwd, environment):
@@ -24,6 +27,10 @@ class FakeJob:
 
     def running(self):
         return self.live
+
+    def owns_running_pid(self, pid):
+        self.calls.append(('owns_running_pid', pid))
+        return self.live and self.in_owned_job and pid == self.pid
 
     def stop(self, timeout):
         self.calls.append(('stop', timeout))
@@ -68,6 +75,131 @@ class WindowsX4ProcessTests(unittest.TestCase):
         self.assertEqual(self.job.calls[-2:], [('stop', 2), ('close',)])
         with self.assertRaises(ValueError):
             owner.stop()
+
+    def test_owns_running_pid_requires_the_same_live_owned_process(self):
+        owner = subject.WindowsX4Process(enabled=True)
+        owner.start(self.view, profile_id=45841, guard=lambda: True)
+        self.assertTrue(owner.owns_running_pid(123))
+        self.assertEqual(self.job.calls[-1], ('owns_running_pid', 123))
+
+        self.assertFalse(owner.owns_running_pid(124))
+        self.assertEqual(self.job.calls[-1], ('owns_running_pid', 123))
+
+        owner.pid = 124
+        calls_before = list(self.job.calls)
+        self.assertFalse(owner.owns_running_pid(123))
+        self.assertEqual(self.job.calls, calls_before)
+
+        owner.pid = 123
+        self.job.live = False
+        self.assertFalse(owner.owns_running_pid(123))
+        self.job.live = True
+        self.job.in_owned_job = False
+        self.assertFalse(owner.owns_running_pid(123))
+        owner.close()
+
+    def test_owns_running_pid_rejects_invalid_pid_thread_and_closed_phase(self):
+        owner = subject.WindowsX4Process(enabled=True)
+        owner.start(self.view, profile_id=45841, guard=lambda: True)
+        for pid in (0, -1, 0x100000000, True, 123.0, '123'):
+            with self.subTest(pid=pid), self.assertRaises(ValueError):
+                owner.owns_running_pid(pid)
+
+        failures = []
+        thread = threading.Thread(target=lambda: self._capture_error(
+            failures, owner.owns_running_pid, 123))
+        thread.start(); thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], RuntimeError)
+        self.assertTrue(owner.stop())
+        with self.assertRaisesRegex(RuntimeError, 'not running'):
+            owner.owns_running_pid(123)
+
+    @staticmethod
+    def _capture_error(errors, callback, *arguments):
+        try:
+            callback(*arguments)
+        except BaseException as error:
+            errors.append(error)
+
+    def test_native_job_rejects_pid_not_matching_held_process_handle(self):
+        native = NATIVE_JOB.__new__(NATIVE_JOB)
+        native.closed = False
+        native.job = 11
+        native.info = subject._ProcessInfo()
+        native.info.hProcess = 33
+        native.get_process_id = lambda process: 124 if process == 33 else 0
+        native.running = lambda: True
+        job_queries = []
+
+        def is_process_in_job(process, job, result):
+            job_queries.append((process, job))
+            result._obj.value = True
+            return True
+
+        native.in_job = is_process_in_job
+        self.assertFalse(native.owns_running_pid(123))
+        self.assertEqual(job_queries, [])
+
+    def test_native_job_rejects_process_outside_owned_job_or_not_running(self):
+        for mode in ('foreign_job', 'stopped'):
+            with self.subTest(mode=mode):
+                native = NATIVE_JOB.__new__(NATIVE_JOB)
+                native.closed = False
+                native.job = 11
+                native.info = subject._ProcessInfo()
+                native.info.hProcess = 33
+                native.get_process_id = lambda process: 123
+                native.running = lambda: mode != 'stopped'
+                job_queries = []
+
+                def is_process_in_job(process, job, result):
+                    job_queries.append((process, job))
+                    result._obj.value = mode != 'foreign_job'
+                    return True
+
+                native.in_job = is_process_in_job
+                self.assertFalse(native.owns_running_pid(123))
+                if mode == 'stopped':
+                    self.assertEqual(job_queries, [])
+                else:
+                    self.assertEqual(job_queries, [(33, 11)])
+
+    def test_native_job_rechecks_process_after_job_membership_query(self):
+        cases = (
+            ('still_owned', [123, 123], [True, True], True),
+            ('exits_during_check', [123], [True, False], False),
+            ('pid_changes_during_check', [123, 124], [True, True], False),
+            ('invalid_retained_handle_pid', [0], [], OSError),
+        )
+        for name, process_ids, running_values, expected in cases:
+            with self.subTest(name=name):
+                native = NATIVE_JOB.__new__(NATIVE_JOB)
+                native.closed = False
+                native.job = 11
+                native.info = subject._ProcessInfo()
+                native.info.hProcess = 33
+                process_id_reads = iter(process_ids)
+                running_reads = iter(running_values)
+                native.get_process_id = lambda process: next(process_id_reads)
+                native.running = lambda: next(running_reads)
+                job_queries = []
+
+                def is_process_in_job(process, job, result):
+                    job_queries.append((process, job))
+                    result._obj.value = True
+                    return True
+
+                native.in_job = is_process_in_job
+                if expected is OSError:
+                    with patch.object(subject.ctypes, 'get_last_error', return_value=6, create=True):
+                        with self.assertRaises(OSError):
+                            native.owns_running_pid(123)
+                else:
+                    self.assertIs(native.owns_running_pid(123), expected)
+                expected_queries = [] if expected is OSError else [(33, 11)]
+                self.assertEqual(job_queries, expected_queries)
 
     def test_failed_or_incomplete_stop_never_claims_cleanup(self):
         owner = subject.WindowsX4Process(enabled=True)

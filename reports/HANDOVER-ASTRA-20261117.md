@@ -1,5 +1,19 @@
 # X4 multiplayer: handover for Astra
 
+Latest Windows client continuation adds `WindowsMotionPeer`, using fresh IP
+Helper UDP owner tables and the existing process owner's held handle/job. It
+refuses ambiguous port owners and rechecks process/socket ownership around the
+separate IPv4/IPv6 snapshots. This is local sampled ownership, not proof of a
+remote UDP endpoint. Fourteen simulated-API tests passed; the process-owner
+module passed 15 tests plus one new focused native-handle recheck test. A Zig
+0.15.2 x86-64 Windows compile against MinGW headers confirmed the table layout
+and API declaration. No native Windows, X4 or full-suite run was made. The
+validator is ready for the existing motion IPC's `validate_peer` hook but is
+not yet wired into the fixture CLI; its overlay/lifecycle integration remains
+next. See the [Windows guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#remaining-motion-integration)
+for private evidence paths and limitations. No initial alignment, clock basis,
+server architecture or normal profile changes were made.
+
 Latest native result: paired native05 reached one confirmed client receipt, then
 failed the unchanged 50m alignment bound with a measured separation of
 88.08677088848634m. The new diagnostic retained both positions and separate game
@@ -23,8 +37,8 @@ regression passed (final two checks: 0.407s). The tests use real local TCP/UDP
 and the real motion IPC adapter with a simulated engine peer. Private output:
 `.local/observed-motion-session-20261118.log`. No X4, full-suite, Windows or WAN
 test was repeated. This hook is not yet wired into the Windows fixture CLI;
-its next required pieces are the motion overlay/lifecycle and a Windows peer
-validator, as described in the updated Windows client guide.
+its next required piece is the motion overlay/lifecycle using the new Windows
+peer validator, as described in the updated Windows client guide.
 
 Read-only inspection of native05's offered/staged checkpoint resolved saved
 index 1318 to ENH-870 and recorded its saved movement fields. The saved position

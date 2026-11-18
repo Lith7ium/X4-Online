@@ -118,6 +118,7 @@ class _Win32Job:
             ctypes.c_void_p, ctypes.c_void_p, wintypes.BOOL, dword, ctypes.c_void_p, wintypes.LPCWSTR,
             ctypes.POINTER(_StartupInfoEx), ctypes.POINTER(_ProcessInfo))
         self.in_job = self._api('IsProcessInJob', wintypes.BOOL, handle, handle, ctypes.POINTER(wintypes.BOOL))
+        self.get_process_id = self._api('GetProcessId', dword, handle)
         self.resume = self._api('ResumeThread', dword, handle)
         self.wait = self._api('WaitForSingleObject', dword, handle, dword)
         self.terminate = self._api('TerminateJobObject', wintypes.BOOL, handle, wintypes.UINT)
@@ -173,6 +174,23 @@ class _Win32Job:
         if result == 258:  # WAIT_TIMEOUT
             return True
         raise OSError(ctypes.get_last_error(), 'WaitForSingleObject')
+
+    def owns_running_pid(self, pid):
+        """Check a PID against the retained root handle and this specific job."""
+        if self.closed or not self.info.hProcess or not self.job:
+            return False
+        process_handle = self.info.hProcess
+        actual_pid = self.get_process_id(process_handle)
+        self._require(actual_pid, 'GetProcessId')
+        if actual_pid != pid or not self.running():
+            return False
+        member = wintypes.BOOL()
+        self._require(self.in_job(process_handle, self.job, ctypes.byref(member)), 'IsProcessInJob')
+        if not member.value or not self.running():
+            return False
+        actual_pid = self.get_process_id(process_handle)
+        self._require(actual_pid, 'GetProcessId')
+        return actual_pid == pid
 
     def stop(self, timeout):
         self._require(self.terminate(self.job, 1), 'TerminateJobObject')
@@ -368,6 +386,20 @@ class WindowsX4Process:
         if self._phase != 'running':
             raise RuntimeError('X4 process is not running under this owner')
         return self._job.running()
+
+    def owns_running_pid(self, pid):
+        """Sample whether a PID still names our live root in the owned job.
+
+        Uses the retained handle rather than reopening a process by PID. This
+        does not prove socket ownership or prevent exit after the observation.
+        The owner thread must keep this object alive across the caller's work.
+        """
+        self._check_thread()
+        if type(pid) is not int or not 0 < pid <= 0xffffffff:
+            raise ValueError('positive Windows process identifier required')
+        if self._phase != 'running':
+            raise RuntimeError('X4 process is not running under this owner')
+        return self.pid == pid and self._job.owns_running_pid(pid)
 
     @property
     def cleanup_confirmed(self):

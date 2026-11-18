@@ -151,12 +151,35 @@ TCP owner. This CLI does not supply one. Reuse the existing
 path; do not create a second TCP reader. The overlay still needs the matching
 saved-registry/motion scripts and their lifecycle, including STOP before X4 exit.
 
-The Linux peer validator reads `/proc` and is not portable to Windows. No Windows
-equivalent is implemented yet. The existing `WindowsX4Process` owns a live process
-handle/job and exposes its PID; reuse that owner when checking the local motion
-socket. Microsoft's
+The Linux peer validator reads `/proc` and is not portable to Windows. The new
+`WindowsMotionPeer(process, destination_socket)` supplies a Windows-specific
+callable for the motion IPC adapter's `validate_peer` argument. It requires the
+existing `WindowsX4Process` owner and the adapter's bound IPv4 loopback socket.
+`WindowsX4Process.owns_running_pid` checks its retained root process handle,
+liveness and membership in its owned job. The validator checks that ownership
+before and after fresh IPv4/IPv6 UDP-table queries; it accepts only one exact
+IPv4 loopback source-port/PID row and refuses any same-port competitor across
+either family. The API entry point is loaded once per validator; tables are
+never cached. Queries have bounded allocation and retry limits.
+
+Microsoft's
 [UDP owner row](https://learn.microsoft.com/en-us/windows/win32/api/udpmib/ns-udpmib-mib_udprow_owner_pid)
 provides the bound local address, port and owning PID, but no remote endpoint.
-Consequently, a validator using that table must document its narrower observation
-and cannot claim the Linux connected-tuple check. API and real Windows behavior
-still need validation before enabling movement in this command.
+The two table queries are separate observations, and a process/socket may change
+after a check. This is a sampled ownership check for the isolated cooperative
+diagnostic, not proof of the complete UDP connection or protection against
+concurrent local writers. The caller must retain both owners throughout use.
+
+Fourteen focused peer-validator tests passed on Linux with simulated Windows
+APIs. The process-owner module passed 15 tests, followed by one new focused test
+for native-handle rechecks (also simulated). A compile-only check against Zig
+0.15.2's MinGW headers confirmed the x86-64 Windows row sizes, table/field offsets,
+constants and API signature. No Windows API, game, or network DLL was executed.
+Private records are `.local/windows-motion-peer-20261118.log`,
+`.local/windows-process-pid-20261118.log` and
+`.local/windows-motion-peer-abi-20261118/`.
+
+The validator is not yet connected to this CLI. Overlay/lifecycle integration,
+native Windows API behavior and real motion still require validation before
+enabling movement here. Initial position alignment and the source/client clock
+basis remain separate unresolved decisions.
