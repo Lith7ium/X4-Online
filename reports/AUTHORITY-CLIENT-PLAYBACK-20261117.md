@@ -194,6 +194,16 @@ that bound, including both positions, game times and measured separation; it
 does not count a rejected sample as accepted. All six evidence tests passed.
 This diagnostic addition has not been exercised in X4.
 
+An independent read-only comparison found that the source descriptor and client
+adapter both read XYZ through `GetObjectPositionInSector` with the same
+`UIPosRot` float structure; the sampler transfers XYZ unchanged. No axis swap,
+unit multiplier or zone/world conversion is visible in that path. This does not
+independently prove cross-process frame or actor identity. The comparison is
+also not simultaneous: the source is sampled before transport/binding, whereas
+client INITIAL follows binding and the private Wait/timing intervention. That
+asymmetry supports investigating simulation drift, but the missing source pose
+and time prevent attributing native04's rejection to it.
+
 Outer cleanup, Xauthority cleanup, source preservation, source-code pins and
 Steam identity checks passed. A subsequent process scan found no X4 process or
 global X4 lock. The run remains an overall failure. Evidence:
