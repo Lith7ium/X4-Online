@@ -117,6 +117,41 @@ class Discovery(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             with subject.retained_scope(scope.scope, active, [SimpleNamespace()]): pass
 
+    def test_supervisor_retains_cancellation_and_scope_exit_failure_result(self):
+        import json
+        from types import SimpleNamespace
+        import authority_recovered_loopback_server as supervisor
+        scope, _, _, identities, _ = self.fixture()
+        try:
+            with scope.scope():
+                identities[10] = None
+                raise KeyboardInterrupt()
+        except BaseExceptionGroup as error:
+            failure = error
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as patches:
+            root = Path(directory)
+            game = root/'game'; (game/'extensions').mkdir(parents=True)
+            auth = root/'auth'; auth.write_bytes(b'private test auth')
+            out = root/'output'
+            store = SimpleNamespace(directory=root/'source/checkpoints')
+            args = SimpleNamespace(out=out, store=store.directory, game=game, display=':1', timeout=30, seed=1)
+            patches.enter_context(patch.object(supervisor.snapshot, 'output_path', return_value=out))
+            patches.enter_context(patch.object(supervisor, 'CheckpointStore', return_value=store))
+            patches.enter_context(patch.object(supervisor.load, 'local_directory', return_value=store.directory))
+            patches.enter_context(patch.object(supervisor.live, 'sha', return_value=supervisor.live.EXE_SHA))
+            patches.enter_context(patch.object(supervisor.live, 'x4_executables', return_value=[]))
+            patches.enter_context(patch.object(supervisor.live, 'steam_identity', return_value={}))
+            patches.enter_context(patch.object(supervisor.shutil, 'which', return_value='/test/bwrap'))
+            patches.enter_context(patch.dict(os.environ, {'XAUTHORITY':str(auth)}))
+            patches.enter_context(patch.object(supervisor, 'diagnostic_process_measure_seconds', side_effect=failure))
+            patches.enter_context(patch.object(supervisor, 'cleanup_diagnostics', return_value=True))
+            patches.enter_context(patch.object(supervisor, 'stop_owned_processes', return_value=[]))
+            result = supervisor.run(args)
+            self.assertFalse(result['success'])
+            self.assertEqual(result['error_types'], ['KeyboardInterrupt', 'RuntimeError'])
+            self.assertEqual(json.loads((out/'result.json').read_text())['error_types'], result['error_types'])
+        self.assertIsNone(subject._active.get())
+
     def test_real_harmless_owned_groups_and_repeated_targeted_reads(self):
         with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup:
             game = Path(directory); (game/'X4').symlink_to(Path(sys.executable).resolve())

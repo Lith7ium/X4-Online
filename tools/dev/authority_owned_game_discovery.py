@@ -2,8 +2,10 @@
 
 Full group uniqueness discovery brackets one synchronous guard call. Nested
 lookups still reread the declared launcher and X4 identities. Discovery of an
-additional X4 in the group is deferred until that call exits, never across a
-socket read/wait or an entire sampling window. This is not a process lock.
+additional X4 is checked again at exit: a transient extra process that starts
+and exits between these boundaries can be missed. The caller exclusively owns
+the private process set. No scope spans a socket read/wait or an entire sampling
+window. This is not a process lock.
 """
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar

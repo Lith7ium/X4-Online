@@ -1563,8 +1563,19 @@ def run(args):
                       final_checkpoint_sha256=None if saved is None else saved.sha256)
     except _WitnessFinished:
         pass
-    except (Exception, KeyboardInterrupt) as error:
+    except (Exception, KeyboardInterrupt, BaseExceptionGroup) as error:
         result['error'] = str(error) or type(error).__name__
+        if isinstance(error, BaseExceptionGroup):
+            # Keep cancellation and a simultaneous guard-exit failure visible.
+            pending_errors = [error]
+            error_types = []
+            while pending_errors and len(error_types) < 16:
+                current = pending_errors.pop()
+                if isinstance(current, BaseExceptionGroup):
+                    pending_errors.extend(reversed(current.exceptions[:16]))
+                else:
+                    error_types.append(type(current).__name__)
+            result['error_types'] = error_types
     finally:
         errors=[]
         if playback_window is not None:
