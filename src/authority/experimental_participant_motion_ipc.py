@@ -98,17 +98,20 @@ class ExperimentalParticipantMotionIPC:
         try:
             if despawn is not False:raise ValueError('X4 despawn binding unavailable')
             value=motion_value(raw)
-            if value['version'] == 3:
-                raise ValueError('real-time position motion binding is not implemented')
+            if value['version'] == 3 and (self._allow_apply or self._observe_limit is not None):
+                raise ValueError('real-time position motion apply or observation is not implemented')
             if value['epoch']!=self._epoch or value['generation']!=self._generation:
                 raise ValueError('foreign motion identity')
             if self._next>=0xffffffffffffffff:raise RuntimeError('motion request capacity')
             self._next+=1;request=self._prefix+format(self._next,'016x');digest=motion_digest(value)
             fields=[request,value['epoch'],value['generation'],str(value['index']),str(value['sequence']),value['sector_macro'],digest]
-            velocity=value['velocity']
+            velocity = value['real_velocity'] if value['version'] == 3 else value['velocity']
             vector=['-','-','-'] if velocity is None else [format(velocity[k],'.17g') for k in ('x','y','z')]
             numeric=[format(value[k],'.17g') for k in ('source_time','x','y','z')]
             kind = 'BIND'
+            if value['version'] == 3:
+                kind = 'BIND3'
+                numeric.insert(1, format(value['capture_time'], '.17g'))
             if value['version'] == 2:
                 if self._allow_apply or self._observe_limit is not None:
                     raise ValueError('orientation apply is not implemented')
@@ -143,6 +146,8 @@ class ExperimentalParticipantMotionIPC:
                 self._bound is None or (self._observe_limit is not None and self._observed>=self._observe_limit)):
                 raise RuntimeError('motion preflight unavailable')
             value=motion_value(raw);digest=motion_digest(value)
+            if value['version'] != 1:
+                raise ValueError('motion preflight requires version one')
             identity=(value['epoch'],value['generation'],value['index'],value['sequence'],digest)
             if identity!=self._bound:raise ValueError('motion preflight differs from last bound sample')
             key=identity[:4]
@@ -178,6 +183,8 @@ class ExperimentalParticipantMotionIPC:
                 raise RuntimeError('motion apply unavailable')
             self._apply_attempted=True
             value=motion_value(raw);digest=motion_digest(value)
+            if value['version'] != 1:
+                raise ValueError('motion apply requires version one')
             identity=(value['epoch'],value['generation'],value['index'],value['sequence'],digest)
             if identity!=self._bound or identity!=self._preflight_ready:
                 raise ValueError('motion apply lacks current READY preflight')
@@ -206,6 +213,8 @@ class ExperimentalParticipantMotionIPC:
             if self._observe_limit is None or self._observed>=self._observe_limit or self._bound is None:
                 raise RuntimeError('motion observe unavailable')
             value=motion_value(raw);digest=motion_digest(value)
+            if value['version'] != 1:
+                raise ValueError('motion observation requires version one')
             identity=(value['epoch'],value['generation'],value['index'],value['sequence'],digest)
             if identity!=self._bound or identity!=self._preflight_ready:
                 raise ValueError('motion observe lacks current READY preflight')

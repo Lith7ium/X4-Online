@@ -35,8 +35,8 @@ class IPC(unittest.TestCase):
            generation=generation,guard=lambda:True,validate_peer=lambda p:False,timeout=1)
   with self.assertRaises(RuntimeError):bridge.wait_ready()
   self.assertEqual(bridge.state,'failed')
-class UnsupportedMotionVersion(unittest.TestCase):
-    def test_v3_refused_before_request_increment_or_outgoing_bind(self):
+class PositionClockBinding(unittest.TestCase):
+    def ready_bridge(self, **options):
         server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.addCleanup(server.close)
@@ -48,19 +48,66 @@ class UnsupportedMotionVersion(unittest.TestCase):
         bridge = ExperimentalParticipantMotionIPC(
             server, enabled=True, lease=lease, attempt=attempt, epoch=epoch,
             generation=generation, guard=lambda: True,
-            validate_peer=lambda address: address == peer.getsockname(), timeout=1)
+            validate_peer=lambda address: address == peer.getsockname(), timeout=1, **options)
         self.assertTrue(bridge.wait_ready())
-        value = dict(version=3, epoch=epoch, generation=generation, index=1, sequence=1,
-                     sector_macro='sector_a', source_time=1, capture_time=10,
-                     x=0, y=0, z=0, real_velocity=None)
-        before = bridge._next
-        with self.assertRaisesRegex(ValueError, 'real-time position motion binding is not implemented'):
-            bridge(value, False)
-        self.assertEqual(bridge._next, before)
-        self.assertEqual(bridge.state, 'failed')
-        peer.setblocking(False)
-        with self.assertRaises(BlockingIOError):
-            peer.recv(769)
+        return bridge, peer
+
+    @staticmethod
+    def sample(sequence=1, velocity=None):
+        return dict(version=3, epoch='b'*32, generation='c'*32, index=1318, sequence=sequence,
+                    sector_macro='sector_a', source_time=7.25, capture_time=100 + sequence,
+                    x=1.5, y=2.5, z=3.5, real_velocity=velocity)
+
+    def test_bind3_exact_fields_digest_and_same_bound_receipt(self):
+        from authority.experimental_tcp_motion import motion_digest
+        bridge, peer = self.ready_bridge()
+        values = [self.sample(), self.sample(2, {'x': 4.5, 'y': -2.5, 'z': 0})]
+        packets, errors = [], []
+        peer.settimeout(1)
+        def answer():
+            try:
+                for value in values:
+                    data, address = peer.recvfrom(769)
+                    fields = data.decode().split('|')
+                    packets.append(fields)
+                    reply = ['R', '1'*32, '2'*32, 'BOUND', *fields[4:11]]
+                    peer.sendto('|'.join(reply).encode(), address)
+            except BaseException as error:
+                errors.append(error)
+        worker = threading.Thread(target=answer)
+        worker.start()
+        try:
+            for value in values:
+                self.assertTrue(bridge(value, False))
+        finally:
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        for value, fields in zip(values, packets):
+            self.assertEqual(len(fields), 19)
+            self.assertEqual(fields[:4], ['M', '1'*32, '2'*32, 'BIND3'])
+            self.assertEqual(fields[5:11], ['b'*32, 'c'*32, '1318', str(value['sequence']),
+                                          'sector_a', motion_digest(value)])
+            self.assertEqual(list(map(float, fields[11:16])),
+                             [value[key] for key in ('source_time', 'capture_time', 'x', 'y', 'z')])
+            velocity = value['real_velocity']
+            expected_rate = ['-', '-', '-'] if velocity is None else [format(velocity[key], '.17g') for key in ('x', 'y', 'z')]
+            self.assertEqual(fields[16:19], expected_rate)
+        self.assertNotEqual(packets[0][4], packets[1][4])
+        self.assertEqual(bridge._bound[-2:], (2, motion_digest(values[1])))
+
+    def test_v3_apply_and_observe_modes_refuse_before_request_or_bind(self):
+        for options in ({'allow_apply': True}, {'observe_limit': 2}):
+            with self.subTest(options=options):
+                bridge, peer = self.ready_bridge(**options)
+                before = bridge._next
+                with self.assertRaisesRegex(ValueError, 'real-time position motion apply or observation'):
+                    bridge(self.sample(), False)
+                self.assertEqual(bridge._next, before)
+                self.assertEqual(bridge.state, 'failed')
+                peer.setblocking(False)
+                with self.assertRaises(BlockingIOError):
+                    peer.recv(769)
 
 
 if __name__=='__main__':unittest.main()

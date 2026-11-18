@@ -13,6 +13,10 @@ class MotionPlaybackTests(unittest.TestCase):
         subprocess.run(['luajit', 'tests/authority_motion_playback.lua'], cwd=ROOT,
                        check=True, capture_output=True, text=True, timeout=5)
 
+    def test_capture_clock_buffer_and_controller(self):
+        subprocess.run(['luajit', 'tests/authority_motion_capture_playback.lua'], cwd=ROOT,
+                       check=True, capture_output=True, text=True, timeout=5)
+
     def test_existing_owner_deferred_binding_and_stop(self):
         subprocess.run(['luajit', 'tests/authority_motion_playback_owner.lua'], cwd=ROOT,
                        check=True, capture_output=True, text=True, timeout=5)

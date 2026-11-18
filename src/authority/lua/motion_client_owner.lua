@@ -163,12 +163,18 @@ function M.new(o)
   if type(raw)~='string' or #raw>768 then return false end
   local p=split(raw)
   local full_pose = p[4]=='BIND2'
-  if (full_pose and (#p~=24 or apply or playback)) or (not full_pose and (#p~=18 or p[4]~='BIND')) or
+  local real_time = p[4]=='BIND3'
+  if (full_pose and (#p~=24 or apply or playback)) or
+     (real_time and (#p~=19 or apply)) or
+     (not full_pose and not real_time and (#p~=18 or p[4]~='BIND')) or
      p[1]~='M' or p[2]~=c.lease or p[3]~=c.attempt or
      not token(p[5],32) or p[6]~=c.epoch or p[7]~=c.generation or not name(p[10]) or not token(p[11],64) then return false end
   local index,seq=natural(p[8]),natural(p[9]);if not index or not seq then return false end
-  local t=number(p[12],0,1e12);local x,y,z=number(p[13],-1e7,1e7),number(p[14],-1e7,1e7),number(p[15],-1e7,1e7)
-  if not t or not x or not y or not z then return false end
+  local t=number(p[12],0,1e12)
+  local capture_time=real_time and number(p[13],0,1e12) or nil
+  local position_start=real_time and 14 or 13
+  local x,y,z=number(p[position_start],-1e7,1e7),number(p[position_start+1],-1e7,1e7),number(p[position_start+2],-1e7,1e7)
+  if not t or (real_time and not capture_time) or not x or not y or not z then return false end
   if apply and apply.observe_limit then
    if observe_count>=apply.observe_limit or index>saved.baseline or
     (stream_index and (index~=stream_index or seq<=stream_sequence or t<=stream_time)) then return false end
@@ -181,7 +187,7 @@ function M.new(o)
    end
   end
   local rate
-  local rate_start=full_pose and 19 or 16
+  local rate_start=full_pose and 19 or (real_time and 17 or 16)
   if p[rate_start]=='-' and p[rate_start+1]=='-' and p[rate_start+2]=='-' then
    if full_pose and (p[22]~='-' or p[23]~='-' or p[24]~='-') then return false end
    rate=nil
@@ -199,7 +205,9 @@ function M.new(o)
   if apply and apply.observe_limit then stream_index=index;stream_sequence=seq;stream_time=t end
   local arrival=last
   local entry=tracks[index]
-  if entry and (entry.sector~=p[10] or entry.dimensions~=#pose) then return false end
+  local sample_version=real_time and 3 or (full_pose and 2 or 1)
+  if entry and (entry.sector~=p[10] or entry.dimensions~=#pose or entry.sample_version~=sample_version) then return false end
+  if entry and real_time and (seq<=entry.last_sequence or t<entry.last_source_time or capture_time<=entry.last_capture_time) then return false end
   if not entry then
    if track_count>=c.max_tracks then return false end
    track_count=track_count+1
@@ -219,14 +227,17 @@ function M.new(o)
    if state~='ready' or not check() then return false end
    local buffer
    if not playback then
-    buffer=assert(new_buffer({dimensions=#pose,hold_only=true}))
+    local buffer_options={dimensions=#pose,hold_only=true}
+    if real_time then buffer_options.clock_basis='capture_time' end
+    buffer=assert(new_buffer(buffer_options))
     if type(buffer)~='table' or type(buffer.push)~='function' or state~='ready' or not check() then return false end
    elseif route~='saved' then return false end
-   entry={sector=p[10],binding=binding,buffer=buffer,route=route,dimensions=#pose};tracks[index]=entry
+   entry={sector=p[10],binding=binding,buffer=buffer,route=route,dimensions=#pose,sample_version=sample_version};tracks[index]=entry
   end
+  if real_time then entry.last_sequence=seq;entry.last_source_time=t;entry.last_capture_time=capture_time end
   staged=nil;preflight_ready=false;preflight_attempted=false
   pending={identity={p[5],p[6],p[7],p[8],p[9],p[10],p[11]},index=index,sequence=seq,sector=p[10],binding=entry.binding,
-   buffer=entry.buffer,entry=entry,route=entry.route,arrival=arrival,source_time=t,position=pose,rate=rate}
+   buffer=entry.buffer,entry=entry,route=entry.route,arrival=arrival,source_time=t,capture_time=capture_time,sample_version=sample_version,position=pose,rate=rate}
   deadline=last+c.timeout;state='pending'
   local ok,v=pcall(entry.binding.begin,entry.binding,{epoch=c.epoch,generation=c.generation,index=index,sequence=seq,sector_macro=p[10]},arrival)
   return ok and v==true and state=='pending' and check()
@@ -369,7 +380,10 @@ function M.new(o)
    local pose={};for i=1,#pending.position do pose[i]=pending.position[i] end
    local rate
    if pending.rate then rate={};for i=1,#pending.rate do rate[i]=pending.rate[i] end end
-   local snapshot={frame=pending.sector,sequence=pending.sequence,source_time=pending.source_time,pose=pose,rate=rate}
+   local snapshot={frame=pending.sector,sequence=pending.sequence,source_time=pending.source_time,pose=pose}
+   if pending.sample_version==3 then
+    snapshot.version=3;snapshot.capture_time=pending.capture_time;snapshot.real_rate=rate
+   else snapshot.rate=rate end
    local function vector_unchanged(v,expected)
     if type(v)~='table' or getmetatable(v)~=nil or #v~=#expected then return false end
     for k in pairs(v)do if type(k)~='number' or k%1~=0 or k<1 or k>#expected then return false end end
@@ -378,9 +392,15 @@ function M.new(o)
    end
    local function snapshot_unchanged()
     if getmetatable(snapshot)~=nil or snapshot.frame~=pending.sector or snapshot.sequence~=pending.sequence or
-       snapshot.source_time~=pending.source_time or snapshot.pose~=pose or snapshot.rate~=rate or
+       snapshot.source_time~=pending.source_time or snapshot.pose~=pose or
+       (pending.sample_version==3 and (snapshot.version~=3 or snapshot.capture_time~=pending.capture_time or snapshot.real_rate~=rate)) or
+       (pending.sample_version~=3 and snapshot.rate~=rate) or
        not vector_unchanged(pose,pending.position) then return false end
-    for k in pairs(snapshot)do if k~='frame' and k~='sequence' and k~='source_time' and k~='pose' and k~='rate' then return false end end
+    for k in pairs(snapshot)do
+     if k~='frame' and k~='sequence' and k~='source_time' and k~='pose' and
+       not (pending.sample_version==3 and (k=='version' or k=='capture_time' or k=='real_rate')) and
+       not (pending.sample_version~=3 and k=='rate') then return false end
+    end
     return not rate or vector_unchanged(rate,pending.rate)
    end
    local receiver=pending.buffer
@@ -400,7 +420,7 @@ function M.new(o)
       entry.initial_alignment_state = {used=false, uncertain=false}
       initial_sample = {snapshot=snapshot, arrival=pending.arrival}
      end
-     entry.playback=assert(playback.factory({enabled=true,binding=identity,buffer=c.buffer,
+     entry.playback=assert(playback.factory({enabled=true,binding=identity,buffer=c.buffer,sample_version=pending.sample_version==3 and 3 or 1,
       initial_sample=initial_sample,initial_alignment_state=entry.initial_alignment_state,
       prepared=function() return entry.control and entry.control:state() == 'prepared' and check() end,
       max_age=c.max_age,clock=c.clock,guard=function()

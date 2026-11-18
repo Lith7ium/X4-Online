@@ -1,6 +1,6 @@
 """One-shot participant motion bridge, created only after local resume."""
 
-from .experimental_tcp_motion import motion_value
+from .experimental_tcp_motion import check_motion_progress, motion_value
 
 RECOVERY_SETTER_FIXTURE = 'recovery_enh_870'
 RECOVERY_SETTER_EPOCH = '4ba7be438ebb04ec5bb85fdb95b5a488'
@@ -68,7 +68,7 @@ class ParticipantMotion:
         if playback:
             sample = motion_value(sample)
             motion_config = self.config['motion']
-            if (sample['version'] != 1 or sample['epoch'] != RECOVERY_SETTER_EPOCH or
+            if (sample['version'] not in (1, 3) or sample['epoch'] != RECOVERY_SETTER_EPOCH or
                     sample['generation'] != motion_config['generation'] or
                     sample['index'] != RECOVERY_SETTER_INDEX or
                     sample['sector_macro'] != 'cluster_06_sector001_macro'):
@@ -78,14 +78,16 @@ class ParticipantMotion:
                 # The first actual source sample enrolls; never fabricate its clock or sequence.
                 if sample['sequence'] != 1:
                     raise ValueError('recovery playback must enroll source sequence one')
-            elif sample['sequence'] <= previous[0] or sample['source_time'] <= previous[1]:
-                raise ValueError('recovery playback source regressed')
+            else:
+                if sample['sequence'] <= previous['sequence']:
+                    raise ValueError('recovery playback source regressed')
+                check_motion_progress(sample, previous)
         self._bind()
         confirmed = self.bridge(sample, despawn)
         if confirmed is True:
             self._confirmed_samples += 1
         if playback and confirmed is True:
-            self._playback_previous = (sample['sequence'], sample['source_time'])
+            self._playback_previous = sample
         return confirmed
 
     def _check_setter_sample(self, sample):
@@ -94,7 +96,7 @@ class ParticipantMotion:
         if (not self.running or self.stopped or
                 motion_config.get('saved_apply_fixture') != RECOVERY_SETTER_FIXTURE):
             raise RuntimeError('recovery setter unavailable')
-        if (type(sample) is not dict or sample.get('epoch') != RECOVERY_SETTER_EPOCH or
+        if (type(sample) is not dict or sample.get('version') != 1 or sample.get('epoch') != RECOVERY_SETTER_EPOCH or
                 type(sample.get('index')) is not int or sample['index'] != RECOVERY_SETTER_INDEX or
                 sample.get('generation') != motion_config['generation']):
             raise ValueError('recovery setter sample mismatch')

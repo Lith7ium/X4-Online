@@ -34,7 +34,8 @@ local function exercise(mode)
      close=function()all_stopped();events[#events+1]='binding';return true end}
    end},
   saved_playback={enabled=true,factory=function(options)
-   local controller=assert(playback.new({enabled=true,buffer=options.buffer,frame=options.binding.sector_macro,
+   assert(options.sample_version==(mode=='v3' and 3 or 1))
+   local controller=assert(playback.new({enabled=true,buffer=options.buffer,frame=options.binding.sector_macro,sample_version=options.sample_version,
     max_age=options.max_age,max_step=50,clock=options.clock,game=function()return now+100 end,
     paused=function()return is_paused end,guard=options.guard,record=function()return true end,fault=options.fault,
     read=function()return actual end,write=function(target)
@@ -45,8 +46,11 @@ local function exercise(mode)
    controllers[#controllers+1]=controller;return controller
   end}}))
  local function packet(number,x)
-  return table.concat({'M',lease,attempt,'BIND',string.format('%032x',number),epoch,generation,'1318',tostring(number),
-   'sector_a',('1'):rep(64),tostring(10000+number*.2),tostring(x),'0','0','-','-','-'},'|')
+  local fields={'M',lease,attempt,mode=='v3' and 'BIND3' or 'BIND',string.format('%032x',number),epoch,generation,'1318',tostring(number),
+   'sector_a',('1'):rep(64),tostring(10000+number*.2)}
+  if mode=='v3' then fields[#fields+1]=tostring(number*.2) end
+  for _,v in ipairs({tostring(x),'0','0','-','-','-'})do fields[#fields+1]=v end
+  return table.concat(fields,'|')
  end
  assert(owner:start())
  input[1]=packet(1,10);assert(owner:tick())
@@ -82,5 +86,5 @@ local function exercise(mode)
  assert(owner:outcome_uncertain()) -- STOP preserves the unmeasured last write.
  saved_callback(nil,'late event');assert(owner:state()=='failed' and writes==3)
 end
-for _,mode in ipairs({'normal','actor_change','write_failure','paused','expired'})do exercise(mode)end
+for _,mode in ipairs({'normal','v3','actor_change','write_failure','paused','expired'})do exercise(mode)end
 print('real owner playback, deferred binding, fixed actor and ordered STOP passed')

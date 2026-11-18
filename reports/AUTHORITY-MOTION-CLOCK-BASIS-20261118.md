@@ -1,6 +1,6 @@
 # Source clock and playback: bounded offline observation
 
-The paired source currently sends **source X4 game time**, while the playback
+At the measured checkpoint, the paired source sent **source X4 game time**, while the playback
 buffer maps the source timestamp onto the client's real-time clock using an
 offset and slew. That mapping does not establish that the two clocks advance at
 the same rate. A deterministic offline experiment with the actual Lua buffer
@@ -87,7 +87,7 @@ schema and synthetic-clock checks alone cannot establish those outcomes.
 The position-only V3 contract, pose-adjacent capture, real-second derivative,
 Lua source encoder, Python source bridge and generic TCP receiver are now
 implemented. [The contract and integration boundary](../docs/AUTHORITY-MOTION-V3.md)
-separate this support from native playback, which still refuses V3. The source
+separate this checkpoint from native playback, which then still refused V3. The source
 session does not opt in automatically. Shared schema acceptance required
 explicit refusal in older client-authority paths to prevent accidental unit
 mixing. A track pins its snapshot version.
@@ -115,3 +115,44 @@ Independent reviews covered registry append validation, capture ordering and
 source/receiver clock handling. No native cadence, Windows or Internet result
 is claimed. The full suite was not repeated; its previously recorded one error
 and 26 skips remain unresolved and this checkpoint is not whole-project acceptance.
+
+## Client playback implementation checkpoint
+
+BIND3 now carries the unchanged V3 snapshot from the Python participant through
+the Lua owner to the native playback factory. The buffer explicitly selects
+capture time; legacy game time stays separate. The controller keeps the original
+local arrival time, even across delayed binding, and retains version and clock
+progression checks across pause/reset. The recovered-client wrapper preserves
+both clocks in separate bounded diagnostic rows. Native one-shot apply and
+legacy client-authority remain V1-only.
+
+Review also found that callbacks could alter an already validated initial
+snapshot before its first setter. Initial alignment now freezes expected values
+and checks container, vector and metadata identity after callbacks, refusing
+prewrite changes without a setter and retaining uncertainty after a possible
+write. This protects both legacy and V3 alignment.
+
+Validation used fake game/native-ABI functions, not X4:
+
+- 24 Python participant/IPC/apply/STOP tests passed.
+- Nine Lua owner/buffer/controller wrappers passed. Additional focused capture
+  checks passed after review added legacy-estimator isolation and the V3 rate
+  bound of 5000 metres per real second.
+- Initial-alignment checks passed, with 35 native-adapter cases covering V3
+  metadata, shape and callback mutation. The affected wrapper was rerun after
+  fixing a false-value rate validation edge.
+- Three recovered-client composition methods passed, including six new V3
+  scenarios and existing legacy alignment/runtime/pause cases. The V3 method
+  passed again after the initial-alignment mutation fence changed.
+
+The composed V3 fixture holds game time at zero, interpolates from 1000 to
+1002.5 metres, predicts to 1012.5 metres using the explicit real-second rate,
+then expires according to original receipt time. STOP waits for control release.
+Invalid capture order, game regression and version switches cause no additional
+write. A sparse update still fails the existing 50-metre running correction
+bound. These observations establish the simulated composition only.
+
+The previously failing full-suite worker test passed individually with current
+socket-count diagnostics. Its original intermittent failure remains unexplained;
+the earlier full run and 26 platform/data-dependent skips are not a pass.
+No full suite, native X4, Windows or Internet trial was repeated at this stage.

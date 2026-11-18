@@ -331,20 +331,78 @@ local function align_initial_fixture(options, callbacks, binding)
    options.fixture == options.initial_alignment_fixture and type(options.prepared) == 'function')
   assert(binding.epoch == '4ba7be438ebb04ec5bb85fdb95b5a488' and binding.index == 1318)
   local sample = options.initial_sample
-  assert(type(sample) == 'table' and type(sample.snapshot) == 'table')
+  assert(type(sample) == 'table' and getmetatable(sample) == nil and type(sample.snapshot) == 'table')
   local snapshot, arrival = sample.snapshot, sample.arrival
-  assert(snapshot.frame == binding.sector_macro and (finite(snapshot.sequence) and snapshot.sequence >= 1 and snapshot.sequence <= 9007199254740991 and snapshot.sequence % 1 == 0) and
-   finite(snapshot.source_time) and snapshot.source_time >= 0)
-  assert(type(snapshot.pose) == 'table' and #snapshot.pose == 3)
-  local target = {x=snapshot.pose[1], y=snapshot.pose[2], z=snapshot.pose[3]}
-  for _, axis in ipairs({'x', 'y', 'z'}) do
-   assert(finite(target[axis]) and math.abs(target[axis]) <= 10000000)
+  assert(getmetatable(snapshot) == nil)
+  local allowed_fields = {frame=true, sequence=true, source_time=true, pose=true}
+  if options.sample_version == 3 then
+   allowed_fields.version = true
+   allowed_fields.capture_time = true
+   allowed_fields.real_rate = true
+  else
+   allowed_fields.version = true
+   allowed_fields.rate = true
   end
+  for key in pairs(sample) do assert(key == 'snapshot' or key == 'arrival') end
+  for key in pairs(snapshot) do assert(allowed_fields[key]) end
+  assert(snapshot.frame == binding.sector_macro and (finite(snapshot.sequence) and snapshot.sequence >= 1 and snapshot.sequence <= 9007199254740991 and snapshot.sequence % 1 == 0) and
+   finite(snapshot.source_time) and snapshot.source_time >= 0 and snapshot.source_time <= 1e12)
+  local function copy_vector(vector, limit)
+   assert(type(vector) == 'table' and getmetatable(vector) == nil and #vector == 3)
+   for key in pairs(vector) do assert(key == 1 or key == 2 or key == 3) end
+   local result = {}
+   for index = 1, 3 do
+    assert(finite(vector[index]) and math.abs(vector[index]) <= limit)
+    result[index] = vector[index]
+   end
+   return result
+  end
+  local pose_reference = snapshot.pose
+  local original_pose = copy_vector(pose_reference, 10000000)
+  local rate_reference = snapshot.rate
+  if options.sample_version == 3 then rate_reference = snapshot.real_rate end
+  local original_rate
+  if rate_reference ~= nil then original_rate = copy_vector(rate_reference, 5000) end
+  local original = {version=snapshot.version, frame=snapshot.frame, sequence=snapshot.sequence,
+   source_time=snapshot.source_time, capture_time=snapshot.capture_time}
+  if options.sample_version == 3 then
+   assert(snapshot.version == 3 and finite(snapshot.capture_time) and
+    snapshot.capture_time >= 0 and snapshot.capture_time <= 1e12 and snapshot.rate == nil)
+  else
+   assert((snapshot.version == nil or snapshot.version == 1) and
+    snapshot.capture_time == nil and snapshot.real_rate == nil)
+  end
+  local function vector_unchanged(vector, expected)
+   if expected == nil then return vector == nil end
+   if type(vector) ~= 'table' or getmetatable(vector) ~= nil or #vector ~= 3 then return false end
+   for key in pairs(vector) do if key ~= 1 and key ~= 2 and key ~= 3 then return false end end
+   for index = 1, 3 do if vector[index] ~= expected[index] then return false end end
+   return true
+  end
+  -- Callbacks share these objects with the owner. Detect replacement as well
+  -- as in-place changes before any setter, and retain original record metadata.
+  local function snapshot_unchanged()
+   if options.initial_sample ~= sample or getmetatable(sample) ~= nil or
+      sample.snapshot ~= snapshot or sample.arrival ~= arrival or getmetatable(snapshot) ~= nil then return false end
+   for key in pairs(sample) do if key ~= 'snapshot' and key ~= 'arrival' then return false end end
+   for key in pairs(snapshot) do if not allowed_fields[key] then return false end end
+   for _, key in ipairs({'version', 'frame', 'sequence', 'source_time', 'capture_time'}) do
+    if snapshot[key] ~= original[key] then return false end
+   end
+   local current_rate = snapshot.rate
+   if options.sample_version == 3 then current_rate = snapshot.real_rate end
+   return snapshot.pose == pose_reference and current_rate == rate_reference and
+    vector_unchanged(snapshot.pose, original_pose) and vector_unchanged(current_rate, original_rate)
+  end
+  local target = {x=original_pose[1], y=original_pose[2], z=original_pose[3]}
   assert(finite(options.max_age) and options.max_age > 0 and options.max_age <= 30)
   local function check_fresh_prepared()
+   assert(snapshot_unchanged())
    local now = callbacks.clock()
-   assert(finite(now) and finite(arrival) and arrival >= 0 and arrival <= now and
-    now - arrival < options.max_age and callbacks.guard() == true and options.prepared() == true)
+   assert(snapshot_unchanged() and finite(now) and finite(arrival) and arrival >= 0 and arrival <= now and
+    now - arrival < options.max_age)
+   assert(callbacks.guard() == true and snapshot_unchanged())
+   assert(options.prepared() == true and snapshot_unchanged())
    return now
   end
   check_fresh_prepared()
@@ -365,8 +423,9 @@ local function align_initial_fixture(options, callbacks, binding)
   assert(error_metres <= INITIAL_ALIGNMENT_READBACK_TOLERANCE)
   local verified_at = check_fresh_prepared()
   assert(options.record({kind='initial_alignment', index=binding.index, epoch=binding.epoch,
-   sector_macro=binding.sector_macro, source_sequence=snapshot.sequence,
-   source_time=snapshot.source_time, arrival=arrival, local_time=verified_at,
+   sector_macro=binding.sector_macro, source_sequence=original.sequence,
+   source_time=original.source_time, capture_time=original.capture_time,
+   arrival=arrival, local_time=verified_at,
    before={x=actual.x, y=actual.y, z=actual.z},
    actual={x=readback.x, y=readback.y, z=readback.z}, target=target,
    error=error_metres, tolerance=INITIAL_ALIGNMENT_READBACK_TOLERANCE}) == true)
@@ -384,6 +443,12 @@ end
 -- Separate sustained-playback factory. The one-shot state machine above is unchanged.
 function M.new_playback_x4(options)
  if type(options) ~= 'table' or options.enabled ~= true then return nil, 'disabled' end
+ local configuration = {}
+ for key, value in pairs(options) do configuration[key] = value end
+ options = configuration
+ local sample_version = options.sample_version or 1
+ assert(sample_version == 1 or sample_version == 3, 'unsupported playback sample version')
+ options.sample_version = sample_version
  assert(type(options.playback) == 'table' and type(options.playback.new) == 'function')
  assert(finite(options.max_step) and options.max_step > 0 and options.max_step <= 50)
  local selected = fixture(options.fixture)
@@ -399,6 +464,7 @@ function M.new_playback_x4(options)
  end
  local ffi = require('ffi')
  return options.playback.new({enabled=true, buffer=options.buffer, frame=binding.sector_macro,
+  sample_version=sample_version,
   clock=callbacks.clock, game=callbacks.game, paused=function() return ffi.C.IsGamePaused() end,
   guard=callbacks.guard, max_age=options.max_age, max_step=options.max_step,
   buffer_options=options.buffer_options,

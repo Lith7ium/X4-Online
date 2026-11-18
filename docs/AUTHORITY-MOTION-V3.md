@@ -39,8 +39,30 @@ TCP receiver preserve both clocks, validate progression and acknowledge the
 complete sample digest. This path has been checked with synthetic source and
 participant callbacks over actual loopback UDP/TCP.
 
-Native participant BIND/playback and client-authority motion still reject V3.
-No ordinary source-session configuration enables it yet. The next step is a
-versioned BIND3 path and playback adapter that uses capture time and real rates
-without substituting those values into legacy game-time fields. Existing
-continuity, freshness, prediction and correction limits remain unchanged.
+The participant IPC uses BIND3 with 19 fields. Relative to the legacy BIND
+packet, capture time follows game time and the final XYZ rate is explicitly
+real-time velocity:
+`M|lease|attempt|BIND3|request|epoch|generation|index|sequence|sector_macro|digest|source_time|capture_time|x|y|z|real_vx|real_vy|real_vz`.
+The existing BOUND receipt acknowledges the full V3 digest. Native one-shot
+apply/observe and older client-authority paths still refuse V3.
+
+The Lua owner passes a V3 snapshot with `version`, `frame`, `sequence`,
+`source_time`, `capture_time`, `pose` and optional `real_rate`. It never populates
+legacy `rate`. Playback explicitly selects `sample_version=3`, which selects
+the buffer's `clock_basis='capture_time'`. Original local receipt time controls
+freshness even if binding completes later. Clock history survives pause/reset;
+the track cannot change versions. The legacy defaults remain unchanged.
+
+The recovered-client adapter supports this path, including the approved
+once-only initial alignment. The native adapter checks that the initial
+snapshot and its metadata remain unchanged through callbacks before writing.
+Separate `AUTH_CLIENT_CAPTURE_CLOCK` diagnostics retain game and capture times
+without changing the older position-log fields. The existing 0.75-second
+continuity, 1-second freshness, 50-metre running correction and 3-metre initial
+readback limits remain unchanged.
+
+This client path has passed simulated clocks and native-ABI substitutes,
+including interpolation with stalled game time, prediction, expiry and STOP
+release. No native X4 V3 playback, Windows or Internet result is established.
+The next step is explicit source-session opt-in and a correlated native oracle
+that validates both clocks; ordinary source sessions still default to V1.

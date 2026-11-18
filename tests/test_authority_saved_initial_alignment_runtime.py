@@ -21,7 +21,12 @@ class SavedInitialAlignmentRuntimeTests(unittest.TestCase):
             subprocess.run(['cc','-shared','-fPIC','-O2',str(fixture),'-o',str(library)],check=True,capture_output=True)
             for case in ('success','default_off','stale','future','unprepared','profile','actor','frame',
                          'fixture','docked','player','invalid_prewrite_pose','stale_during_inspection','readback','identity_after_write',
-                         'record_failure','running_limit'):
+                         'record_failure','running_limit','v3_success','v3_bad_capture','v3_bad_game',
+                         'v3_bad_rate','v3_bad_rate_type','v3_bad_rate_key','v3_mixed_fields','v3_mutate_capture',
+                         'v3_mutate_version','v3_mutate_rate','v3_mutate_rate_reference',
+                         'v3_mutate_game','v3_mutate_pose','v3_mutate_pose_reference',
+                         'v3_mutate_snapshot_reference','v3_mutate_arrival','v3_mutate_key',
+                         'v3_postwrite_mutation'):
                 with self.subTest(case=case):
                     result = subprocess.run(['luajit','tests/authority_saved_initial_alignment_native.lua'],
                         cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(library),ALIGNMENT_CASE=case),

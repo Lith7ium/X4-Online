@@ -3,6 +3,7 @@ local ffi=require('ffi')
 ffi.cdef[[void TestSetRecoveryCode(bool);int TestWrites(void);int TestReads(void);void TestPause(bool);void TestZone(uint64_t);void TestDrift(float);]]
 ffi.C.TestSetRecoveryCode(true)
 local mode=arg[1]
+local real_time = mode and mode:match('^capture_') ~= nil
 local now=1
 local events,requests,input,output,logs={},{},{},{},{}
 function RegisterEvent(name,callback)assert(not events[name]);events[name]=callback;return true end
@@ -38,6 +39,7 @@ X4LAN_MOTION_BUFFER.new = function(options)
  local original_push = buffer.push
  buffer.push = function(self, snapshot, arrival)
   buffer_pushes[#buffer_pushes + 1] = {sequence=snapshot.sequence, source_time=snapshot.source_time,
+   capture_time=snapshot.capture_time, real_rate=snapshot.real_rate,
    x=snapshot.pose[1], arrival=arrival}
   return original_push(self, snapshot, arrival)
  end
@@ -56,7 +58,7 @@ local configuration={enabled=true,port=2345,lease=lease,attempt=attempt,epoch=ep
 -- This mode exercises the actual wrapper/owner/playback composition with a
 -- controllable native ownership adapter. MD behavior has separate tests.
 local control_phase, control_preparations, control_releases = 'new', 0, 0
-local alignment_enabled = mode == 'alignment' or mode == 'alignment_sparse'
+local alignment_enabled = mode == 'alignment' or mode == 'alignment_sparse' or real_time
 local controlled_fixture = mode == 'control' or alignment_enabled
 if controlled_fixture then
  configuration.saved_replica_control_fixture = 'recovery_enh_870'
@@ -96,8 +98,16 @@ for _,change in ipairs({{index=1317},{epoch=('c'):rep(32)},{saved_playback_fixtu
 end
 local client=assert(runtime.new_x4(configuration))
 local function packet(sequence,x,source)
- return {'M',lease,attempt,'BIND',string.format('%032x',sequence+15),epoch,generation,'1318',tostring(sequence),
+ local fields = {'M',lease,attempt,'BIND',string.format('%032x',sequence+15),epoch,generation,'1318',tostring(sequence),
   'cluster_06_sector001_macro',('1'):rep(64),tostring(source),tostring(x),'0','0','-','-','-'}
+ if real_time then
+  fields[4] = 'BIND3'
+  table.insert(fields, 13, tostring(100 + (sequence - 1) * .2))
+  if mode == 'capture_playback' and sequence > 1 then
+   fields[17], fields[18], fields[19] = '50', '0', '0'
+  end
+ end
+ return fields
 end
 local function send(sequence,x,source)
  input[1]=table.concat(packet(sequence,x,source),'|')
@@ -123,14 +133,33 @@ if alignment_enabled then
  send(1, 1000, 0)
  assert(client:state() == 'ready' and ffi.C.TestWrites() == 1)
  assert(output[#output]:find('|BOUND|', 1, true))
- assert(#logs == 2 and logs[1]:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true))
- assert(logs[2]:find('AUTH_CLIENT_PLAYBACK INITIAL ', 1, true))
- assert(logs[2]:find(' x=1000 y=0 z=0', 1, true))
+ local initial_line = real_time and 3 or 2
+ assert(#logs == (real_time and 4 or 2) and logs[1]:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true))
+ assert(logs[initial_line]:find('AUTH_CLIENT_PLAYBACK INITIAL ', 1, true))
+ assert(logs[initial_line]:find(' x=1000 y=0 z=0', 1, true))
  assert(client:tick() and ffi.C.TestWrites() == 1)
  assert(#buffer_pushes == 1 and buffer_pushes[1].sequence == 1)
  assert(buffer_pushes[1].source_time == 0 and buffer_pushes[1].arrival == 1 and buffer_pushes[1].x == 1000)
+ if real_time then
+  assert(buffer_pushes[1].capture_time == 100)
+  assert(logs[2]:find('latest_source_time=0 latest_capture_time=100', 1, true))
+ end
 
- if mode == 'alignment_sparse' then
+ if real_time and mode ~= 'capture_playback' and mode ~= 'capture_sparse' then
+  local invalid = packet(2, 1010, 0)
+  if mode == 'capture_duplicate' then invalid[13] = '100'
+  elseif mode == 'capture_regression' then invalid[13] = '99'
+  elseif mode == 'capture_game_regression' then invalid[12] = '-1'
+  elseif mode == 'capture_version_switch' then invalid[4] = 'BIND'; table.remove(invalid, 13)
+  else error('unknown capture case') end
+  input[1] = table.concat(invalid, '|')
+  now = 1.2
+  assert(not client:tick() and client:state() == 'failed')
+  assert(ffi.C.TestWrites() == 1 and #buffer_pushes == 1)
+  return
+ end
+
+ if mode == 'alignment_sparse' or mode == 'capture_sparse' then
   -- Reproduce the observed source/local gaps. Seeding does not relax expiry
   -- or make the next distant held sample eligible for a running correction.
   now = 2.01
@@ -152,7 +181,7 @@ if alignment_enabled then
  end
 
  now = 1.2
- send(2, 1010, .2)
+ send(2, 1010, real_time and 0 or .2)
  assert(client:tick() and ffi.C.TestWrites() == 2)
  -- Dense seq2 interpolates from the seeded seq1; a discarded seq1 would jump to 1010.
  assert(math.abs(tonumber(ffi.C.GetObjectPositionInSector(41).x) - 1002.5) < .001)
@@ -163,6 +192,33 @@ if alignment_enabled then
   end
  end
  assert(alignment_records == 1 and control_preparations == 2)
+
+ if mode == 'capture_playback' then
+  assert(buffer_pushes[2].source_time == 0 and buffer_pushes[2].capture_time == 100.2)
+  assert(buffer_pushes[2].real_rate[1] == 50)
+  now = 1.4
+  assert(client:tick() and ffi.C.TestWrites() == 3)
+  assert(math.abs(tonumber(ffi.C.GetObjectPositionInSector(41).x) - 1012.5) < .001)
+  now = 2.21 -- Original arrival was 1.2: expire and drain the last write.
+  assert(client:tick() and ffi.C.TestWrites() == 3)
+  input[1] = table.concat({'M',lease,attempt,'STOP',('8'):rep(32),epoch,generation},'|')
+  assert(client:tick() and client:state() == 'stopping' and control_releases == 1)
+  control_phase = 'released'
+  assert(client:tick() and client:state() == 'stopped')
+  assert(output[#output]:find('|STOPPED|', 1, true))
+  local stopped, capture_record = false, false
+  for _, line in ipairs(logs) do
+   if line:find('AUTH_CLIENT_PLAYBACK STOPPED ', 1, true) then
+    stopped = line:find(' uncertain=0 drained=1', 1, true) ~= nil
+   elseif line:find('AUTH_CLIENT_CAPTURE_CLOCK version=1 kind=STOPPED ', 1, true) then
+    capture_record = line:find('latest_source_time=0 ', 1, true) ~= nil and
+     line:find('latest_capture_time=100.2', 1, true) ~= nil
+   end
+  end
+  assert(stopped and capture_record)
+  print('capture-time binding, alignment, interpolation, prediction, expiry and STOP passed with fake ABI')
+  return
+ end
 
  now = 1.3
  ffi.C.TestDrift(1200)

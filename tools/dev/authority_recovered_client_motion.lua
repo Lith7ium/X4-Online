@@ -244,6 +244,7 @@ function M.new_x4(c)
  -- initial-alignment record. BOUND confirms binding/consumption, not movement.
  -- Only verified alignment permits the first BIND to seed interpolation.
  local playback_sequence,playback_source_time,playback_expected_reply=nil,nil,nil
+ local playback_version,playback_capture_time=nil,nil
  local playback_samples,playback_observations,playback_readbacks,playback_reports=0,0,0,0
  local playback_controller,playback_latest,playback_next_report=nil,nil,nil
  local playback_stopped_reported,playback_failure_reported=false,false
@@ -252,6 +253,14 @@ function M.new_x4(c)
  local playback_phases={waiting=true,held=true,interpolated=true,extrapolated=true,frozen=true,['held-no-rate']=true}
  local function finite(value)
   return type(value)=='number' and value==value and math.abs(value)<math.huge
+ end
+ -- Keep the existing position-evidence schema stable. This separate bounded
+ -- record preserves the two clock domains without relabeling game seconds.
+ local function playback_clock_log(kind, sequence, source_time, capture_time, local_time)
+  if playback_version ~= 3 then return end
+  assert(finite(source_time) and finite(capture_time) and finite(local_time))
+  DebugError(('[X4LAN] AUTH_CLIENT_CAPTURE_CLOCK version=1 kind=%s epoch=%s index=1318 render_sequence=%.0f latest_source_time=%.17g latest_capture_time=%.17g local_time=%.17g'):format(
+   kind, c.epoch, sequence, source_time, capture_time, local_time))
  end
  local function playback_log(kind,uncertain)
   assert(playback_latest and (kind=='SUMMARY' or kind=='STOPPED'))
@@ -262,6 +271,7 @@ function M.new_x4(c)
    value.target.x,value.target.y,value.target.z,value.error)
   if kind=='STOPPED' then line=line..' uncertain='..(uncertain and '1' or '0')..' drained='..(playback_drained and '1' or '0') end
   DebugError(line)
+  playback_clock_log(kind, value.sequence, value.latest_source_time, value.latest_capture_time, value.local_time)
  end
  local function playback_record(event)
   assert(type(event)=='table' and event.index==1318 and event.epoch==c.epoch and event.sector_macro==playback_sector)
@@ -271,6 +281,7 @@ function M.new_x4(c)
     c.epoch, event.source_sequence, event.source_time, event.arrival, event.local_time,
     event.before.x, event.before.y, event.before.z, event.target.x, event.target.y, event.target.z,
     event.actual.x, event.actual.y, event.actual.z, event.error))
+   playback_clock_log('INITIAL_ALIGNMENT', event.source_sequence, event.source_time, event.capture_time, event.local_time)
    return true
   end
   assert(event.kind=='observation' or event.kind=='readback')
@@ -279,6 +290,7 @@ function M.new_x4(c)
    for _,axis in ipairs({'x','y','z'})do assert(finite(pose[axis]))end
   end
   assert(finite(event.latest_source_time) and finite(event.local_time) and finite(event.game_time) and integer(event.source_sequence) and event.source_sequence>=1)
+  if playback_version == 3 then assert(finite(event.latest_capture_time)) end
   local phase=playback_latest.phase
   if event.kind=='observation' then
    assert(playback_phases[event.phase]);phase=event.phase;playback_observations=playback_observations+1
@@ -287,6 +299,7 @@ function M.new_x4(c)
   playback_latest={actual={x=event.actual.x,y=event.actual.y,z=event.actual.z},
    target={x=event.target.x,y=event.target.y,z=event.target.z},sequence=event.source_sequence,phase=phase,
    local_time=event.local_time,game_time=event.game_time,latest_source_time=event.latest_source_time,
+   latest_capture_time=event.latest_capture_time,
    error=math.sqrt(dx*dx+dy*dy+dz*dz)}
   if playback_reports<64 and event.local_time>=playback_next_report then
    playback_reports=playback_reports+1;playback_next_report=event.local_time+1;playback_log('SUMMARY')
@@ -314,6 +327,7 @@ function M.new_x4(c)
  end
  local playback_adapter={new=function(options)
   assert(saved_playback_fixture and not playback_controller and not C.IsGamePaused() and options.guard()==true)
+  assert(options.sample_version == playback_version)
   local actual=options.read()
   assert(not C.IsGamePaused() and options.guard()==true and type(actual)=='table')
   for _,axis in ipairs({'x','y','z'})do assert(finite(actual[axis]))end
@@ -322,9 +336,11 @@ function M.new_x4(c)
    not C.IsGamePaused() and options.guard()==true)
   DebugError(('[X4LAN] AUTH_CLIENT_PLAYBACK INITIAL version=1 epoch=%s index=1318 sector=%s source_sequence=%.0f local_time=%.17g game_time=%.17g x=%.17g y=%.17g z=%.17g'):format(
    c.epoch,playback_sector,playback_sequence,local_time,game_time,actual.x,actual.y,actual.z))
+  playback_clock_log('INITIAL', playback_sequence, playback_source_time, playback_capture_time, local_time)
   assert(not C.IsGamePaused() and options.guard()==true)
   playback_latest={actual={x=actual.x,y=actual.y,z=actual.z},target={x=actual.x,y=actual.y,z=actual.z},
-   sequence=playback_sequence,phase='waiting',local_time=local_time,game_time=game_time,error=0}
+   sequence=playback_sequence,phase='waiting',local_time=local_time,game_time=game_time,error=0,
+   latest_source_time=playback_source_time,latest_capture_time=playback_capture_time}
   playback_next_report=local_time+1
   playback_controller=assert(X4LAN_MOTION_PLAYBACK.new(options))
   local first=true
@@ -393,15 +409,28 @@ function M.new_x4(c)
   assert(type(value)=='string' and #value<=768)
   local fields={};for item in (value..'|'):gmatch('(.-)|')do fields[#fields+1]=item end
   assert(fields[1]=='M' and fields[2]==c.lease and fields[3]==c.attempt)
-  if fields[4]=='BIND' then
-   assert(#fields==18 and token(fields[5]) and fields[6]==c.epoch and fields[7]==c.generation and allowed[fields[8]])
+  if fields[4]=='BIND' or fields[4]=='BIND3' then
+   local sample_version = fields[4] == 'BIND3' and 3 or 1
+   local expected_fields = sample_version == 3 and 19 or 18
+   assert(#fields==expected_fields and token(fields[5]) and fields[6]==c.epoch and fields[7]==c.generation and allowed[fields[8]])
+   assert(sample_version ~= 3 or not saved_apply_fixture)
    if saved_playback_fixture then
     assert(fields[8]=='1318' and fields[10]==playback_sector and not playback_expected_reply)
     local sequence,source_time=tonumber(fields[9]),tonumber(fields[12])
     assert(fields[9]:match('^[1-9]%d*$') and #fields[9]<=16 and integer(sequence) and sequence<=9007199254740991 and
      string.format('%.0f',sequence)==fields[9] and (not playback_sequence or sequence>playback_sequence) and
      finite(source_time) and source_time>=0 and source_time<=1e12 and
-     (not playback_source_time or source_time>playback_source_time))
+     (not playback_version or sample_version == playback_version))
+    if sample_version == 3 then
+     local capture_time = tonumber(fields[13])
+     assert(finite(capture_time) and capture_time >= 0 and capture_time <= 1e12 and
+      (not playback_capture_time or capture_time > playback_capture_time) and
+      (not playback_source_time or source_time >= playback_source_time))
+     playback_capture_time = capture_time
+    else
+     assert(not playback_source_time or source_time > playback_source_time)
+    end
+    playback_version = sample_version
     playback_sequence,playback_source_time=sequence,source_time;playback_samples=playback_samples+1
     playback_expected_reply=table.concat({'R',c.lease,c.attempt,'BOUND',unpack(fields,5,11)},'|')
    end

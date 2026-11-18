@@ -153,6 +153,20 @@ class Install(unittest.TestCase):
       cwd=ROOT, capture_output=True, text=True, timeout=5,
       env=dict(os.environ, LD_PRELOAD=str(library)))
      self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+ def test_capture_clock_playback_composition_and_refusals(self):
+  with tempfile.TemporaryDirectory() as directory:
+   library = Path(directory) / 'abi.so'
+   subprocess.run(
+    ['cc', '-O2', '-shared', '-fPIC', 'tests/fixtures/saved_motion_apply_abi.c', '-o', str(library)],
+    cwd=ROOT, check=True, capture_output=True)
+   for mode in ('capture_playback', 'capture_duplicate', 'capture_regression',
+                'capture_game_regression', 'capture_version_switch', 'capture_sparse'):
+    with self.subTest(mode=mode):
+     result = subprocess.run(
+      ['luajit', 'tests/authority_recovered_client_playback.lua', mode],
+      cwd=ROOT, capture_output=True, text=True, timeout=5,
+      env=dict(os.environ, LD_PRELOAD=str(library)))
+     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
  def test_saved_apply_combines_with_player_sector_after_bound(self):
   self.status=('ready',subject.RECOVERY_APPLY_EPOCH,10082,'d'*64)
   loader=self.ui/'authority_download_load_probe.lua'

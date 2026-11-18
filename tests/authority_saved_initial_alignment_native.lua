@@ -57,6 +57,45 @@ if mode == 'identity_after_write' then ffi.C.TestAlignmentMode(3) end
 if mode == 'player' then ffi.C.TestAlignmentMode(4) end
 if mode == 'invalid_prewrite_pose' then ffi.C.TestAlignmentMode(5) end
 if mode == 'default_off' then options.initial_alignment_fixture = nil end
+local real_time_case = mode:match('^v3_') ~= nil
+if real_time_case then
+ options.sample_version = 3
+ snapshot.version = 3
+ snapshot.capture_time = 123.5
+ snapshot.real_rate = {4, 0, 0}
+ snapshot.rate = nil
+end
+if mode == 'v3_bad_capture' then snapshot.capture_time = 0/0 end
+if mode == 'v3_bad_game' then snapshot.source_time = 1e12+1 end
+if mode == 'v3_bad_rate' then snapshot.real_rate[1] = 5001 end
+if mode == 'v3_bad_rate_type' then snapshot.real_rate = false end
+if mode == 'v3_bad_rate_key' then snapshot.real_rate.extra = 0 end
+if mode == 'v3_mixed_fields' then snapshot.rate = {0, 0, 0} end
+local mutations = {
+ v3_mutate_capture=function() snapshot.capture_time = 456 end,
+ v3_mutate_version=function() snapshot.version = 1 end,
+ v3_mutate_rate=function() snapshot.real_rate[1] = 10 end,
+ v3_mutate_rate_reference=function() snapshot.real_rate = {4, 0, 0} end,
+ v3_mutate_game=function() snapshot.source_time = 78 end,
+ v3_mutate_pose=function() snapshot.pose[1] = 1001 end,
+ v3_mutate_pose_reference=function() snapshot.pose = {1000, 25, -10} end,
+ v3_mutate_snapshot_reference=function()
+  local replacement = {}
+  for key, value in pairs(snapshot) do replacement[key] = value end
+  options.initial_sample.snapshot = replacement
+ end,
+ v3_mutate_arrival=function() options.initial_sample.arrival = .95 end,
+ v3_mutate_key=function() snapshot.extra = true end,
+}
+if mutations[mode] then
+ options.prepared = function() mutations[mode](); return true end
+end
+if mode == 'v3_postwrite_mutation' then
+ options.prepared = function()
+  if ffi.C.TestWrites() > 0 then snapshot.capture_time = 456 end
+  return true
+ end
+end
 local result = module.new_playback_x4(options)
 if mode == 'default_off' then
  assert(result and ffi.C.TestWrites() == 0 and #events == 0)
@@ -64,12 +103,14 @@ if mode == 'default_off' then
 end
 local rejected_before_write = {stale=true, future=true, unprepared=true, profile=true, actor=true,
  frame=true, fixture=true, docked=true, player=true, invalid_prewrite_pose=true, stale_during_inspection=true}
+if mutations[mode] or mode:match('^v3_bad_') or mode == 'v3_mixed_fields' then
+ rejected_before_write[mode] = true
+end
 if rejected_before_write[mode] then
  assert(not result and ffi.C.TestWrites() == 0 and #faults == 1 and not faults[1].uncertain)
- assert(snapshot.sequence == 7 and snapshot.source_time == 77)
  return
 end
-if mode == 'readback' or mode == 'identity_after_write' or mode == 'record_failure' then
+if mode == 'readback' or mode == 'identity_after_write' or mode == 'record_failure' or mode == 'v3_postwrite_mutation' then
  assert(not result and ffi.C.TestWrites() == 1 and #faults == 1 and faults[1].uncertain)
  assert(options.initial_alignment_state.uncertain)
  return
@@ -78,6 +119,7 @@ assert(result and ffi.C.TestWrites() == 1 and #events == 1 and #faults == 0)
 local record = events[1]
 assert(record.kind == 'initial_alignment' and record.source_sequence == 7 and record.source_time == 77)
 assert(record.arrival == .9 and record.local_time == 1 and record.before.x == 0)
+if real_time_case then assert(record.capture_time == 123.5) else assert(record.capture_time == nil) end
 assert(record.target.x == 1000 and record.actual.x == 1000 and record.error == 0 and record.tolerance == 3)
 assert(math.abs(ffi.C.TestYaw() - 90) < .0001) -- Native setter receives degrees; readback remains radians.
 assert(options.initial_alignment_state.used and not options.initial_alignment_state.uncertain)
@@ -87,5 +129,5 @@ if mode == 'running_limit' then
  assert(not result:tick() and ffi.C.TestWrites() == 1)
  return
 end
-assert(mode == 'success')
+assert(mode == 'success' or mode == 'v3_success')
 assert(not module.new_playback_x4(options) and ffi.C.TestWrites() == 1) -- Consumed state cannot retry.

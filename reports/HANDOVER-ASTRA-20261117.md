@@ -13,13 +13,18 @@ is committed at `80371717`; six focused tests pass. No new native attempt follow
 The user has now **approved** additional monotonic capture time and explicit
 real-second rates, retaining game time. Historical pending-clock statements
 below are superseded. Position-only v3 schema, source capture and transport are
-implemented with focused synthetic and real-loopback checks. Native BIND/playback
-and client-authority paths explicitly refuse V3. The next implementation step is
-BIND3 and capture-time playback, followed by the opt-in source-session wiring;
+implemented with focused synthetic and real-loopback checks. BIND3 and the
+capture-time client playback path now also pass fake-native composition checks,
+including initial alignment, ongoing writes, freshness expiry and STOP/release.
+Older client-authority and one-shot apply paths still refuse V3. The next step is
+explicit source-session wiring and a native oracle for both clocks;
 do not retry the old native performance fixture unchanged. See
 [the implementation evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#first-implementation-checkpoint).
 Native/client gameplay integration remains unproven. GPU-free server work stays deferred. Goal remains active and the full
 Linux/Windows Internet gameplay objective remains unmet.
+The historical full-suite failure was retried individually with current
+diagnostics and passed; this does not resolve the previous full-run failure or
+26 environment/platform skips. No full suite or X4 launch was repeated here.
 See [the latest native result](AUTHORITY-CLIENT-PLAYBACK-20261117.md#unprofiled-process-helper-comparison-2026-11-18)
 and [the approved clock direction](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#approved-direction-2026-11-18).
 
