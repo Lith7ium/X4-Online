@@ -3,7 +3,8 @@
 The saved_playback_fixture option enables bounded-evidence sustained playback;
 the default and separately enabled saved_apply fixture behavior are unchanged.
 The saved_replica_control_fixture option adds the dedicated local control owner
-only alongside matching saved playback.
+only alongside matching saved playback. The saved_initial_alignment_fixture
+option explicitly adds one initial position/readback for that controlled fixture.
 
 No game, helper, listener or socket is started. The caller owns the fourth UDP
 FD handoff, all process/checkpoint/STOP fences, final log checks and redaction.

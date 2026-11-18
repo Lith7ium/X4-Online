@@ -923,3 +923,36 @@ SHA256 `4cb8b7914c6313d7208a48028d39a0d273470507bacb8935898184366c4db9b2`.
 The earlier audit file is preserved. No full suite or unchanged engine test
 was repeated. This is not native Windows/Windows CLI, actual source-X4 motion,
 initial-alignment, physical-velocity, exact AI-stack, WAN or gameplay proof.
+
+## Approved initial placement: opt-in implementation
+
+The user approved one initial placement at the server position with native
+readback on the isolated ship. The subsequent correction bound remains 50 m.
+Linux and Windows configurations now accept
+`saved_initial_alignment_fixture="recovery_enh_870"`, requiring both matching
+playback and shared-control options. It defaults off and retains the fixed
+registry epoch/index, ENH-870 identity, profile and actor/frame guards.
+
+After shared preparation, the owner supplies the first sample with its original
+sequence, source time and arrival time. It consumes the alignment attempt before
+constructing playback. The native factory checks freshness and preparation,
+reads the actual pose, sets the supplied XYZ while preserving orientation, and
+reads back the pose. Readback must be within the existing 3 m endpoint tolerance.
+Only then may the normal INITIAL and BOUND acknowledgments follow. A separate
+`AUTH_CLIENT_INITIAL_ALIGNMENT` record retains pre-position, target, readback,
+error and original sample timing for the next native comparison.
+
+Expired/future samples or invalid native poses refuse before writing. A setter,
+readback or observer fault after entering the write retains uncertainty even
+before a playback object exists, including reentrant STOP. The current attempt
+fails without retry or an age reset. No-option enrollment, later 50 m corrections,
+velocity handling, clock mapping and the read-only binder remain unchanged.
+
+Focused checks pass: 17 native-factory fake-ABI scenarios, three owner lifecycle
+scenarios, configuration/forwarding checks, the assembled wrapper's 1,000 m
+initial placement followed by a rejected excessive correction, and relevant
+existing writer/owner/playback regressions. Review found and corrected a missing
+finite-XYZ check on the native pre-write pose; its new refusal test passed.
+These are simulated engine checks. Neither preceding native smoke enabled this
+new option. Actual source-X4 placement/readback and sustained paired playback
+remain to be demonstrated; no full suite was repeated.

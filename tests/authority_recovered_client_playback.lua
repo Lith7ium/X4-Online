@@ -44,8 +44,12 @@ local configuration={enabled=true,port=2345,lease=lease,attempt=attempt,epoch=ep
 -- This mode exercises the actual wrapper/owner/playback composition with a
 -- controllable native ownership adapter. MD behavior has separate tests.
 local control_phase, control_preparations, control_releases = 'new', 0, 0
-if mode == 'control' then
+local controlled_fixture = mode == 'control' or mode == 'alignment'
+if controlled_fixture then
  configuration.saved_replica_control_fixture = 'recovery_enh_870'
+ if mode == 'alignment' then
+  configuration.saved_initial_alignment_fixture = 'recovery_enh_870'
+ end
  X4LAN_SAVED_REPLICA_CONTROL = {new_x4=function(options)
   assert(options.enabled == true and options.fixture == 'recovery_enh_870')
   assert(options.expected_save_path == configuration.expected_save_path)
@@ -89,7 +93,7 @@ local function send(sequence,x,source)
  assert(request.screen=='X4AuthoritySavedBaselineMotionBind')
  if mode=='paused_initial' and sequence==1 then ffi.C.TestPause(true) end
  events['X4AuthoritySavedBaselineMotionBind.Result'](nil,request.args.request_id..'|Bound|1318|0x29|0x2b')
- if mode == 'control' then
+ if controlled_fixture then
   assert(client:state() == 'preparing' and control_phase == 'preparing')
   assert(not output[#output]:find('|BOUND|', 1, true) or sequence > 1)
   if sequence == 1 then
@@ -100,7 +104,37 @@ local function send(sequence,x,source)
   assert(client:tick() and client:state() == 'ready')
  end
 end
-send(1,1000000,0) -- Arbitrary first target is enrollment only and must never write.
+if mode == 'alignment' then
+ -- Exercise the complete wrapper/router/owner/native-factory composition.
+ -- Only the explicitly selected first pose may exceed the ongoing 50 m bound.
+ send(1, 1000, 0)
+ assert(client:state() == 'ready' and ffi.C.TestWrites() == 1)
+ assert(output[#output]:find('|BOUND|', 1, true))
+ assert(#logs == 2 and logs[1]:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true))
+ assert(logs[2]:find('AUTH_CLIENT_PLAYBACK INITIAL ', 1, true))
+ assert(logs[2]:find(' x=1000 y=0 z=0', 1, true))
+ assert(client:tick() and ffi.C.TestWrites() == 1)
+
+ now = 1.2
+ send(2, 1010, .2)
+ assert(client:tick() and ffi.C.TestWrites() == 2)
+ local alignment_records = 0
+ for _, line in ipairs(logs) do
+  if line:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true) then
+   alignment_records = alignment_records + 1
+  end
+ end
+ assert(alignment_records == 1 and control_preparations == 2)
+
+ now = 1.3
+ ffi.C.TestDrift(1200)
+ assert(not client:tick() and client:state() == 'failed')
+ assert(ffi.C.TestWrites() == 2) -- The later excessive correction never writes.
+ assert(not client:tick() and ffi.C.TestWrites() == 2)
+ print('explicit initial alignment composes once and retains the ongoing distance bound')
+ return
+end
+send(1,1000000,0) -- Default first target is enrollment only and must never write.
 if mode=='paused_initial' then
  assert(client:state()=='failed' and ffi.C.TestWrites()==0 and ffi.C.TestReads()==0)
  for _,line in ipairs(logs)do assert(not line:find(' INITIAL ',1,true))end

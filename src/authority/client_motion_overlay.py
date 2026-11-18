@@ -52,7 +52,10 @@ def validate_motion_settings(status, settings):
         copied_settings['indices'] = list(copied_settings['indices'])
 
     fields = {'port', 'lease', 'attempt', 'generation', 'nonce', 'router_generation', 'timeout'}
-    allowed_optional = {'player_sector', 'saved_apply_fixture', 'saved_playback_fixture', 'saved_replica_control_fixture'}
+    allowed_optional = {
+        'player_sector', 'saved_apply_fixture', 'saved_playback_fixture',
+        'saved_replica_control_fixture', 'saved_initial_alignment_fixture',
+    }
     required_fields = set(copied_settings) - allowed_optional
     if required_fields not in (fields | {'index'}, fields | {'indices'}):
         raise ValueError('invalid client motion settings')
@@ -73,6 +76,13 @@ def validate_motion_settings(status, settings):
             copied_settings['saved_replica_control_fixture'] != RECOVERY_APPLY_FIXTURE or
             saved_playback_fixture != RECOVERY_APPLY_FIXTURE):
         raise ValueError('invalid recovery saved-replica-control fixture')
+
+    # Matching playback above also enforces the fixed saved epoch and index.
+    if 'saved_initial_alignment_fixture' in copied_settings and (
+            copied_settings['saved_initial_alignment_fixture'] != RECOVERY_APPLY_FIXTURE or
+            copied_settings.get('saved_replica_control_fixture') != RECOVERY_APPLY_FIXTURE or
+            saved_playback_fixture != RECOVERY_APPLY_FIXTURE):
+        raise ValueError('invalid recovery saved-initial-alignment fixture')
 
     player_sector = copied_settings.get('player_sector')
     if 'player_sector' in copied_settings:
@@ -141,6 +151,8 @@ def render_motion_config(status, settings):
         config += ',authority_client_motion_saved_playback_fixture="' + settings['saved_playback_fixture'] + '"'
     if settings.get('saved_replica_control_fixture') is not None:
         config += ',authority_client_motion_saved_replica_control_fixture="' + settings['saved_replica_control_fixture'] + '"'
+    if settings.get('saved_initial_alignment_fixture') is not None:
+        config += ',authority_client_motion_saved_initial_alignment_fixture="' + settings['saved_initial_alignment_fixture'] + '"'
     if settings.get('player_sector') is not None:
         player_sector = settings['player_sector']
         for name in ('incarnation', 'nonce'):
@@ -190,6 +202,11 @@ def transform_motion_control(control_text, settings):
         code = code.replace(
             '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
             '    saved_replica_control_fixture=cfg.authority_client_motion_saved_replica_control_fixture,\n'
+            '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
+    if settings.get('saved_initial_alignment_fixture') is not None:
+        code = code.replace(
+            '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
+            '    saved_initial_alignment_fixture=cfg.authority_client_motion_saved_initial_alignment_fixture,\n'
             '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
     player_sector = settings.get('player_sector')
     if player_sector is not None:

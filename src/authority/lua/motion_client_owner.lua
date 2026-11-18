@@ -16,7 +16,7 @@ local function name(v)return type(v)=='string' and #v>=1 and #v<=128 and v:match
 local function split(v)local p={};for s in (v..'|'):gmatch('(.-)|')do p[#p+1]=s end;return p end
 -- Fixed diagnostics only; external callback text never becomes log data.
 local playback_stages={}
-for word in ('state clock guard paused buffer_reset sample arrival sequence buffer_push read read_pose game_read game_value game_clock readback_record render render_frame observation_record distance write write_state'):gmatch('%S+')do playback_stages[word]=true end
+for word in ('state initial_alignment clock guard paused buffer_reset sample arrival sequence buffer_push read read_pose game_read game_value game_clock readback_record render render_frame observation_record distance write write_state'):gmatch('%S+')do playback_stages[word]=true end
 local native_stages={}
 for word in ('initial profile profile_recheck references actor sector zone player player_container docking fixture fixture_sector fixture_code validated position_read setter'):gmatch('%S+')do native_stages[word]=true end
 local function playback_diagnostic(stage,native_stage)
@@ -60,6 +60,10 @@ function M.new(o)
   assert(playback and c.max_tracks==1 and type(replica_control)=='table' and
    replica_control.enabled==true and type(replica_control.factory)=='function','invalid saved replica control')
  end
+ if playback and playback.initial_alignment_fixture ~= nil then
+  assert(replica_control and playback.initial_alignment_fixture == 'recovery_enh_870' and
+   c.epoch == '4ba7be438ebb04ec5bb85fdb95b5a488', 'initial alignment requires prepared fixture control')
+ end
  local finish_binding
  local stopping_identity
  local state,busy='new',false;local last,pending,deadline,delivered=nil,nil,nil,nil
@@ -74,6 +78,7 @@ function M.new(o)
   -- Capture drain evidence before stop() changes the playback state. Regardless
   -- of capture failures, disable every writer before any external callback.
   for _,entry in pairs(tracks)do
+   if entry.initial_alignment_state and entry.initial_alignment_state.uncertain then playback_uncertain = true end
    if entry.playback then
     local observed,uncertain=pcall(entry.playback.outcome_uncertain,entry.playback)
     playback_uncertain=playback_uncertain or not observed or uncertain==true
@@ -388,11 +393,22 @@ function M.new(o)
      for key,value in pairs(identity)do assert(entry.playback_binding[key]==value)end
     else
      entry.playback_binding=identity
+     local initial_sample
+     if playback.initial_alignment_fixture ~= nil then
+      assert(entry.control and entry.control:state() == 'prepared' and not entry.initial_alignment_attempted)
+      entry.initial_alignment_attempted = true -- Never retry a possibly dispatched initial setter.
+      entry.initial_alignment_state = {used=false, uncertain=false}
+      initial_sample = {snapshot=snapshot, arrival=pending.arrival}
+     end
      entry.playback=assert(playback.factory({enabled=true,binding=identity,buffer=c.buffer,
+      initial_sample=initial_sample,initial_alignment_state=entry.initial_alignment_state,
+      prepared=function() return entry.control and entry.control:state() == 'prepared' and check() end,
       max_age=c.max_age,clock=c.clock,guard=function()
        return state~='failed' and state~='stopped' and (not entry.control or entry.control:state()=='prepared') and check()
       end,
       fault=function(reason,uncertain,stage,native_stage)
+       -- Factory-time alignment can mutate before a playback object is returned.
+       playback_uncertain = playback_uncertain or uncertain == true
        fail('playback',playback_diagnostic(stage,native_stage))
       end}))
      assert(type(entry.playback.push)=='function' and type(entry.playback.tick)=='function' and
@@ -461,6 +477,7 @@ function M.new(o)
  function api:outcome_uncertain()
   if playback_uncertain or control_uncertain or current_control_uncertainty() then return true end
   for _,entry in pairs(tracks)do
+   if entry.initial_alignment_state and entry.initial_alignment_state.uncertain then return true end
    if entry.playback and entry.playback:outcome_uncertain() then return true end
   end
   return false
@@ -542,9 +559,10 @@ function M.new_x4(o)
    type(settings.module)=='table' and type(settings.module.new_playback_x4)=='function' and
    type(settings.playback)=='table' and type(settings.record)=='function')
   local native_playback=settings.module.new_playback_x4
-  c.saved_playback={enabled=true,factory=function(opt)
+  c.saved_playback={enabled=true,initial_alignment_fixture=settings.initial_alignment_fixture,factory=function(opt)
    opt.expected_save_path=c.expected_save_path;opt.test_profile='45841';opt.resolve=c.resolve
    opt.fixture=settings.fixture;opt.playback=settings.playback;opt.max_step=settings.max_step
+   opt.initial_alignment_fixture=settings.initial_alignment_fixture
    opt.buffer_options=settings.buffer_options;opt.record=settings.record
    return native_playback(opt)
   end}

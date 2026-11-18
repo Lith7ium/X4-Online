@@ -7,10 +7,18 @@ owned shutdown. The planned five-second trajectory took longer; cached pose
 times span 9.8218675 game seconds, with delay cause unmeasured. No server/TLS or
 native-Windows run was involved. See the
 [Windows shared-control evidence](AUTHORITY-CLIENT-PLAYBACK-20261117.md#windows-shared-control-smoke-under-proton-2026-11-18).
-The user has now approved once-only initial placement at the server position
-with native readback on the isolated fixture, retaining the subsequent 50 m
-correction bound. That implementation is the next step; clock mapping remains
-an open decision. GPU-free server work stays deferred in favor of clients.
+The user has approved once-only initial placement at the server position with
+native readback on the isolated fixture, retaining the subsequent 50 m bound.
+The explicit `saved_initial_alignment_fixture="recovery_enh_870"` option is now
+implemented and passes focused fake-engine, configuration and assembled-client
+checks. It requires shared preparation, preserves original sample timing and
+retains uncertainty after an unconfirmed write. Both native smoke runs above
+left this newer option off. The next evidence must come from the actual source
+pair using a real first server pose, never synthetic enrollment XYZ zero. See
+[implementation and test boundaries](AUTHORITY-CLIENT-PLAYBACK-20261117.md#approved-initial-placement-opt-in-implementation).
+Clock mapping remains an open decision. GPU-free server work stays deferred
+in favor of clients. Initial-placement questions in the historical entries
+below are superseded by this approval and implementation.
 
 Latest client implementation: shared Linux/Windows overlays now accept the
 explicit `saved_replica_control_fixture="recovery_enh_870"` option alongside

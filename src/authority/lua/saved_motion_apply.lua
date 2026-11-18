@@ -317,6 +317,70 @@ function M.new_x4(options)
  return M.new(callbacks)
 end
 
+-- One explicitly selected fixture placement before sustained playback exists.
+-- Three metres is the existing bounded native playback endpoint proof tolerance.
+-- This exception never changes the later playback correction limit (50 metres).
+local INITIAL_ALIGNMENT_READBACK_TOLERANCE = 3
+local function align_initial_fixture(options, callbacks, binding)
+ local mutation_requested = false
+ local alignment_state = options.initial_alignment_state
+ local ok = pcall(function()
+  assert(type(alignment_state) == 'table' and alignment_state.used == false and alignment_state.uncertain == false)
+  alignment_state.used = true
+  assert(options.initial_alignment_fixture == 'recovery_enh_870' and
+   options.fixture == options.initial_alignment_fixture and type(options.prepared) == 'function')
+  assert(binding.epoch == '4ba7be438ebb04ec5bb85fdb95b5a488' and binding.index == 1318)
+  local sample = options.initial_sample
+  assert(type(sample) == 'table' and type(sample.snapshot) == 'table')
+  local snapshot, arrival = sample.snapshot, sample.arrival
+  assert(snapshot.frame == binding.sector_macro and (finite(snapshot.sequence) and snapshot.sequence >= 1 and snapshot.sequence <= 9007199254740991 and snapshot.sequence % 1 == 0) and
+   finite(snapshot.source_time) and snapshot.source_time >= 0)
+  assert(type(snapshot.pose) == 'table' and #snapshot.pose == 3)
+  local target = {x=snapshot.pose[1], y=snapshot.pose[2], z=snapshot.pose[3]}
+  for _, axis in ipairs({'x', 'y', 'z'}) do
+   assert(finite(target[axis]) and math.abs(target[axis]) <= 10000000)
+  end
+  assert(finite(options.max_age) and options.max_age > 0 and options.max_age <= 30)
+  local function check_fresh_prepared()
+   local now = callbacks.clock()
+   assert(finite(now) and finite(arrival) and arrival >= 0 and arrival <= now and
+    now - arrival < options.max_age and callbacks.guard() == true and options.prepared() == true)
+   return now
+  end
+  check_fresh_prepared()
+  local actual = callbacks.inspect(binding)
+  for _, axis in ipairs({'x', 'y', 'z'}) do assert(finite(actual[axis])) end
+  for _, angle in ipairs({'yaw', 'pitch', 'roll'}) do assert(finite(actual[angle])) end
+  check_fresh_prepared()
+  -- Mark before calling the setter: a throwing or reentrant request may have written.
+  mutation_requested = true
+  alignment_state.uncertain = true
+  assert(callbacks.write(binding, {x=target.x, y=target.y, z=target.z,
+   yaw=actual.yaw*180/math.pi, pitch=actual.pitch*180/math.pi, roll=actual.roll*180/math.pi}) == true)
+  check_fresh_prepared()
+  local readback = callbacks.inspect(binding)
+  for _, axis in ipairs({'x', 'y', 'z'}) do assert(finite(readback[axis])) end
+  local dx, dy, dz = readback.x-target.x, readback.y-target.y, readback.z-target.z
+  local error_metres = math.sqrt(dx*dx + dy*dy + dz*dz)
+  assert(error_metres <= INITIAL_ALIGNMENT_READBACK_TOLERANCE)
+  local verified_at = check_fresh_prepared()
+  assert(options.record({kind='initial_alignment', index=binding.index, epoch=binding.epoch,
+   sector_macro=binding.sector_macro, source_sequence=snapshot.sequence,
+   source_time=snapshot.source_time, arrival=arrival, local_time=verified_at,
+   before={x=actual.x, y=actual.y, z=actual.z},
+   actual={x=readback.x, y=readback.y, z=readback.z}, target=target,
+   error=error_metres, tolerance=INITIAL_ALIGNMENT_READBACK_TOLERANCE}) == true)
+  check_fresh_prepared()
+  alignment_state.uncertain = false
+ end)
+ if not ok then
+  pcall(options.fault, 'initial_alignment_failed', mutation_requested,
+   'initial_alignment', callbacks.failure_stage())
+  return false
+ end
+ return true
+end
+
 -- Separate sustained-playback factory. The one-shot state machine above is unchanged.
 function M.new_playback_x4(options)
  if type(options) ~= 'table' or options.enabled ~= true then return nil, 'disabled' end
@@ -330,6 +394,9 @@ function M.new_playback_x4(options)
   (not selected.epoch or binding.epoch == selected.epoch) and natural(binding.actor_key) and
   natural(binding.sector_key) and natural(binding.zone_key))
  local callbacks = assert(native_callbacks(options))
+ if options.initial_alignment_fixture ~= nil then
+  if not align_initial_fixture(options, callbacks, binding) then return nil, 'initial_alignment_failed' end
+ end
  local ffi = require('ffi')
  return options.playback.new({enabled=true, buffer=options.buffer, frame=binding.sector_macro,
   clock=callbacks.clock, game=callbacks.game, paused=function() return ffi.C.IsGamePaused() end,

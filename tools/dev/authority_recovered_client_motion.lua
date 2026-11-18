@@ -176,6 +176,12 @@ function M.new_x4(c)
   assert(type(X4LAN_SAVED_REPLICA_CONTROL) == 'table' and
    type(X4LAN_SAVED_REPLICA_CONTROL.new_x4) == 'function')
  end
+ local initial_alignment_fixture = c.saved_initial_alignment_fixture
+ if initial_alignment_fixture ~= nil then
+  assert(initial_alignment_fixture == 'recovery_enh_870' and
+   replica_control_fixture == initial_alignment_fixture and saved_playback_fixture == initial_alignment_fixture,
+   'initial alignment requires shared fixture preparation and playback')
+ end
  local saved_apply_fixture=c.saved_apply_fixture
  assert(saved_apply_fixture==nil or (saved_apply_fixture=='recovery_enh_870' and
   c.epoch=='4ba7be438ebb04ec5bb85fdb95b5a488' and c.index==1318 and c.indices==nil))
@@ -258,6 +264,14 @@ function M.new_x4(c)
  end
  local function playback_record(event)
   assert(type(event)=='table' and event.index==1318 and event.epoch==c.epoch and event.sector_macro==playback_sector)
+  if event.kind == 'initial_alignment' then
+   assert(initial_alignment_fixture and event.tolerance == 3 and event.error <= event.tolerance)
+   DebugError(('[X4LAN] AUTH_CLIENT_INITIAL_ALIGNMENT version=1 epoch=%s index=1318 source_sequence=%.0f source_time=%.17g arrival=%.17g local_time=%.17g before_x=%.17g before_y=%.17g before_z=%.17g target_x=%.17g target_y=%.17g target_z=%.17g actual_x=%.17g actual_y=%.17g actual_z=%.17g error=%.17g tolerance=3'):format(
+    c.epoch, event.source_sequence, event.source_time, event.arrival, event.local_time,
+    event.before.x, event.before.y, event.before.z, event.target.x, event.target.y, event.target.z,
+    event.actual.x, event.actual.y, event.actual.z, event.error))
+   return true
+  end
   assert(event.kind=='observation' or event.kind=='readback')
   for _,pose in ipairs({event.actual,event.target}) do
    assert(type(pose)=='table')
@@ -457,6 +471,7 @@ function M.new_x4(c)
    end
    if saved_playback_fixture then
     options.saved_playback={enabled=true,fixture=saved_playback_fixture,module=X4LAN_SAVED_MOTION_APPLY,
+     initial_alignment_fixture=initial_alignment_fixture,
      playback=playback_adapter,max_step=50,record=playback_record,
      buffer_options={delay=.15,horizon=.35,stale=.75}}
    end
