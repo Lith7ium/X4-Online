@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools/dev'))
+import authority_tcp_job_client_live as ownership
 from authority_tcp_job_client_live import socket_owner
 
 
@@ -142,7 +143,26 @@ class UDPSocketOwnerTest(unittest.TestCase):
         reasons = []
         self.assertFalse(socket_owner(self.peer.getsockname(), self.peer.getsockname(),
                                       self.identity, diagnostic=reasons.append))
-        self.assertEqual(reasons, ['connected IPv4 flow count differs from one'])
+        self.assertEqual(reasons, ['connected IPv4 flow count differs from one (matches=0)'])
+
+    def test_duplicate_connected_flow_reports_match_count(self):
+        original = ownership._udp_table
+        peer_endpoint = ownership._proc_ipv4_endpoint(self.peer.getsockname())
+        destination_endpoint = ownership._proc_ipv4_endpoint(self.receiver.getsockname())
+
+        def duplicate_match(path, address_length):
+            rows = original(path, address_length)
+            if path.name != 'udp':
+                return rows
+            matches = [row for row in rows
+                       if row[1] == peer_endpoint and row[2] == destination_endpoint]
+            self.assertEqual(len(matches), 1)
+            return rows + matches
+
+        reasons = []
+        with patch.object(ownership, '_udp_table', side_effect=duplicate_match):
+            self.assertFalse(self.owner(diagnostic=reasons.append))
+        self.assertEqual(reasons, ['connected IPv4 flow count differs from one (matches=2)'])
 
     def test_duplicate_owned_descriptor_has_a_static_diagnostic(self):
         duplicate = os.dup(self.peer.fileno())
