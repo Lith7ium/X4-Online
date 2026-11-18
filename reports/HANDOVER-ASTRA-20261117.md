@@ -1,5 +1,14 @@
 # X4 multiplayer: handover for Astra
 
+Motion profile checks now share lexical path normalization for absolute POSIX,
+Windows drive and UNC paths. Case and interior separators remain significant;
+relative paths, dot segments, device prefixes and other profiles are rejected.
+No movement limits, startup order or clock semantics changed. The focused run
+covered 31 tests: eight passed initially, the affected 23 passed after correcting
+two outdated test assumptions; the final root-relative-path fix passed its
+single helper test. See `.local/windows-motion-paths-20261118.log`. LuaJIT and a
+fake native ABI were used; no Windows engine or game was started.
+
 The next Windows prerequisite now shares the saved-registry verifier/status
 reader with the existing Linux tools (`authority.registry_evidence` and
 `authority.saved_registry`). The verifier function's AST is unchanged; the

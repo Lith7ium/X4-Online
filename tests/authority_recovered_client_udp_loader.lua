@@ -36,13 +36,14 @@ X4LAN_CLIENT_MOTION_EVENT_ROUTER={new_x4=function()return router end}
 X4LAN_MOTION_CLIENT_OWNER={new_x4=function()return owner end}
 function X4LAN_RECOVERED_CLIENT_LOAD_READY()return true end
 local motion=dofile('tools/dev/authority_recovered_client_motion.lua')
+X4LAN_REPLICA_MOTION_BINDING=dofile('src/authority/lua/replica_motion_binding.lua')
 local options={enabled=true,port=2345,baseline=100,index=42,timeout=5,
  lease=('a'):rep(32),attempt=('b'):rep(32),epoch=('c'):rep(32),generation=('d'):rep(32),
  nonce=('e'):rep(32),router_generation=('f'):rep(32),expected_save_path='/private/45841/save'}
 local ok,result=pcall(motion.new_x4,options)
 if expected[platform] then assert(ok and type(result)=='table' and #calls==2)
 else assert(not ok and #calls==0)end
--- Existing Linux-style profile guard must still reject a Windows path before loading.
-options.expected_save_path='C:/private/45841/save'
+-- Relative paths remain invalid and must be rejected before loading.
+options.expected_save_path='private/45841/save'
 local before=#calls
 assert(not pcall(motion.new_x4,options) and #calls==before)

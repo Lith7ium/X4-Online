@@ -2,6 +2,7 @@
 local ffi=require('ffi');ffi.cdef[[void TestAdvance(void);int TestWrites(void);]]
 local resolve=dofile('tools/dev/authority_registry_resolve_string.lua')
 local replica=dofile('src/authority/lua/replica_motion_binding.lua')
+X4LAN_REPLICA_MOTION_BINDING=replica
 local saved=dofile('src/authority/lua/saved_baseline_motion_binding.lua')
 local buffer=dofile('src/authority/lua/motion_buffer.lua')
 local setter=dofile('src/authority/lua/saved_motion_apply.lua')

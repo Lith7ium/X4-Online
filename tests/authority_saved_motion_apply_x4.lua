@@ -1,5 +1,6 @@
 local ffi=require('ffi');ffi.cdef[[void TestAdvance(void);int TestWrites(void);float TestYaw(void);]]
 local resolver=dofile('tools/dev/authority_registry_resolve_string.lua')
+X4LAN_REPLICA_MOTION_BINDING=dofile('src/authority/lua/replica_motion_binding.lua')
 local module=dofile('src/authority/lua/saved_motion_apply.lua')
 local now=1;local sent,logs={},{}
 function GetCurRealTime()return now end

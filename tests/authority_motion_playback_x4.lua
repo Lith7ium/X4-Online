@@ -1,6 +1,7 @@
 -- Fake native ABI only: repeated XYZ writes preserve actual orientation.
 local ffi=require('ffi')
 ffi.cdef[[int TestWrites(void);float TestYaw(void);void TestDrift(float);void TestPause(bool);int TestReads(void);]]
+X4LAN_REPLICA_MOTION_BINDING=dofile('src/authority/lua/replica_motion_binding.lua')
 local setter=dofile('src/authority/lua/saved_motion_apply.lua')
 local playback=dofile('src/authority/lua/motion_playback.lua')
 local buffer=dofile('src/authority/lua/motion_buffer.lua')

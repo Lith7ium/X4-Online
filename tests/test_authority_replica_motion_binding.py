@@ -17,6 +17,10 @@ class ReplicaMotionBinding(unittest.TestCase):
             for mode in ('zone','dock','pause','despawn'):
                 with self.subTest(mode=mode):
                     subprocess.run(['luajit','tests/authority_replica_motion_binding_x4.lua'],cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(lib),TEST_BIND_FAILURE=mode),check=True,capture_output=True,text=True,timeout=5)
+            for path_case in ('drive_forward','drive_backslash','unc','wrong_profile','case_mismatch','expected_wrong_profile'):
+                with self.subTest(path_case=path_case):
+                    subprocess.run(['luajit','tests/authority_replica_motion_binding_x4.lua'],cwd=ROOT,
+                        env=dict(os.environ,LD_PRELOAD=str(lib),TEST_SAVE_PATH_CASE=path_case),check=True,capture_output=True,text=True,timeout=5)
     def test_md_bind_is_read_only_and_registry_scoped(self):
         root=ET.parse(ROOT/'tools/dev/authority_replica_motion_bind.xml').getroot()
         self.assertEqual(root.get('name'),'X4AuthorityReplicaMotionBind')

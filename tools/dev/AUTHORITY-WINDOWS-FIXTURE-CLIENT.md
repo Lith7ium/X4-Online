@@ -173,6 +173,22 @@ TCP owner. This CLI does not supply one. Reuse the existing
 path; do not create a second TCP reader. The overlay still needs the matching
 saved-registry/motion scripts and their lifecycle, including STOP before X4 exit.
 
+The motion scripts now share `replica_motion_binding.normalize_profile_save_path`
+for their profile checks. It accepts absolute POSIX, Windows drive and UNC paths
+ending in `/45841/save`, normalizes separators/trailing slashes, and preserves
+case and interior separators. Relative paths, dot segments, device namespaces
+and other profiles are refused. Recovered motion and saved apply/playback
+normalize copied options, leaving caller settings unchanged. This is lexical
+comparison only; the workspace remains responsible for actual path ownership.
+Both existing installers already load the binding module before these consumers.
+The initial 31-test focused run exposed three failures in two outdated test
+assumptions (an incomplete UNC example and the former rejection of drive paths).
+After correcting those, all 23 tests in the affected modules passed. A final
+helper-only check passed after adding rejection of single-backslash root-relative
+paths. The other eight tests passed in the initial run. These use LuaJIT and a
+fake native ABI; they do not establish Windows engine behavior. Private log:
+`.local/windows-motion-paths-20261118.log`.
+
 The Linux peer validator reads `/proc` and is not portable to Windows. The new
 `WindowsMotionPeer(process, destination_socket)` supplies a Windows-specific
 callable for the motion IPC adapter's `validate_peer` argument. It requires the

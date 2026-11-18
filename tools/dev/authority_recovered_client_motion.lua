@@ -140,7 +140,11 @@ function M.new_x4(c)
  if type(c)~='table' or c.enabled~=true then return nil,'disabled' end
  local fixed={};for k,v in pairs(c)do fixed[k]=v end;c=fixed
  local function integer(v)return type(v)=='number' and v==v and v%1==0 end
- assert(type(c.expected_save_path)=='string' and c.expected_save_path:sub(1,1)=='/' and c.expected_save_path:sub(-11)=='/45841/save' and
+ assert(type(X4LAN_REPLICA_MOTION_BINDING)=='table' and type(X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path)=='function')
+ local normalize_save_path=X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path
+ c.expected_save_path=assert(normalize_save_path(c.expected_save_path),
+  'invalid profile-45841 save path')
+ assert(
   integer(c.port) and c.port>=1 and c.port<=65535 and integer(c.baseline) and c.baseline>=1 and c.baseline<=200000 and
   type(c.timeout)=='number' and c.timeout==c.timeout and c.timeout>0 and c.timeout<=30)
  local allowed={};local locked
@@ -190,7 +194,8 @@ function M.new_x4(c)
  assert(type(net.pending)=='function')
  local function environment()
   local p=C.GetSaveFolderPath()
-  return p~=nil and p~=ffi.NULL and ffi.string(p):gsub('\\','/'):gsub('/+$','')==c.expected_save_path and
+  local normalized=p~=nil and p~=ffi.NULL and normalize_save_path(ffi.string(p)) or nil
+  return normalized==c.expected_save_path and
    C.IsPlayerValid() and type(X4LAN_RECOVERED_CLIENT_LOAD_READY)=='function' and X4LAN_RECOVERED_CLIENT_LOAD_READY()==true
  end
  -- At most one permitted saved ship is in scope. With a candidate list the

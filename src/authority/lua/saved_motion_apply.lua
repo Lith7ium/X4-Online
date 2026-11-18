@@ -223,7 +223,13 @@ end
 local function native_callbacks(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  local selected=fixture(o.fixture)
- assert(o.test_profile=='45841' and type(o.expected_save_path)=='string' and o.expected_save_path:sub(1,1)=='/' and o.expected_save_path:sub(-11)=='/45841/save')
+ local c={};for k,v in pairs(o)do c[k]=v end
+ assert(type(X4LAN_REPLICA_MOTION_BINDING)=='table' and
+  type(X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path)=='function')
+ local normalize_save_path=X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path
+ c.expected_save_path=assert(normalize_save_path(c.expected_save_path),
+  'invalid profile-45841 save path')
+ assert(c.test_profile=='45841')
  assert(type(o.resolve)=='table' and o.resolve==X4LAN_RESOLVE_STRING and type(o.guard)=='function')
  local ffi=require('ffi')
  if not pcall(ffi.typeof,'UniverseID')then ffi.cdef('typedef uint64_t UniverseID;')end
@@ -233,10 +239,10 @@ local function native_callbacks(o)
   UniverseID GetContextByClass(UniverseID,const char*,bool);UniverseID GetPlayerControlledShipID(void);
   UniverseID GetPlayerOccupiedShipID(void);UniverseID GetPlayerContainerID(void);const char* GetObjectIDCode(UniverseID);
   UIPosRot GetObjectPositionInSector(UniverseID);void SetObjectSectorPos(UniverseID,UniverseID,UIPosRot);double GetCurrentGameTime(void);]]
- local C=ffi.C;local c={};for k,v in pairs(o)do c[k]=v end
+ local C=ffi.C
  local native_stage='initial'
  c.failure_stage=function()return native_stage end
- local function key(v)local n=o.resolve.actor_u64(v);return n and tostring(n):gsub('ULL$','') or nil end
+ local function key(v)local n=c.resolve.actor_u64(v);return n and tostring(n):gsub('ULL$','') or nil end
  local function ref(text)
   assert(natural(text));local x=ConvertStringToLuaID(text);local kind=type(x)
   if kind=='number' or kind=='cdata' then assert(key(x)==text)else assert(kind=='userdata')end
@@ -249,11 +255,11 @@ local function native_callbacks(o)
  c.guard=function()
   native_stage='profile'
   local p=C.GetSaveFolderPath()
-  if p==nil or p==ffi.NULL or ffi.string(p):gsub('\\','/'):gsub('/+$','')~=o.expected_save_path or
+  if p==nil or p==ffi.NULL or normalize_save_path(ffi.string(p))~=c.expected_save_path or
      not C.IsPlayerValid() or C.IsGamePaused() or external()~=true then return false end
   native_stage='profile_recheck'
   local q=C.GetSaveFolderPath()
-  return q~=nil and q~=ffi.NULL and ffi.string(q):gsub('\\','/'):gsub('/+$','')==o.expected_save_path and C.IsPlayerValid() and not C.IsGamePaused()
+  return q~=nil and q~=ffi.NULL and normalize_save_path(ffi.string(q))==c.expected_save_path and C.IsPlayerValid() and not C.IsGamePaused()
  end
  c.clock=GetCurRealTime;c.game=function()return tonumber(C.GetCurrentGameTime())end
  local function ids(p)

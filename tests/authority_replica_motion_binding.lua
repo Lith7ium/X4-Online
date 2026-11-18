@@ -1,4 +1,16 @@
 local M=dofile('src/authority/lua/replica_motion_binding.lua')
+local normalize=M.normalize_profile_save_path
+assert(normalize('/home/test/45841/save')=='/home/test/45841/save')
+assert(normalize('C:/Users/Test/Documents/Egosoft/X4/45841/save')=='C:/Users/Test/Documents/Egosoft/X4/45841/save')
+assert(normalize('C:\\Users\\Test\\Documents\\Egosoft\\X4\\45841\\save\\')=='C:/Users/Test/Documents/Egosoft/X4/45841/save')
+assert(normalize('C:/Users//Test/45841/save')=='C:/Users//Test/45841/save')
+assert(normalize('\\\\Server\\Share\\Users\\Test\\45841\\save')=='//Server/Share/Users/Test/45841/save')
+for _,path in ipairs({'relative/45841/save','/home/test/45842/save','C:/Users/Test/../45841/save',
+ '\\\\server\\share\\Users\\..\\45841\\save','//server/share','//server/share/Users/Test/45841/save/\0',
+ 'C:/Users/Test//Documents/../45841/save','//?/C:/Users/Test/45841/save',
+ '\\Users\\Test\\45841\\save','\\??\\C:\\Users\\Test\\45841\\save'})do
+ assert(normalize(path)==nil,path)
+end
 local epoch,generation,nonce=string.rep('a',32),string.rep('b',32),string.rep('c',32)
 local function sample(seq)return {epoch=epoch,generation=generation,index=42,sequence=seq or 1,sector_macro='sector_a'}end
 local function rig(mode,custom_nonce)

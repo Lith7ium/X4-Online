@@ -4,6 +4,54 @@ local MAX=9007199254740991
 local function integer(v)return type(v)=='number' and v==v and v>=1 and v<=MAX and v%1==0 end
 local function finite(v)return type(v)=='number' and v==v and v>=0 and v<math.huge end
 local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
+-- Lexically normalize separators only; this does not establish filesystem provenance or resolve filesystem case.
+function M.normalize_profile_save_path(value)
+ if type(value)~='string' or #value==0 then
+  return nil
+ end
+ if value:find('\0',1,true) or value:find('%c') then
+  return nil
+ end
+ if value:sub(1,1)=='\\' and value:sub(2,2)~='\\' then
+  return nil
+ end
+
+ local path=value:gsub('\\','/')
+ local prefix
+ local remainder
+ if path:match('^%a:/') then
+  prefix=path:sub(1,2)
+  remainder=path:sub(4)
+ elseif path:sub(1,2)=='//' then
+  local server,share,tail=path:match('^//([^/]+)/([^/]+)(/.*)$')
+  if not server or not share or server=='.' or server=='..' or server=='?' or share=='.' or share=='..' then
+   return nil
+  end
+  prefix='//'..server..'/'..share
+  remainder=tail:sub(2)
+ elseif path:sub(1,1)=='/' then
+  prefix='/'
+  remainder=path:sub(2)
+ else
+  return nil
+ end
+
+ for segment in remainder:gmatch('[^/]+') do
+  if segment=='.' or segment=='..' then
+   return nil
+  end
+ end
+ while remainder:sub(-1)=='/' do
+  remainder=remainder:sub(1,-2)
+ end
+
+ local separator=prefix=='/' and '' or '/'
+ local normalized=prefix..separator..remainder
+ if normalized:sub(-11)~='/45841/save' then
+  return nil
+ end
+ return normalized
+end
 local function name(v)return type(v)=='string' and #v>=1 and #v<=128 and v:match('^[A-Za-z0-9_]+$')~=nil end
 -- Exact conversion independent of FFI or Lua number rounding.
 local function decimal(hex)
@@ -104,6 +152,8 @@ local function new_x4(o,screen,baseline)
  assert(type(o.resolve)=='table' and o.resolve==X4LAN_RESOLVE_STRING and type(o.resolve.parse_hex)=='function' and type(o.resolve.actor_u64)=='function')
  for _,n in ipairs({'GetCurRealTime','AddUITriggeredEvent','ConvertStringToLuaID','ConvertIDTo64Bit','GetComponentData'})do assert(type(_G[n])=='function')end
  local c={};for k,v in pairs(o)do c[k]=v end
+ c.expected_save_path=M.normalize_profile_save_path(c.expected_save_path)
+ assert(c.expected_save_path,'invalid profile-45841 save path')
  local ffi=require('ffi')
  if not pcall(ffi.typeof,'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
  ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);bool IsValidComponent(UniverseID);bool IsComponentOperational(UniverseID);
@@ -113,7 +163,8 @@ local function new_x4(o,screen,baseline)
  local external,expected=c.guard,c.expected_save_path
  local function environment()
   local path=C.GetSaveFolderPath()
-  return path~=nil and path~=ffi.NULL and ffi.string(path):gsub('\\','/'):gsub('/+$','')==expected and C.IsPlayerValid() and not C.IsGamePaused()
+  local normalized=path~=nil and path~=ffi.NULL and M.normalize_profile_save_path(ffi.string(path)) or nil
+  return normalized==expected and C.IsPlayerValid() and not C.IsGamePaused()
  end
  local function guard()return environment() and external()==true and environment()end
  local function key(v)local n=u64(v);return n and tostring(n):gsub('ULL$','') or nil end
