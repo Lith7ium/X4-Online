@@ -4,13 +4,13 @@ Internal development on the authoritative fork. Client work takes priority;
 GPU-free server development is deferred while the user seeks a hosted test server.
 The overall Windows/Linux Internet gameplay goal remains unmet.
 
-Latest native result, 18 November: latest-position collection at `3d88b804`
-queued three actual source samples; only sequence 1 has a confirmed host ACK.
-Initial alignment again had zero readback error. Native playback then refused
-sequence 3 at a 282.922 m correction, above the unchanged 50 m bound. No ongoing
-paired movement or STOP/release was established. Source gaps remained above
-0.75 s; repeated synchronous checkpoint requests remain in the source polling
-path. See [the latest collection result](#actual-source-latest-position-attempt-2026-11-18).
+Latest native result, 18 November: batching saved checks at `ef867aa6`
+reduced checkpoint metadata requests but did not improve the observed source
+cadence. Three samples were queued and sequence 1 was ACKed. Native sequence 3
+was refused at a 287.300 m correction, with no running write. Initial alignment
+again had zero readback error. Cleanup passed. Work stops here at the user's
+request; resume only when the user is ready. See
+[the paused checkpoint](#batched-checks-native-result-and-requested-pause-2026-11-18).
 
 Earlier client increment, 18 November: both the independent bounded live-input
 path and an explicit paired-supervisor playback path are now wired in code.
@@ -1193,3 +1193,52 @@ recipients, then source close and full helper STOP/window close. These tests
 simulate the game source and do not establish native timing or gameplay.
 No full suite was rerun. A fresh bounded two-X4 attempt is prepared to evaluate
 the changed call path; no native success is claimed for this implementation yet.
+
+
+## Batched-checks native result and requested pause (2026-11-18)
+
+One two-Linux-X4 run of `ef867aa6` exercised the configured batching and failed
+at native playback distance validation. Three actual source samples were queued;
+only sequence 1 has a confirmed host ACK. Native sequence 3's time and target XYZ
+match the original third capture exactly. It requested 287.299942264 m while the
+client remained at its aligned initial position, with zero running readbacks
+and `uncertain=0`. Initial alignment removed 105.952209082 m at an original
+arrival age of 0.278725612 s with zero readback error. Client INITIAL-to-failure
+elapsed time was 1.825166713 s on its own local clock. There is no ongoing paired
+movement, STOP/release, departure-save, Windows, WAN or gameplay proof.
+
+The source intervals were 0.993531693 s and 0.864827578 s, still above the existing
+0.75 s continuity limit. Batching was active: across the full probe, checkpoint
+metadata checks fell from the preceding run's 54 to 21, and lifetime checks rose
+from 3 to 50. However, three polls still took 1.481931000 s total versus
+1.534717814 s previously; four begins took 0.573664661 s versus 0.318302698 s.
+Collection took 3.256245527 s versus 3.036759084 s. These two separate attempts
+do not demonstrate a cadence improvement. Counts prove the changed path ran;
+they do not isolate why wall-time cost stayed high. Full-guard aggregates are
+inclusive and must not be summed with nested helper costs or treated as CPU
+utilization. The corrected failure counters now report 3 samples, 1 ACK and
+4 begin attempts consistently with the retained ledger.
+
+Do not repeat this unchanged test. On resumption, first profile remaining
+per-operation costs using nested inclusive/self-time measurements and the
+retained traces; avoid assuming checkpoint IPC alone explains the delay. The
+expensive bootstrap/registry work is separate from steady-state sampling.
+Do not widen playback bounds, alter the pending clock policy or choose a new
+server architecture without the user's agreement. GPU-free server work remains
+deferred; the complete persistent Linux/Windows Internet gameplay goal is unmet.
+
+Both test games and the owned cgroup were cleaned up; Xauthority cleanup,
+unchanged pinned source/code and Steam identities were confirmed. A post-run
+process scan found no X4 instance. Normal profiles/saves were not used. The user
+requested a checkpoint and goal pause after this run to use the PC. No further
+native test or implementation work is to start until the user resumes.
+
+Artifacts: `.local/private-paired-batched-native-20261118-01/`, including both
+engine logs, `trial-result.json`, all three `source-captures-before-delivery.json`
+samples and `offline-correlation.json`. Correlation SHA-256:
+`df0cfa1038a948753d0d6f79540c3ba70610aa86c863e1f352f87f3af506ed5b`.
+Manifest `authority-paired-batched-reviewed-20261118-01.json` has 488 pins,
+SHA-256 `acbc700c985d05dee9584fdd0e2c5f402a4be427fa22568f1727503cd7c3b969`.
+Scope helper `authority_paired_batched_scope_20261118_01.py` SHA-256:
+`da992f048a6090390afbff05b6e3bab793713ac6abe22d440d4c228ed588cf2d`.
+The trial and alignment-evidence helpers are unchanged from latest attempt 01.

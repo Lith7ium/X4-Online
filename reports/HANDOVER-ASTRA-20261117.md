@@ -1,5 +1,23 @@
 # X4 multiplayer: handover for Astra
 
+Work stopped at the user's explicit request after the current test completed.
+The goal is to be paused until the user says the PC is available again. Do not
+start another game or continue implementation on an automatic continuation.
+Latest code checkpoint: `ef867aa6`; this report's commit preserves the result.
+
+Batched-checks native attempt 01 failed: 3 source samples queued, ACK 1 retained,
+sequence 3 rejected at 287.300 m, no running write. Initial alignment still
+passed with zero error. Metadata checks fell 54 -> 21, but source gaps remained
+0.994 / 0.865 s and collection was 3.256 s. Thus batching was exercised without
+a demonstrated cadence improvement. Next investigation on explicit resume:
+remaining nested guard/validation costs with inclusive/self-time separation;
+do not rerun the same test or widen bounds. Owned games/cgroup/Xauthority were
+cleaned; source/code/Steam preservation passed and no X4 process remained.
+Private evidence: `.local/private-paired-batched-native-20261118-01/`.
+See [the paused checkpoint and exact evidence](AUTHORITY-CLIENT-PLAYBACK-20261117.md#batched-checks-native-result-and-requested-pause-2026-11-18).
+The complete Linux/Windows Internet gameplay objective remains unmet.
+Entries below are the prior development history.
+
 Latest code change: explicit default-off `batch_latest_saved_checks` preserves
 substantive saved checks before/after each latest begin/poll call and uses
 lifetime checks inside. The bounded latest-playback fixture opts in. Obsolete
