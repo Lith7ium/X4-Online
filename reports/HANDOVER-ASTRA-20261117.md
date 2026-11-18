@@ -13,6 +13,27 @@ comparison with the existing LAN replica method are in the
 No repeat run or initial snap/clock change was made. Native03/04 below are
 retained as preceding context.
 
+Client continuation now adds an optional motion consumer to
+`ObservedClientSession`, using the existing TCP owner's `apply_motion` hook.
+The session checks its log and process/profile guard before and after dispatch;
+a late log or controller fault prevents a positive receipt. The caller still
+owns motion readiness, peer ownership, STOP and cleanup. The 15-test session
+module passed; subsequent focused checks including a new controller-fault
+regression passed (final two checks: 0.407s). The tests use real local TCP/UDP
+and the real motion IPC adapter with a simulated engine peer. Private output:
+`.local/observed-motion-session-20261118.log`. No X4, full-suite, Windows or WAN
+test was repeated. This hook is not yet wired into the Windows fixture CLI;
+its next required pieces are the motion overlay/lifecycle and a Windows peer
+validator, as described in the updated Windows client guide.
+
+Read-only inspection of native05's offered/staged checkpoint resolved saved
+index 1318 to ENH-870 and recorded its saved movement fields. The saved position
+is zone-relative and cannot directly explain the live sector-space discrepancy.
+Selected results and query bodies are in
+`.local/paired-initial-save-evidence-20261118-01/`; see the client report for
+the digest and limitations. The initial-alignment question has been presented
+with the new measured offset; no answer or implementation is recorded yet.
+
 Client follow-up: `load_observations.py` now extracts the existing ordered
 load/marker/pause parser from Linux tooling for use by either client platform.
 The existing Linux caller delegates to it; Windows process integration remains

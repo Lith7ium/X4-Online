@@ -43,7 +43,7 @@ class ObservedSessionTest(unittest.TestCase):
         self.log = b''
         self.partial_during_command = False
 
-    def connect(self, *, disconnect=False, keepalive_interval=2):
+    def connect(self, *, disconnect=False, keepalive_interval=2, participant_command=None):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0))
         listener.listen(1)
@@ -72,8 +72,9 @@ class ObservedSessionTest(unittest.TestCase):
                                              'attempt_id': self.offer.attempt_id}).encode() + b'\n')
                     if disconnect:
                         return
-                    command = {'version': 1, 'kind': 'participant_command', 'epoch': self.offer.world_epoch,
-                               'connection_handle': 1, 'request_id': 1, 'operation': 'resume'}
+                    command = participant_command or {
+                        'version': 1, 'kind': 'participant_command', 'epoch': self.offer.world_epoch,
+                        'connection_handle': 1, 'request_id': 1, 'operation': 'resume'}
                     conn.sendall(json.dumps(command).encode() + b'\n')
                     reply = stream.readline()
                     if reply:
@@ -139,6 +140,44 @@ class ObservedSessionTest(unittest.TestCase):
                 b'[X4LAN] AUTH_MARKER load INSPECTED ' + self.bound.marker.encode() + b'\n',
                 b'[X4LAN] AUTH_DOWNLOAD_LOAD pause_observed|' + fields + b'\n')
 
+    def motion_command(self):
+        sample = {'version': 1, 'epoch': self.offer.world_epoch, 'generation': 'd' * 32,
+                  'index': 7, 'sequence': 1, 'sector_macro': 'sector_a', 'source_time': 1.0,
+                  'x': 10.0, 'y': 20.0, 'z': 30.0, 'velocity': None}
+        return {'version': 1, 'kind': 'motion_snapshot', 'connection_handle': 1,
+                'session_epoch': self.offer.world_epoch, 'incarnation': '4' * 32,
+                'request_id': 1, 'sample': sample}
+
+    def start_motion_peer(self, ipc):
+        from authority.experimental_tcp_motion import motion_digest
+
+        peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        peer.bind(('127.0.0.1', 0)); peer.settimeout(3)
+        lease, attempt = ipc._lease, ipc._attempt
+        epoch, generation = self.offer.world_epoch, 'd' * 32
+        def engine_owner():
+            try:
+                peer.sendto(f'R|{lease}|{attempt}|READY|{epoch}|{generation}'.encode('ascii'),
+                            ipc._sock.getsockname())
+                data, address = peer.recvfrom(1024)
+                fields = data.decode('ascii').split('|')
+                self.motion_ipc_requests.append(fields)
+                if fields[:4] != ['M', lease, attempt, 'BIND']:
+                    raise AssertionError('unexpected motion IPC request')
+                if fields[7:11] != ['7', '1', 'sector_a', motion_digest(self.motion_command()['sample'])]:
+                    raise AssertionError('motion sample identity changed in IPC')
+                if fields[11:18] != ['1', '10', '20', '30', '-', '-', '-']:
+                    raise AssertionError('motion pose or rate changed in IPC')
+                peer.sendto('|'.join(['R', lease, attempt, 'BOUND', *fields[4:11]]).encode('ascii'), address)
+            except BaseException as error:
+                self.errors.append(error)
+            finally:
+                peer.close()
+        self.motion_ipc_requests = []
+        thread = threading.Thread(target=engine_owner)
+        thread.start(); self.addCleanup(self.join_thread, thread)
+        return thread
+
     def test_real_tcp_udp_handoff_and_late_duplicate(self):
         owner, client, bound, deadline = self.connect(keepalive_interval=.02)
         controller = LocalParticipantControl(enabled=True, timeout=2)
@@ -155,6 +194,7 @@ class ObservedSessionTest(unittest.TestCase):
             read_log=lambda: self.log, guard=lambda: True, deadline=deadline)
         self.addCleanup(session.close)
         self.assertTrue(session.start())
+        self.assertIsNone(owner._participant._apply_motion)
         self.assertEqual(owner._participant._timeout, controller.timeout + 1)
         while not self.replies:
             session.poll(.1)
@@ -164,6 +204,121 @@ class ObservedSessionTest(unittest.TestCase):
         self.log += request
         with self.assertRaisesRegex(ValueError, 'out of order'):
             session.poll()
+        self.assertEqual(client.fileno(), -1)
+        self.assertEqual(controller.sock.fileno(), -1)
+
+    def make_motion_ipc(self):
+        from authority.experimental_participant_motion_ipc import ExperimentalParticipantMotionIPC
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(('127.0.0.1', 0))
+        return ExperimentalParticipantMotionIPC(sock, enabled=True, lease='e' * 32,
+            attempt=self.offer.attempt_id, epoch=self.offer.world_epoch, generation='d' * 32,
+            guard=lambda: True, validate_peer=lambda peer: peer[0] == '127.0.0.1', timeout=2)
+
+    @staticmethod
+    def close_motion_ipc(ipc):
+        if ipc.state in ('new', 'ready', 'remote_stopped'):
+            ipc.close()
+
+    def test_motion_callback_passes_through_real_ipc_before_tcp_receipt(self):
+        command = self.motion_command()
+        owner, client, bound, deadline = self.connect(participant_command=command)
+        controller = LocalParticipantControl(enabled=True, timeout=2)
+        self.addCleanup(controller.close)
+        self.start_fake_participant(controller)
+        ipc = self.make_motion_ipc()
+        self.addCleanup(self.close_motion_ipc, ipc)
+        peer = self.start_motion_peer(ipc)
+        self.assertTrue(ipc.wait_ready())
+        self.log = b''.join(self.log_parts())
+        session = ObservedClientSession(owner, bound, controller, slot='save_009',
+            read_log=lambda: self.log, guard=lambda: True, deadline=deadline, apply_motion=ipc)
+        self.addCleanup(session.close)
+        self.assertTrue(session.start())
+        poll_deadline = time.monotonic() + 4
+        while not self.replies and time.monotonic() < poll_deadline:
+            session.poll(.1)
+        peer.join(3)
+        self.assertFalse(peer.is_alive())
+        self.assertEqual(self.errors, [])
+        self.assertEqual(len(self.motion_ipc_requests), 1)
+        self.assertEqual(self.motion_ipc_requests[0][3], 'BIND')
+        self.assertEqual(len(self.replies), 1)
+        self.assertEqual(self.replies[0]['kind'], 'motion_receipt')
+        self.assertEqual(self.replies[0]['status'], 'accepted')
+
+    def test_log_failure_after_motion_ipc_dispatch_blocks_tcp_receipt(self):
+        command = self.motion_command()
+        owner, client, bound, deadline = self.connect(participant_command=command)
+        controller = LocalParticipantControl(enabled=True, timeout=2)
+        self.addCleanup(controller.close)
+        self.start_fake_participant(controller)
+        ipc = self.make_motion_ipc()
+        self.addCleanup(self.close_motion_ipc, ipc)
+        peer = self.start_motion_peer(ipc)
+        self.assertTrue(ipc.wait_ready())
+        self.log = b''.join(self.log_parts())
+
+        def dispatch_then_break_log(sample, despawn):
+            accepted = ipc(sample, despawn)
+            self.log += b'[X4LAN] AUTH_PARTICIPANT ERR'
+            return accepted
+
+        session = ObservedClientSession(owner, bound, controller, slot='save_009',
+            read_log=lambda: self.log, guard=lambda: True, deadline=deadline,
+            apply_motion=dispatch_then_break_log)
+        self.addCleanup(session.close)
+        self.assertTrue(session.start())
+        with self.assertRaisesRegex(RuntimeError, 'incomplete during motion'):
+            while True:
+                session.poll(.1)
+        peer.join(3)
+        self.assertFalse(peer.is_alive())
+        self.assertEqual(self.errors, [])
+        self.assertEqual(self.motion_ipc_requests[0][3], 'BIND')
+        self.assertEqual(self.replies, [])
+        self.assertEqual(client.fileno(), -1)
+        self.assertEqual(controller.sock.fileno(), -1)
+
+    def test_controller_fault_after_motion_dispatch_blocks_tcp_receipt(self):
+        command = self.motion_command()
+        owner, client, bound, deadline = self.connect(participant_command=command)
+        controller = LocalParticipantControl(enabled=True, timeout=2)
+        self.addCleanup(controller.close)
+        self.start_fake_participant(controller)
+        ipc = self.make_motion_ipc()
+        self.addCleanup(self.close_motion_ipc, ipc)
+        peer = self.start_motion_peer(ipc)
+        self.assertTrue(ipc.wait_ready())
+        self.log = b''.join(self.log_parts())
+
+        def dispatch_then_fault_controller(sample, despawn):
+            accepted = ipc(sample, despawn)
+            controller.fault = True
+            return accepted
+
+        session = ObservedClientSession(owner, bound, controller, slot='save_009',
+            read_log=lambda: self.log, guard=lambda: True, deadline=deadline,
+            apply_motion=dispatch_then_fault_controller)
+        self.addCleanup(session.close)
+        self.assertTrue(session.start())
+        with self.assertRaisesRegex(RuntimeError, 'observed session ownership changed'):
+            while True:
+                session.poll(.1)
+        peer.join(3)
+        self.assertFalse(peer.is_alive())
+        self.assertEqual(self.errors, [])
+        self.assertEqual(self.motion_ipc_requests[0][3], 'BIND')
+        self.assertEqual(self.replies, [])
+        self.assertEqual(client.fileno(), -1)
+        self.assertEqual(controller.sock.fileno(), -1)
+
+    def test_invalid_motion_callback_is_rejected_during_session_construction(self):
+        owner, client, bound, deadline = self.connect(disconnect=True)
+        controller = LocalParticipantControl(enabled=True, timeout=2)
+        with self.assertRaisesRegex(ValueError, 'motion consumer must be callable'):
+            ObservedClientSession(owner, bound, controller, slot='save_009',
+                read_log=lambda: b'', guard=lambda: True, deadline=deadline, apply_motion=object())
         self.assertEqual(client.fileno(), -1)
         self.assertEqual(controller.sock.fileno(), -1)
 

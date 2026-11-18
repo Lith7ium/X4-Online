@@ -142,3 +142,21 @@ None of these checks establishes that this assembled command starts Windows
 X4, loads the right profile on Windows, completes Internet admission, or
 supports the user's shared-world gameplay goal. A native Windows run is still
 required.
+
+## Remaining motion integration
+
+The observed session can accept an optional motion consumer through the existing
+TCP owner. This CLI does not supply one. Reuse the existing
+`ExperimentalParticipantMotionIPC` and Lua motion owner when wiring the native
+path; do not create a second TCP reader. The overlay still needs the matching
+saved-registry/motion scripts and their lifecycle, including STOP before X4 exit.
+
+The Linux peer validator reads `/proc` and is not portable to Windows. No Windows
+equivalent is implemented yet. The existing `WindowsX4Process` owns a live process
+handle/job and exposes its PID; reuse that owner when checking the local motion
+socket. Microsoft's
+[UDP owner row](https://learn.microsoft.com/en-us/windows/win32/api/udpmib/ns-udpmib-mib_udprow_owner_pid)
+provides the bound local address, port and owning PID, but no remote endpoint.
+Consequently, a validator using that table must document its narrower observation
+and cannot claim the Linux connected-tuple check. API and real Windows behavior
+still need validation before enabling movement in this command.

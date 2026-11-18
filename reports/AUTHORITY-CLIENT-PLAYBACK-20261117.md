@@ -232,6 +232,23 @@ distance by that difference would not establish ship velocity or network delay.
 There is no earlier matched pose pair for this attempt, so it does not isolate
 load-time divergence, later independent NPC movement, or frame/identity error.
 
+A subsequent read-only inspection used the checkpoint actually offered and
+staged for this client, SHA-256
+`2ebbcea67f4993c8da7f93661779ca8f3a9539d1f59a865ca811b71f852e7af0`.
+Its forward and reverse registry entries map index 1318 to saved component
+`[0x7841d]`, the Antigone ship ENH-870, and back. The saved game-time attribute
+is `7.09`. Its parent is `zone003_cluster_06_sector001_macro`; the ship-offset
+position is (-31102, -7052.023, 35448.031), while the distinct movement read/write
+position is (-31082.139, -7038.869, 35429.68), with stored linear velocity
+(101.213, 67.1674, -93.801). These are raw saved fields, not live measurements.
+The zone offset uses `default="1"`; the zone-to-sector transform and the meaning
+of the two position fields were not established. Thus these values cannot yet
+be directly compared with the live sector positions or diagnose the 88m gap.
+No X4 run or save modification was made for this inspection. Selected evidence
+and the executed query bodies are retained in
+`.local/paired-initial-save-evidence-20261118-01/`; its `result.json` SHA-256 is
+`1947153befeb5ef6ffaa348716dd9329a50e150c6c3a18c903e4c9b0577f18e5`.
+
 The client logged Wait ready, a later-tick observation, a zero-velocity request,
 then INITIAL. Those records do not prove the physical effect of the velocity
 request. No continuous paired playback, 26-sample sequence, STOP/release or

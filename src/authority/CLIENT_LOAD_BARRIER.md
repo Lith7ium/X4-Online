@@ -57,6 +57,17 @@ process, profile and log provenance; `close()` closes the network owners but
 does not stop X4 or check events after close. No native Windows or Internet
 session is established by the synthetic TCP/UDP tests.
 
+An optional `apply_motion(sample, despawn)` consumer can connect this session to
+the existing participant motion IPC. The session checks its active owner,
+process/profile guard and evolving log before and after consumption, before the
+TCP participant can acknowledge it. A fault after dispatch cannot undo an X4
+effect, but prevents a positive receipt. The callback must bound its own work
+within the participant timeout (controller timeout plus one second);
+its readiness, socket ownership, pause handling, STOP and cleanup remain the
+caller's responsibility. With no callback, incoming motion stays unsupported.
+This connection does not add movement to the Windows fixture CLI: its overlay
+and native motion-peer ownership still need integration and native validation.
+
 These primitives provide no authenticated event transport or independent
 cross-reload proof. The isolated supervisor treats its correlated observations as
 trusted assertions for experimental admission, not as proof of the loaded file.

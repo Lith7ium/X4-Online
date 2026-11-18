@@ -47,10 +47,12 @@ class ObservedClientSession:
     Each public operation uses the creating thread. Reader/guard callbacks and
     filesystem or socket calls are synchronous and cannot be interrupted.
     A dispatched claim or command may have taken effect even if a later check
-    fails; this owner never retries it. Closing does not stop or fence X4.
+    fails; this owner never retries it. A motion callback must be bounded, and
+    its IPC/STOP and cleanup remain caller-owned. Closing does not stop or fence X4.
     """
 
-    def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline):
+    def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
+                 apply_motion=None):
         if not isinstance(owner, ExperimentalClientOwner) or not isinstance(controller, LocalParticipantControl):
             raise ValueError('client owner and local controller required')
         if owner._thread is not threading.current_thread():
@@ -59,6 +61,8 @@ class ObservedClientSession:
         self._thread = threading.get_ident()
         self._state, self._busy = 'new', False
         try:
+            if apply_motion is not None and not callable(apply_motion):
+                raise ValueError('motion consumer must be callable')
             if (not callable(read_log) or not callable(guard) or type(deadline) not in (int, float) or
                     not math.isfinite(deadline) or deadline <= time.monotonic()):
                 raise ValueError('bounded session callbacks required')
@@ -78,6 +82,7 @@ class ObservedClientSession:
             self._bound, self._encoded = owner._offer, encoded
             self._load = owner._load
             self._slot, self._read_log, self._guard, self._deadline = slot, read_log, guard, float(deadline)
+            self._apply_motion = apply_motion
             self._socket, self._lease = controller.sock, controller.lease
             self._controller_timeout = controller.timeout
             self._hook = self._wait_hook
@@ -165,6 +170,17 @@ class ObservedClientSession:
             self.owner.poll()
             self._check()
 
+    def _checked_motion(self, sample, despawn):
+        if (threading.get_ident() != self._thread or self._state != 'active' or
+                not self._busy or self._apply_motion is None):
+            raise RuntimeError('observed motion callback unavailable')
+        if not self._check():
+            raise RuntimeError('client log became incomplete during motion')
+        result = self._apply_motion(sample, despawn)
+        if not self._check():
+            raise RuntimeError('client log became incomplete during motion')
+        return result
+
     def start(self):
         """Wait for observations, enroll once, then submit one admission claim."""
         with self._operation(('new',)):
@@ -188,8 +204,10 @@ class ObservedClientSession:
             if not self._check(): raise RuntimeError('client log became incomplete')
             self._state = 'activating'
             # Leave one second for participant framing around its controller.
-            self.owner.activate(attempt, _CheckedParticipant(self),
-                                participant_timeout=self._controller_timeout + 1)
+            activate_options = {'participant_timeout': self._controller_timeout + 1}
+            if self._apply_motion is not None:
+                activate_options['apply_motion'] = self._checked_motion
+            self.owner.activate(attempt, _CheckedParticipant(self), **activate_options)
             self._state = 'active'
             if not self._check(): raise RuntimeError('client log became incomplete after claim')
             return True
