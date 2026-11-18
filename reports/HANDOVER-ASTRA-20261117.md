@@ -20,6 +20,15 @@
 > [the playback guide](../docs/AUTHORITY-CLIENT-PLAYBACK.md). The original handover
 > below records the earlier checkpoint, not the current branch tip.
 
+The latest follow-up groups process discovery around each single playback pull,
+including network waits, while rereading known identities inside. Extra group
+members may be detected only after a client effect; exclusive isolated ownership
+is assumed. The focused 26-sample fixture passes, but the changed scope has no X4
+result yet. Offline tracing found 3,841 aggregate guards and 611 checkpoint checks
+for the complete flow. Its helper/file checks are simulated, so do not treat its
+timing as a native performance prediction or restart X4 without accounting for
+the remaining nested costs.
+
 ## Objective and decisions from the user
 
 The user wants one persistent X4 universe, managed by a central server on the

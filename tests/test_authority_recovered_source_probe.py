@@ -551,6 +551,13 @@ class Probe(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux process and socket ownership required')
     def test_real_twenty_six_samples_observed_after_receipt_then_ordered_drain(self):
+        self.exercise_twenty_six_samples(use_identity_scope=True)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process and socket ownership required')
+    def test_real_playback_without_optional_identity_scope(self):
+        self.exercise_twenty_six_samples(use_identity_scope=False)
+
+    def exercise_twenty_six_samples(self, *, use_identity_scope):
         """Real UDP/TCP and ownership guards, with a simulated source/client."""
         from tests import test_authority_experimental_tcp_motion as fixture
         from test_authority_paired_playback_evidence import source_sample
@@ -604,18 +611,19 @@ class Probe(unittest.TestCase):
             scope_calls = []
             @contextmanager
             def identity_scope():
-                self.assertEqual(scope_depth[0], 0)
-                scope_depth[0] = 1
-                scope_calls.append('enter')
+                scope_depth[0] += 1
+                self.assertLessEqual(scope_depth[0], 2)
+                scope_calls.append(('enter', scope_depth[0]))
                 try:
                     yield
                 finally:
-                    scope_depth[0] = 0
-                    scope_calls.append('exit')
+                    scope_calls.append(('exit', scope_depth[0]))
+                    scope_depth[0] -= 1
             def check_active(**_options):
-                self.assertEqual(scope_depth[0], 1)
+                self.assertIn(scope_depth[0], (1, 2) if use_identity_scope else (0,))
                 return True
             def observe(sample):
+                self.assertEqual(scope_depth[0], 0)
                 self.assertIsNone(case.case.host._control._reader_lease)
                 self.assertFalse(case.case.host._busy)
                 self.assertEqual(case.received[-1][1], sample)
@@ -635,13 +643,17 @@ class Probe(unittest.TestCase):
                 identity=(os.getpid(), linux_gate_live.start_ticks(os.getpid())), verify=lambda:None,
                 verify_process=lambda:None, client_motion=True, verify_stopped=lambda:None,
                 saved_playback_fixture='recovery_enh_870', playback_sample_observer=observe,
-                playback_identity_scope=identity_scope,
+                playback_identity_scope=identity_scope if use_identity_scope else None,
                 playback_begin=lambda: events.append(('begin', time.monotonic())) or True,
                 playback_checkpoint_check=lambda: pump() or True,
                 playback_checkpoint_stop=lambda: events.append(('checkpoint_stop_hook', time.monotonic())) or guard.stop())
             self.assertEqual(observed, expected)
-            self.assertGreater(len(scope_calls), 0)
-            self.assertEqual(scope_calls, ['enter', 'exit']*(len(scope_calls)//2))
+            if use_identity_scope:
+                self.assertIn(('enter', 2), scope_calls)
+            else:
+                self.assertEqual(scope_calls, [])
+            self.assertEqual(sum(event == 'enter' for event, _ in scope_calls),
+                             sum(event == 'exit' for event, _ in scope_calls))
             self.assertEqual(scope_depth[0], 0)
             self.assertEqual([row[1] for row in case.received], expected)
             self.assertEqual(result['client_receipt_sample_sha256'], [motion_digest(s) for s in expected])

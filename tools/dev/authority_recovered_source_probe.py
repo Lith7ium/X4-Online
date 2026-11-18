@@ -434,7 +434,15 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             diagnostics.pull_attempts += 1
             pull_started_at = time.monotonic()
         try:
-            received = checked_operation(source.pull)
+            # Only this private playback diagnostic batches group discovery
+            # across one pull's UDP/TCP waits. Nested guards still read the
+            # known process identities. An extra group member may be detected
+            # only after a client effect, or missed if it exits before the end.
+            with playback_identity_scope() if playback_identity_scope is not None else nullcontext():
+                received = checked_operation(source.pull)
+            # The scope's exit verification is part of the sampling budget.
+            if playback_identity_scope is not None:
+                check_deadline()
         finally:
             if diagnostics is not None:
                 diagnostics.last_pull_seconds = time.monotonic() - pull_started_at

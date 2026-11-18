@@ -54,7 +54,7 @@ Static call expansion estimates about 62 scans per aggregate source guard,
 consistent with its measured 0.724s average. This supports the diagnosis but
 is not native per-function timing attribution.
 
-The correction in `e0f6f9e1` uses full discovery at entry/exit of each synchronous
+The correction exercised in attempt 03 (`e0f6f9e1`) uses full discovery at entry/exit of each synchronous
 aggregate guard, with fresh targeted launcher/X4 PID, start time, UID,
 executable, group and session checks inside. It is enabled only for paired
 playback and never spans a socket wait or the entire sampling window. It
@@ -83,6 +83,41 @@ repeated nested validation remains the next performance investigation.
 All owned processes were cleaned up; a subsequent read-only check found no
 X4 process or global X4 lock. Evidence:
 `.local/private-paired-playback-native-20261118-03/{result.json,trial-result.json,paired-server/result.json}`.
+
+A bounded offline trace of the existing real TCP/UDP fixture subsequently
+counted actual socket sends and confirmed sample observations:
+
+| Boundary | Aggregate guards | Checkpoint checks |
+| --- | ---: | ---: |
+| First TCP snapshot send | 192 | 24 |
+| First confirmed sample | 228 | 30 |
+| Each later confirmed sample, delta | 142 | 23 |
+| Complete 26-sample flow | 3,841 | 611 |
+
+The native03 counters coincide with the fixture's first-send boundary. This
+narrows the investigation but still cannot show whether the native send occurred.
+The fixture's baseline took 6.423s. A private variant with two harmless real
+Python process groups and full discovery around each pull completed in 12.014s
+(828 full group discoveries). It uses one fixture pump per checkpoint, whereas
+native03 averaged 9.375 pumps per request. Protected-file checks are stubs and
+there is no real checkpoint helper or `PlaybackSamplingWindow` in this variant.
+Neither time predicts native performance. Reproduction and JSON counters:
+`../x4-playback-discovery-scope-20261118/.local/measure_paired_guard_counts_20261118.py`
+and `guard-counts-{counts,pull_scope}-20261118.json` in that directory.
+
+The source probe now applies that discovery scope to each single playback pull,
+including its UDP/TCP waits. Nested checks still reread known process identities;
+an additional X4 may be discovered only after a client effect, or missed if it
+exits before the boundary. This relies on exclusive ownership of the isolated
+processes. Scope exit is charged to the unchanged sampling deadline; normal
+checks remain outside pulls. The actual changed 26-sample TCP/UDP fixture passed
+in 6.426s (`.local/paired-pull-scope-focused-20261118.log`). This test checks
+scope nesting and observation after exit, with simulated engine edges. Review
+caught the optional scope callback being called unconditionally; the correction
+retains the unscoped path. A separate real TCP/UDP test of that path passed in
+6.421s (`.local/paired-pull-no-scope-focused-20261118.log`). No new
+native run has been performed; remaining helper/file costs need accounting
+before deciding whether another expensive native attempt is justified.
 
 A separate read-only code review tightened intermediate native readbacks:
 each SUMMARY now independently checks actual-to-target distance, and log reads

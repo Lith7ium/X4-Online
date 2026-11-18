@@ -16,14 +16,16 @@ source sample or client motion receipt. Both runs confirmed source preservation
 and owned-scope cleanup. Native08 remains the latest successful client playback;
 paired native movement and Windows/Internet operation remain unproven.
 
-The follow-up correction batches full process discovery at each synchronous
-guard's entry/exit while checking known process identities at every nested
-lookup. It is private-playback-only, restores normal checks before client
-teardown and leaves save checks/timeouts intact. It assumes exclusive private
-process ownership; transient extra processes between boundaries may be missed.
-Attempt 03 exercised this correction in X4 and substantially reduced binding
-time. It still timed out after prevalidating one source sample, with no confirmed
-client receipt. The current measurements and remaining limits are below.
+Attempt 03 batched full process discovery at synchronous guard boundaries and
+substantially reduced binding time, but still timed out after prevalidating one
+source sample, without a client receipt. The subsequent correction also brackets
+each single playback pull with full discovery; nested checks reread known process
+identities. That scope includes UDP/TCP waits under the unchanged 15-second
+sampling deadline. An additional X4 can be detected only after a client effect,
+or missed if it exits before the final check. This assumes exclusive ownership
+of the isolated test processes. No scope spans the entire sampling window;
+normal checks remain outside pulls and before teardown. The new correction has
+passed the focused TCP/UDP fixture, but has not been exercised with X4.
 
 ## Data and lifetime
 
