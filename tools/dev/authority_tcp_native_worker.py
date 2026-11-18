@@ -36,6 +36,7 @@ from authority.local_participant_control import LocalParticipantControl
 from authority.load_messages import MAX_INTEGER, MAX_MESSAGE, _pairs, _reject_constant
 from authority.trusted_load_messages import decode_load_claim
 from authority.experimental_participant_motion_ipc import ExperimentalParticipantMotionIPC
+from authority.experimental_tcp_motion import motion_value
 from authority.experimental_tcp_client_authority_motion import grant_value
 
 MAX_CONFIG=16384
@@ -95,18 +96,25 @@ def config_value(raw):
         raise ValueError('invalid loopback participant peer')
     if 'motion' in obj:
         motion=obj['motion']
-        if (type(motion) is not dict or set(motion)-{'saved_apply_fixture'}!={'lease','attempt','epoch','generation','timeout'} or
+        if (type(motion) is not dict or set(motion)-{'saved_apply_fixture', 'saved_playback_fixture'}!={'lease','attempt','epoch','generation','timeout'} or
             any(type(motion[k]) is not str or not _HEX.fullmatch(motion[k]) for k in ('lease','attempt','epoch','generation')) or
             len({motion[k] for k in ('lease','attempt','epoch','generation')})!=4 or
             motion['lease'] in (obj['lease'],obj['epoch']) or motion['attempt'] in (obj['lease'],obj['epoch']) or
             not finite(motion['timeout']) or not 0<motion['timeout']<=30 or
             2*motion['timeout']>=obj['controller_timeout']):
             raise ValueError('invalid motion context or timeout')
+        if 'saved_apply_fixture' in motion and 'saved_playback_fixture' in motion:
+            raise ValueError('client motion apply and playback are mutually exclusive')
         if 'saved_apply_fixture' in motion and (
                 type(motion['saved_apply_fixture']) is not str or
                 motion['saved_apply_fixture'] != RECOVERY_SETTER_FIXTURE or
                 motion['epoch'] != RECOVERY_SETTER_EPOCH):
             raise ValueError('invalid recovery setter fixture')
+        if 'saved_playback_fixture' in motion and (
+                type(motion['saved_playback_fixture']) is not str or
+                motion['saved_playback_fixture'] != RECOVERY_SETTER_FIXTURE or
+                motion['epoch'] != RECOVERY_SETTER_EPOCH):
+            raise ValueError('invalid recovery playback fixture')
     try: raw_claim=obj['claim'].encode('ascii')
     except UnicodeError as error: raise ValueError('invalid claim encoding') from error
     claim=decode_load_claim(raw_claim)
@@ -241,6 +249,7 @@ class LazyMotion:
         self.sock,self.cfg,self.guard=sock,cfg,guard
         self.running=False;self.stopped=False;self.bridge=None
         self.destination=sock.getsockname()
+        self._playback_previous = None
     def _bind(self):
         self.guard()
         if self.bridge is None:
@@ -260,8 +269,27 @@ class LazyMotion:
         self.guard()
     def __call__(self,sample,despawn):
         if not self.running or self.stopped or despawn is not False:raise RuntimeError('motion while paused or unsupported despawn')
+        playback = self.cfg['motion'].get('saved_playback_fixture') == RECOVERY_SETTER_FIXTURE
+        if playback:
+            sample = motion_value(sample)
+            if (sample['version'] != 1 or sample['epoch'] != RECOVERY_SETTER_EPOCH or
+                    sample['generation'] != self.cfg['motion']['generation'] or
+                    sample['index'] != RECOVERY_SETTER_INDEX or
+                    sample['sector_macro'] != 'cluster_06_sector001_macro'):
+                raise ValueError('recovery playback sample mismatch')
+            previous = self._playback_previous
+            if previous is None:
+                # Lua consumes the actual first sample as enrollment only. Never
+                # renumber, translate its pose, or fabricate its source clock.
+                if sample['sequence'] != 1:
+                    raise ValueError('recovery playback must enroll source sequence one')
+            elif sample['sequence'] <= previous[0] or sample['source_time'] <= previous[1]:
+                raise ValueError('recovery playback source regressed')
         self._bind()
-        return self.bridge(sample,despawn)
+        confirmed = self.bridge(sample,despawn)
+        if playback and confirmed is True:
+            self._playback_previous = (sample['sequence'], sample['source_time'])
+        return confirmed
     def _check_setter_sample(self, sample):
         """Fence the only permitted recovery fixture before any setter IPC."""
         if not self.running or self.stopped or self.cfg['motion'].get('saved_apply_fixture') != RECOVERY_SETTER_FIXTURE:

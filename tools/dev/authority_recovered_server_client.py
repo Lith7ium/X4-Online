@@ -29,6 +29,29 @@ RECOVERY_SETTER_EPOCH = '4ba7be438ebb04ec5bb85fdb95b5a488'
 RECOVERY_SETTER_INDEX = 1318
 
 
+def verify_playback_install_inputs(case, profile, status):
+    """Fence current recovery-fixture content, not a historical save/ticket."""
+    import authority_native_client_playback as playback
+
+    case, profile = Path(case), Path(profile)
+    if (type(status) is not tuple or status != playback.STATUS or
+            any(type(value) is not type(expected) for value, expected in zip(status, playback.STATUS)) or
+            case.is_symlink() or profile.is_symlink() or profile.name != '45841' or
+            not profile.resolve().is_relative_to(case.resolve())):
+        raise ValueError('invalid recovery playback lineage')
+    evidence = playback.registry.recovery.marked.file_evidence
+    expected = [(profile/'content.xml', playback.CONTENT_SHA)]
+    expected.extend((case/'extensions/x4_lan_lab/md'/name, digest)
+                    for name, digest in playback.SCRIPT_PINS.items())
+    for path, digest in expected:
+        try:
+            actual = evidence._read_regular(path, 1 << 20, collect=False)[1]
+        except (OSError, ValueError):
+            raise ValueError('recovery playback input unavailable') from None
+        if actual != digest:
+            raise ValueError('recovery playback content or scripts differ')
+
+
 class ClientMotionErrorWatch(witness.ErrorWatch):
     """Pin one append-only client log and scan incrementally through exit."""
     TAGS = (
@@ -150,10 +173,13 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
                 self.client_authority_worker_config is not None or
                 type(request) is not dict or
-                set(request) - {'player_sector', 'saved_apply_fixture'} != {'indices', 'generation', 'timeout'} or
+                set(request) - {'player_sector', 'saved_apply_fixture', 'saved_playback_fixture'} != {'indices', 'generation', 'timeout'} or
                 ('player_sector' in request and request['player_sector'] is not True) or
                 type(ticket) is not dict):
             raise ValueError('invalid retained client motion request')
+
+        if 'saved_apply_fixture' in request and 'saved_playback_fixture' in request:
+            raise ValueError('client motion apply and playback are mutually exclusive')
 
         if 'saved_apply_fixture' in request and (
                 request['saved_apply_fixture'] != RECOVERY_SETTER_FIXTURE or
@@ -162,6 +188,14 @@ class ServerClient(combined.RecoveredRemoteParticipant):
                 type(request['indices']) is not list or request['indices'] != [RECOVERY_SETTER_INDEX] or
                 type(request['indices'][0]) is not int):
             raise ValueError('invalid recovery setter fixture')
+
+        if 'saved_playback_fixture' in request:
+            if (type(request['saved_playback_fixture']) is not str or
+                    request['saved_playback_fixture'] != RECOVERY_SETTER_FIXTURE or
+                    type(request['indices']) is not list or request['indices'] != [RECOVERY_SETTER_INDEX] or
+                    type(request['indices'][0]) is not int):
+                raise ValueError('invalid recovery playback fixture')
+            verify_playback_install_inputs(case, profile, status)
 
         excluded_tokens = {self.lease, ticket['world_epoch'], ticket['attempt_id'],
                            status[1], request['generation']}
@@ -191,10 +225,11 @@ class ServerClient(combined.RecoveredRemoteParticipant):
                     raise ValueError('client sector requires the confirmed marker')
                 excluded_tokens.add(self.marker)
                 settings['player_sector'] = {'incarnation': fresh_token(), 'nonce': fresh_token(), 'after_bound': True}
-            if 'saved_apply_fixture' in request:
-                # The saved setter uses the installer's single-index contract.
-                settings['index'] = settings.pop('indices')[0]
-                settings['saved_apply_fixture'] = request['saved_apply_fixture']
+            for option in ('saved_apply_fixture', 'saved_playback_fixture'):
+                if option in request:
+                    # Both explicit saved-fixture routes require one fixed index.
+                    settings['index'] = settings.pop('indices')[0]
+                    settings[option] = request[option]
             installation = motion_install.install(case, profile, status, settings)
         except BaseException:
             motion_socket.close()
@@ -208,8 +243,9 @@ class ServerClient(combined.RecoveredRemoteParticipant):
             key: settings[key] for key in ('lease', 'attempt', 'generation', 'timeout')
         }
         self.motion_worker_config['epoch'] = status[1]
-        if 'saved_apply_fixture' in request:
-            self.motion_worker_config['saved_apply_fixture'] = request['saved_apply_fixture']
+        for option in ('saved_apply_fixture', 'saved_playback_fixture'):
+            if option in request:
+                self.motion_worker_config[option] = request[option]
         return list(installation.paths)
 
     def prepare_fixture_player_source(self, case, profile, *, slot, sector, grant, timeout, ticket, latest_cache=False, freeze_drain=False, throttle=False):
