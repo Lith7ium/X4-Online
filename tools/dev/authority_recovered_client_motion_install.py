@@ -2,6 +2,8 @@
 
 The saved_playback_fixture option enables bounded-evidence sustained playback;
 the default and separately enabled saved_apply fixture behavior are unchanged.
+The saved_replica_control_fixture option adds the dedicated local control owner
+only alongside matching saved playback.
 
 No game, helper, listener or socket is started. The caller owns the fourth UDP
 FD handoff, all process/checkpoint/STOP fences, final log checks and redaction.
@@ -18,7 +20,8 @@ import authority_two_x4_resume_live as participant
 from authority.client_motion_overlay import (
     HEX, MD, MODULES, PLAYER_SECTOR_MD, PLAYER_SECTOR_MODULE,
     RECOVERY_APPLY_EPOCH, RECOVERY_APPLY_FIXTURE, RECOVERY_APPLY_MD,
-    RECOVERY_APPLY_MODULE, RECOVERY_PLAYBACK_MODULE, SECRET_FIELDS,
+    RECOVERY_APPLY_MODULE, RECOVERY_PLAYBACK_MODULE, RECOVERY_REPLICA_CONTROL_MODULE,
+    RECOVERY_REPLICA_CONTROL_MD, SECRET_FIELDS,
     append_load_ready_hook, render_motion_config, select_motion_sources,
     transform_motion_control, validate_motion_settings,
 )
@@ -162,6 +165,11 @@ def install(case,profile,status,settings):
     motion_control=transform_motion_control(ctl,settings)
     load_text=append_load_ready_hook(load_text)
     modules,md_names=select_motion_sources(settings)
+    if settings.get('saved_replica_control_fixture') is not None:
+        control_sources=(ROOT/RECOVERY_REPLICA_CONTROL_MODULE[0],ROOT/'tools/dev'/RECOVERY_REPLICA_CONTROL_MD)
+        if (any(path.is_symlink() or not path.is_file() for path in control_sources) or
+            'ui/'+RECOVERY_REPLICA_CONTROL_MODULE[1] in manifest_files):
+            raise ValueError('saved replica control overlay source or manifest is invalid')
     if saved_apply_fixture is not None:
         apply_sources=(ROOT/RECOVERY_APPLY_MODULE[0],ROOT/'tools/dev'/RECOVERY_APPLY_MD)
         if (any(path.is_symlink() or not path.is_file() for path in apply_sources) or

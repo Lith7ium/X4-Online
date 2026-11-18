@@ -1,5 +1,18 @@
 # X4 multiplayer: handover for Astra
 
+Latest client implementation: shared Linux/Windows overlays now accept the
+explicit `saved_replica_control_fixture="recovery_enh_870"` option alongside
+the existing playback fixture. It prepares the one local NPC after read-only
+binding, delays playback until preparation is confirmed, and defers STOPPED
+until drained playback and asynchronous local AI-order release are confirmed.
+The ordinary binder remains read-only and the option defaults off. This is a
+bounded internal fixture, not a general NPC authority policy. See the
+[shared control implementation and limits](AUTHORITY-CLIENT-PLAYBACK-20261117.md#shared-fixture-control-option).
+Focused fake-engine/configuration checks cover the new path; its changed MD
+flow still needs an actual X4 run. The previous private native08 result does not
+validate this new implementation. No initial alignment, clock basis, server
+architecture or normal profile changes were made.
+
 Latest client/server evidence: pair 02 passed with actual Linux server X4 and
 Windows X4 under Proton using existing authenticated loopback TLS/file transfer,
 real checkpoint admission and one server-directed resume. The client retained
@@ -52,14 +65,15 @@ evidence, input hashes and boundaries are in the
 [network runtime record](AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md#real-dll-execution-under-wine).
 The initial-placement decision below remains pending and no behavior changed.
 
-Latest read-only follow-up: source setup occurs after the world is running;
+Previous read-only follow-up: source setup occurs after the world is running;
 saved-client actor takeover starts only on the first BIND. Native05 reads
 INITIAL after its private Wait/zero-velocity steps, leaving earlier client
 displacement unmeasured. Its initial 88m refusal precedes buffered playback,
 so the separate clock-rate issue did not generate that comparison. The tracked
 saved binder used by the Windows CLI is read-only and does not include the
-private AI suppression/release experiment. Native Windows takeover is therefore
-still missing even though the receiver plumbing is connected. See the
+private AI suppression/release experiment. The explicit shared control option
+above now implements a separate path, still without native Windows takeover
+evidence. See the
 [sequence audit](AUTHORITY-CLIENT-PLAYBACK-20261117.md#follow-up-the-first-pose-comparison-happens-after-takeover-begins).
 The user has been asked whether to implement a separately verified initial
 placement on the isolated fixture or first gather early pose measurements.

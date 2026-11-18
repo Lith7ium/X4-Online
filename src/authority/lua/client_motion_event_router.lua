@@ -16,6 +16,7 @@ function M.new(o)
  local fixed={};for k,v in pairs(o)do fixed[k]=v end;o=fixed
  assert(integer(o.max_generations) and o.max_generations<=4096 and integer(o.max_tracks) and o.max_tracks<=100000)
  assert(o.saved_apply==nil or o.saved_apply==true)
+ assert(o.saved_replica_control==nil or type(o.saved_replica_control)=='boolean','invalid saved replica control flag')
  assert(o.saved_apply_fixture==nil or (o.saved_apply==true and o.saved_apply_fixture=='recovery_enh_870'))
  if o.saved_apply then assert(integer(o.max_apply_requests) and o.max_apply_requests<=200000)
  else assert(o.max_apply_requests==nil) end
@@ -179,7 +180,11 @@ function M.new(o)
    assert(owner.event==current.owner_event and owner.state==current.owner_state and
     (not o.saved_apply or owner.apply_event==current.owner_apply_event))
    local good,owner_state=pcall(current.owner_state,owner)
-   assert(good and owner_state==expected_state and owner.event==current.owner_event and owner.state==current.owner_state and
+   -- Only the opt-in saved binding can finish its readonly MD inspection
+   -- before asynchronous local control preparation has completed.
+   local expected_owner_state=owner_state==expected_state or
+    (o.saved_replica_control==true and route=='saved' and owner_state=='preparing')
+   assert(good and expected_owner_state and owner.event==current.owner_event and owner.state==current.owner_state and
     (not o.saved_apply or owner.apply_event==current.owner_apply_event) and state=='active' and context())
    pending=nil
   end)

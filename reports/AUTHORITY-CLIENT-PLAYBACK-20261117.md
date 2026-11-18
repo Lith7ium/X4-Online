@@ -792,3 +792,51 @@ These files,
 binaries, saves and private credentials are not committed. Selected dependencies
 are checked before and after runs;
 intermediate mutation and external cgroup migration are outside that evidence.
+
+## Shared fixture control option
+
+The Linux and Windows client overlays now expose an explicit
+`saved_replica_control_fixture="recovery_enh_870"` option. It requires the
+matching saved-playback option, epoch `4ba7be438ebb04ec5bb85fdb95b5a488` and
+single registry index 1318. The existing saved-reference binder remains
+read-only. Default configurations install neither the new control module nor
+its MD script.
+
+After a successful read-only BIND, the motion owner enters `preparing`.
+The separate controller captures the prior AI order, creates one finite Wait,
+observes that Wait current and started across advancing UI/game samples, and
+requests constant zero linear velocity. Only then does the owner construct
+playback, read INITIAL and acknowledge BOUND. Later BINDs revalidate ownership
+of the same temporary order. Initial enrollment still does not write a target;
+packet arrival time, the 50 m bound and source-clock handling are unchanged.
+
+STOP captures the playback drain/certainty state before disabling writers.
+Only stale, certain playback permits release of an acquired local order.
+The controller disables constant velocity and cancels only its captured Wait.
+STOPPED is withheld until two advancing observations confirm that the Wait is
+absent and the captured prior order is current and started. The enclosing pause
+gate therefore also waits. Release polling remains bounded when order
+resumption is pending. Unconfirmed ownership after a fault requires the
+existing process fence; there is no automatic repair/retry.
+
+This is a short internal trial: the Wait lasts 30 game seconds, and the local
+controller refuses further work at 29 game seconds from its pre-request clock
+sample. Release must finish before that bound. This is not a sustained gameplay
+lease, a general AI suppression policy, or an exact restoration of the AI stack
+or an unknown previous constant-velocity mode. A successful zero request is
+not a physical velocity measurement. The new two-sample release check does not
+reproduce native08's longer six-second observation span.
+
+Focused checks exercise configuration forwarding, generated Linux/Windows
+overlays, delayed preparation/release, packet correlation, deadlines, expiry,
+fault uncertainty and the existing pause gate with fake engine behavior.
+The new controller checks cover 13 simulated lifecycle scenarios and eight
+native-adapter scenarios against a fake ABI, including exact hexadecimal
+reference conversion. The new MD script passes the local game-schema validator;
+schema validity does not establish runtime behavior.
+The assembled test exposed an event-router assumption that BIND must return
+immediately ready; the router now allows `preparing` only on the explicitly
+enabled saved route. No full suite or actual X4 run was repeated for this
+change. The native08 private-script success above is prior evidence for the
+underlying operations, not evidence that this new shared implementation works
+in X4, Windows, over the Internet, or with actual source-X4 motion.

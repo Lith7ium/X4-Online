@@ -176,7 +176,7 @@ class ServerClient(combined.RecoveredRemoteParticipant):
         if (not self.keep_worker or self.motion_sock is not None or self.motion_worker_config is not None or
                 self.client_authority_worker_config is not None or
                 type(request) is not dict or
-                set(request) - {'player_sector', 'saved_apply_fixture', 'saved_playback_fixture'} != {'indices', 'generation', 'timeout'} or
+                set(request) - {'player_sector', 'saved_apply_fixture', 'saved_playback_fixture', 'saved_replica_control_fixture'} != {'indices', 'generation', 'timeout'} or
                 ('player_sector' in request and request['player_sector'] is not True) or
                 type(ticket) is not dict):
             raise ValueError('invalid retained client motion request')
@@ -191,6 +191,12 @@ class ServerClient(combined.RecoveredRemoteParticipant):
                 type(request['indices']) is not list or request['indices'] != [RECOVERY_SETTER_INDEX] or
                 type(request['indices'][0]) is not int):
             raise ValueError('invalid recovery setter fixture')
+
+        if 'saved_replica_control_fixture' in request and (
+                type(request['saved_replica_control_fixture']) is not str or
+                request['saved_replica_control_fixture'] != RECOVERY_SETTER_FIXTURE or
+                request.get('saved_playback_fixture') != RECOVERY_SETTER_FIXTURE):
+            raise ValueError('invalid recovery replica control fixture')
 
         if 'saved_playback_fixture' in request:
             if (type(request['saved_playback_fixture']) is not str or
@@ -233,6 +239,8 @@ class ServerClient(combined.RecoveredRemoteParticipant):
                     # Both explicit saved-fixture routes require one fixed index.
                     settings['index'] = settings.pop('indices')[0]
                     settings[option] = request[option]
+            if 'saved_replica_control_fixture' in request:
+                settings['saved_replica_control_fixture'] = request['saved_replica_control_fixture']
             installation = motion_install.install(case, profile, status, settings)
         except BaseException:
             motion_socket.close()
@@ -246,7 +254,7 @@ class ServerClient(combined.RecoveredRemoteParticipant):
             key: settings[key] for key in ('lease', 'attempt', 'generation', 'timeout')
         }
         self.motion_worker_config['epoch'] = status[1]
-        for option in ('saved_apply_fixture', 'saved_playback_fixture'):
+        for option in ('saved_apply_fixture', 'saved_playback_fixture', 'saved_replica_control_fixture'):
             if option in request:
                 self.motion_worker_config[option] = request[option]
         return list(installation.paths)

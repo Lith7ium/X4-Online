@@ -39,12 +39,12 @@ def _annotate(error, message):
 
 
 def validate_motion_request(request, participant_timeout):
-    """Validate the caller-selected server stream; no lease is inferred."""
+    """Validate the explicit stream and optional fixture-only replica control."""
     if request is None:
         return
     fields = {'generation', 'indices', 'timeout'}
     if (type(request) is not dict or
-            set(request) not in (fields, fields | {'saved_playback_fixture'}) or
+            set(request) - {'saved_playback_fixture', 'saved_replica_control_fixture'} != fields or
             type(request['generation']) is not str or
             not re.fullmatch(r'[0-9a-f]{32}', request['generation']) or
             type(request['indices']) is not list or not 1 <= len(request['indices']) <= 32 or
@@ -57,6 +57,10 @@ def validate_motion_request(request, participant_timeout):
     if 'saved_playback_fixture' in request and (
             request['saved_playback_fixture'] != 'recovery_enh_870' or request['indices'] != [1318]):
         raise ValueError('invalid saved playback request')
+    if 'saved_replica_control_fixture' in request and (
+            request['saved_replica_control_fixture'] != 'recovery_enh_870' or
+            request.get('saved_playback_fixture') != 'recovery_enh_870'):
+        raise ValueError('invalid saved replica control request')
 
 
 def _motion_settings(request, registry_status, bound, controller, registry_nonce, port):
@@ -79,8 +83,9 @@ def _motion_settings(request, registry_status, bound, controller, registry_nonce
         settings['index'] = request['indices'][0]
     else:
         settings['indices'] = list(request['indices'])
-    if 'saved_playback_fixture' in request:
-        settings['saved_playback_fixture'] = request['saved_playback_fixture']
+    for option in ('saved_playback_fixture', 'saved_replica_control_fixture'):
+        if option in request:
+            settings[option] = request[option]
     return settings
 
 

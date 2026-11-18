@@ -41,6 +41,36 @@ local lease,attempt,epoch,generation,nonce,router_generation=('a'):rep(32),('b')
 local configuration={enabled=true,port=2345,lease=lease,attempt=attempt,epoch=epoch,generation=generation,nonce=nonce,
  router_generation=router_generation,baseline=10082,index=1318,timeout=5,expected_save_path='/private/45841/save',
  saved_playback_fixture='recovery_enh_870'}
+-- This mode exercises the actual wrapper/owner/playback composition with a
+-- controllable native ownership adapter. MD behavior has separate tests.
+local control_phase, control_preparations, control_releases = 'new', 0, 0
+if mode == 'control' then
+ configuration.saved_replica_control_fixture = 'recovery_enh_870'
+ X4LAN_SAVED_REPLICA_CONTROL = {new_x4=function(options)
+  assert(options.enabled == true and options.fixture == 'recovery_enh_870')
+  assert(options.expected_save_path == configuration.expected_save_path)
+  assert(options.resolve == X4LAN_RESOLVE_STRING and options.nonce == nonce)
+  assert(options.binding.actor_key == '41' and options.binding.sector_key == '43')
+  assert(options.binding.index == 1318 and options.binding.epoch == epoch)
+  return {
+   prepare=function()
+    assert(options.guard() == true)
+    control_preparations = control_preparations + 1
+    control_phase = 'preparing'
+    return true
+   end,
+   tick=function() return options.guard() == true end,
+   state=function() return control_phase end,
+   outcome_uncertain=function() return false end,
+   release=function()
+    assert(control_phase == 'prepared' and options.guard() == true)
+    control_releases = control_releases + 1
+    control_phase = 'releasing'
+    return true
+   end,
+  }
+ end}
+end
 for _,change in ipairs({{index=1317},{epoch=('c'):rep(32)},{saved_playback_fixture='other'},
  {saved_apply_fixture='recovery_enh_870'}})do
  local invalid={};for key,value in pairs(configuration)do invalid[key]=value end
@@ -59,6 +89,16 @@ local function send(sequence,x,source)
  assert(request.screen=='X4AuthoritySavedBaselineMotionBind')
  if mode=='paused_initial' and sequence==1 then ffi.C.TestPause(true) end
  events['X4AuthoritySavedBaselineMotionBind.Result'](nil,request.args.request_id..'|Bound|1318|0x29|0x2b')
+ if mode == 'control' then
+  assert(client:state() == 'preparing' and control_phase == 'preparing')
+  assert(not output[#output]:find('|BOUND|', 1, true) or sequence > 1)
+  if sequence == 1 then
+   assert(ffi.C.TestWrites() == 0 and ffi.C.TestReads() == 0)
+   assert(#logs == 0) -- INITIAL cannot be read or logged before preparation.
+  end
+  control_phase = 'prepared'
+  assert(client:tick() and client:state() == 'ready')
+ end
 end
 send(1,1000000,0) -- Arbitrary first target is enrollment only and must never write.
 if mode=='paused_initial' then
@@ -70,7 +110,7 @@ assert(client:state()=='ready' and ffi.C.TestWrites()==0 and ffi.C.TestReads()>0
 assert(#logs==1 and logs[1]:find('AUTH_CLIENT_PLAYBACK INITIAL version=1 ',1,true))
 assert(logs[1]:find(' x=0 y=0 z=0',1,true) and output[#output]:find('|BOUND|',1,true))
 assert(client:tick() and ffi.C.TestWrites()==0)
-if mode~='good' and mode~='bounded' and mode~='uncertain' and mode~='docking' and mode~='fixture' and mode~='zone' and mode~='distance' then
+if mode~='good' and mode~='control' and mode~='bounded' and mode~='uncertain' and mode~='docking' and mode~='fixture' and mode~='zone' and mode~='distance' then
  local invalid=packet(2,5,.2)
  if mode=='sector' then invalid[10]='other_sector'
  elseif mode=='index' then invalid[8]='1317'
@@ -134,13 +174,22 @@ if mode=='bounded' then
   now=now+.6;send(sequence,sequence%2==0 and 5 or 6,sequence*.6)
   assert(client:tick())
  end
-elseif mode=='good' then
+elseif mode=='good' or mode=='control' then
  for tick=1,6 do now=1.2+tick*.1;assert(client:tick())end
  now=1.9;send(3,10,.9);assert(client:tick())
  for tick=1,16 do now=1.9+tick*.1;assert(client:tick())end
  assert(ffi.C.TestWrites()>=2)
 end
 input[1]=table.concat({'M',lease,attempt,'STOP',('8'):rep(32),epoch,generation},'|')
+if mode == 'control' then
+ assert(client:tick() and client:state() == 'stopping')
+ assert(control_preparations == 3 and control_releases == 1)
+ assert(not output[#output]:find('|STOPPED|', 1, true))
+ local writes_before_release = ffi.C.TestWrites()
+ assert(client:tick() and client:state() == 'stopping')
+ assert(ffi.C.TestWrites() == writes_before_release)
+ control_phase = 'released'
+end
 assert(client:tick() and client:state()=='stopped' and output[#output]:find('|STOPPED|',1,true))
 local final=logs[#logs]
 assert(final:find('AUTH_CLIENT_PLAYBACK STOPPED version=1 ',1,true))

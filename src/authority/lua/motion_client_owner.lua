@@ -55,30 +55,67 @@ function M.new(o)
   assert(saved and not apply and type(playback)=='table' and playback.enabled==true and
    type(playback.factory)=='function','invalid saved playback')
  end
+ local replica_control=c.saved_replica_control
+ if replica_control~=nil then
+  assert(playback and c.max_tracks==1 and type(replica_control)=='table' and
+   replica_control.enabled==true and type(replica_control.factory)=='function','invalid saved replica control')
+ end
+ local finish_binding
+ local stopping_identity
  local state,busy='new',false;local last,pending,deadline,delivered=nil,nil,nil,nil
  local staged,bound,writer,operation_identity,apply_used,preflight_ready=nil,nil,nil,nil,false,false
  local operation_requests,operation_count,preflight_attempted={},0,false
  local observe_count,stream_index,stream_sequence,stream_time,stream_binding=0,nil,nil,nil,nil
  local tracks,track_count={},0;local api={}
  local playback_uncertain=false
- local function stop_playback()
+ local control_uncertain=false
+ local function stop_playback(capture_drain)
   local success=true
+  -- Capture drain evidence before stop() changes the playback state. Regardless
+  -- of capture failures, disable every writer before any external callback.
   for _,entry in pairs(tracks)do
    if entry.playback then
     local observed,uncertain=pcall(entry.playback.outcome_uncertain,entry.playback)
     playback_uncertain=playback_uncertain or not observed or uncertain==true
+    if capture_drain then
+     local ok,value=pcall(entry.playback.state,entry.playback)
+     entry.drained=ok and value=='stale' and observed and uncertain==false
+    end
+   end
+  end
+  for _,entry in pairs(tracks)do
+   if entry.playback then
     local ok,stopped=pcall(entry.playback.stop,entry.playback)
     success=ok and stopped==true and success
    end
   end
   return success
  end
+ local function current_control_uncertainty()
+  for _,entry in pairs(tracks)do
+   if entry.control_started then
+    local ok,value=pcall(entry.control.outcome_uncertain,entry.control)
+    if not ok or value~=false then return true end
+   end
+  end
+  return false
+ end
  local function fail(reason,diagnostic)
   if state~='failed' then
    local retained=diagnostic and playback_diagnostic(diagnostic.stage,diagnostic.native_stage)
    state='failed'
    stop_playback() -- Disable every writer before notifying the enclosing owner.
-   pcall(c.fault,reason,playback_uncertain,retained)
+   control_uncertain=control_uncertain or current_control_uncertainty()
+   -- A terminal owner fault abandons a possibly known-held local Wait. That
+   -- ownership is unresolved until an observed release, even if the adapter's
+   -- own last operation was certain.
+   for _,entry in pairs(tracks)do
+    if entry.control_started then
+     local ok,phase=pcall(entry.control.state,entry.control)
+     control_uncertain=control_uncertain or not ok or phase~='released'
+    end
+   end
+   pcall(c.fault,reason,playback_uncertain or control_uncertain,retained)
   end
   return false
  end
@@ -219,6 +256,32 @@ function M.new(o)
    target={x=bound.position[1],y=bound.position[2],z=bound.position[3]}}
   return writer:begin(input)==true and state==active and check()
  end
+ local function finish_stop()
+  assert(check() and c.net:receive()==nil)
+  assert(send(reply('STOPPED',stopping_identity)))
+  tracks={};state='stopped';deadline=nil;stopping_identity=nil
+ end
+ local function tick_control_preparation()
+  local entry=pending.entry
+  assert(c.net:receive()==nil and check())
+  local phase=entry.control:state()
+  if phase=='prepared' then
+   state='pending'
+   finish_binding()
+  else assert(phase=='preparing')end
+ end
+ local function tick_control_release()
+  assert(c.net:receive()==nil and check())
+  local released=true
+  for _,entry in pairs(tracks)do
+   if entry.control_started then
+    local phase=entry.control:state()
+    assert(phase=='releasing' or phase=='released')
+    released=released and phase=='released'
+   end
+  end
+  if released then finish_stop()end
+ end
  function api:tick()
   -- The enclosing update owner must keep ticking while paused. A late
   -- packet is a fault; stopped owners never revive or inspect an actor.
@@ -227,9 +290,19 @@ function M.new(o)
    if not ok or state~='stopped' or value~=nil then return fail('late_packet')end
    return true
   end
-  if busy or (state~='ready' and state~='pending' and state~='applying' and state~='preflighting') then return fail('tick')end
+  if busy or (state~='ready' and state~='pending' and state~='applying' and state~='preflighting' and state~='preparing' and state~='stopping') then return fail('tick')end
   busy=true;local ok=pcall(function()
    assert(check())
+   local active=state
+   if active=='preparing' or active=='stopping' then assert(c.net:receive()==nil and check())end
+   for _,entry in pairs(tracks)do
+    if entry.control_started then
+     assert(entry.control:tick()==true and state==active and check())
+     if active~='preparing' and active~='stopping' then assert(entry.control:state()=='prepared')end
+    end
+   end
+   if state=='preparing' then tick_control_preparation();return end
+   if state=='stopping' then tick_control_release();return end
    if state=='pending' then assert(pending.binding:tick() and check())end
    if state=='applying' or state=='preflighting' then
     local active=state;assert(writer:tick() and state==active and check())
@@ -255,17 +328,27 @@ function M.new(o)
      assert(c.stop and #p==7 and p[1]=='M' and p[2]==c.lease and p[3]==c.attempt and
       token(p[5],32) and p[6]==c.epoch and p[7]==c.generation and check())
      state='stopping';deadline=last+c.timeout
-     assert(stop_playback())
+     assert(stop_playback(true))
      for _,entry in pairs(tracks)do
       assert(type(entry.binding.close)=='function' and entry.binding:close()==true and state=='stopping' and check())
      end
      local ok,closed=pcall(c.stop)
      assert(ok and closed==true and state=='stopping' and check() and c.net:receive()==nil)
-     assert(send(reply('STOPPED',{p[5],p[6],p[7]})))
-     tracks={};state='stopped';deadline=nil
+     stopping_identity={p[5],p[6],p[7]}
+     local releasing=false
+     for _,entry in pairs(tracks)do
+      if entry.control_started then
+       assert(entry.playback and entry.drained==true)
+       assert(entry.control:release()==true and state=='stopping' and check())
+       local phase=entry.control:state()
+       assert(phase=='releasing' or phase=='released')
+       releasing=releasing or phase=='releasing'
+      end
+     end
+     if not releasing then finish_stop()end
     elseif p[4]=='APPLY' or p[4]=='OBSERVE' or p[4]=='PREFLIGHT' then assert(accept_operation(packet,p[4])) else assert(not apply_used and accept(packet))end
    end
-   if playback then
+   if playback and state~='stopping' and state~='stopped' then
     for _,entry in pairs(tracks)do
      if entry.playback then assert(entry.playback:tick()==true and check())end
     end
@@ -277,12 +360,7 @@ function M.new(o)
   local active=state;busy=true;local ok=pcall(function()assert(check() and writer:event(value)==true and state==active and check())end)
   busy=false;if not ok then return fail('apply_event')end;return true
  end
- function api:event(value,route)
-  route=route or 'replica'
-  if busy or state~='pending' or delivered or not pending or route~=pending.route then return fail('event')end
-  busy=true;local ok=pcall(function()
-   assert(check());local accepted=pending.binding:event(value)
-   assert(accepted==true and delivered==true and state=='pending' and check())
+ finish_binding=function()
    local pose={};for i=1,#pending.position do pose[i]=pending.position[i] end
    local rate
    if pending.rate then rate={};for i=1,#pending.rate do rate[i]=pending.rate[i] end end
@@ -311,7 +389,9 @@ function M.new(o)
     else
      entry.playback_binding=identity
      entry.playback=assert(playback.factory({enabled=true,binding=identity,buffer=c.buffer,
-      max_age=c.max_age,clock=c.clock,guard=function()return state~='failed' and state~='stopped' and check()end,
+      max_age=c.max_age,clock=c.clock,guard=function()
+       return state~='failed' and state~='stopped' and (not entry.control or entry.control:state()=='prepared') and check()
+      end,
       fault=function(reason,uncertain,stage,native_stage)
        fail('playback',playback_diagnostic(stage,native_stage))
       end}))
@@ -341,10 +421,45 @@ function M.new(o)
      digest=pending.identity[7],arrival=pending.arrival,position={pending.position[1],pending.position[2],pending.position[3]}}
    end
    assert(send(reply('BOUND',pending.identity)));pending=nil;staged=nil;deadline=nil;delivered=nil;state='ready'
+ end
+ function api:event(value,route)
+  route=route or 'replica'
+  if busy or state~='pending' or delivered or not pending or route~=pending.route then return fail('event')end
+  busy=true;local ok=pcall(function()
+   assert(check());local accepted=pending.binding:event(value)
+   assert(accepted==true and delivered==true and state=='pending' and check())
+   if replica_control then
+    assert(staged and staged.index==pending.index and staged.sequence==pending.sequence)
+    local entry=pending.entry
+    local identity={actor_key=staged.actor_key,sector_key=staged.sector_key,zone_key=staged.zone_key,
+     index=pending.index,epoch=c.epoch,sector_macro=pending.sector}
+    if entry.control then
+     for key,value in pairs(identity)do assert(entry.control_binding[key]==value)end
+    else
+     entry.control_binding=identity
+     entry.control=assert(replica_control.factory({binding=identity,nonce=c.nonce,timeout=c.timeout,
+      clock=c.clock,guard=function()return state~='failed' and state~='stopped' and check()end,
+      fault=function(_,uncertain)
+       control_uncertain=control_uncertain or uncertain~=false
+       fail('replica_control')
+      end}))
+     for _,method in ipairs({'prepare','tick','state','release','outcome_uncertain'})do
+      assert(type(entry.control[method])=='function')
+     end
+    end
+    assert(state=='pending' and check())
+    state='preparing';entry.control_started=true
+    assert(entry.control:prepare()==true and state=='preparing' and check())
+    local phase=entry.control:state()
+    assert(phase=='preparing' or phase=='prepared')
+    if phase=='preparing' then return end
+    state='pending'
+   end
+   finish_binding()
   end);busy=false;if not ok then return fail('event')end;return true
  end
  function api:outcome_uncertain()
-  if playback_uncertain then return true end
+  if playback_uncertain or control_uncertain or current_control_uncertainty() then return true end
   for _,entry in pairs(tracks)do
    if entry.playback and entry.playback:outcome_uncertain() then return true end
   end

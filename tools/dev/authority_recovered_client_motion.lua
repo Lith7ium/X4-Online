@@ -6,7 +6,7 @@ local player_sector_event_claimed=false
 local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
 -- Only static diagnostic codes may cross into X4's log. Never interpolate a
 -- callback's arbitrary text: it may contain wire data or control characters.
-local owner_reasons={playback=true,start=true,late_packet=true,tick=true,apply_event=true,event=true}
+local owner_reasons={playback=true,replica_control=true,start=true,late_packet=true,tick=true,apply_event=true,event=true}
 local playback_stages={}
 for word in ('state clock guard paused buffer_reset sample arrival sequence buffer_push read read_pose game_read game_value game_clock readback_record render render_frame observation_record distance write write_state'):gmatch('%S+')do playback_stages[word]=true end
 local native_stages={}
@@ -167,6 +167,14 @@ function M.new_x4(c)
  if saved_playback_fixture then
   assert(type(X4LAN_MOTION_PLAYBACK)=='table' and type(X4LAN_MOTION_PLAYBACK.new)=='function' and
    type(X4LAN_SAVED_MOTION_APPLY)=='table' and type(X4LAN_SAVED_MOTION_APPLY.new_playback_x4)=='function')
+ end
+ local replica_control_fixture = c.saved_replica_control_fixture
+ if replica_control_fixture ~= nil then
+  assert(replica_control_fixture == 'recovery_enh_870' and
+   saved_playback_fixture == replica_control_fixture,
+   'saved replica control requires the bounded playback fixture')
+  assert(type(X4LAN_SAVED_REPLICA_CONTROL) == 'table' and
+   type(X4LAN_SAVED_REPLICA_CONTROL.new_x4) == 'function')
  end
  local saved_apply_fixture=c.saved_apply_fixture
  assert(saved_apply_fixture==nil or (saved_apply_fixture=='recovery_enh_870' and
@@ -429,6 +437,7 @@ function M.new_x4(c)
   router_factory=function(o)
    local options={enabled=true,max_generations=1,max_tracks=1,
     guard=o.guard,retire_guard=function()return false end,fault=o.fault}
+   if replica_control_fixture then options.saved_replica_control=true end
    if saved_apply_fixture then
     options.saved_apply=true;options.saved_apply_fixture=saved_apply_fixture;options.max_apply_requests=2
    end
@@ -450,6 +459,18 @@ function M.new_x4(c)
     options.saved_playback={enabled=true,fixture=saved_playback_fixture,module=X4LAN_SAVED_MOTION_APPLY,
      playback=playback_adapter,max_step=50,record=playback_record,
      buffer_options={delay=.15,horizon=.35,stale=.75}}
+   end
+   if replica_control_fixture then
+    -- Separate from read-only binding: this opt-in temporarily owns only the
+    -- fixed fixture's local AI order. The motion owner waits for preparation
+    -- before playback and for confirmed release before acknowledging STOP.
+    options.saved_replica_control = {enabled=true, factory=function(control_options)
+     control_options.enabled = true
+     control_options.fixture = replica_control_fixture
+     control_options.expected_save_path = c.expected_save_path
+     control_options.resolve = X4LAN_RESOLVE_STRING
+     return X4LAN_SAVED_REPLICA_CONTROL.new_x4(control_options)
+    end}
    end
    return X4LAN_MOTION_CLIENT_OWNER.new_x4(options)
   end,

@@ -1,9 +1,9 @@
 local M=dofile('src/authority/lua/client_motion_event_router.lua');assert(M.new({enabled=false})==nil)
 local n1,n2,g1,g2,e=('1'):rep(32),('2'):rep(32),('a'):rep(32),('b'):rep(32),('c'):rep(32)
 local replica='X4AuthorityReplicaMotionBind';local saved='X4AuthoritySavedBaselineMotionBind'
-local function rig(max)
+local function rig(max,replica_control)
  local handlers,requests,faults={},{},{};local permitted=true;local r
- r=assert(M.new({enabled=true,max_generations=max or 4,max_tracks=2,
+ r=assert(M.new({enabled=true,max_generations=max or 4,max_tracks=2,saved_replica_control=replica_control,
   register=function(name,cb)assert(not handlers[name]);handlers[name]=cb;return true end,
   send=function(screen,op,args)requests[#requests+1]={screen,op,args.request_id};return true end,
   guard=function()return permitted end,retire_guard=function()return permitted end,
@@ -70,6 +70,33 @@ local fixed=assert(M.new(mutable));mutable.guard=function()return true end;mutab
 assert(fixed:start());enabled=false;assert(not fixed:attach(g1,n1,e,owner()) and fixed:state()=='failed')
 mutable.max_generations=1;fixed=assert(M.new(mutable));mutable.max_generations=100
 assert(fixed:start());a=owner();assert(fixed:attach(g1,n1,e,a));a.phase='stopped';assert(fixed:retire());assert(not fixed:attach(g2,n2,e,owner()))
+-- Async preparation is allowed only after a saved-route response with an
+-- explicit boolean opt-in. Replica/apply/other transitional states stay fenced.
+for _,case in ipairs({
+ {enabled=true,route='saved',phase='preparing',accepted=true},
+ {enabled=true,route='saved',phase='ready',accepted=true},
+ {route='saved',phase='preparing',accepted=false},
+ {enabled=false,route='saved',phase='preparing',accepted=false},
+ {enabled=true,route='replica',phase='preparing',accepted=false},
+ {enabled=true,route='saved',phase='releasing',accepted=false},
+ {enabled=true,route='saved',phase='pending',accepted=false},
+})do
+ local router,handlers,_,faults=rig(nil,case.enabled)
+ local target=owner()
+ function target:event(_,route)
+  assert(route==case.route);self.calls=self.calls+1;self.phase=case.phase;return true
+ end
+ assert(router:attach(g1,n1,e,target))
+ local request=args(n1,42,1,case.route=='saved' and 100 or nil)
+ assert(router:issue(case.route=='saved' and saved or replica,'Bind',request))
+ event(handlers,case.route,request.request_id)
+ assert(target.calls==1)
+ if case.accepted then
+  assert(router:state()=='active' and #faults==0 and router:owns(g1,n1,e,target))
+ else assert(router:state()=='failed' and #faults==1)end
+end
+assert(not pcall(rig,nil,'enabled'))
+assert(not pcall(rig,nil,1))
 -- Native registration ownership is claimed once, including partial failure.
 local native=dofile('src/authority/lua/client_motion_event_router.lua');local native_handlers={}
 function RegisterEvent(name,fn)assert(not native_handlers[name]);native_handlers[name]=fn end

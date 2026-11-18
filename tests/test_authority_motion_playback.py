@@ -17,6 +17,10 @@ class MotionPlaybackTests(unittest.TestCase):
         subprocess.run(['luajit', 'tests/authority_motion_playback_owner.lua'], cwd=ROOT,
                        check=True, capture_output=True, text=True, timeout=5)
 
+    def test_saved_replica_control_prepares_and_releases_asynchronously(self):
+        subprocess.run(['luajit', 'tests/authority_motion_replica_control_owner.lua'], cwd=ROOT,
+                       check=True, capture_output=True, text=True, timeout=5)
+
     def test_native_factory_with_fake_x4_abi(self):
         with tempfile.TemporaryDirectory() as directory:
             library = Path(directory)/'fake.so'

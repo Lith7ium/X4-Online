@@ -93,7 +93,7 @@ def config_value(raw):
         raise ValueError('invalid loopback participant peer')
     if 'motion' in obj:
         motion=obj['motion']
-        if (type(motion) is not dict or set(motion)-{'saved_apply_fixture', 'saved_playback_fixture'}!={'lease','attempt','epoch','generation','timeout'} or
+        if (type(motion) is not dict or set(motion)-{'saved_apply_fixture', 'saved_playback_fixture', 'saved_replica_control_fixture'}!={'lease','attempt','epoch','generation','timeout'} or
             any(type(motion[k]) is not str or not _HEX.fullmatch(motion[k]) for k in ('lease','attempt','epoch','generation')) or
             len({motion[k] for k in ('lease','attempt','epoch','generation')})!=4 or
             motion['lease'] in (obj['lease'],obj['epoch']) or motion['attempt'] in (obj['lease'],obj['epoch']) or
@@ -112,6 +112,11 @@ def config_value(raw):
                 motion['saved_playback_fixture'] != RECOVERY_SETTER_FIXTURE or
                 motion['epoch'] != RECOVERY_SETTER_EPOCH):
             raise ValueError('invalid recovery playback fixture')
+        if 'saved_replica_control_fixture' in motion and (
+                type(motion['saved_replica_control_fixture']) is not str or
+                motion['saved_replica_control_fixture'] != RECOVERY_SETTER_FIXTURE or
+                motion.get('saved_playback_fixture') != RECOVERY_SETTER_FIXTURE):
+            raise ValueError('invalid recovery replica control fixture')
     try: raw_claim=obj['claim'].encode('ascii')
     except UnicodeError as error: raise ValueError('invalid claim encoding') from error
     claim=decode_load_claim(raw_claim)

@@ -22,6 +22,8 @@ RECOVERY_APPLY_EPOCH = '4ba7be438ebb04ec5bb85fdb95b5a488'
 RECOVERY_APPLY_MODULE = ('src/authority/lua/saved_motion_apply.lua', 'saved_motion_apply.lua')
 RECOVERY_APPLY_MD = 'authority_saved_motion_apply.xml'
 RECOVERY_PLAYBACK_MODULE = ('src/authority/lua/motion_playback.lua', 'motion_playback.lua')
+RECOVERY_REPLICA_CONTROL_MODULE = ('src/authority/lua/saved_replica_control.lua', 'saved_replica_control.lua')
+RECOVERY_REPLICA_CONTROL_MD = 'authority_saved_replica_control.xml'
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,7 @@ class MotionSelection:
 
 
 def validate_motion_settings(status, settings):
-    """Validate the recovery registry identity and motion configuration."""
+    """Validate motion options; replica control requires the fixed playback actor."""
     if (type(status) is not tuple or len(status) != 4 or status[0] != 'ready' or
             type(status[1]) is not str or not HEX.fullmatch(status[1]) or
             type(status[2]) is not int or not 1 <= status[2] <= 200000 or
@@ -50,7 +52,7 @@ def validate_motion_settings(status, settings):
         copied_settings['indices'] = list(copied_settings['indices'])
 
     fields = {'port', 'lease', 'attempt', 'generation', 'nonce', 'router_generation', 'timeout'}
-    allowed_optional = {'player_sector', 'saved_apply_fixture', 'saved_playback_fixture'}
+    allowed_optional = {'player_sector', 'saved_apply_fixture', 'saved_playback_fixture', 'saved_replica_control_fixture'}
     required_fields = set(copied_settings) - allowed_optional
     if required_fields not in (fields | {'index'}, fields | {'indices'}):
         raise ValueError('invalid client motion settings')
@@ -66,6 +68,11 @@ def validate_motion_settings(status, settings):
             copied_settings.get('index') != 1318 or 'indices' in copied_settings or
             'saved_apply_fixture' in copied_settings):
         raise ValueError('invalid recovery saved-playback fixture')
+
+    if 'saved_replica_control_fixture' in copied_settings and (
+            copied_settings['saved_replica_control_fixture'] != RECOVERY_APPLY_FIXTURE or
+            saved_playback_fixture != RECOVERY_APPLY_FIXTURE):
+        raise ValueError('invalid recovery saved-replica-control fixture')
 
     player_sector = copied_settings.get('player_sector')
     if 'player_sector' in copied_settings:
@@ -108,6 +115,9 @@ def select_motion_sources(settings):
     if settings.get('saved_playback_fixture') is not None:
         playback_modules = (RECOVERY_APPLY_MODULE, RECOVERY_PLAYBACK_MODULE)
         modules = (*modules[:-1], *playback_modules, modules[-1])
+    if settings.get('saved_replica_control_fixture') is not None:
+        modules = (*modules[:-1], RECOVERY_REPLICA_CONTROL_MODULE, modules[-1])
+        md_names = (*md_names, RECOVERY_REPLICA_CONTROL_MD)
     return modules, md_names
 
 
@@ -129,6 +139,8 @@ def render_motion_config(status, settings):
         config += ',authority_client_motion_saved_apply_fixture="' + settings['saved_apply_fixture'] + '"'
     if settings.get('saved_playback_fixture') is not None:
         config += ',authority_client_motion_saved_playback_fixture="' + settings['saved_playback_fixture'] + '"'
+    if settings.get('saved_replica_control_fixture') is not None:
+        config += ',authority_client_motion_saved_replica_control_fixture="' + settings['saved_replica_control_fixture'] + '"'
     if settings.get('player_sector') is not None:
         player_sector = settings['player_sector']
         for name in ('incarnation', 'nonce'):
@@ -174,6 +186,11 @@ def transform_motion_control(control_text, settings):
             "  assert(op~='pause' or not client_motion or client_motion:state()=='stopped',"
             "'client playback STOP required before pause')\n")
         control_text = control_text.replace(submission_hook, pause_guard + submission_hook)
+    if settings.get('saved_replica_control_fixture') is not None:
+        code = code.replace(
+            '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
+            '    saved_replica_control_fixture=cfg.authority_client_motion_saved_replica_control_fixture,\n'
+            '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
     player_sector = settings.get('player_sector')
     if player_sector is not None:
         after_bound = ',after_bound=true' if player_sector.get('after_bound') is True else ''
