@@ -192,7 +192,7 @@ binding is a hypothesis, not an established diagnosis. The fixture bound remains
 50m. A follow-up now retains a bounded source/client comparison before enforcing
 that bound, including both positions, game times and measured separation; it
 does not count a rejected sample as accepted. All six evidence tests passed.
-This diagnostic addition has not been exercised in X4.
+The diagnostic addition was subsequently exercised in attempt 05 below.
 
 An independent read-only comparison found that the source descriptor and client
 adapter both read XYZ through `GetObjectPositionInSector` with the same
@@ -208,6 +208,65 @@ Outer cleanup, Xauthority cleanup, source preservation, source-code pins and
 Steam identity checks passed. A subsequent process scan found no X4 process or
 global X4 lock. The run remains an overall failure. Evidence:
 `.local/private-paired-playback-native-20261118-04/{result.json,trial-result.json,paired-server/result.json}`.
+
+### Paired native attempt 05: measured initial offset
+
+One further two-X4 Linux attempt used manifest
+`.local/authority-paired-playback-reviewed-20261118-06.json`. It **failed** the
+unchanged 50m initial alignment bound after one prevalidated source sample and
+one confirmed client receipt. Zero samples passed the playback observer. The
+new error-path diagnostic retained the comparison in both the supervisor and
+trial results:
+
+| Observation | Source sample | Client INITIAL |
+| --- | ---: | ---: |
+| X (m) | -115815.375 | -115773.5234375 |
+| Y (m) | -5625.779296875 | -5565.68505859375 |
+| Z (m) | 127603.671875 | 127554.71875 |
+| Own game time (s) | 20.784212683999964 | 21.672679077999963 |
+
+The measured separation was **88.08677088848634m**. These observations were not
+simultaneous: source sampling precedes transport and client binding. Their game
+times differ by about 0.888s, but are separate simulation clocks; dividing the
+distance by that difference would not establish ship velocity or network delay.
+There is no earlier matched pose pair for this attempt, so it does not isolate
+load-time divergence, later independent NPC movement, or frame/identity error.
+
+The client logged Wait ready, a later-tick observation, a zero-velocity request,
+then INITIAL. Those records do not prove the physical effect of the velocity
+request. No continuous paired playback, 26-sample sequence, STOP/release or
+departure save was reached. The complete source diagnostic took 12.100s;
+initial verification, binding, registration and collection took 1.276s, 3.077s,
+6.266s and 1.481s. The first pull took 1.353s including validation. The record
+contains 114 aggregate guards and 34 checkpoint checks. These are diagnostic
+costs, not a representative gameplay or dedicated-server benchmark.
+
+Outer cgroup and Xauthority cleanup, unchanged code pins, original source
+preservation and Steam identity checks passed. The supervisor recorded no owned
+processes remaining; a subsequent independent executable scan found no X4 and
+the global X4 lock was absent. The coordinator's
+`display_released_after_runner` remains false: its graceful display release is
+conditional on runner success, which did not occur. Outer cleanup is separate.
+Both outer `observation_valid` and overall `success` remain false.
+
+Private evidence root: `.local/private-paired-playback-native-20261118-05/`.
+SHA-256 values:
+
+- `result.json`: `0b8ce23d765adc77f64c776ad2720867f0f9ccd04c2cb57315e2ecf3b0f31c9a`
+- `trial-result.json`: `7c52fbfe7aba5321f1f1318390c6f4d06151bd6b6cea3de80f8781a2c09c57fc`
+- `paired-server/result.json`: `0007ee7fed11c8e611f6eeab8b2672f247c79daf4f080c6e80460e5c862a39a7`
+
+The earlier LAN client uses a different takeover method. In the local reference
+`../x4-playtest7/extension/x4_lan_lab/ui/universe_game.lua`, lines 193–200 spawn
+a separate replica at the received pose, call `ActivateObject(replica, false)`
+and correct its pose; lines 225–231 remove local NPC originals. The retained
+`sensor-fix-motion-guest-bc90d2e/result.json` reports 201 NPC samples and maximum
+position error 1.473m. That supports the old replica path, not safe takeover of
+the same saved actor. The current private paired binder instead requests Wait
+and zero velocity on the existing actor, after binding begins. Replacing saved
+actors, introducing an initial snap, or changing the motion clock has not been
+authorized by this test. The outstanding user decisions remain pending; no
+threshold or protocol change was made, and no repeat run was started.
 
 A separate read-only code review tightened intermediate native readbacks:
 each SUMMARY now independently checks actual-to-target distance, and log reads

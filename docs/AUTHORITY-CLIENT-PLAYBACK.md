@@ -42,7 +42,12 @@ but failed the initial source/client distance bound (>50m). This is an overall
 failure, with no continuous paired movement or STOP/release proof. Cleanup and
 source preservation passed. Its source position was lost on the failure path;
 the following diagnostic correction retains both positions and their separation
-without changing the bound. That correction has only offline evidence so far.
+without changing the bound. Attempt 05 exercised that correction in X4 and
+retained an 88.0868m separation after one confirmed client receipt. It again
+failed before continuous playback. The non-simultaneous source/client game
+times were 20.7842s and 21.6727s; they do not establish why the positions differ.
+Outer cleanup and source preservation passed; overall success and observation
+validity remain false. See the report for exact evidence and cleanup details.
 
 ## Data and lifetime
 

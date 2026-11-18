@@ -1,9 +1,17 @@
 # X4 multiplayer: handover for Astra
 
-Latest native result: paired native04 reached one confirmed client receipt, then failed
-the initial 50m alignment bound. No continuous paired movement was proven.
-Cleanup passed; no X4 remains. The full details and following diagnostic fix are
-in the current client report. Native03 below is retained as preceding context.
+Latest native result: paired native05 reached one confirmed client receipt, then
+failed the unchanged 50m alignment bound with a measured separation of
+88.08677088848634m. The new diagnostic retained both positions and separate game
+times (source 20.7842s, client 21.6727s); these are not simultaneous observations
+and do not establish the cause. No continuous paired movement was proven.
+Outer cleanup and source preservation passed; a subsequent scan found no X4.
+The coordinator's graceful display-release flag and outer observation-valid flag
+remain false; this is an overall failure. Details, artifact hashes and the
+comparison with the existing LAN replica method are in the
+[client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md#paired-native-attempt-05-measured-initial-offset).
+No repeat run or initial snap/clock change was made. Native03/04 below are
+retained as preceding context.
 
 Client follow-up: `load_observations.py` now extracts the existing ordered
 load/marker/pause parser from Linux tooling for use by either client platform.
