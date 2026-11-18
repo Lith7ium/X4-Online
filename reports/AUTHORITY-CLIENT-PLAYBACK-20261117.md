@@ -159,7 +159,21 @@ are stubs in this trace. Evidence:
 `.local/paired-liveness-count-20261118/guard-counts-liveness-counts-20261118.json`;
 reproduce from the repository root with
 `X4_MEASURE_CODE_ROOT="$PWD" python .local/paired-liveness-count-20261118/measure.py counts`.
-No new native attempt has yet exercised either this change or the per-pull scope.
+A subsequent single offline profile executed the actual `check_live_context`
+ten times within one discovery scope: two real Python groups stood in for X4,
+Steam identity was checked live, and 30 retained client files (211,131 bytes)
+were hashed on each invocation. Median/max were 0.787/0.850ms. The complete
+scope took 43.476ms, including its two group scans. The latter is one observation,
+not a representative distribution. Real save metadata was replaced by a small
+private file stat; registry/log, witness/server and IPC checks were excluded.
+Six such contexts per aggregate guard would account for roughly 6.59s over the
+counted flow; this is a partial cost estimate, not an end-to-end prediction.
+Evidence: `.local/private-client-context-profile-20261118/context-profile-result.json`.
+
+Paired native attempt 04 was then started with manifest
+`.local/authority-paired-playback-reviewed-20261118-05.json`, unchanged time limits
+and success criteria. Its outcome is pending; do not treat a started run as
+evidence of success. Output: `.local/private-paired-playback-native-20261118-04/`.
 
 A separate read-only code review tightened intermediate native readbacks:
 each SUMMARY now independently checks actual-to-target distance, and log reads

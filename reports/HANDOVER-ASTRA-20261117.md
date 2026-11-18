@@ -33,8 +33,9 @@ The updated real TCP/UDP fixture passes with simulated engine edges. Full guards
 still surround checkpoint operations; file/registry/log changes during the last
 lightweight peer check can be detected only at the next full boundary, after a
 dispatch. Initial bind, worker STOP and ordinary callers retain full checks.
-No native retry has yet exercised these two changes. See the current report for
-the real-helper measurement and precise limits.
+Native attempt 04 is now pending with these two changes and unchanged limits.
+See the current report for the real-helper/context measurements and precise
+limits; inspect its result before starting another run.
 
 ## Objective and decisions from the user
 
