@@ -13,6 +13,7 @@ function X4LAN_RECOVERED_CLIENT_LOAD_READY()return true end
 X4LAN_LOCAL_UDP_MODULE={load=function()return {open=function()return {send=function()return true end,
  pending=function()return false end,receive=function()return nil end}end}end}
 X4LAN_RESOLVE_STRING=dofile('tools/dev/authority_registry_resolve_string.lua')
+X4LAN_REPLICA_MOTION_BINDING=dofile('src/authority/lua/replica_motion_binding.lua')
 X4LAN_PLAYER_SECTOR_INTEREST=dofile('src/authority/lua/player_sector_interest.lua')
 X4LAN_CLIENT_MOTION_EVENT_ROUTER={new_x4=function()return {start=function()return true end,
  attach=function()return true end,state=function()return 'active' end}end}

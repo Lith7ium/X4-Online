@@ -181,6 +181,14 @@ class ExperimentalSourceMotionIPC:
 
     def _quiet(self, deadline, phase):
         self._check(deadline, phase)
+        self._quiet_after_entry_check(deadline, phase)
+
+    def _quiet_after_entry_check(self, deadline, phase):
+        """Check the socket immediately after a caller's completed entry check.
+
+        Keep the post-select check: readiness observation is an I/O boundary,
+        and ownership must still be current before sending the next request.
+        """
         readable, _, exceptional = select.select([self._sock], [], [self._sock], 0)
         if readable or exceptional:
             raise RuntimeError('unexpected queued source motion packet')
@@ -491,8 +499,9 @@ class ExperimentalSourceMotionIPC:
 
     @contextmanager
     def _latest_saved_checks(self, deadline, phase, *, obsolete=False):
-        """Keep full saved checks at operation boundaries when explicitly enabled."""
+        """Check entry once, adding a full exit check in explicit batch mode."""
         if not self._batch_latest_saved_checks:
+            self._check(deadline, phase)
             yield
             return
         previous = self._lifetime_only
@@ -528,7 +537,7 @@ class ExperimentalSourceMotionIPC:
         self._state='pulling';deadline=time.monotonic()+self._timeout
         try:
             with self._latest_saved_checks(deadline, 'pulling'):
-                self._quiet(deadline,'pulling')
+                self._quiet_after_entry_check(deadline, 'pulling')
                 if self._next>=_MAX:raise RuntimeError('source motion request capacity')
                 self._next+=1;request=str(self._next)
                 packet='|'.join(['P',self._lease,self._attempt,'PULL',self._epoch,self._generation,request]).encode('ascii')
@@ -553,7 +562,6 @@ class ExperimentalSourceMotionIPC:
             obsolete = self._pending_barrier_generation != control._latest_motion.generation
             self._lifetime_only = obsolete
             with self._latest_saved_checks(deadline, 'pulling', obsolete=obsolete):
-                self._check(deadline,'pulling')
                 readable,_,bad=select.select([self._sock],[],[self._sock],0)
                 self._check(deadline,'pulling')
                 if bad:raise RuntimeError('source motion socket error')

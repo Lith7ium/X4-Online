@@ -195,3 +195,142 @@ Focused validation, without starting X4:
 These checks establish protocol and evidence composition, not real X4 cadence,
 native movement, Windows compatibility or Internet play. Existing motion limits
 were not increased, and no ordinary configuration silently enables V3.
+
+## First native V3 attempt (2026-11-18)
+
+The bounded two-Linux-X4 attempt at `a3296cf1` failed. Private artifacts are in
+`.local/private-paired-capture-native-20261118-01/`, launched using
+`.local/authority_paired_capture_scope_20261118_01.py` and its fresh 488-file
+manifest. The private runner enables the shared V3 source-session flag and
+retains the approved initial alignment and replica-control fixtures. It does
+not change playback bounds. The source is the same isolated confirmed checkpoint
+with SHA-256 `2b07a55d0d5fda0ef08de8a6b9a562100d745ae39076d1a7092f5e3c150f5994`.
+
+Both instances loaded and reported a registry count of 10,082. This is not a
+proof of complete ship coverage, exact loaded bytes or ongoing synchronization
+of that population. Movement remained limited to registry index 1318, ENH-870.
+
+The source captured and queued three V3 samples; the host retained only ACK 1.
+The native client recorded initial alignment with zero readback error, preserving
+both clocks in its capture diagnostic. Its next reported source sequence was 3,
+with two received samples, 57 observations and zero running readbacks. The
+261.570595-metre correction was refused by the unchanged 50-metre bound. No
+running write or STOP/release completion was proven. The enclosing observation
+and paired-playback acceptance both failed; partial log records are diagnostic
+evidence only.
+
+| Interval | Capture seconds | Game seconds | Capture to queue (later sample) |
+| --- | ---: | ---: | ---: |
+| 1 to 2 | 0.888236 | 0.889897 | 0.600323 s |
+| 2 to 3 | 0.777787 | 0.777933 | 0.644893 s |
+
+Sample 1 took 0.610915 seconds from native capture to the collector's queue
+timestamp. These are same-host monotonic measurements, not remote clock-offset
+estimates. Both capture intervals exceeded the existing 0.75-second continuity
+bound; skipping sample 2 left a 1.666022-second span from 1 to 3. Game time ran
+close to real time in these two intervals, so clock-rate mismatch does not
+explain this particular failure. The V3 clock change does not itself improve
+sampling or delivery cadence.
+
+Collection lasted 2.966203 seconds. Three polls used 1.360626 seconds in total;
+each completed pull took approximately 0.74-0.79 seconds. Existing batched
+checkpoint checks were enabled. Follow up on repeated synchronous ownership and
+checkpoint work in that path before another native run; do not repeat this
+unchanged attempt or widen the correction/freshness bounds.
+
+Owned process/cgroup and Xauthority cleanup passed. Selected code pins, the
+source checkpoint and Steam identity were unchanged, and a separate `/proc`
+executable scan found no remaining X4 process. Cleanup is distinct from the
+failed motion observation. No Windows, Internet or gameplay acceptance is
+claimed.
+
+## Full check and fixture corrections
+
+The strict check at `a3296cf1` ran 5,263 methods in 554.517 seconds and exited 1:
+one failure, three errors and 56 skips. Its log is
+`.local/check-capture-clock-20261118-01.log`. The four findings were outdated
+fixtures: a log test rewrote an observed partial line, a simulated sector adapter
+omitted the now-required replica-binding module (two modes), and a setter fixture
+omitted its explicit V1 sample version. The fixtures now append without rewriting,
+load the real binding module and identify the V1 sample. No production guard was
+relaxed. All four selected methods passed afterward, including both sector modes.
+An independent review found no further issue in these three test-file changes.
+
+Thirty of the 56 skipped methods had existing local prerequisites that were not
+selected in the full-run environment. All 30 passed separately after native
+cleanup in 428.238 seconds, without skips. They cover pinned Linux/Windows image
+checks, Zig compilation, crypto library/relay behavior, MD schemas and matched
+stock UI references. The Windows image checks run on Linux; they do not establish
+Windows execution. Exact selected IDs and results are retained in
+`.local/check-capture-clock-missing-input-tests-20261118-01.txt` and
+`.local/check-capture-clock-missing-input-results-20261118-01.log`.
+
+The crypto library was freshly built from current sources using the existing
+pinned Zig toolchain and build flags, without rebuilding or installing a game
+gate. Its SHA-256 is
+`92fe5bc5255086bd6181d69fff001d6360d59fad8b3397bede3a846a977548e6`;
+before/after source and local-header hashes are retained in
+`.local/check-capture-crypto-20261118-01/build-result.json`. Prepared MD schemas
+match their recorded provenance checksums. The existing stock UI reference uses
+the previously documented catalogue match; that match was not repeated here.
+
+The remaining 26 methods depend on Windows execution or missing reference
+inputs. The original strict run remains failed; selected follow-ups cannot turn
+it into a full-suite pass. No unchanged full-suite rerun was performed.
+
+## Follow-up: avoid duplicate latest-operation entry checks
+
+Read-only review found that explicit batched `begin_latest` and `poll_latest`
+each performed an entry check, then immediately repeated it before the first
+socket readiness observation. No external callback, I/O or protected mutation
+occurred between those checks. The shared context now supplies that entry check
+once. Unbatched operation ordering is unchanged. Both full saved-check boundaries
+in batch mode, post-select ownership checks, obsolete-reply lifetime checks and
+exception restoration remain intact. The generic quiet-socket helper still
+performs both its own entry and post-select check.
+
+Forty-five focused methods passed in 39.353 seconds across the latest saved-check,
+real helper, running-source binding and recovered-source probe modules. A new
+adverse case invalidates ownership during readiness observation and verifies that
+both modes refuse the operation without sending a request or delivering a sample.
+Independent review found no boundary/order regression. Log:
+`.local/check-capture-entry-guards-20261118-01.log`.
+
+This removes one redundant nested guard chain per batched begin/poll operation.
+Its native timing benefit is unmeasured and may be insufficient. No second X4
+run followed this small change. Investigate the remaining measured overhead
+before deciding whether another native attempt is informative.
+
+## Proposed diagnostic guard policy (not implemented or approved)
+
+The remaining source path repeatedly revalidates process, socket ownership and
+the saved baseline around external callbacks and I/O. The native attempt records
+216 active-guard calls taking 5.268442 seconds and 21 checkpoint checks taking
+2.816292 seconds during the 11.813666-second source diagnostic. These inclusive
+timings overlap: they must not be added or treated as isolated CPU costs. Existing
+profile evidence and this run justify investigating that path, but do not prove
+that a particular relaxation will satisfy the movement bounds.
+
+Proposed scope for user review: an explicit diagnostic-only policy for this
+isolated source/client pair, with full validation before admission and on
+pause/stop or lifecycle change, and expensive process/socket/checkpoint
+revalidation at a maximum age of 250 milliseconds during motion. If a refresh
+cannot complete within the allowed age, motion must stop rather than reuse an
+expired result. The implementation must first establish which local checks can
+remain immediate (for example, retained process-handle exit detection), without
+pretending a cheap check proves full socket or file ownership.
+
+Session identity, epoch/generation, ordering, source clock progression, protocol
+admission, callback reentrancy fences, lifecycle barriers and all playback bounds
+remain immediate. The current strict policy remains the default. The proposed
+policy would not establish unchanged file/socket ownership at every callback:
+an external change could remain undetected within the allowed age and a stale
+sample could be processed before detection. Start/end validation cannot undo or
+prove the absence of that intermediate effect. Isolated disposable profiles and
+owned cleanup remain required.
+
+Approval would authorize developing and measuring this policy, not declaring it
+safe for general gameplay or claiming native success. First validate the age,
+expiry and lifecycle behavior with simulated changes and representative local
+guard costs. Only then consider another bounded X4 attempt. This proposal changes
+a validation guarantee, so it requires the user's architecture decision.

@@ -3,6 +3,7 @@ import select
 import socket
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from tests import test_authority_experimental_tcp_motion as fixture
 from authority.experimental_source_motion_ipc import ExperimentalSourceMotionIPC
@@ -189,6 +190,37 @@ class LatestSavedChecks(unittest.TestCase):
         self.assertEqual(owners.bridge.state, 'failed')
         self.assertFalse(owners.bridge._lifetime_only)
         self.assertFalse(select.select([owners.remote], [], [], 0)[0])
+
+    def test_ownership_loss_during_readiness_check_prevents_send_or_delivery(self):
+        real_select = select.select
+        for batched in (False, True):
+            for operation in ('begin', 'poll'):
+                with self.subTest(batched=batched, operation=operation):
+                    owners = self.owners(batch_latest_saved_checks=batched)
+                    if operation == 'poll':
+                        owners.bridge.begin_latest()
+                        self.response(owners)
+
+                    def lose_ownership(*args):
+                        ready = real_select(*args)
+                        owners.bridge._guard = lambda: False
+                        return ready
+
+                    with patch('authority.experimental_source_motion_ipc.select.select',
+                               side_effect=lose_ownership), \
+                         patch.object(owners.bridge, '_consume') as consume:
+                        with self.assertRaisesRegex(RuntimeError, 'source motion guard failed'):
+                            if operation == 'begin':
+                                owners.bridge.begin_latest()
+                            else:
+                                owners.bridge.poll_latest()
+                        consume.assert_not_called()
+                    self.assertEqual(owners.bridge.state, 'failed')
+                    self.assertTrue(owners.host._failed)
+                    self.assertFalse(owners.bridge._lifetime_only)
+                    self.assertFalse(real_select([owners.remote], [], [], 0)[0])
+                    self.assertFalse(any(peer.get('motion_pending')
+                                         for peer in owners.control._peers.values()))
 
 
 if __name__ == '__main__':

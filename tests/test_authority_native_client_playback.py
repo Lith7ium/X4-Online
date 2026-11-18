@@ -205,7 +205,8 @@ class PlaybackTests(unittest.TestCase):
                     stream.write(b'[X4LAN] AUTH_CLIENT_PLAYBACK SUM')
                 with self.assertRaises(subject.PlaybackLogPending):
                     controller.records()
-                controller.log.write_bytes(initial+b'[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR')
+                with controller.log.open('ab') as stream:
+                    stream.write(b'\n[X4LAN] AUTH_RECOVERED_CLIENT_MOTION ERROR\n')
                 with self.assertRaisesRegex(ValueError, 'faulted'):
                     controller.records()
             finally:

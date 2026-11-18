@@ -126,7 +126,7 @@ class LazySetter(unittest.TestCase):
         self.owner.bridge = Mock()
         self.owner.bridge.preflight.return_value = 'READY'
         self.owner.bridge.apply_once.return_value = True
-        self.sample = {'epoch': EPOCH, 'index': 1318, 'generation': 'd' * 32}
+        self.sample = {'version': 1, 'epoch': EPOCH, 'index': 1318, 'generation': 'd' * 32}
 
     def test_preflight_and_apply_use_bound_bridge(self):
         self.assertEqual(self.owner.preflight(self.sample), 'READY')

@@ -1,37 +1,53 @@
 # X4 multiplayer: handover for Astra
 
-Current continuation (2026-11-18): the unprofiled `2911ee82` attempt failed
-in registry-log observation after one source sample and successful initial
-alignment (zero error); no host ACK or running movement was proven. Cleanup,
-source/code/Steam preservation and the separate no-X4 process scan passed.
-The single sample cannot establish a cadence improvement. A complete unrelated
-append between two registry captures is a reproducible false-positive mechanism;
-the original failing snapshots were not retained. Fix that case without weakening
-prefix/identity/receipt validation before another native attempt. The correction
-is committed at `80371717`; six focused tests pass. No new native attempt followed.
+Current continuation (2026-11-18): **the first native V3 attempt failed** at
+`a3296cf1`. Three source samples carried monotonic capture time and explicit
+real-second velocity through the shared source path; only ACK 1 was retained.
+Initial alignment again had zero readback error. The client next reported
+sequence 3 and refused a 261.570595-metre running correction. Capture gaps were
+0.888236 and 0.777787 seconds; capture-to-queue delay was 0.60-0.65 seconds.
+Game time ran near real time in these intervals. Thus V3 is wired into X4, but
+has not solved the existing cadence problem or proven running playback. No
+STOP/release completion was proven. Do not repeat the unchanged native attempt
+or increase the 0.75-second continuity, 1-second freshness, 50-metre running
+correction or 3-metre initial-readback bounds.
 
-The user has now **approved** additional monotonic capture time and explicit
-real-second rates, retaining game time. Historical pending-clock statements
-below are superseded. Position-only v3 schema, source capture and transport are
-implemented with focused synthetic and real-loopback checks. BIND3 and the
-capture-time client playback path now also pass fake-native composition checks,
-including initial alignment, ongoing writes, freshness expiry and STOP/release.
-Older client-authority and one-shot apply paths still refuse V3. Explicit
-source-session wiring and the native log oracle now also support V3: the probe
-passed 26 samples over real loopback UDP/TCP with simulated endpoints, and
-synthetic log checks validate both clocks against acknowledged samples. Source
-settings use `real_time_motion=true`; the bounded supervisor flag is
-`--diagnostic-real-time-motion` with latest ENH-870 playback. The next step is a
-new pinned two-X4 attempt of this complete path;
-do not retry the old native performance fixture unchanged. See
-[the implementation evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#first-implementation-checkpoint).
-Native/client gameplay integration remains unproven. GPU-free server work stays deferred. Goal remains active and the full
-Linux/Windows Internet gameplay objective remains unmet.
-The historical full-suite failure was retried individually with current
-diagnostics and passed; this does not resolve the previous full-run failure or
-26 environment/platform skips. No X4 V3 launch has been performed yet.
-See [the latest native result](AUTHORITY-CLIENT-PLAYBACK-20261117.md#unprofiled-process-helper-comparison-2026-11-18)
-and [the approved clock direction](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#approved-direction-2026-11-18).
+Private evidence: `.local/private-paired-capture-native-20261118-01/`. Owned
+process/cgroup and Xauthority cleanup passed; selected code/source/Steam pins
+were unchanged and a separate executable scan found no remaining X4 process.
+The next investigation is repeated synchronous ownership/checkpoint work in the
+source poll and delivery path; batched saved checks are already enabled.
+One immediate duplicate entry check per batched begin/poll has since been removed,
+preserving unbatched order and post-I/O/callback fences. Forty-five focused methods
+passed, including adverse ownership loss during readiness observation. Native
+timing benefit remains unmeasured; no second X4 attempt followed this small change.
+See [the native result and timings](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#first-native-v3-attempt-2026-11-18).
+
+A user question is pending on a separate diagnostic guard policy: expensive
+ownership/checkpoint results could be retained for at most 250 milliseconds,
+with admission/lifecycle checks and immediate protocol/motion fences preserved.
+External changes could then be detected late and permit a stale sample. This is
+**not approved or implemented**; do not infer permission from elapsed time or the
+approved capture-clock work. See [the concrete proposal](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#proposed-diagnostic-guard-policy-not-implemented-or-approved).
+
+The user's additional capture clock and real-second rates are **approved** and
+implemented explicitly as V3; V1/V2 game-time units remain unchanged. BIND3,
+source-session wiring, capture-based client playback and correlated log evidence
+have focused fake-native and real-loopback tests. The loopback test passed 26
+samples with simulated endpoints and a stalled game clock. Legacy client-authority
+and one-shot apply still refuse V3. Ordinary configurations do not enable it.
+
+The latest strict full check ran 5,263 methods in 554.517 seconds, with one
+failure, three errors and 56 skips. Three outdated test fixtures explain the
+four findings; four selected methods passed after fixture corrections, without
+changing production guards. Thirty additional skipped methods passed separately
+in 428.238 seconds with restored prerequisites and a fresh current-source crypto
+test library after native cleanup (no skips). The other 26 still need
+Windows execution or missing reference inputs. **No complete suite pass** is
+claimed. See [the check evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#full-check-and-fixture-corrections).
+
+Goal remains active. Client work remains the priority; GPU-free server work
+stays deferred. Shared-world Linux/Windows Internet gameplay is not achieved.
 
 The following entries preserve prior checkpoints and their then-current next steps.
 
