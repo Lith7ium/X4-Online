@@ -451,7 +451,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     if playback_liveness_check is not None:
         binding_options['peer_client_guard'] = check_liveness
     if latest_playback:
-        binding_options.update(latest=True, saved_lifetime_guard=saved_lifetime_guard)
+        binding_options.update(latest=True, saved_lifetime_guard=saved_lifetime_guard,
+                               batch_latest_saved_checks=True)
     source = checked_operation(bind_running_source_motion,
         sock, motion, process=process, lease=settings['lease'], attempt=settings['attempt'],
         epoch=settings['epoch'], generation=settings['generation'], world=world,
@@ -666,6 +667,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                                   'silence_before_client_stop_seconds': DRAIN_SECONDS}
     if latest_collection is not None:
         result['latest_playback'] = {
+            'batch_latest_saved_checks': True,
             'queued_sequences': [sample['sequence'] for sample in staged_samples],
             'acknowledged_sequences': [sample['sequence'] for sample in samples],
             'stats': copy.deepcopy(latest_collection['stats']),

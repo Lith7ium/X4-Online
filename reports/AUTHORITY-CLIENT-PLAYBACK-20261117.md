@@ -1162,3 +1162,34 @@ private first-capture flush as well as validation/queue work; it cannot be
 attributed entirely to checkpoint IPC. If finer attribution is needed, record
 nested operation spans with inclusive/self-time separation before choosing an
 optimization. Never infer CPU utilization from these wall-time aggregates.
+
+
+### Follow-up: batch saved checks inside one latest operation
+
+`ExperimentalSourceMotionIPC` now accepts default-off
+`batch_latest_saved_checks=True`, requiring latest mode and both substantive
+saved-state and lifetime callbacks. The bounded latest-playback fixture opts in;
+other callers retain their previous behavior. Normal `begin_latest()` and
+`poll_latest()` calls run substantive saved checks at entry and successful exit.
+Nested checks still validate process, socket, state and saved-helper lifetime,
+but do not request the same saved-state assertion repeatedly. Callback ownership
+remains fenced. Exit checks run before a return; an exit failure after UDP
+request or queue insertion fences the source and host, without reporting success.
+
+An obsolete reply after a lifecycle barrier retains the existing lifetime-only
+validation and discard behavior, including at operation boundaries. Guard mode
+is restored in `finally`. Registration, STOP, outer full digest checks and
+playback timing/bounds remain unchanged. These are sampled checks, not atomic
+protection against transient changes between boundaries. The fixture result
+records that batching was configured, even if the later attempt fails.
+
+Focused checks passed: seven new real-loopback boundary/fault tests in 3.810 s;
+nine existing latest-source regressions in 3.209 s; three binder/default/refusal
+tests in 0.011 s; and the 26-source-sample slow-recipient UDP/TCP integration in
+7.212 s. One additional real checkpoint-helper/window/UDP/TCP integration passed
+in 0.256 s: exactly two helper requests per normal operation, nested lifetime
+checks, no TCP reader reentry during helper requests, exact ACKs from both
+recipients, then source close and full helper STOP/window close. These tests
+simulate the game source and do not establish native timing or gameplay.
+No full suite was rerun. A fresh bounded two-X4 attempt is prepared to evaluate
+the changed call path; no native success is claimed for this implementation yet.

@@ -144,6 +144,7 @@ class RunningBind(unittest.TestCase):
                 self.assertEqual(ipc.call_args.kwargs['timeout'], 300)
                 self.assertIs(ipc.call_args.kwargs['latest'], False)
                 self.assertIsNone(ipc.call_args.kwargs['saved_lifetime_guard'])
+                self.assertIs(ipc.call_args.kwargs['batch_latest_saved_checks'], False)
                 self.assertIs(ipc.call_args.kwargs['stop_enabled'], True)
         finally:
             thread.join(3)
@@ -165,10 +166,12 @@ class RunningBind(unittest.TestCase):
             motion_bind.bind_running_source_motion(server, motion, process=identity, lease=L,
                 attempt=A, epoch=E, generation=G, world=world, client_guard=lambda: True,
                 select_recipients=selector, saved_baseline=10082, saved_guard=saved_guard,
-                latest=True, saved_lifetime_guard=lifetime_guard, timeout=1)
+                latest=True, saved_lifetime_guard=lifetime_guard,
+                batch_latest_saved_checks=True, timeout=1)
         binding.assert_called_once()
         options = ipc.call_args.kwargs
         self.assertIs(options['latest'], True)
+        self.assertIs(options['batch_latest_saved_checks'], True)
         self.assertIs(options['saved_lifetime_guard'], lifetime_guard)
         self.assertIs(options['saved_guard'], saved_guard)
         self.assertIs(options['select_recipients'], selector)
@@ -184,6 +187,10 @@ class RunningBind(unittest.TestCase):
         saved_guard = lambda *_: True
         lifetime_guard = lambda *_: True
         invalid = [dict(latest=1), dict(saved_lifetime_guard=lifetime_guard),
+                   dict(batch_latest_saved_checks=1),
+                   dict(batch_latest_saved_checks=True),
+                   dict(latest=True, batch_latest_saved_checks=True),
+                   dict(latest=True, saved_guard=saved_guard, batch_latest_saved_checks=True),
                    dict(latest=True, saved_lifetime_guard=lifetime_guard),
                    dict(latest=True, saved_guard=saved_guard),
                    dict(latest=True, saved_guard=saved_guard, saved_lifetime_guard=False),

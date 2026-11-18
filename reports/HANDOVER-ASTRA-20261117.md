@@ -1,5 +1,14 @@
 # X4 multiplayer: handover for Astra
 
+Latest code change: explicit default-off `batch_latest_saved_checks` preserves
+substantive saved checks before/after each latest begin/poll call and uses
+lifetime checks inside. The bounded latest-playback fixture opts in. Obsolete
+barrier replies still validate lifetime and discard; exit failures fence even
+after enqueue. Registration, STOP, digest boundaries and playback bounds stay
+unchanged. Focused real-loopback and real-helper integration tests passed;
+native timing remains unverified pending one fresh attempt. See
+[batching implementation and validation](AUTHORITY-CLIENT-PLAYBACK-20261117.md#follow-up-batch-saved-checks-inside-one-latest-operation).
+
 Latest continuation: one two-Linux-X4 attempt of explicit latest playback at
 `3d88b804` failed. Three source samples were queued, sequence 1 was ACKed, and
 native sequence 3 was refused at 282.922 m with no running write. Initial

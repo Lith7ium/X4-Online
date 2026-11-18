@@ -64,7 +64,7 @@ def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, 
                                world, client_guard, timeout=30, validate_sample=None,
                                saved_baseline=None, saved_guard=None, select_recipients=None,candidate_indices=None,
                                bind_timeout=None, private_long_diagnostic=False, peer_client_guard=None,
-                               latest=False, saved_lifetime_guard=None):
+                               latest=False, saved_lifetime_guard=None, batch_latest_saved_checks=False):
     """Opt-in single diagnostic source; no assertion of cross-X4 identity.
 
     `bind_timeout`, when supplied, is a per-stage limit: the binding helper
@@ -73,6 +73,8 @@ def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, 
 
     Explicit latest-position mode forwards its saved lifetime guard to the
     existing IPC owner; candidate lists and long diagnostics remain excluded.
+    Optional batching retains substantive saved checks at operation boundaries
+    and uses the lifetime guard for nested checks within that operation.
 
     The private playback diagnostic can supply a cheaper peer_client_guard.
     Full client_guard checks still surround checkpoint requests in the source
@@ -83,6 +85,9 @@ def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, 
     if (not callable(client_guard) or not callable(select_recipients) or type(private_long_diagnostic) is not bool or
             (peer_client_guard is not None and not callable(peer_client_guard)) or
             type(latest) is not bool or
+            type(batch_latest_saved_checks) is not bool or
+            (batch_latest_saved_checks and (not latest or not callable(saved_guard) or
+                                            not callable(saved_lifetime_guard))) or
             (saved_lifetime_guard is not None and (not latest or saved_guard is None or
                                                    not callable(saved_lifetime_guard))) or
             (latest and saved_guard is not None and not callable(saved_lifetime_guard)) or
@@ -118,6 +123,7 @@ def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, 
             epoch=epoch,generation=generation,guard=context,validate_peer=peer,timeout=timeout,
             validate_sample=validate_sample,saved_baseline=saved_baseline,saved_guard=saved_guard,
             select_recipients=select_recipients,stop_enabled=True,candidate_indices=candidate_indices,
-            latest=latest,saved_lifetime_guard=saved_lifetime_guard, **options)
+            latest=latest,saved_lifetime_guard=saved_lifetime_guard,
+            batch_latest_saved_checks=batch_latest_saved_checks, **options)
     except BaseException:
         sock.close();raise

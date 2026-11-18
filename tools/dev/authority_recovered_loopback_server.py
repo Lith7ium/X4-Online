@@ -1524,6 +1524,7 @@ def run(args):
                                 'playback_checkpoint_stop': lambda: playback_window.stop_checkpoint(guard),
                                 'playback_sample_observer': observe_playback}
                             if latest_playback:
+                                result['paired_playback']['batch_latest_saved_checks'] = True
                                 playback_options.update(latest_playback=True,
                                     playback_checkpoint_lifetime=lambda: playback_window.check_checkpoint_lifetime(guard))
                         # X4's source owner has its own 120-second pending-operation

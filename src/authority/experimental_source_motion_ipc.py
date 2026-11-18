@@ -4,6 +4,7 @@ The caller binds/validates the source socket using its PID/inode guard before
 construction, confirms registry lifetimes separately, and owns all processes,
 profile locks and failure fencing. This bridge does not start X4 or a listener.
 """
+from contextlib import contextmanager
 import copy
 import math
 import re
@@ -21,8 +22,8 @@ _MAX_PACKET=768
 _MAX=9007199254740991
 
 class ExperimentalSourceMotionIPC:
-    """One request at a time; no next pull until TCP recipients confirm."""
-    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None,saved_baseline=None,saved_guard=None,latest=False,saved_lifetime_guard=None,stop_enabled=False,candidate_indices=None,private_long_diagnostic=False):
+    """One owned source request at a time; optional replaceable TCP delivery."""
+    def __init__(self,sock,motion,*,enabled=False,lease,attempt,epoch,generation,guard,validate_peer,timeout=30,validate_sample=None,select_recipients=None,saved_baseline=None,saved_guard=None,latest=False,saved_lifetime_guard=None,stop_enabled=False,candidate_indices=None,private_long_diagnostic=False,batch_latest_saved_checks=False):
         if (enabled is not True or type(sock) is not socket.socket or sock.family!=socket.AF_INET or
             sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_DGRAM or
             sock.getsockname()[0]!='127.0.0.1' or not sock.getsockname()[1] or
@@ -34,6 +35,8 @@ class ExperimentalSourceMotionIPC:
             (saved_lifetime_guard is not None and not callable(saved_lifetime_guard)) or
             (latest and saved_guard is not None and saved_lifetime_guard is None) or
             (saved_lifetime_guard is not None and (not latest or saved_guard is None)) or
+            type(batch_latest_saved_checks) is not bool or
+            (batch_latest_saved_checks and (not latest or saved_guard is None or saved_lifetime_guard is None)) or
             type(latest) is not bool or type(stop_enabled) is not bool or (latest and (select_recipients is None or
                 motion._delivery._host._control._latest_motion is None or motion._delivery._host._control._latest_source is not None or
                 motion._delivery._test_binding is not None)) or
@@ -62,6 +65,7 @@ class ExperimentalSourceMotionIPC:
         self._last_pull=None;self._observed={};self._latest=latest;self._pending_request=None;self._pending_deadline=None;self._pending_barrier_generation=None
         self._saved_baseline=saved_baseline;self._saved_guard=saved_guard;self._saved_lifetime_guard=saved_lifetime_guard;self._lifetime_only=False
         self._stop_enabled=stop_enabled
+        self._batch_latest_saved_checks = batch_latest_saved_checks
         self._candidate_indices=candidate_indices;self._candidate_selected=None;self._candidate_attempted=False
         motion._source_owner=self
         if latest:motion._delivery._host._control._latest_source=self
@@ -465,6 +469,25 @@ class ExperimentalSourceMotionIPC:
             if changed:
                 self._fail();raise RuntimeError('latest source guard changed ownership')
 
+    @contextmanager
+    def _latest_saved_checks(self, deadline, phase, *, obsolete=False):
+        """Keep full saved checks at operation boundaries when explicitly enabled."""
+        if not self._batch_latest_saved_checks:
+            yield
+            return
+        previous = self._lifetime_only
+        try:
+            # An obsolete reply must remain drainable after its old baseline
+            # has changed. Its existing checks validate lifetime and discard it.
+            self._lifetime_only = obsolete
+            self._check(deadline, phase)
+            self._lifetime_only = True
+            yield
+            self._lifetime_only = obsolete
+            self._check(deadline, self._state)
+        finally:
+            self._lifetime_only = previous
+
     def begin_latest(self,*,_scheduler=None):
         """Start one bounded UDP sample without waiting for X4 or any recipient.
 
@@ -484,16 +507,17 @@ class ExperimentalSourceMotionIPC:
             return False
         self._state='pulling';deadline=time.monotonic()+self._timeout
         try:
-            self._quiet(deadline,'pulling')
-            if self._next>=_MAX:raise RuntimeError('source motion request capacity')
-            self._next+=1;request=str(self._next)
-            packet='|'.join(['P',self._lease,self._attempt,'PULL',self._epoch,self._generation,request]).encode('ascii')
-            if self._sock.send(packet)!=len(packet):raise RuntimeError('source motion pull failed')
-            self._pending_request=request;self._pending_deadline=deadline;self._pending_barrier_generation=gate.generation
-            return True
+            with self._latest_saved_checks(deadline, 'pulling'):
+                self._quiet(deadline,'pulling')
+                if self._next>=_MAX:raise RuntimeError('source motion request capacity')
+                self._next+=1;request=str(self._next)
+                packet='|'.join(['P',self._lease,self._attempt,'PULL',self._epoch,self._generation,request]).encode('ascii')
+                if self._sock.send(packet)!=len(packet):raise RuntimeError('source motion pull failed')
+                self._pending_request=request;self._pending_deadline=deadline;self._pending_barrier_generation=gate.generation
+                return True
         except BaseException:self._fail();raise
     def poll_latest(self,*,_scheduler=None):
-        """Poll once; return (completed, sample), never wait for UDP or TCP.
+        """Poll source readiness once; caller guards can perform bounded I/O.
 
         A sample completed under a world/lifecycle barrier is validated then
         discarded. Completion means local queue acceptance, not client receipt.
@@ -502,20 +526,23 @@ class ExperimentalSourceMotionIPC:
         if not self._latest or self._state!='pulling' or threading.get_ident()!=self._owner:
             self._fail();raise RuntimeError('no pending latest source pull')
         deadline=self._pending_deadline;request=self._pending_request
+        previous = self._lifetime_only
         try:
             control=self._motion._delivery._host._control
             control._reader_free(motion=True)
-            self._lifetime_only=(self._pending_barrier_generation!=control._latest_motion.generation)
-            self._check(deadline,'pulling')
-            readable,_,bad=select.select([self._sock],[],[self._sock],0)
-            self._check(deadline,'pulling')
-            if bad:raise RuntimeError('source motion socket error')
-            if not readable:return (False,None)
-            value=self._consume(self._sock.recv(_MAX_PACKET+1),request,deadline,latest=True)
-            self._pending_request=None;self._pending_deadline=None;self._pending_barrier_generation=None
-            return (True,value)
+            obsolete = self._pending_barrier_generation != control._latest_motion.generation
+            self._lifetime_only = obsolete
+            with self._latest_saved_checks(deadline, 'pulling', obsolete=obsolete):
+                self._check(deadline,'pulling')
+                readable,_,bad=select.select([self._sock],[],[self._sock],0)
+                self._check(deadline,'pulling')
+                if bad:raise RuntimeError('source motion socket error')
+                if not readable:return (False,None)
+                value=self._consume(self._sock.recv(_MAX_PACKET+1),request,deadline,latest=True)
+                self._pending_request=None;self._pending_deadline=None;self._pending_barrier_generation=None
+                return (True,value)
         except BaseException:self._fail();raise
-        finally:self._lifetime_only=False
+        finally:self._lifetime_only=previous
     def preflight(self,sample,*,_scheduler=None):
         """Check a confirmed saved sample without requesting a local write."""
         self._reserved(_scheduler)

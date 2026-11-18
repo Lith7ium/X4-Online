@@ -726,6 +726,7 @@ class Probe(unittest.TestCase):
                 self.assertEqual(observed, [expected[sequence-1] for sequence in sequences])
                 self.assertEqual(result['latest_playback']['queued_sequences'], list(range(1, 27)))
                 self.assertEqual(result['latest_playback']['acknowledged_sequences'], sequences)
+                self.assertIs(result['latest_playback']['batch_latest_saved_checks'], True)
                 self.assertIsNone(case.case.host._control._latest_source)
             else:
                 self.assertEqual(observed, expected)
