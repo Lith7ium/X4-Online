@@ -29,8 +29,74 @@ def native_log(*, target=1021.4, uncertain=0, phase='frozen'):
 
 
 class PairedEvidence(unittest.TestCase):
-    def evidence(self, path):
-        return subject.PairedPlaybackEvidence(path, guard=lambda: True, deadline=time.monotonic()+5)
+    def evidence(self, path, *, latest=False):
+        return subject.PairedPlaybackEvidence(path, guard=lambda: True,
+                                              deadline=time.monotonic()+5, latest=latest)
+
+    def latest_evidence(self, path, *, sequences=(1, 3, 26), log=None):
+        if log is None:
+            log = native_log().replace(b'samples=26', b'samples=3')
+        path.write_bytes(log)
+        evidence = self.evidence(path, latest=True)
+        for sequence in sequences:
+            sample = source_sample(sequence)
+            self.assertTrue(evidence.received(sample))
+            sample['source_time'] = -1
+        self.assertEqual(evidence.samples, [source_sample(sequence) for sequence in sequences])
+        return evidence
+
+    def test_latest_sparse_acknowledgements_have_delivery_counts_and_original_times(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'engine.log'
+            # An earlier source can remain the interpolation target after the
+            # third delivery; the count is deliveries, not raw source sequence.
+            log = native_log().replace(b'samples=26', b'samples=3')
+            log = log.replace(
+                b'source_sequence=26 local_time=16', b'source_sequence=3 local_time=16')
+            evidence = self.latest_evidence(path, log=log)
+            result = evidence.stopped(stopped_guard=lambda: True)
+            self.assertEqual(result['source_samples'], 3)
+            self.assertEqual(result['acknowledged_sequences'], [1, 3, 26])
+            self.assertEqual(result['final_source_sequence'], 26)
+            self.assertTrue(result['latest'])
+            self.assertAlmostEqual(result['source_game_elapsed'], 5)
+            self.assertAlmostEqual(result['target_prediction_error'], 0)
+
+    def test_latest_rejects_unacknowledged_rows_final_and_invalid_delivery_counts(self):
+        base = native_log().replace(b'samples=26', b'samples=3')
+        cases = [
+            ((1, 3, 26), base.replace(b'source_sequence=26 local_time=16',
+                                     b'source_sequence=2 local_time=16')),
+            ((1, 3, 25), base),
+            ((1,), base),
+            ((1, 3, 26), base.replace(b'samples=3', b'samples=26')),
+            ((1, 3, 26), base.replace(b'samples=3', b'samples=2', 1)),
+            ((1, 3, 26), base.replace(b'samples=3', b'samples=4', 1)),
+            ((1, 3, 26), base.replace(b'local_time=17 game_time=14 report=1 samples=3',
+                                     b'local_time=17 game_time=14 report=1 samples=2')),
+        ]
+        for sequences, log in cases:
+            with self.subTest(sequences=sequences, log=log), tempfile.TemporaryDirectory() as directory:
+                evidence = self.latest_evidence(Path(directory)/'engine.log', sequences=sequences, log=log)
+                with self.assertRaises(ValueError):
+                    evidence.stopped(stopped_guard=lambda: True)
+
+    def test_latest_rejects_enrollment_sequence_regression_and_provenance_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'engine.log'
+            path.write_bytes(native_log())
+            evidence = self.evidence(path, latest=True)
+            with self.assertRaises(ValueError):
+                evidence.received(source_sample(3))
+            evidence.received(source_sample(1))
+            evidence.received(source_sample(3))
+            for sample in (source_sample(3), source_sample(2), source_sample(27),
+                           source_sample(4) | {'generation': 'd'*32},
+                           source_sample(4) | {'sector_macro': 'other'},
+                           source_sample(4) | {'source_time': source_sample(3)['source_time']}):
+                with self.subTest(sample=sample), self.assertRaises(ValueError):
+                    evidence.received(sample)
+            self.assertEqual([sample['sequence'] for sample in evidence.samples], [1, 3])
 
     def feed(self, evidence):
         for sequence in range(1, 27):

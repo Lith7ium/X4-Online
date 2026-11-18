@@ -20,6 +20,53 @@ import authority_witness_guard_client as client
 from authority_helper_lifecycle import OwnedHelper
 from authority_tcp_native_worker import read_line, send_frame, parse_json
 
+@unittest.skipUnless(sys.platform=='linux' and hasattr(os,'pidfd_open'),'Linux pidfd required')
+class GuardLifetimeTests(unittest.TestCase):
+    """Real descriptor identities with an idle helper double; no helper launch."""
+    def guard(self):
+        parent, child = socket.socketpair()
+        self.addCleanup(parent.close); self.addCleanup(child.close)
+        pidfd = os.pidfd_open(os.getpid())
+        self.addCleanup(os.close, pidfd)
+        g = object.__new__(client.WitnessGuardClient)
+        g.owner = threading.get_ident(); g.state = 'ready'; g.deadline = time.monotonic()+10
+        g.sock = g._owned_sock = parent; g.fd = parent.fileno()
+        info = os.fstat(g.fd); g.identity = (info.st_dev, info.st_ino)
+        info = os.fstat(pidfd)
+        g._pidfd = pidfd; g._proc = Mock(poll=Mock(return_value=None))
+        g.helper = g._owned_helper = SimpleNamespace(proc=g._proc, pidfd=pidfd,
+                                                     _pidfd_identity=(info.st_dev, info.st_ino))
+        for method in ('_pump', '_send', '_read', '_quiet', '_cleanup'):
+            setattr(g, method, Mock(side_effect=AssertionError('lifetime check performed I/O')))
+        return g
+
+    def test_idle_lifetime_preserves_state_without_pump_or_ipc(self):
+        g = self.guard()
+        self.assertTrue(g.check_lifetime()); self.assertEqual(g.state, 'ready')
+        for method in ('_pump', '_send', '_read', '_quiet', '_cleanup'):
+            getattr(g, method).assert_not_called()
+
+    def test_lifetime_rejects_owner_state_helper_process_socket_pidfd_and_deadline(self):
+        for kind in ('owner', 'state', 'helper', 'process', 'exited', 'socket', 'socket_inode',
+                     'pidfd', 'pidfd_inode', 'deadline'):
+            with self.subTest(kind=kind):
+                g = self.guard()
+                if kind == 'owner': g.owner += 1
+                elif kind == 'state': g.state = 'checking'
+                elif kind == 'helper': g.helper = SimpleNamespace()
+                elif kind == 'process': g.helper.proc = Mock()
+                elif kind == 'exited': g._proc.poll.return_value = 0
+                elif kind == 'socket': g.sock = None
+                elif kind == 'socket_inode': g.identity = (-1, -1)
+                elif kind == 'pidfd': g.helper.pidfd = None
+                elif kind == 'pidfd_inode': g.helper._pidfd_identity = (-1, -1)
+                elif kind == 'deadline': g.deadline = time.monotonic()-1
+                with self.assertRaises(RuntimeError): g.check_lifetime()
+                self.assertEqual(g.state, 'failed')
+                for method in ('_pump', '_send', '_read', '_quiet', '_cleanup'):
+                    getattr(g, method).assert_not_called()
+                with self.assertRaises(RuntimeError): g.check_lifetime()
+
 @unittest.skipUnless(sys.platform=='linux' and hasattr(os,'pidfd_open') and hasattr(signal,'pidfd_send_signal'),'Linux pidfd required')
 class GuardHelper(unittest.TestCase):
     def setUp(self):

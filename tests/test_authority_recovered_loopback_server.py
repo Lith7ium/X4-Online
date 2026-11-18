@@ -35,6 +35,49 @@ from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
 
 
 class WitnessJoinModeTests(unittest.TestCase):
+    def test_latest_playback_is_explicit_and_requires_bounded_saved_mode(self):
+        self.assertFalse(MODULE.diagnostic_latest_playback(SimpleNamespace(), None, False))
+        args = SimpleNamespace(diagnostic_latest_playback=True)
+        self.assertTrue(MODULE.diagnostic_latest_playback(args, 'recovery_enh_870', False))
+        for saved, long_motion in ((None, False), ('recovery_enh_870', True)):
+            with self.subTest(saved=saved, long_motion=long_motion), self.assertRaises(ValueError):
+                MODULE.diagnostic_latest_playback(args, saved, long_motion)
+        with self.assertRaises(ValueError):
+            MODULE.diagnostic_latest_playback(SimpleNamespace(diagnostic_latest_playback=1), 'recovery_enh_870', False)
+
+    def test_latest_finish_requires_same_ack_subsequence_in_receipts_and_readback(self):
+        for fault in (None, 'missing_first', 'missing_final', 'reordered', 'readback_disagrees', 'missing_capture', 'wrong_count'):
+            with self.subTest(fault=fault):
+                active = SimpleNamespace(finish=Mock(return_value={'finished': True}))
+                acknowledged = [1, 3, 26]
+                observation = {
+                    'source_stopped_before_disconnect': True,
+                    'client_motion_receipts_confirmed': True, 'client_worker_stop_confirmed': True,
+                    'client_receipt_sample_sha256': ['a'*64] * 3,
+                    'saved_playback': {'source_sample_count': 26},
+                    'latest_playback': {'queued_sequences': list(range(1, 27)), 'acknowledged_sequences': acknowledged},
+                    'playback_readback': {'latest': True, 'acknowledged_sequences': list(acknowledged),
+                        'source_samples': 3, 'final_source_sequence': 26, 'native_position_changed': True},
+                }
+                if fault == 'missing_first': acknowledged[0] = 2
+                if fault == 'missing_final': acknowledged[-1] = 25
+                if fault == 'reordered': acknowledged[1] = 1
+                if fault == 'readback_disagrees': observation['playback_readback']['acknowledged_sequences'][1] = 4
+                if fault == 'missing_capture': observation['latest_playback']['queued_sequences'].pop()
+                if fault == 'wrong_count': observation['client_receipt_sample_sha256'].pop()
+                clients = []
+                def finish():
+                    return MODULE.finish_source_diagnostic(active, clients, [('guard', 'save', 'pump')],
+                        verify=lambda: None, probe=lambda *_: observation,
+                        require_client_receipts=True, saved_playback=True, latest_playback=True)
+                if fault is None:
+                    self.assertEqual(finish(), (observation, {'finished': True}))
+                    self.assertEqual(clients, [])
+                else:
+                    with self.assertRaises(RuntimeError): finish()
+                    active.finish.assert_not_called()
+                    self.assertEqual(clients, [active])
+
     def test_playback_requires_the_pinned_single_client_mode(self):
         defaults = SimpleNamespace()
         self.assertIsNone(MODULE.diagnostic_saved_playback(defaults, False, None, False, False, None))

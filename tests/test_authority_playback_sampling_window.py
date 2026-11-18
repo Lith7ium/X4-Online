@@ -59,6 +59,49 @@ class WindowTests(unittest.TestCase):
         self.helper.pump=pump
         return host
 
+    def test_checkpoint_lifetime_is_local_and_has_separate_metrics(self):
+        self.enter()
+        sequence = self.helper.seq
+        before = dict(self.window.metrics)
+        process_checks = self.process_checks
+        with patch.object(self.helper, '_pump', side_effect=AssertionError('unexpected pump')), \
+             patch.object(self.helper, '_send', side_effect=AssertionError('unexpected request')), \
+             patch.object(self.helper, '_read', side_effect=AssertionError('unexpected read')), \
+             patch.object(self.helper, '_quiet', side_effect=AssertionError('unexpected socket check')):
+            self.assertTrue(self.window.check_checkpoint_lifetime(self.helper))
+        self.assertEqual(self.helper.seq, sequence)
+        self.assertEqual(self.helper.state, 'ready')
+        self.assertIsNone(self.window._helper_io)
+        self.assertEqual(self.process_checks, process_checks+2)
+        self.assertEqual(self.window.metrics['checkpoint_lifetime_checks'], 1)
+        for key in ('checkpoint_full_checks', 'checkpoint_metadata_checks',
+                    'source_full_checks', 'source_metadata_checks'):
+            self.assertEqual(self.window.metrics[key], before[key])
+        self.assertTrue(self.window.stop_checkpoint(self.helper))
+        self.assertTrue(self.window.close(process_guard=self.process_guard))
+
+    def test_checkpoint_lifetime_requires_active_pinned_guard_and_checks_after_callback(self):
+        with self.assertRaisesRegex(RuntimeError, 'inactive'):
+            self.window.check_checkpoint_lifetime(self.helper)
+        self.assertTrue(self.window.failed)
+        for kind in ('wrong_guard', 'changed_after_check'):
+            with self.subTest(kind=kind):
+                window = subject.PlaybackSamplingWindow(lambda p: hashlib.sha256(p.read_bytes()).hexdigest(), self.source)
+                self.addCleanup(window.cleanup)
+                window.open(self.entries, self.helper, process_guard=self.process_guard, deadline=time.monotonic()+10)
+                if kind == 'wrong_guard':
+                    with self.assertRaisesRegex(RuntimeError, 'guard changed'):
+                        window.check_checkpoint_lifetime(object())
+                else:
+                    def change():
+                        window._process = object()
+                        return True
+                    with patch.object(self.helper, 'check_lifetime', side_effect=change):
+                        with self.assertRaisesRegex(RuntimeError, 'helper changed'):
+                            window.check_checkpoint_lifetime(self.helper)
+                self.assertTrue(window.failed)
+                window.cleanup()
+
     def test_real_helper_pump_checks_pinned_saves_on_open_metadata_and_stop(self):
         states=[]
         def active_check(*, server_checked=False):

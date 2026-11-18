@@ -1052,3 +1052,37 @@ the first enrollment receipt, lifecycle fences and separate sample/receipt
 accounting. Per-stage timing is needed before attributing the measured delay
 to one component. No producer thread, clock change or threshold relaxation has
 been introduced.
+
+### Follow-up: explicit latest-position collection
+
+The bounded fixture now exposes `--diagnostic-latest-playback`, requiring saved
+playback and excluding the long diagnostic. The existing serialized path remains
+the default. The new single-owner collector uses the existing asynchronous
+source/latest-position transport: it protects the first frame from replacement,
+queues 26 validated source samples, and records actual ACKs separately. Before
+establishing the final motion barrier, it requires an increasing acknowledged
+subsequence containing sequences 1 and 26, matching receipt digests, and drained
+transport. Intermediate positions may be replaced; queue acceptance is not an
+ACK.
+
+Playback log inspection is deferred until collection completes so a log flush
+cannot block the next source request. Source/helper lifetime checks under the
+TCP reader lease do not pump or request checkpoint IPC; the existing full and
+metadata checks remain at sample-operation and STOP boundaries. Separate
+lifetime-check counters and collection timings are retained. Initial alignment,
+original sample timing, clock mapping, the 0.75 s continuity and 1 s freshness
+limits, later 50 m corrections and STOP/release gates are unchanged.
+
+Focused validation, not a full-suite result:
+
+- Nine running-source binder tests and six lifetime/window guard tests passed.
+- Ten fake collector tests and nine focused evidence tests passed.
+- Two real loopback UDP/TCP tests passed together in 13.625 s: a latest consumer
+  delayed by 0.35 s, and the unchanged default delivery of all 26 samples.
+- Two loopback mode/finish tests passed in 0.005 s. An initial test invocation
+  lacked `PYTHONPATH=tests`; correcting that import setup resolved it without a
+  product change.
+
+No new native game run has exercised this integration. One fresh bounded native
+attempt is planned; passing these checks does not establish delivery cadence,
+sustained paired motion or a solution to the recorded sparse-gap failure.

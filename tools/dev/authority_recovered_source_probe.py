@@ -53,6 +53,7 @@ class SourceProbeDiagnostics:
         self.last_pull_seconds = None
         self.prevalidated_samples = 0
         self.confirmed_client_receipts = 0
+        self.latest_collection = None
 
     def guard_call_site(self):
         """Capture only code locations, never frame locals or callback values."""
@@ -109,6 +110,8 @@ class SourceProbeDiagnostics:
                 'last_pull_seconds': self.last_pull_seconds,
                 'prevalidated_samples': self.prevalidated_samples,
                 'confirmed_client_receipts': self.confirmed_client_receipts}
+        if self.latest_collection is not None:
+            result['latest_collection'] = copy.deepcopy(self.latest_collection)
         if self.include_guard_callsites:
             result['guard_call_sites'] = [
                 {'guard': kind, 'phase': phase,
@@ -159,12 +162,17 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         sector_arm=None, sector_incarnation=None, saved_apply_fixture=None, record_apply_intent=None,
         saved_playback_fixture=None, playback_sample_observer=None,
         playback_begin=None, playback_checkpoint_check=None, playback_checkpoint_stop=None, playback_identity_scope=None,
-        playback_liveness_check=None):
+        playback_liveness_check=None, latest_playback=False, playback_checkpoint_lifetime=None):
     from authority_paired_playback_evidence import SAMPLE_COUNT, SAMPLE_INTERVAL, DRAIN_SECONDS
     if playback_identity_scope is not None and (saved_playback_fixture is None or not callable(playback_identity_scope)):
         raise ValueError('invalid playback identity scope')
     if playback_liveness_check is not None and (saved_playback_fixture is None or not callable(playback_liveness_check)):
         raise ValueError('invalid playback liveness check')
+    if (type(latest_playback) is not bool or
+            (latest_playback and (saved_playback_fixture is None or private_long_diagnostic or
+                                  not callable(playback_checkpoint_lifetime))) or
+            (not latest_playback and playback_checkpoint_lifetime is not None)):
+        raise ValueError('latest playback requires bounded saved playback and its lifetime guard')
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -356,6 +364,16 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             diagnostics.saved_checkpoint_guard_seconds += elapsed
             diagnostics.record_guard_call('saved_checkpoint', site, elapsed)
 
+    def saved_lifetime_guard(epoch, count):
+        # Called under the TCP owner's reader lease: no helper request or pump.
+        # Full checkpoint validation still surrounds source sampling and STOP.
+        if ((epoch, count) != (settings['epoch'], settings['baseline']) or
+                guard.status[:3] != ('ready', epoch, count) or
+                world._baseline != pinned_baseline or world.session.state != 'running' or
+                world.session.pending is not None or world.session.baseline_id is not None):
+            return False
+        return playback_checkpoint_lifetime() is True
+
     staged_samples = []
     sample_received_at = []
 
@@ -380,6 +398,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     delivery = ExperimentalTCPJobDelivery(host, enabled=True, timeout=delivery_timeout, **delivery_options)
     motion_options = {'allow_apply': True} if saved_apply_fixture is not None else {}
     motion = ExperimentalTCPMotion(delivery, enabled=True, **motion_options)
+    if latest_playback:
+        host._control.enable_latest_motion(enabled=True, timeout=delivery_timeout)
     selected_recipient = None
     if client_motion:
         if sector_poll is not None:
@@ -414,6 +434,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         binding_options['private_long_diagnostic'] = True
     if playback_liveness_check is not None:
         binding_options['peer_client_guard'] = check_liveness
+    if latest_playback:
+        binding_options.update(latest=True, saved_lifetime_guard=saved_lifetime_guard)
     source = checked_operation(bind_running_source_motion,
         sock, motion, process=process, lease=settings['lease'], attempt=settings['attempt'],
         epoch=settings['epoch'], generation=settings['generation'], world=world,
@@ -434,62 +456,86 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     required_samples = SAMPLE_COUNT if saved_playback_fixture else (1 if pair_delivery else 2)
     if saved_playback_fixture:
         sampling_deadline = min(deadline, time.monotonic() + 15)
-    for _ in range(required_samples * 4 if saved_playback_fixture else (1 if pair_delivery else 20)):
-        next_pull_at = time.monotonic() + (SAMPLE_INTERVAL if saved_playback_fixture else .1)
-        previous_count = len(staged_samples)
+    latest_collection = None
+    if latest_playback:
+        from authority_latest_playback_collection import collect_latest_playback
+        progress = {}
         if diagnostics is not None:
-            diagnostics.pull_attempts += 1
-            pull_started_at = time.monotonic()
-        try:
-            # Only this private playback diagnostic batches group discovery
-            # across one pull's UDP/TCP waits. Nested guards still read the
-            # known process identities. An extra group member may be detected
-            # only after a client effect, or missed if it exits before the end.
-            with playback_identity_scope() if playback_identity_scope is not None else nullcontext():
-                received = checked_operation(source.pull)
-            # The scope's exit verification is part of the sampling budget.
-            if playback_identity_scope is not None:
-                check_deadline()
-        finally:
-            if diagnostics is not None:
-                diagnostics.last_pull_seconds = time.monotonic() - pull_started_at
-        if len(staged_samples) > previous_count:
-            if len(staged_samples) != previous_count + 1:
-                raise RuntimeError('ambiguous source sample')
-            if client_motion:
-                if (received is None or received != staged_samples[-1]
-                        or motion_digest(received) != motion_digest(staged_samples[-1])):
-                    raise RuntimeError('motion receipt differs from source sample')
-                if pair_delivery and (received['index'] != index or received['sequence'] != 2 or
-                                      received['velocity'] is None):
-                    raise RuntimeError('pair delivery lacks the correlated known-rate sample')
-                track_key = (settings['epoch'], settings['generation'], index)
-                track = motion._tracks.get(track_key)
-                recipient_key = (selected_recipient['id'], selected_recipient['incarnation'])
-                expected_receipt = (received['sequence'], motion_digest(received))
-                if track is None or track['peer_samples'].get(recipient_key) != expected_receipt:
-                    raise RuntimeError('motion receipt digest not recorded for client')
-                if diagnostics is not None:
-                    diagnostics.confirmed_client_receipts += 1
-            samples.append(staged_samples[-1])
-            if saved_playback_fixture and checked_operation(playback_sample_observer, copy.deepcopy(samples[-1])) is not True:
+            diagnostics.latest_collection = progress
+        latest_collection = checked_operation(collect_latest_playback,
+            source=source, motion=motion, host=host, recipient=selected_recipient,
+            deadline=sampling_deadline, check=active_guard, scope=playback_identity_scope,
+            sample_count=required_samples, interval=SAMPLE_INTERVAL, progress=progress)
+        if latest_collection['queued_samples'] != staged_samples:
+            raise RuntimeError('queued playback samples differ from validated source captures')
+        samples = latest_collection['acknowledged_samples']
+        if diagnostics is not None:
+            diagnostics.latest_collection = copy.deepcopy(latest_collection)
+            diagnostics.samples_received = len(staged_samples)
+            diagnostics.confirmed_client_receipts = len(samples)
+        # Evidence inspection may wait for a log flush; keep it outside the
+        # live collection loop so it cannot delay the next native PULL.
+        sampling_deadline = None
+        for sample in samples:
+            if checked_operation(playback_sample_observer, copy.deepcopy(sample)) is not True:
                 raise RuntimeError('playback sample observation unconfirmed')
+    else:
+        for _ in range(required_samples * 4 if saved_playback_fixture else (1 if pair_delivery else 20)):
+            next_pull_at = time.monotonic() + (SAMPLE_INTERVAL if saved_playback_fixture else .1)
+            previous_count = len(staged_samples)
             if diagnostics is not None:
-                diagnostics.samples_received = len(samples)
-            if len(samples) == required_samples:
-                break
-        elif received is not None:
-            raise RuntimeError('uncaptured motion receipt')
-        elif diagnostics is not None:
-            diagnostics.empty_pulls += 1
-        if saved_playback_fixture:
-            while time.monotonic() < next_pull_at:
-                active_guard()
-                time.sleep(min(.05, max(0, next_pull_at-time.monotonic())))
-        else:
-            time.sleep(.1)
-    if len(samples) != required_samples:
-        raise RuntimeError('required server source samples unavailable')
+                diagnostics.pull_attempts += 1
+                pull_started_at = time.monotonic()
+            try:
+                # Only this private playback diagnostic batches group discovery
+                # across one pull's UDP/TCP waits. Nested guards still read the
+                # known process identities. An extra group member may be detected
+                # only after a client effect, or missed if it exits before the end.
+                with playback_identity_scope() if playback_identity_scope is not None else nullcontext():
+                    received = checked_operation(source.pull)
+                # The scope's exit verification is part of the sampling budget.
+                if playback_identity_scope is not None:
+                    check_deadline()
+            finally:
+                if diagnostics is not None:
+                    diagnostics.last_pull_seconds = time.monotonic() - pull_started_at
+            if len(staged_samples) > previous_count:
+                if len(staged_samples) != previous_count + 1:
+                    raise RuntimeError('ambiguous source sample')
+                if client_motion:
+                    if (received is None or received != staged_samples[-1]
+                            or motion_digest(received) != motion_digest(staged_samples[-1])):
+                        raise RuntimeError('motion receipt differs from source sample')
+                    if pair_delivery and (received['index'] != index or received['sequence'] != 2 or
+                                          received['velocity'] is None):
+                        raise RuntimeError('pair delivery lacks the correlated known-rate sample')
+                    track_key = (settings['epoch'], settings['generation'], index)
+                    track = motion._tracks.get(track_key)
+                    recipient_key = (selected_recipient['id'], selected_recipient['incarnation'])
+                    expected_receipt = (received['sequence'], motion_digest(received))
+                    if track is None or track['peer_samples'].get(recipient_key) != expected_receipt:
+                        raise RuntimeError('motion receipt digest not recorded for client')
+                    if diagnostics is not None:
+                        diagnostics.confirmed_client_receipts += 1
+                samples.append(staged_samples[-1])
+                if saved_playback_fixture and checked_operation(playback_sample_observer, copy.deepcopy(samples[-1])) is not True:
+                    raise RuntimeError('playback sample observation unconfirmed')
+                if diagnostics is not None:
+                    diagnostics.samples_received = len(samples)
+                if len(samples) == required_samples:
+                    break
+            elif received is not None:
+                raise RuntimeError('uncaptured motion receipt')
+            elif diagnostics is not None:
+                diagnostics.empty_pulls += 1
+            if saved_playback_fixture:
+                while time.monotonic() < next_pull_at:
+                    active_guard()
+                    time.sleep(min(.05, max(0, next_pull_at-time.monotonic())))
+            else:
+                time.sleep(.1)
+        if len(samples) != required_samples:
+            raise RuntimeError('required server source samples unavailable')
     sampling_deadline = None
     if sector_poll is not None:
         # The receipt above belongs to this already admitted incarnation. The
@@ -599,7 +645,13 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         result['saved_apply'] = apply_observation
     if saved_playback_fixture:
         result['saved_playback'] = {'fixture': saved_playback_fixture,
-                                  'source_sample_count': len(samples),
+                                  'source_sample_count': len(staged_samples),
                                   'enrollment_sequence': 1,
                                   'silence_before_client_stop_seconds': DRAIN_SECONDS}
+    if latest_collection is not None:
+        result['latest_playback'] = {
+            'queued_sequences': [sample['sequence'] for sample in staged_samples],
+            'acknowledged_sequences': [sample['sequence'] for sample in samples],
+            'stats': copy.deepcopy(latest_collection['stats']),
+        }
     return result

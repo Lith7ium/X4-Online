@@ -35,6 +35,7 @@ class PlaybackSamplingWindow:
         self._local_save_busy = False
         self.metrics = dict(source_full_checks=0, source_metadata_checks=0,
                             checkpoint_full_checks=0, checkpoint_metadata_checks=0,
+                            checkpoint_lifetime_checks=0,
                             windows=0, saves=self._saves.metrics,
                             exclusive_writer_and_fd_owner_assumed=True,
                             unchanged_bytes_between_boundaries_proven=False)
@@ -155,6 +156,22 @@ class PlaybackSamplingWindow:
             else:
                 self.metrics['checkpoint_full_checks'] += 1
                 result = self._helper_request(guard, guard.check)
+            return result
+        return self._run(check)
+
+    def check_checkpoint_lifetime(self, guard):
+        """Check only the active pinned helper lifetime; no pump or IPC request.
+
+        Source/save pins remain the aggregate caller's responsibility. Full and
+        metadata checkpoint requests still run at their existing boundaries.
+        """
+        def check():
+            if self.state != 'active' or guard is not self._checkpoint:
+                raise RuntimeError('playback checkpoint guard changed or inactive')
+            self._process_check()
+            self.metrics['checkpoint_lifetime_checks'] += 1
+            result = guard.check_lifetime()
+            self._process_check()
             return result
         return self._run(check)
 

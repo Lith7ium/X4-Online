@@ -17,12 +17,14 @@ PREDICTION_HORIZON = .35  # Existing motion_buffer.lua default; not a new policy
 
 
 class PairedPlaybackEvidence:
-    def __init__(self, path, *, guard, deadline):
-        if not callable(guard) or not math.isfinite(deadline) or deadline <= time.monotonic():
+    def __init__(self, path, *, guard, deadline, latest=False):
+        if (type(latest) is not bool or not callable(guard) or
+                not math.isfinite(deadline) or deadline <= time.monotonic()):
             raise ValueError('bounded playback evidence context required')
         self.reader = PlaybackLog(path)
         self.guard = guard
         self.deadline = deadline
+        self.latest = latest
         self.samples = []
         self.initial = None
         self.initial_comparison = None
@@ -46,10 +48,16 @@ class PairedPlaybackEvidence:
             time.sleep(.01)
 
     def received(self, sample):
-        """Called after its TCP receipt; first source packet only enrolled X4."""
+        """Record an acknowledged original sample; latest callers defer log reads until drain."""
         value = motion_value(sample)
+        expected_sequence = len(self.samples) + 1
+        sequence_valid = value['sequence'] == expected_sequence
+        if self.latest:
+            previous_sequence = self.samples[-1]['sequence'] if self.samples else 0
+            sequence_valid = (previous_sequence < value['sequence'] <= SAMPLE_COUNT and
+                              (bool(self.samples) or value['sequence'] == 1))
         if (value['version'] != 1 or value['epoch'] != EPOCH or value['index'] != 1318 or
-                value['sector_macro'] != SECTOR or value['sequence'] != len(self.samples) + 1 or
+                value['sector_macro'] != SECTOR or not sequence_valid or
                 len(self.samples) >= SAMPLE_COUNT):
             raise ValueError('paired playback source identity or sequence differs')
         if self.samples and (value['generation'] != self.samples[-1]['generation'] or
@@ -79,15 +87,28 @@ class PairedPlaybackEvidence:
     def stopped(self, *, stopped_guard):
         """Validate native drain and the final source-derived predicted target."""
         initial, summaries, stopped = self._wait_for(2, guard=stopped_guard)
-        if len(self.samples) != SAMPLE_COUNT or initial != self.initial or not summaries:
+        sample_count = len(self.samples)
+        complete = sample_count == SAMPLE_COUNT
+        if self.latest:
+            complete = sample_count >= 2 and self.samples[-1]['sequence'] == SAMPLE_COUNT
+        if not complete or initial != self.initial or not summaries:
             raise ValueError('paired playback evidence incomplete')
         final = self.samples[-1]
-        if (stopped['source_sequence'] != final['sequence'] or stopped['samples'] != SAMPLE_COUNT or
+        if (stopped['source_sequence'] != final['sequence'] or stopped['samples'] != sample_count or
                 stopped['readbacks'] < 2 or stopped['phase'] != 'frozen' or final['velocity'] is None):
             raise ValueError('paired playback final sample not observed')
+        acknowledged_ordinals = {sample['sequence']: ordinal
+                                 for ordinal, sample in enumerate(self.samples, 1)}
         for row in [*summaries, stopped]:
-            if (not 2 <= row['source_sequence'] <= SAMPLE_COUNT or
-                    not row['source_sequence'] <= row['samples'] <= SAMPLE_COUNT or row['error'] > 3 or
+            if self.latest:
+                # Interpolation may still report an earlier acknowledged source
+                # after later deliveries. Its count must include that delivery.
+                ordinal = acknowledged_ordinals.get(row['source_sequence'])
+                count_valid = ordinal is not None and ordinal <= row['samples'] <= sample_count
+            else:
+                count_valid = (2 <= row['source_sequence'] <= SAMPLE_COUNT and
+                               row['source_sequence'] <= row['samples'] <= SAMPLE_COUNT)
+            if (not count_valid or row['error'] > 3 or
                     math.dist([row['actual_' + axis] for axis in ('x', 'y', 'z')],
                               [row['target_' + axis] for axis in ('x', 'y', 'z')]) > 3):
                 raise ValueError('paired playback readback mismatch')
@@ -101,10 +122,14 @@ class PairedPlaybackEvidence:
         client_movement = math.dist([initial[axis] for axis in ('x', 'y', 'z')], actual)
         if source_movement <= .02 or client_movement <= .02:
             raise ValueError('paired playback movement unconfirmed')
-        return dict(initial=copy.deepcopy(initial), stopped=copy.deepcopy(stopped),
-                    source_samples=SAMPLE_COUNT, source_displacement=source_movement,
+        result = dict(initial=copy.deepcopy(initial), stopped=copy.deepcopy(stopped),
+                    source_samples=sample_count, source_displacement=source_movement,
                     client_displacement=client_movement, target_prediction_error=math.dist(predicted, target),
                     source_game_elapsed=final['source_time'] - self.samples[0]['source_time'],
                     client_game_elapsed=stopped['game_time'] - initial['game_time'],
                     native_position_changed=True, native_velocity_proven=False,
                     cross_process_identity_proven=False)
+        if self.latest:
+            result.update(latest=True, acknowledged_sequences=list(acknowledged_ordinals),
+                          final_source_sequence=final['sequence'])
+        return result

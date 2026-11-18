@@ -563,7 +563,11 @@ class Probe(unittest.TestCase):
     def test_real_playback_with_separate_liveness_checks(self):
         self.exercise_twenty_six_samples(use_identity_scope=True, use_liveness_check=True)
 
-    def exercise_twenty_six_samples(self, *, use_identity_scope, use_liveness_check=False):
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process and socket ownership required')
+    def test_latest_real_udp_tcp_keeps_enrollment_and_final_receipt_with_slow_consumer(self):
+        self.exercise_twenty_six_samples(use_identity_scope=True, use_liveness_check=True, latest=True)
+
+    def exercise_twenty_six_samples(self, *, use_identity_scope, use_liveness_check=False, latest=False):
         """Real UDP/TCP and ownership guards, with a simulated source/client."""
         from tests import test_authority_experimental_tcp_motion as fixture
         from test_authority_paired_playback_evidence import source_sample
@@ -574,7 +578,7 @@ class Probe(unittest.TestCase):
         expected = [source_sample(n) for n in range(1, 27)]
         try:
             conn = case.case.connect(); case.case.offer_and_claim(conn)
-            case.client(conn, 1); case.case.host.tick(.1)
+            case.client(conn, 1, delay=.35 if latest else 0); case.case.host.tick(.1)
             world = case.case.world; baseline = object(); world._baseline = (7, baseline)
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.bind(('127.0.0.1', 0))
             source = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); source.bind(('127.0.0.1', 0))
@@ -632,8 +636,13 @@ class Probe(unittest.TestCase):
                 self.assertEqual(scope_depth[0], 0)
                 self.assertIsNone(case.case.host._control._reader_lease)
                 self.assertFalse(case.case.host._busy)
-                self.assertEqual(case.received[-1][1], sample)
-                self.assertEqual(len(case.received), len(observed)+1)
+                if latest:
+                    self.assertEqual(case.received[len(observed)][1], sample)
+                    self.assertTrue(case.case.host._control._motion_idle())
+                    self.assertTrue(case.case.host._control._latest_motion.blocked)
+                else:
+                    self.assertEqual(case.received[-1][1], sample)
+                    self.assertEqual(len(case.received), len(observed)+1)
                 observed.append(sample)
                 events.append(('observed', time.monotonic()))
                 return True
@@ -646,6 +655,7 @@ class Probe(unittest.TestCase):
             liveness_check = Mock(return_value=True)
             full_check = Mock()
             pump = recovered_client.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()), time.monotonic()+25)
+            latest_options = dict(latest_playback=True, playback_checkpoint_lifetime=lambda: True) if latest else {}
             result = subject.run(sock=sock, settings=settings, index=1318, baseline=baseline, guard=guard,
                 pump=pump, active=active, host=case.case.host, world=world,
                 identity=(os.getpid(), linux_gate_live.start_ticks(os.getpid())), verify=full_check,
@@ -655,8 +665,19 @@ class Probe(unittest.TestCase):
                 playback_liveness_check=liveness_check if use_liveness_check else None,
                 playback_begin=lambda: events.append(('begin', time.monotonic())) or True,
                 playback_checkpoint_check=lambda: pump() or True,
-                playback_checkpoint_stop=lambda: events.append(('checkpoint_stop_hook', time.monotonic())) or guard.stop())
-            self.assertEqual(observed, expected)
+                playback_checkpoint_stop=lambda: events.append(('checkpoint_stop_hook', time.monotonic())) or guard.stop(),
+                **latest_options)
+            if latest:
+                sequences = [sample['sequence'] for sample in observed]
+                self.assertEqual(sequences[0], 1)
+                self.assertEqual(sequences[-1], 26)
+                self.assertLess(len(sequences), 26)  # Slow ACKs coalesce unsent positions.
+                self.assertEqual(observed, [expected[sequence-1] for sequence in sequences])
+                self.assertEqual(result['latest_playback']['queued_sequences'], list(range(1, 27)))
+                self.assertEqual(result['latest_playback']['acknowledged_sequences'], sequences)
+                self.assertIsNone(case.case.host._control._latest_source)
+            else:
+                self.assertEqual(observed, expected)
             self.assertGreater(full_check.call_count, 26)
             if use_liveness_check:
                 self.assertGreater(liveness_check.call_count, 26)
@@ -670,8 +691,8 @@ class Probe(unittest.TestCase):
             self.assertEqual(sum(event == 'enter' for event, _ in scope_calls),
                              sum(event == 'exit' for event, _ in scope_calls))
             self.assertEqual(scope_depth[0], 0)
-            self.assertEqual([row[1] for row in case.received], expected)
-            self.assertEqual(result['client_receipt_sample_sha256'], [motion_digest(s) for s in expected])
+            self.assertEqual([row[1] for row in case.received], observed)
+            self.assertEqual(result['client_receipt_sample_sha256'], [motion_digest(s) for s in observed])
             times = dict(events)
             self.assertLess(events.index(('begin', times['begin'])), 1)
             self.assertGreaterEqual(times['guard_stop']-times['source_stop'], 1.25)

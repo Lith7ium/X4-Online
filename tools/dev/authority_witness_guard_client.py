@@ -127,8 +127,9 @@ class WitnessGuardClient:
         if deferred[0] is not None:
             raise InterruptedError('signal '+str(deferred[0]))
 
-    def _check(self):
-        if (threading.get_ident()!=self.owner or self.state not in ('initializing','ready','checking','stopping') or
+    def _check_identity(self, allowed_states):
+        """Check the owned idle/in-flight endpoints without pumping or IPC."""
+        if (threading.get_ident()!=self.owner or self.state not in allowed_states or
             self.helper is None or self.helper is not self._owned_helper or self.helper.proc is not self._proc or
             self.helper.pidfd!=self._pidfd or self._pidfd is None or self._proc.poll() is not None or
             self.sock is None or self.sock is not self._owned_sock or self.sock.fileno()!=self.fd or time.monotonic()>=self.deadline):
@@ -138,17 +139,28 @@ class WitnessGuardClient:
         pidfd_st=os.fstat(self._pidfd)
         if (pidfd_st.st_dev,pidfd_st.st_ino)!=self._owned_helper._pidfd_identity:
             raise RuntimeError('guard pidfd identity changed')
+
+    def _check(self):
+        self._check_identity(('initializing','ready','checking','stopping'))
         state=self.state
         self._pump()
-        if (self.state!=state or self.helper is not self._owned_helper or self.helper.proc is not self._proc or
-                self.helper.pidfd!=self._pidfd or self._proc.poll() is not None or self.sock is None or self.sock is not self._owned_sock or
-                self.sock.fileno()!=self.fd or time.monotonic()>=self.deadline):
+        if self.state!=state:
             raise RuntimeError('guard helper changed')
-        st=os.fstat(self.fd)
-        if (st.st_dev,st.st_ino)!=self.identity:raise RuntimeError('guard IPC identity changed')
-        pidfd_st=os.fstat(self._pidfd)
-        if (pidfd_st.st_dev,pidfd_st.st_ino)!=self._owned_helper._pidfd_identity:
-            raise RuntimeError('guard pidfd identity changed')
+        self._check_identity((state,))
+
+    def check_lifetime(self):
+        """Check an idle owned helper without pump, request or socket reads.
+
+        This does not inspect checkpoint contents or queued protocol frames.
+        Failure poisons the owner; the outer supervisor must fence its session
+        and explicitly clean the helper outside the no-I/O guard callback.
+        """
+        try:
+            self._check_identity(('ready',))
+            return True
+        except BaseException:
+            self.state='failed'
+            raise
 
     def _send(self,value,deadline):
         payload=json.dumps(value,separators=(',',':'),allow_nan=False).encode('ascii')

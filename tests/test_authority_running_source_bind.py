@@ -142,9 +142,67 @@ class RunningBind(unittest.TestCase):
                     attempt=A, epoch=E, generation=G, world=world, client_guard=lambda: True,
                     select_recipients=lambda value, members: [], timeout=300, bind_timeout=120)
                 self.assertEqual(ipc.call_args.kwargs['timeout'], 300)
+                self.assertIs(ipc.call_args.kwargs['latest'], False)
+                self.assertIsNone(ipc.call_args.kwargs['saved_lifetime_guard'])
+                self.assertIs(ipc.call_args.kwargs['stop_enabled'], True)
         finally:
             thread.join(3)
         self.assertFalse(thread.is_alive()); self.assertEqual(errors, [])
+
+    def test_running_latest_forwards_saved_lifetime_guard_without_changing_stop_policy(self):
+        server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        source = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        server.bind(('127.0.0.1', 0)); source.bind(('127.0.0.1', 0))
+        server.connect(source.getsockname()); source.connect(server.getsockname())
+        self.addCleanup(server.close); self.addCleanup(source.close)
+        identity, world = context()
+        motion = types.SimpleNamespace(_delivery=types.SimpleNamespace(_host=types.SimpleNamespace(_world=world)))
+        saved_guard = lambda *_: True
+        lifetime_guard = lambda *_: True
+        selector = lambda *_: []
+        with patch.object(motion_bind, 'bind_running_source') as binding, \
+             patch.object(motion_bind, 'ExperimentalSourceMotionIPC') as ipc:
+            motion_bind.bind_running_source_motion(server, motion, process=identity, lease=L,
+                attempt=A, epoch=E, generation=G, world=world, client_guard=lambda: True,
+                select_recipients=selector, saved_baseline=10082, saved_guard=saved_guard,
+                latest=True, saved_lifetime_guard=lifetime_guard, timeout=1)
+        binding.assert_called_once()
+        options = ipc.call_args.kwargs
+        self.assertIs(options['latest'], True)
+        self.assertIs(options['saved_lifetime_guard'], lifetime_guard)
+        self.assertIs(options['saved_guard'], saved_guard)
+        self.assertIs(options['select_recipients'], selector)
+        self.assertEqual(options['saved_baseline'], 10082)
+        self.assertIs(options['stop_enabled'], True)
+        self.assertTrue(options['guard']())
+        self.assertTrue(options['validate_peer'](source.getsockname()))
+        world.session.state = 'paused'
+        self.assertFalse(options['guard']())
+        self.assertFalse(options['validate_peer'](source.getsockname()))
+
+    def test_invalid_running_latest_options_refuse_before_handoff(self):
+        saved_guard = lambda *_: True
+        lifetime_guard = lambda *_: True
+        invalid = [dict(latest=1), dict(saved_lifetime_guard=lifetime_guard),
+                   dict(latest=True, saved_lifetime_guard=lifetime_guard),
+                   dict(latest=True, saved_guard=saved_guard),
+                   dict(latest=True, saved_guard=saved_guard, saved_lifetime_guard=False),
+                   dict(latest=True, candidate_indices=(1318,)),
+                   dict(latest=True, private_long_diagnostic=True)]
+        for options in invalid:
+            with self.subTest(options=options):
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.bind(('127.0.0.1', 0)); self.addCleanup(sock.close)
+                identity, world = context()
+                motion = types.SimpleNamespace(_delivery=types.SimpleNamespace(_host=types.SimpleNamespace(_world=world)))
+                with patch.object(motion_bind, 'bind_running_source') as binding, \
+                     patch.object(motion_bind, 'ExperimentalSourceMotionIPC') as ipc:
+                    with self.assertRaises(ValueError):
+                        motion_bind.bind_running_source_motion(sock, motion, process=identity,
+                            lease=L, attempt=A, epoch=E, generation=G, world=world,
+                            client_guard=lambda: True, select_recipients=lambda *_: [], **options)
+                    binding.assert_not_called(); ipc.assert_not_called()
+                self.assertEqual(sock.fileno(), -1)
 
     def test_member_change_inside_guard_or_before_handoff_fails(self):
         for stage in ('guard','handoff'):

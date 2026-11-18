@@ -11,10 +11,19 @@ Seeding alone cannot fix the observed 1.431 s source gap, which exceeds the exis
 0.75 s continuity limit; local freshness also expired. Delivery cadence needs
 investigation without changing the outstanding clock policy or widening bounds.
 See [the preserved evidence and limits](AUTHORITY-CLIENT-PLAYBACK-20261117.md#actual-source-initial-alignment-2026-11-18).
-The fixture currently serializes PULL, receipt and evidence checks; investigate
-the existing latest-position APIs before another native attempt. Preserve
-sequence 1 enrollment, single-owner operation and separate receipt accounting.
-Do not repeat the native attempt for the seeding change alone.
+Latest implementation: the bounded fixture now has explicit
+`--diagnostic-latest-playback`; the serialized path remains the default. Its
+single-owner collector protects the first frame, queues 26 source samples and
+validates the actual ACK subsequence, including 1 and 26, before a drained final
+barrier. Evidence log checks run after collection; queued positions and ACKs
+remain separate. Reader-lease lifetime guards perform no helper IPC or pumping.
+Clock policy, continuity/freshness limits, initial alignment and the 50 m bound
+remain unchanged. Focused binder/guard, fake collector/evidence and loopback
+mode/finish checks passed. Two real UDP/TCP tests (slow latest consumer and
+unchanged default 26-sample delivery) passed together in 13.625 s. This is not a
+full-suite or native-game result. One fresh bounded native attempt is planned;
+the seeding fix alone still cannot repair the earlier trace. See the
+[latest integration and exact check groups](AUTHORITY-CLIENT-PLAYBACK-20261117.md#follow-up-explicit-latest-position-collection).
 
 Latest client evidence: the shared control path also passed in Windows X4
 under Proton using the same source checkpoint, 25 synthetic motion updates,
