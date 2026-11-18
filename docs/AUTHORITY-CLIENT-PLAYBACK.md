@@ -8,6 +8,15 @@ pause trial passed with a private Wait-plus-zero-velocity intervention. Default
 NPC playback still faults; see the
 [integration report](../reports/AUTHORITY-CLIENT-PLAYBACK-20261117.md).
 
+The latest native attempt was paired playback 01: the isolated server published
+a fresh checkpoint, but stale exact registry-hash comparison rejected lineage
+before source sampling or native client launch. The narrow fix accepts the
+fresh lowercase mapping hash while keeping typed ready-state, epoch and count
+checks. Its 8 focused tests passed in 0.020s and retained fresh-checkpoint
+preflight passed. Native08 remains the latest native client success; attempt 01
+confirmed unchanged source pins and owned-scope/Xauthority cleanup only. It has
+not been rerun.
+
 ## Data and lifetime
 
 The controller receives source-time positions and optional linear rates,
@@ -149,8 +158,11 @@ The existing two-process supervisor also has an explicit
 `--diagnostic-saved-playback` mode. It requires `--registry-witness-join`,
 `--diagnostic-client`, `--diagnostic-source-index 1318` and
 `--diagnostic-client-motion`, with the pinned recovery registry and script
-lineage. Pair delivery and one-shot apply are forbidden. Fresh checkpoint
-admission remains mandatory. This is an internal experiment, not a playable mode.
+lineage. The fresh checkpoint witness binds registry identity; playback requires
+exact typed ready-state, epoch and count plus a valid lowercase mapping hash,
+allowing the fresh checkpoint's hash to differ from the original fixture value.
+Pair delivery and one-shot apply are forbidden. Fresh checkpoint admission
+remains mandatory. This is an internal experiment, not a playable mode.
 
 Unlike the independent worker above, the paired path's existing TCP owner sends
 the first actual source packet as enrollment and preserves source sequences
@@ -160,7 +172,10 @@ native readbacks with the source. Its bounded metadata phase has full save
 digest checks at the boundaries and retains other live guards. The ordinary
 save-check path remains unchanged outside this explicit mode.
 
-This wiring has real local TCP/UDP tests with simulated engine edges only.
+This wiring has real local TCP/UDP tests with simulated engine edges only. Native
+paired attempt 01 did not reach source sampling or launch a client: server-side
+checkpoint publication succeeded, then the stale hash comparison failed. No
+client playback or native source samples are evidenced by that attempt.
 The switch does not install the private native08 NPC Wait/velocity override or
 release observer. A native paired runner still needs those pinned artifacts and
 must pass departure saving as well as movement/STOP/release observation. See

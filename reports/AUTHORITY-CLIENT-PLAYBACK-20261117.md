@@ -7,8 +7,18 @@ The overall Windows/Linux Internet gameplay goal remains unmet.
 Current client increment, 18 November: both the independent bounded live-input
 path and an explicit paired-supervisor playback path are now wired in code.
 The paired path uses the existing retained TCP owner and fresh join checkpoint.
-These increments have offline evidence only; native attempt 08 below remains
-the latest X4 trial. No Windows or Internet gameplay is established.
+The latest native attempt, paired playback 01, failed in recovery-lineage
+preflight after the isolated server published a fresh checkpoint; it stopped
+before source sampling or native client launch. The rejection was a stale exact
+registry-status hash comparison. The narrow comparison fix in `d06f62cb` now
+accepts the fresh lowercase mapping hash while retaining exact typed checks for
+the ready state, epoch and count. Its 8 focused tests passed in 0.020s, and the
+retained fresh-checkpoint preflight passed. The run's source pins were unchanged
+and owned-scope/Xauthority cleanup was confirmed. Native08 remains the latest
+native client success: one Linux client completed the bounded 20-metre
+playback/STOP/pause flow with synthetic host controls. No source samples or
+client were launched in paired attempt 01. No Windows or Internet gameplay is
+established.
 
 ## Paired source and client integration, 18 November
 
@@ -16,9 +26,10 @@ The shared supervisor accepts `--diagnostic-saved-playback` only for one private
 witness-join client, registry index 1318, and ordinary repeated source sampling.
 Local-pair and one-shot setter modes are mutually exclusive with playback.
 The fresh join ticket, marker and saved registry remain verified by the existing
-admission path. Playback additionally pins the recovery registry status, content
-XML and four compatible MD scripts; it does not substitute the historical
-native08 save hash for the fresh checkpoint.
+admission path. Playback pins the content XML and four compatible MD scripts;
+registry lineage requires exact typed ready-state, epoch and count fields plus a
+valid lowercase mapping hash bound through the fresh-checkpoint witness. It does
+not substitute the historical native08 save hash for the fresh checkpoint.
 
 This path uses `LazyMotion` directly, not the independent `NativePlayback`
 worker or its queue. The first actual source packet, sequence 1, is unchanged
@@ -47,10 +58,13 @@ reader. Failure remains sticky. This assumes exclusive writers and FD ownership;
 metadata is not proof that all intervening bytes were unchanged.
 
 The private native08 Wait/velocity intervention and release observer are not
-installed by this new switch. The next native runner must explicitly reuse and
-pin those private artifacts, observe release, and retain the normal final save
-gate. General NPC authority and exact AI/velocity restoration remain unresolved.
-No native paired trial was run for this increment.
+installed by this new switch. Native paired attempt 01 failed before the client
+was launched, so it produced no source samples, playback, release observation
+or departure pause/save. The runner did confirm unchanged source pins and
+owned-scope/Xauthority cleanup. The narrow fresh-mapping-hash fix is covered by
+8 focused tests (0.020s) and a passing retained-checkpoint preflight; attempt 01
+has not been rerun. General NPC authority and exact AI/velocity restoration
+remain unresolved.
 
 Focused validation, without an expensive full-suite rerun:
 
