@@ -1,5 +1,21 @@
 # X4 multiplayer: handover for Astra
 
+The next Windows prerequisite now shares the saved-registry verifier/status
+reader with the existing Linux tools (`authority.registry_evidence` and
+`authority.saved_registry`). The verifier function's AST is unchanged; the
+status reader has clearer local names. The Windows overlay and observed session
+accept optional `registry_status`/`registry_nonce`, reuse the paused load gate
+and require its correlated epoch/count receipt before admission. Existing
+wrappers preserve their APIs. Focused validation passed 22 core tests plus 48
+overlay/parser/session tests, including generated Lua with a simulated engine
+and local TCP/UDP with scripted participants. Evidence and limits are in the
+[Windows guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#remaining-motion-integration).
+CLI orchestration is still missing: derive the status from the exact verified
+download while maintaining keepalive, then supply it consistently to installer,
+session and the final-log check. Do not call the multi-pass reader synchronously
+on the connection-owning thread during a live load. No native game, Windows,
+WAN, full-suite or full-size save reinspection was run for this extraction.
+
 Latest Windows client continuation adds `WindowsMotionPeer`, using fresh IP
 Helper UDP owner tables and the existing process owner's held handle/job. It
 refuses ambiguous port owners and rechecks process/socket ownership around the

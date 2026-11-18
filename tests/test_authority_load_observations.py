@@ -102,6 +102,36 @@ class ClientLoadObservations(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'oversized'):
                 stream.feed(b'xxxx')
 
+    def test_registry_receipt_is_ordered_required_and_checked_after_load(self):
+        nonce = '1' * 32
+        status = ('ready', '2' * 32, 3, '3' * 64)
+        registry = observations.REGISTRY_TAG + (nonce + '|startup|' + status[1] + '|3\n').encode()
+        def stream():
+            return observations.BoundReceiptStream(self.bound, slot='save_009',
+                registry_status=status, registry_nonce=nonce)
+        checked = stream()
+        self.assertFalse(checked.feed(self.request + self.marker + registry[:-1]))
+        self.assertTrue(checked.feed(b'\n' + self.pause))
+        with self.assertRaises(ValueError):
+            checked.feed(registry)
+        for snapshot in (self.snapshot, self.request + registry + self.marker + self.pause,
+                         self.request + self.marker + registry.replace(b'|3\n', b'|4\n') + self.pause):
+            with self.subTest(snapshot=snapshot), self.assertRaises(ValueError):
+                stream().feed(snapshot)
+        for error in (b'[X4LAN] AUTH_RECOVERY_REGISTRY_ERROR ' + nonce.encode(),
+                      b'Error while executing onEvent script for event: X4AuthorityShipRegistry.Correlated.'):
+            checked = stream()
+            self.assertTrue(checked.feed(self.request + self.marker + registry + self.pause))
+            self.assertFalse(checked.feed(error[:10]))
+            with self.assertRaisesRegex(ValueError, 'registry reported'):
+                checked.feed(error[10:] + b'\n')
+
+    def test_partial_registry_configuration_is_refused(self):
+        for options in ({'registry_nonce': '1' * 32},
+                        {'registry_status': ('uninitialized',)}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                observations.BoundReceiptStream(self.bound, slot='save_009', **options)
+
 
 if __name__ == '__main__':
     unittest.main()

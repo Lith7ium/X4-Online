@@ -207,6 +207,43 @@ class ObservedSessionTest(unittest.TestCase):
         self.assertEqual(client.fileno(), -1)
         self.assertEqual(controller.sock.fileno(), -1)
 
+    def test_registry_gate_admits_then_refuses_a_late_registry_fault(self):
+        owner, client, bound, deadline = self.connect()
+        controller = LocalParticipantControl(enabled=True, timeout=2)
+        self.addCleanup(controller.close)
+        self.start_fake_participant(controller)
+        request, marker, pause = self.log_parts()
+        nonce, epoch = '1' * 32, '2' * 32
+        registry = f'[X4LAN] AUTH_RECOVERY_REGISTRY {nonce}|startup|{epoch}|3\n'.encode()
+        self.log = request + marker + registry + pause
+        session = ObservedClientSession(owner, bound, controller, slot='save_009',
+            read_log=lambda: self.log, guard=lambda: True, deadline=deadline,
+            registry_status=('ready', epoch, 3, '3' * 64), registry_nonce=nonce)
+        self.addCleanup(session.close)
+        self.assertTrue(session.start())
+        while not self.replies:
+            session.poll(.1)
+        self.assertEqual(self.replies[0]['status'], 'confirmed')
+        self.assertEqual(len(self.claims), 1)
+        self.log += f'[X4LAN] AUTH_RECOVERY_REGISTRY_ERROR {nonce}\n'.encode()
+        with self.assertRaisesRegex(ValueError, 'registry reported'):
+            session.poll()
+        self.assertEqual(client.fileno(), -1)
+
+    def test_missing_registry_receipt_prevents_admission(self):
+        owner, client, bound, deadline = self.connect()
+        controller = LocalParticipantControl(enabled=True, timeout=2)
+        self.addCleanup(controller.close)
+        self.log = b''.join(self.log_parts())
+        session = ObservedClientSession(owner, bound, controller, slot='save_009',
+            read_log=lambda: self.log, guard=lambda: True, deadline=deadline,
+            registry_status=('ready', '2' * 32, 3, '3' * 64), registry_nonce='1' * 32)
+        self.addCleanup(session.close)
+        with self.assertRaisesRegex(ValueError, 'out of order'):
+            session.start()
+        self.assertEqual(self.claims, [])
+        self.assertEqual(client.fileno(), -1)
+
     def make_motion_ipc(self):
         from authority.experimental_participant_motion_ipc import ExperimentalParticipantMotionIPC
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

@@ -5,11 +5,13 @@ The caller owns process and log provenance, freshness and file continuity.
 """
 from .load_messages import Offer
 from .trusted_load_messages import encode_bound_offer
+from .client_registry_overlay import registry_receipt
 
 MAX_LOG = 256 << 20
 MAX_LINE = 65536
 LOAD_TAG = b'[X4LAN] AUTH_DOWNLOAD_LOAD '
 MARKER_TAG = b'AUTH_MARKER '
+REGISTRY_TAG = b'[X4LAN] AUTH_RECOVERY_REGISTRY '
 TICKET_FIELDS = ('world_epoch', 'connection_handle', 'baseline_id', 'load_generation',
                  'checkpoint_id', 'sha256', 'attempt_id', 'slot')
 STREAM_FAULTS = (b'auth_participant error', b'auth_identity load error')
@@ -70,7 +72,7 @@ class BoundReceiptStream:
     completed sequence is not admission or proof of X4/process provenance.
     """
 
-    def __init__(self, bound, *, slot):
+    def __init__(self, bound, *, slot, registry_status=None, registry_nonce=None):
         encode_bound_offer(bound)
         offer = Offer(**{name: getattr(bound.offer, name) for name in Offer.__dataclass_fields__})
         if (type(slot) is not str or len(slot) != 8 or not slot.startswith('save_') or
@@ -84,6 +86,10 @@ class BoundReceiptStream:
             ('marker', b'load INSPECTED ' + bound.marker.encode('ascii')),
             ('load', ('pause_observed|' + fields).encode('ascii')),
         )
+        self._registry = registry_status is not None or registry_nonce is not None
+        if self._registry:
+            record = ('registry', registry_receipt(registry_nonce, registry_status))
+            self._expected = self._expected[:-1] + (record, self._expected[-1])
         self._stage = 0
         self._carry = b''
         self._size = 0
@@ -107,11 +113,16 @@ class BoundReceiptStream:
                 lowered = line.lower()
                 if any(marker in lowered for marker in STREAM_FAULTS):
                     raise ValueError('client script reported an error')
+                if self._registry and (b'auth_recovery_registry_error' in lowered or
+                        b'event: x4authorityshipregistry.correlated' in lowered):
+                    raise ValueError('client registry reported an error')
                 rows = []
                 if LOAD_TAG in line:
                     rows.append(('load', line.split(LOAD_TAG, 1)[1].strip()))
                 if MARKER_TAG in line:
                     rows.append(('marker', line.split(MARKER_TAG, 1)[1].strip()))
+                if self._registry and REGISTRY_TAG in line:
+                    rows.append(('registry', line.split(REGISTRY_TAG, 1)[1].strip()))
                 for row in rows:
                     if self._stage >= len(self._expected) or row != self._expected[self._stage]:
                         raise ValueError('load and marker observations differ or are out of order')

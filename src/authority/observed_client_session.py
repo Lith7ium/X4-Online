@@ -52,7 +52,7 @@ class ObservedClientSession:
     """
 
     def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
-                 apply_motion=None):
+                 apply_motion=None, registry_status=None, registry_nonce=None):
         if not isinstance(owner, ExperimentalClientOwner) or not isinstance(controller, LocalParticipantControl):
             raise ValueError('client owner and local controller required')
         if owner._thread is not threading.current_thread():
@@ -88,7 +88,8 @@ class ObservedClientSession:
             self._hook = self._wait_hook
             self._peer = None
             self._snapshot = b''
-            self._records = BoundReceiptStream(bound, slot=slot)
+            self._records = BoundReceiptStream(bound, slot=slot,
+                registry_status=registry_status, registry_nonce=registry_nonce)
         except BaseException as error:
             self._fail(error)
             raise

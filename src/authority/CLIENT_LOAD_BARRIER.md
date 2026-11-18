@@ -57,6 +57,19 @@ process, profile and log provenance; `close()` closes the network owners but
 does not stop X4 or check events after close. No native Windows or Internet
 session is established by the synthetic TCP/UDP tests.
 
+For a checkpoint containing the saved ship registry, the caller can pass
+`registry_status` and `registry_nonce` to both `install_fixture_overlay` and
+`ObservedClientSession`. Derive the status from the verified staged checkpoint
+using `authority.saved_registry.saved_status`; it returns the existing
+`('ready', epoch, last_index, mapping_sha256)` or `('uninitialized',)` tuple.
+The installer uses the same paused Lua status gate as the Linux recovery
+diagnostic. The session requires its correlated startup receipt between marker
+inspection and the pause receipt, and rejects missing, repeated, mismatched or
+late fault records. The observed header contains epoch/count only: the saved
+mapping fingerprint does not establish a live actor mapping. The caller must
+keep the load connection alive during potentially long checkpoint inspection.
+The Windows fixture CLI does not yet select or orchestrate this optional path.
+
 An optional `apply_motion(sample, despawn)` consumer can connect this session to
 the existing participant motion IPC. The session checks its active owner,
 process/profile guard and evolving log before and after consumption, before the

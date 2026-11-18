@@ -145,6 +145,28 @@ required.
 
 ## Remaining motion integration
 
+The registry prerequisite now has shared building blocks. The saved verifier
+and status reader live in `authority.registry_evidence` and
+`authority.saved_registry`; the Linux developer tools re-export the existing
+APIs. The Windows overlay builder accepts optional `registry_status` and
+`registry_nonce` parameters and installs the existing registry MD/Lua status
+gate before the final load receipt. Supply the same parameters to
+`ObservedClientSession` to require that observation before admission and to
+monitor later registry faults. The status must describe the exact verified
+download; no new server metadata field has been introduced. A live epoch/count
+receipt is not a runtime proof of the entire saved mapping.
+
+The CLI has not yet been wired to inspect the download and enable this path.
+Keepalive must continue during the multi-pass XML inspection; directly blocking
+the connection owner on a large save would not preserve that requirement.
+The extraction passed 22 focused existing tests. Another 48 focused tests
+covered shared overlay installation, log parsing and session admission, including
+execution of the generated Windows Lua gate with a simulated engine and real
+local TCP/UDP with scripted participants. Logs:
+`.local/windows-registry-core-20261118.log` and
+`.local/windows-registry-overlay-20261118.log`. No real save was reparsed, and
+no X4, native Windows, WAN or full-suite test was repeated.
+
 The observed session can accept an optional motion consumer through the existing
 TCP owner. This CLI does not supply one. Reuse the existing
 `ExperimentalParticipantMotionIPC` and Lua motion owner when wiring the native

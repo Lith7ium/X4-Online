@@ -1,6 +1,7 @@
 """Synthetic files only: no X4, Windows installation, or real DLL."""
 import hashlib
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -64,6 +65,31 @@ class FixtureOverlayTest(unittest.TestCase):
             self.install()
         self.assertEqual(keep.read_bytes(), b'original')
         self.assertEqual([path.name for path in target.iterdir()], ['keep'])
+
+    def test_installed_registry_gate_executes_before_pause_receipt(self):
+        manifest = self.install(registry_status=('ready', '1' * 32, 3, '2' * 64),
+                                registry_nonce='3' * 32)
+        target = self.view / 'extensions/x4_lan_lab'
+        for name, digest in manifest.items():
+            self.assertEqual(hashlib.sha256((target / name).read_bytes()).hexdigest(), digest)
+        paths = [item.attrib['name'] for item in ET.parse(target / 'ui.xml').iter('file')]
+        self.assertLess(paths.index('ui/recovery_registry_status.lua'),
+                        paths.index('ui/authority_download_load_probe.lua'))
+        self.assertIn('md/authority_ship_registry.xml', manifest)
+        root = Path(__file__).resolve().parents[1]
+        for mode in ('ready', 'wrong_count'):
+            with self.subTest(mode=mode):
+                subprocess.run(['luajit', str(root / 'tests/authority_windows_registry_gate.lua'),
+                                str(target / 'ui'), mode], check=True, capture_output=True, cwd=root)
+
+    def test_incomplete_registry_options_leave_no_overlay(self):
+        for changes in ({'registry_nonce': '3' * 32},
+                        {'registry_status': ('ready', '1' * 32, 3, '2' * 64)},
+                        {'registry_status': ('ready', '1' * 32, True, '2' * 64),
+                         'registry_nonce': '3' * 32}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.install(**changes)
+            self.assertEqual(list((self.view / 'extensions').iterdir()), [])
 
     def test_bad_input_fails_before_creating_any_extension(self):
         for changes in ({'new_test_view': False}, {'participant_port': 0},

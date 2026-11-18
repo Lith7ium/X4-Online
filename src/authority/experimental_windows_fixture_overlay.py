@@ -21,6 +21,7 @@ import re
 import stat
 
 from .trusted_load_messages import encode_bound_offer
+from .client_registry_overlay import extend_load_probe
 from lockstep.launcher import extension
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -71,7 +72,8 @@ def _windows_save_path(value):
 
 
 def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
-                            participant_port, participant_lease, windows_dll, dll_sha256):
+                            participant_port, participant_lease, windows_dll, dll_sha256,
+                            registry_status=None, registry_nonce=None):
     """Create one absent x4_lan_lab in an exclusively owned new test view.
 
     A failure after creation leaves an owned partial extension for inspection;
@@ -84,6 +86,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     participant commands even though the UDP probe may already be listening.
     The caller must protect the plaintext ticket and lease with private ACLs
     and clean up the owned configuration after X4 stops.
+    Optional registry status must come from the verified offered checkpoint;
+    the Lua gate checks its epoch/count before the ordinary pause receipt.
     """
     if new_test_view is not True:
         raise ValueError('exclusive new test view required')
@@ -128,6 +132,14 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     files['ui/authority_download_load_probe.lua'] = load_probe.replace(
         hook, hook + b'  if not X4LAN_AUTHORITY_MARKER_READY() then return end\n'
                      b'  if not X4LAN_IDENTITY_READY() then return end\n')
+    if registry_status is not None or registry_nonce is not None:
+        files['ui/authority_download_load_probe.lua'] = extend_load_probe(
+            files['ui/authority_download_load_probe.lua'].decode('utf-8'),
+            registry_nonce, registry_status).encode('utf-8')
+        for target, source in (
+                ('ui/recovery_registry_status.lua', 'src/authority/lua/recovery_registry_status.lua'),
+                ('md/authority_ship_registry.xml', 'tools/dev/authority_ship_registry.xml')):
+            files[target] = _source(ROOT / source, 1024 * 1024)
     udp = files['ui/local_udp_module.lua']
     if udp.count(b'return M\n') != 1:
         raise ValueError('unexpected UDP module export')
@@ -143,6 +155,9 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
               f'authority_load_save_path={lua_string(save_path)},authority_ticket={{{ticket_lua}}},'
               f'authority_participant_port={participant_port},authority_participant_lease={lua_string(participant_lease)}' + '}\n')
     ui_files = [name for name in sources if name.startswith('ui/')]
+    if registry_status is not None:
+        ui_files.insert(ui_files.index('ui/authority_download_load_probe.lua'),
+                        'ui/recovery_registry_status.lua')
     files.update({'ui/config.lua': config.encode('ascii'),
                   'ui.xml': extension.ui_xml(ui_files).encode('utf-8'),
                   'content.xml': extension.CONTENT.encode('utf-8'),
