@@ -64,7 +64,9 @@ class AssembledFixtureSessionTest(unittest.TestCase):
         fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest()
         control_listener = listening_socket()
         self.addCleanup(control_listener.close)
+        control_listener.settimeout(.2)
         tls_listener = listening_socket()
+        self.addCleanup(tls_listener.close)
         port = tls_listener.getsockname()[1]
         stop = threading.Event()
         receipt_ready = threading.Event()
@@ -72,8 +74,15 @@ class AssembledFixtureSessionTest(unittest.TestCase):
 
         def control_server():
             try:
-                connection, _ = control_listener.accept()
-                connection.settimeout(10)
+                while not stop.is_set():
+                    try:
+                        connection, _ = control_listener.accept()
+                        break
+                    except socket.timeout:
+                        continue
+                else:
+                    return
+                connection.settimeout(3)
                 with connection, connection.makefile('rb', buffering=0) as stream:
                     if stream.readline() != offer_request():
                         raise AssertionError('unexpected offer request')
@@ -102,12 +111,39 @@ class AssembledFixtureSessionTest(unittest.TestCase):
 
         server_thread = threading.Thread(target=control_server, name='fixture-control-server')
         server_thread.start()
+
+        def cleanup_control_server():
+            stop.set()
+            server_thread.join(5)
+            self.assertFalse(server_thread.is_alive())
+
+        self.addCleanup(cleanup_control_server)
         loop = asyncio.new_event_loop()
         loop_thread = threading.Thread(target=loop.run_forever, name='fixture-tls-server')
         loop_thread.start()
-        tunnel = asyncio.run_coroutine_threadsafe(start_server(listener=tls_listener, ssl_context=context,
+
+        def cleanup_loop():
+            loop.call_soon_threadsafe(loop.stop)
+            loop_thread.join(5)
+            self.assertFalse(loop_thread.is_alive())
+            loop.close()
+
+        self.addCleanup(cleanup_loop)
+        tunnel_start = asyncio.run_coroutine_threadsafe(start_server(listener=tls_listener, ssl_context=context,
             shared_key=b'k' * 32, control_port=control_listener.getsockname()[1],
-            file_port=service.port), loop).result(timeout=5)
+            file_port=service.port), loop)
+
+        def cleanup_tunnel():
+            if not tunnel_start.done():
+                tunnel_start.cancel()
+                return
+            if tunnel_start.cancelled() or tunnel_start.exception() is not None:
+                return
+            tunnel = tunnel_start.result()
+            asyncio.run_coroutine_threadsafe(tunnel.close(), loop).result(timeout=5)
+
+        self.addCleanup(cleanup_tunnel)
+        tunnel_start.result(timeout=5)
 
         workspace = self.workspace
         test = self
@@ -209,16 +245,8 @@ class AssembledFixtureSessionTest(unittest.TestCase):
             self.assertFalse((workspace.view / 'extensions' / 'x4_lan_lab' / 'ui' / 'config.lua').exists())
             self.assertEqual((workspace.save_dir / 'save_009.xml.gz').read_bytes(), content)
         finally:
-            stop.set()
             for process in processes:
                 process.close()
-            asyncio.run_coroutine_threadsafe(tunnel.close(), loop).result(timeout=5)
-            loop.call_soon_threadsafe(loop.stop)
-            loop_thread.join(5)
-            server_thread.join(5)
-            self.assertFalse(loop_thread.is_alive())
-            self.assertFalse(server_thread.is_alive())
-            loop.close()
 
 
 if __name__ == '__main__':
