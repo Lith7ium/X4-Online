@@ -1,6 +1,21 @@
 # X4 multiplayer: handover for Astra
 
-Latest client evidence: actual Windows X4 under Proton loaded the native05
+Latest client control evidence: actual Windows X4 under Proton completed one
+existing UDP resume (request 1) and pause (request 2) cycle after correlated
+marker/identity/registry/load-pause observations. Attempt 03 passed with 34 raw
+clock samples: 3.9011855s game-time advance and a final 0.4027788s stable paused
+interval. Attempts 01/02 failed before commands due to private process-discovery
+assumptions: thread name and incompatible maps/stat device representations.
+The corrected check retains pinned map inode plus namespace pathname stat
+identity, private prefix and socket ownership. All attempts recorded scoped
+cleanup and unchanged source/Steam identities. See the
+[control evidence and exact artifact hashes](AUTHORITY-WINDOWS-ENGINE-CONTROL-20261118.md).
+This used a locally generated offer; real server/TLS/admission and native Windows
+remain untested. Initial-placement/clock decisions remain pending; no motion
+changes or full-suite repeat. Next: independent client lifecycle against the
+existing genuine Linux server, with motion disabled.
+
+Previous load evidence: actual Windows X4 under Proton loaded the native05
 checkpoint and returned its marker, both identity fixtures, the 10,082-entry
 registry header and pause receipt. The first attempt exposed the Windows
 overlay's obsolete `Store.$marker` script; it now installs the shared persistent

@@ -13,7 +13,11 @@ checkpoint under Proton and emitted the marker, two identity observations,
 10,082-entry registry header and pause receipt. This exposed and fixed an
 obsolete marker-script selection in this overlay. Linux owned that diagnostic's
 profile and processes; the Windows CLI, ACLs, Jobs, network admission and native
-Windows remain untested by it. See the [engine-load record](../../reports/AUTHORITY-WINDOWS-ENGINE-LOAD-20261118.md).
+Windows remain untested by it. See the [engine-load record](../../reports/AUTHORITY-WINDOWS-ENGINE-LOAD-20261118.md). A later
+[private control run](../../reports/AUTHORITY-WINDOWS-ENGINE-CONTROL-20261118.md)
+confirmed actual Windows-engine resume/pause and raw clock progress/stability
+under Proton. It used a locally generated offer and Linux-owned isolation;
+real server/TLS/admission and the assembled Windows CLI remain untested by it.
 
 ## Prerequisites
 
