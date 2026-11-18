@@ -536,6 +536,110 @@ class Probe(unittest.TestCase):
             case.doCleanups()
         self.assertFalse(thread.is_alive());self.assertEqual(errors,[])
 
+    def test_playback_invalid_fixture_is_rejected_before_any_operation(self):
+        for options in (
+                {'saved_playback_fixture': 'unknown'},
+                {'saved_playback_fixture': 'recovery_enh_870'},
+                {'playback_sample_observer': lambda _: True},
+                {'playback_begin': lambda: True}):
+            events, kwargs, _ = self.context()
+            kwargs.update(options)
+            with self.subTest(options=tuple(options)), self.assertRaises(ValueError):
+                subject.run(**kwargs)
+            self.assertEqual(events, [])
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process and socket ownership required')
+    def test_real_twenty_six_samples_observed_after_receipt_then_ordered_drain(self):
+        """Real UDP/TCP and ownership guards, with a simulated source/client."""
+        from tests import test_authority_experimental_tcp_motion as fixture
+        from test_authority_paired_playback_evidence import source_sample
+        case = fixture.MotionTCP('test_invalid_values_and_no_fake_velocity')
+        case.setUp()
+        events, errors = [], []
+        sock = source = thread = None
+        expected = [source_sample(n) for n in range(1, 27)]
+        try:
+            conn = case.case.connect(); case.case.offer_and_claim(conn)
+            case.client(conn, 1); case.case.host.tick(.1)
+            world = case.case.world; baseline = object(); world._baseline = (7, baseline)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.bind(('127.0.0.1', 0))
+            source = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); source.bind(('127.0.0.1', 0))
+            source.connect(sock.getsockname()); source.settimeout(10)
+            settings = dict(epoch=expected[0]['epoch'], baseline=10082, lease='1'*32,
+                            attempt='2'*32, generation='c'*32)
+            def source_peer():
+                try:
+                    prefix = ['S', settings['lease'], settings['attempt']]
+                    identity = [settings['epoch'], settings['generation']]
+                    source.send('|'.join(prefix+['HELLO']+identity).encode())
+                    self.assertEqual(source.recv(769).decode().split('|')[3], 'BOUND')
+                    source.send('|'.join(prefix+['ATTACHED']+identity).encode())
+                    count = 0
+                    while True:
+                        packet = source.recv(769).decode().split('|'); request = packet[6]
+                        if packet[3] == 'REGISTER_SAVED':
+                            reply = prefix+['SAVED_REGISTERED']+identity+[request, packet[7], packet[8]]
+                        elif packet[3] == 'PULL':
+                            sample = expected[count]; count += 1
+                            rate = ['-', '-', '-'] if sample['velocity'] is None else [str(sample['velocity'][a]) for a in ('x','y','z')]
+                            reply = prefix+['SAMPLE']+identity+[request, '1318', str(count), sample['sector_macro'],
+                                str(sample['source_time']), str(sample['x']), str(sample['y']), str(sample['z'])]+rate
+                        elif packet[3] == 'STOP':
+                            self.assertEqual(count, 26)
+                            events.append(('source_stop', time.monotonic()))
+                            source.send('|'.join(prefix+['STOPPED']+identity+[request]).encode())
+                            break
+                        else:
+                            raise AssertionError('unexpected source command')
+                        source.send('|'.join(reply).encode())
+                except BaseException as error:
+                    errors.append(error)
+            thread = threading.Thread(target=source_peer); thread.start()
+            guard = SimpleNamespace(status=('ready', settings['epoch'], 10082, 'd'*64),
+                deadline=time.monotonic()+25, check=Mock(side_effect=AssertionError('ordinary checkpoint check used')),
+                stop=Mock(side_effect=lambda: events.append(('guard_stop', time.monotonic())) or True))
+            observed = []
+            def observe(sample):
+                self.assertIsNone(case.case.host._control._reader_lease)
+                self.assertFalse(case.case.host._busy)
+                self.assertEqual(case.received[-1][1], sample)
+                self.assertEqual(len(case.received), len(observed)+1)
+                observed.append(sample)
+                events.append(('observed', time.monotonic()))
+                return True
+            def stop_worker(*, source_stopped):
+                self.assertTrue(source_stopped())
+                events.append(('client_stop', time.monotonic()))
+                return True
+            active = SimpleNamespace(participant=SimpleNamespace(check_active=Mock(return_value=True),
+                stop_motion_worker=Mock(side_effect=stop_worker)))
+            pump = recovered_client.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()), time.monotonic()+25)
+            result = subject.run(sock=sock, settings=settings, index=1318, baseline=baseline, guard=guard,
+                pump=pump, active=active, host=case.case.host, world=world,
+                identity=(os.getpid(), linux_gate_live.start_ticks(os.getpid())), verify=lambda:None,
+                verify_process=lambda:None, client_motion=True, verify_stopped=lambda:None,
+                saved_playback_fixture='recovery_enh_870', playback_sample_observer=observe,
+                playback_begin=lambda: events.append(('begin', time.monotonic())) or True,
+                playback_checkpoint_check=lambda: True)
+            self.assertEqual(observed, expected)
+            self.assertEqual([row[1] for row in case.received], expected)
+            self.assertEqual(result['client_receipt_sample_sha256'], [motion_digest(s) for s in expected])
+            times = dict(events)
+            self.assertLess(events.index(('begin', times['begin'])), 1)
+            self.assertGreaterEqual(times['guard_stop']-times['source_stop'], 1.25)
+            self.assertLess(times['source_stop'], times['guard_stop'])
+            self.assertLess(times['guard_stop'], times['client_stop'])
+            self.assertEqual(result['saved_playback']['source_sample_count'], 26)
+            self.assertFalse(result['client_motion_proven'])
+            guard.check.assert_not_called()
+        finally:
+            if thread: thread.join(10)
+            if sock: sock.close()
+            if source: source.close()
+            cleanup_motion_fixture(case)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+
     def test_receipt_digest_and_client_stop_fences_fail_closed(self):
         for mode in ('ok','wrong_sample','wrong_digest','no_receipt','worker_failure','bad_socket',
                      'pair_zero','pair_nonzero','pair_no_sample','pair_unknown_rate','pair_wrong_index',
