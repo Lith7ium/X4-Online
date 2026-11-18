@@ -1361,3 +1361,41 @@ Independent review found no blocker; `git diff --check` passed. The full suite
 was not repeated. One fresh unprofiled two-X4 attempt is needed to determine
 whether these small changes help the measured source cadence; no native
 improvement or successful movement is claimed yet.
+
+## Unprofiled process-helper comparison (2026-11-18)
+
+One fresh two-Linux-X4 run at `2911ee82` stopped with
+`client log changed during registry observation`. One source sample queued;
+no host receipt was recorded. The client performed initial alignment with
+zero readback error and logged INITIAL. No running movement was demonstrated.
+The sample matches the queued ledger. With only one sample there is no source
+interval or useful cadence comparison; one 0.454 s poll does not establish a
+native performance gain.
+
+The registry verifier requires two independently stable log captures to be
+identical, so a complete unrelated append between them can trigger this exact
+error. Deterministic regressions reproduce that mechanism. The failing run did not
+retain both read tuples, so the exact intervening append cannot be reconstructed
+from its final log. This result is not the earlier 50 m correction rejection.
+
+Cleanup, Xauthority removal, pinned sources and Steam identity preservation all
+passed. The supervisor lists no owned processes remaining; a separate readable
+`/proc/*/exe` scan found no X4 executable. Normal saves were not involved.
+Artifacts: `.local/private-paired-proc-native-20261118-01/`, including
+`offline-correlation.json`, source captures, both engine logs and process scan.
+Correlation SHA-256: `fb19eaf6b6c01f76834e6a8940079561bc1be539e21d645b9b9aefc7236ffc86`.
+The unprofiled comparison is complete but inconclusive about cadence. Do not
+repeat it unchanged. The user has now approved the separate capture-clock
+protocol direction; see [the clock contract](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#approved-direction-2026-11-18).
+
+### Registry observation correction
+
+The verifier now accepts two individually stable captures of the same inode
+when the second contains the exact first byte prefix followed only by complete,
+unrelated rows. It validates the newer capture again. Replacement, truncation,
+rewritten prefixes, metadata-only changes, appended relevant receipts/errors,
+and partial tails remain failures. In-read instability still fails without a
+retry. Independent review found no blocker. Six focused receipt/log tests pass,
+including both load gates, normal append and 28 mutation/tail cases. This is a
+reproduced verifier fix, not proof that the precise native append was captured.
+No further native run has been started for this change.

@@ -42,21 +42,12 @@ def install(case, nonce, status, *, load_gate='identity'):
     return [module, script]
 
 
-def verify_log(path, nonce, status, ticket, marker, *, load_gate='identity'):
-    """Require ordered correlated receipts; marker mode rejects identity receipts.
-
-    Identity mode retains its existing observation contract. Marker mode accepts
-    exactly load request, inspected marker, startup registry status, and pause.
-    """
-    _check_load_gate(load_gate)
-    evidence = recovery.marked.file_evidence
-    before = evidence._read_regular(path, evidence.MAX_LOG, collect=True)
-    data = before[2]
+def _verify_log_data(data, nonce, status, watch, marker, load_gate):
+    """Validate complete captured rows without reading the live log again."""
     if data and not data.endswith(b'\n'): raise ValueError('client log incomplete')
     if b'[X4LAN] AUTH_RECOVERY_REGISTRY_ERROR '+nonce.encode('ascii') in data:
         raise ValueError('client registry status faulted')
     expected = 'uninitialized' if status == ('uninitialized',) else status[1]+'|'+str(status[2])
-    watch = recovery.base.client.ReceiptWatch(path, ticket)
     status_tag = b'[X4LAN] AUTH_RECOVERY_REGISTRY '
     status_value = (nonce+'|startup|'+expected).encode('ascii')
     status_rows = [line.split(status_tag, 1)[1].strip() for line in data.splitlines()
@@ -89,6 +80,33 @@ def verify_log(path, nonce, status, ticket, marker, *, load_gate='identity'):
         if len(hits) != 1: raise ValueError('missing or repeated client registry/load receipt')
         positions.append(hits[0])
     if positions != sorted(set(positions)): raise ValueError('client registry receipts out of order')
-    if evidence._read_regular(path, evidence.MAX_LOG, collect=True) != before:
-        raise ValueError('client log changed during registry observation')
+
+
+def verify_log(path, nonce, status, ticket, marker, *, load_gate='identity'):
+    """Require ordered correlated receipts and two matching append-only captures.
+
+    Unrelated complete rows may append between the captures. Replacement,
+    truncation, rewritten prefixes and newly appended load/registry/marker or
+    identity rows fail closed. Each capture must itself be stable; an in-read
+    append remains an unstable observation rather than a retry here.
+    """
+    _check_load_gate(load_gate)
+    evidence = recovery.marked.file_evidence
+    watch = recovery.base.client.ReceiptWatch(path, ticket)
+    before = evidence._read_regular(path, evidence.MAX_LOG, collect=True)
+    _verify_log_data(before[2], nonce, status, watch, marker, load_gate)
+    after = evidence._read_regular(path, evidence.MAX_LOG, collect=True)
+    if after != before:
+        if (after[0][:2] != before[0][:2] or len(after[2]) <= len(before[2]) or
+                not after[2].startswith(before[2])):
+            raise ValueError('client log changed during registry observation')
+        appended = after[2][len(before[2]):]
+        relevant = (recovery.base.client.TAG, b'AUTH_MARKER load ',
+                    b'AUTH_IDENTITY load ', b'AUTH_RECOVERY_REGISTRY')
+        if any(tag in appended for tag in relevant):
+            raise ValueError('client log changed during registry observation')
+        try:
+            _verify_log_data(after[2], nonce, status, watch, marker, load_gate)
+        except ValueError as error:
+            raise ValueError('client log changed during registry observation') from error
     return True

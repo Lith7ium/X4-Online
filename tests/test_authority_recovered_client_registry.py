@@ -2,6 +2,7 @@
 from pathlib import Path
 import gzip
 import hashlib
+import os
 import sys
 import tempfile
 import time
@@ -248,6 +249,74 @@ class RecoveredClientRegistryTests(unittest.TestCase):
                     verify()
             with self.assertRaisesRegex(ValueError, 'faulted'):
                 owner.guarded_registry_observation(Mock(return_value=True), verify)
+
+    def test_live_registry_observation_accepts_only_complete_unrelated_append(self):
+        evidence = subject.recovery.marked.file_evidence
+        original = evidence._read_regular
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'log'
+            for mode in ('identity', 'marker'):
+                for status in (('uninitialized',), ('ready', '1'*32, 3, '2'*64)):
+                    with self.subTest(mode=mode, status=status):
+                        rows = self.rows(status) if mode == 'identity' else self.marker_rows(status)
+                        path.write_bytes(b'\n'.join(rows)+b'\n')
+                        calls = []
+                        def append_between_captures(*args, **kwargs):
+                            calls.append(True)
+                            if len(calls) == 2:
+                                with path.open('ab') as stream:
+                                    stream.write(b'[X4LAN] AUTH_CLIENT_PLAYBACK SUMMARY unrelated to admission\n')
+                            return original(*args, **kwargs)
+                        with patch.object(evidence, '_read_regular', side_effect=append_between_captures):
+                            self.assertTrue(subject.verify_log(path, self.nonce, status, self.ticket,
+                                                               self.marker, load_gate=mode))
+                        self.assertEqual(len(calls), 2)
+
+    def test_live_append_preserves_identity_prefix_and_relevant_tail_refusals(self):
+        evidence = subject.recovery.marked.file_evidence
+        original = evidence._read_regular
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'log'
+            for mode in ('identity', 'marker'):
+                status = ('uninitialized',)
+                rows = self.rows(status) if mode == 'identity' else self.marker_rows(status)
+                baseline = b'\n'.join(rows)+b'\n'
+                tails = [rows[0]+b'\n', rows[-1]+b'\n',
+                    b'[X4LAN] AUTH_MARKER load ERROR\n',
+                    b'[X4LAN] AUTH_IDENTITY load READY\n',
+                    b'[X4LAN] AUTH_RECOVERY_REGISTRY '+self.nonce.encode()+b'|startup|wrong\n',
+                    b'[X4LAN] AUTH_RECOVERY_REGISTRY_ERROR '+self.nonce.encode()+b'\n',
+                    b'[X4LAN] AUTH_RECOVERY_REGISTRY '+self.nonce.encode()+b'|other|wrong\n',
+                    b'[X4LAN] AUTH_RECOVERY_REGISTRY '+self.nonce[:8].encode(),
+                    b'unrelated partial tail']
+                mutations = ['replacement', 'truncation', 'rewrite_append', 'metadata', 'in_read_growth']
+                for mutation in mutations + tails:
+                    with self.subTest(mode=mode, mutation=mutation):
+                        path.write_bytes(baseline)
+                        calls = []
+                        def change_between_captures(*args, **kwargs):
+                            calls.append(True)
+                            if len(calls) == 2:
+                                if type(mutation) is bytes:
+                                    with path.open('ab') as stream: stream.write(mutation)
+                                elif mutation == 'replacement':
+                                    replacement = Path(tmp)/'replacement'
+                                    replacement.write_bytes(baseline)
+                                    os.replace(replacement, path)
+                                elif mutation == 'truncation': path.write_bytes(baseline[:-1])
+                                elif mutation == 'rewrite_append':
+                                    path.write_bytes(baseline.replace(self.marker.encode(), b'9'*32)+b'unrelated\n')
+                                elif mutation == 'metadata':
+                                    info = path.stat()
+                                    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns+1000000))
+                                else:
+                                    raise evidence.EvidenceFileGrowing((0, 0, len(baseline), 0, 0), baseline+b'new\n')
+                            return original(*args, **kwargs)
+                        with patch.object(evidence, '_read_regular', side_effect=change_between_captures):
+                            with self.assertRaises(ValueError):
+                                subject.verify_log(path, self.nonce, status, self.ticket,
+                                                   self.marker, load_gate=mode)
+                        self.assertEqual(len(calls), 2)
 
     def test_checkpoint_parse_pumps_tcp_owner_and_propagates_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
