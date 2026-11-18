@@ -5,6 +5,17 @@ the initial 50m alignment bound. No continuous paired movement was proven.
 Cleanup passed; no X4 remains. The full details and following diagnostic fix are
 in the current client report. Native03 below is retained as preceding context.
 
+Client follow-up: `load_observations.py` now extracts the existing ordered
+load/marker/pause parser from Linux tooling for use by either client platform.
+The existing Linux caller delegates to it; Windows process integration remains
+pending. The final focused parser/legacy run passed 12 tests. The one-shot
+`saved_motion_apply.lua` state machine also has clearer variable names and
+layout; its three existing tests passed, and an independent LuaJIT listing
+comparison found identical instructions and visible constants after excluding
+debug names and source locations. No new X4 run or full-suite run was made.
+The user's decisions on a separate initial position alignment and the motion
+clock basis are still pending; neither behavior has been changed.
+
 > Client-first continuation, 18 November: server graphics work remains deferred.
 > The bounded live-input path and explicit fresh-checkpoint paired playback
 > diagnostic are wired through the admitted TCP owner. Native paired attempt 03
