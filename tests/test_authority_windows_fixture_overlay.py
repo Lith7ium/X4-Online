@@ -66,6 +66,31 @@ class FixtureOverlayTest(unittest.TestCase):
         self.assertEqual(keep.read_bytes(), b'original')
         self.assertEqual([path.name for path in target.iterdir()], ['keep'])
 
+    def test_installed_marker_restores_persisted_markerstate_before_inspection(self):
+        """Recovered checkpoints persist MarkerState, not one-shot Store state."""
+        self.install()
+        marker = ET.parse(self.view / 'extensions/x4_lan_lab/md/authority_checkpoint_marker.xml').getroot()
+        self.assertEqual(marker.attrib['name'], 'X4AuthorityCheckpointMarker')
+        cues = {cue.attrib['name']: cue for cue in marker.findall('./cues/cue')}
+        state = cues['MarkerState']
+        self.assertEqual(state.attrib.get('namespace'), 'this')
+        self.assertIsNone(state.find('conditions'))
+        # A fresh state initializes only its load flag; it must not overwrite
+        # the marker recovered from the checkpoint.
+        self.assertEqual([value.attrib for value in state.findall('./actions/set_value')],
+                         [{'name': '$loaded', 'exact': 'false'}])
+        loaded = cues['Loaded']
+        self.assertIsNotNone(loaded.find('./conditions/event_game_loaded'))
+        mark_loaded = loaded.find('./actions/do_if/set_value')
+        self.assertEqual(mark_loaded.attrib, {'name': 'MarkerState.$loaded', 'exact': 'true'})
+        self.assertEqual(loaded.find('./actions/do_if').attrib['value'], 'MarkerState.$marker?')
+        inspection = cues['Inspect'].find('./actions/do_if')
+        self.assertEqual(inspection.attrib['value'],
+                         'MarkerState.$marker? and MarkerState.$loaded? and MarkerState.$loaded')
+        event = inspection.find('raise_lua_event')
+        self.assertEqual(event.attrib, {'name': "'X4AuthorityCheckpointMarker.Inspected'",
+                                       'param': 'MarkerState.$marker'})
+
     def test_installed_registry_gate_executes_before_pause_receipt(self):
         manifest = self.install(registry_status=('ready', '1' * 32, 3, '2' * 64),
                                 registry_nonce='3' * 32)

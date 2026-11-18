@@ -129,7 +129,7 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         'ui/local_udp_module.lua': ROOT / 'src/authority/lua/local_udp_module.lua',
         'ui/authority_two_x4_participant_probe.lua': ROOT / 'tools/dev/authority_two_x4_participant_probe.lua',
         'md/authority_identity_fixture.xml': ROOT / 'tools/dev/authority_identity_fixture.xml',
-        'md/authority_checkpoint_marker.xml': ROOT / 'tools/dev/authority_checkpoint_marker.xml',
+        'md/authority_checkpoint_marker.xml': ROOT / 'src/authority/md/checkpoint_marker.xml',
     }
     files = {name: _source(path, 1024 * 1024) for name, path in sources.items()}
     load_probe = files['ui/authority_download_load_probe.lua']

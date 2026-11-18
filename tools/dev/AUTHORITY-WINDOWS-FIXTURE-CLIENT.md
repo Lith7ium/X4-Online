@@ -8,6 +8,13 @@ motion diagnostics can consume an existing server stream and select the narrow
 recovery playback experiment described below. A successful result records
 bounded observations and owned-process cleanup, not gameplay or Internet acceptance.
 
+The actual Windows X4 engine has now loaded the marked Linux-produced fixture
+checkpoint under Proton and emitted the marker, two identity observations,
+10,082-entry registry header and pause receipt. This exposed and fixed an
+obsolete marker-script selection in this overlay. Linux owned that diagnostic's
+profile and processes; the Windows CLI, ACLs, Jobs, network admission and native
+Windows remain untested by it. See the [engine-load record](../../reports/AUTHORITY-WINDOWS-ENGINE-LOAD-20261118.md).
+
 ## Prerequisites
 
 - Windows with Python 3.11 or later, logged-in Steam ready for direct X4

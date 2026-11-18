@@ -1,6 +1,20 @@
 # X4 multiplayer: handover for Astra
 
-Latest independent Windows prerequisite: the current network DLL actually
+Latest client evidence: actual Windows X4 under Proton loaded the native05
+checkpoint and returned its marker, both identity fixtures, the 10,082-entry
+registry header and pause receipt. The first attempt exposed the Windows
+overlay's obsolete `Store.$marker` script; it now installs the shared persistent
+`MarkerState.$marker` definition used by Linux. The targeted regression failed
+before the fix; 17 focused tests and one corrected engine-load run passed.
+Both engine runs used new private prefixes and recorded scoped owned cleanup,
+unchanged source hashes and unchanged Steam identities. No full-suite repeat.
+See [the engine-load evidence and limits](AUTHORITY-WINDOWS-ENGINE-LOAD-20261118.md).
+This was a Linux-owned load diagnostic with a locally generated offer, not the
+assembled Windows CLI, native Windows, actual server admission or gameplay.
+GPU-free server work remains deferred; initial placement and clock decisions
+remain pending. Do not repeat the same load proof without a new reason.
+
+Previous independent Windows prerequisite: the current network DLL actually
 loaded through `package.loadlib` in the installed Windows LuaJIT runtime under
 Wine. One bounded process passed all ten module/UDP/clock/close checks and
 exited zero. The outer private-prefix harness recorded failure because several
