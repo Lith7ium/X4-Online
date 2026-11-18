@@ -301,6 +301,26 @@ Its native timing benefit is unmeasured and may be insufficient. No second X4
 run followed this small change. Investigate the remaining measured overhead
 before deciding whether another native attempt is informative.
 
+## Windows executable playback with a stalled game clock
+
+At `07364e54`, one isolated Windows X4 run under Proton passed V3 playback from
+a synthetic local UDP source. Source game time remained zero; monotonic capture
+time and explicit real-second rates drove 25 movement updates after enrollment.
+All 26 packets were acknowledged and correlated with the native log. The ship
+moved exactly 20 metres, with zero final error, 1,005 readbacks and confirmed
+STOP/pause. Movement-update capture intervals were 0.344-0.404 seconds;
+INITIAL-to-STOP elapsed time was 9.904 seconds. This validates the Windows game
+code path for the new clock basis, not the nominal schedule or actual server
+cadence. No server, TLS connection, native Windows OS or WAN participated.
+
+Seven assembled Windows fixture tests also passed using real TLS/file/TCP/UDP
+loopback with simulated Windows/game endpoints. They cover V3 fields and
+receipts, a stalled game clock, duplicate/regressed capture time, version changes
+and cleanup ordering. Full evidence and limitations are recorded in
+[the client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md#windows-v3-capture-clock-playback-under-proton-2026-11-18).
+The failed real-source Linux attempt above remains unresolved. No repeated
+paired-X4 run or change to the diagnostic guard policy followed this result.
+
 ## Proposed diagnostic guard policy (not implemented or approved)
 
 The remaining source path repeatedly revalidates process, socket ownership and

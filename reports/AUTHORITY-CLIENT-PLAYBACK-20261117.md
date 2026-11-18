@@ -1399,3 +1399,87 @@ retry. Independent review found no blocker. Six focused receipt/log tests pass,
 including both load gates, normal append and 28 mutation/tail cases. This is a
 reproduced verifier fix, not proof that the precise native append was captured.
 No further native run has been started for this change.
+
+## Windows V3 capture-clock playback under Proton (2026-11-18)
+
+One isolated run at `07364e54` passed in the Windows X4 executable under Proton.
+It used the updated shared Lua and the existing Windows network DLL, with a
+synthetic local UDP motion source. Source game time remained zero for every
+packet; actual monotonic capture times advanced and real-second velocities were
+derived from successive synthetic positions. The final velocity was zero. This
+exercises playback independently of source game-time progression.
+
+The enrollment pose was discarded by the shared runtime. The following 25
+movement updates targeted a total displacement of 20 metres along X, holding Y
+and Z fixed. All 26 packets, including enrollment, were acknowledged. Their
+digests and native clock correlations were independently checked against the
+raw log. Capture times progressed strictly; the logged source clock always
+matched an acknowledged sample and game time remained zero.
+
+| Observation | Result |
+| --- | --- |
+| Native rows | INITIAL, 9 SUMMARY, STOPPED |
+| Observations / readbacks | 1,122 / 1,005 |
+| Summary playback phases | Interpolated and extrapolated |
+| Maximum summary actual-to-target error | 0.003754 m |
+| Initial / final X | -116786.265625 / -116766.265625 m |
+| Final displacement / position error | 20 m / 0 m |
+| Enrollment-to-first-update capture interval | 0.815692 s |
+| Subsequent movement-update capture intervals | 0.343568-0.404500 s |
+| Source capture elapsed / native INITIAL-to-STOP elapsed | 9.190497 / 9.904052 s |
+| Final sequence / sample count | 26 / 26 |
+| STOP state | frozen, drained=1, uncertain=0 |
+
+Resume and pause were confirmed without retry; STOP was acknowledged before
+pause. The nominal five-second trajectory took longer under the harness and
+guard schedule. These observations do not isolate scheduling delay or prove
+target cadence, visual smoothness, capacity, or the physical-velocity setter.
+STOP/release confirmation is the shared runtime/protocol result, not an
+independent measurement of exact AI-stack restoration or the later MD position.
+Initial alignment was not enabled in this run.
+
+The private runner now uses the shared strict V3 `PlaybackLog` reader. Review
+found that its predecessor's custom trimming could omit an unterminated error
+after STOP. The new runner preserves pending rows, prefix/inode validation and
+raw error detection, waiting only within its original deadline for complete
+final evidence. The previous runner and its artifacts were left unchanged.
+
+Owned process groups and readable processes matching the private Proton prefix
+were absent after cleanup. There were no uninspectable Wine candidates; five
+unrelated process environments were unreadable, so whole-system cleanup is not
+claimed. All 504 selected source pins, protected overlay/save inputs and Steam
+state were unchanged. The disposable profile was 45841; normal saves were not
+used.
+
+Private reproducibility evidence:
+
+- Runner: `.local/authority_windows_capture_control_proton_20261118_01.py`,
+  SHA-256 `8e7abdaf6d5bd9c4f6fa300b3e0a4dca76c3cabcb5c3d550552cec34fcd488f9`.
+- Reviewed manifest: `.local/authority-windows-capture-control-proton-reviewed-20261118-01.json`,
+  SHA-256 `911a78f3094d47b3e6ca5181e2de18efcc0d6f1324f18a7a4b4904801294e7df`.
+- Results, packet ledger and raw engine log:
+  `.local/windows-capture-control-proton-20261118-01/` (`result.json`,
+  `motion-cycle.json` and the private prefix's `45841/x4authority.log`).
+- Launch log: `.local/authority-windows-capture-control-native-20261118-01.log`.
+- Checkpoint `checkpoint-f3bfb3fc65ad4a93b199230755601f62`, SHA-256
+  `2b07a55d0d5fda0ef08de8a6b9a562100d745ae39076d1a7092f5e3c150f5994`.
+- Existing Windows network DLL, SHA-256
+  `6ad97e04fd804c031b673af7259e4010b0afb2ad095e8821647998a69e2809e0`.
+
+Before this native run, seven assembled Windows fixture tests passed in 6.172
+seconds, using real TLS/file/TCP/UDP loopback and actual overlay generation but
+simulated Windows/game endpoints. Four added cases check BIND3's 19 fields,
+explicit real-second rates, source/capture clocks, digests and receipt sequence;
+duplicate or regressed capture time and a version switch are rejected before a
+second binding. Successful cleanup sends STOP before pause/process close; an
+invalid stream sends STOP without pretending pause succeeded. Existing opt-in
+playback/replica/initial-alignment settings were unchanged. These test-only
+changes are committed as `07364e54`; the unchanged tests were not repeated after
+cherry-pick.
+
+This native result proves synthetic V3 playback in Windows X4 under Proton.
+It does not include a real server or TLS, native Windows OS, WAN, crossplay or
+shared-world gameplay. The assembled transport test and this native test are
+separate evidence, not proof of their untested combination. The failed real
+Linux source-to-client run and its cadence problem remain unresolved; see
+[the clock report](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#first-native-v3-attempt-2026-11-18).

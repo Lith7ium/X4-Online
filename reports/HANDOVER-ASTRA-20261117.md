@@ -1,13 +1,27 @@
 # X4 multiplayer: handover for Astra
 
-Current continuation (2026-11-18): **the first native V3 attempt failed** at
+Current continuation (2026-11-18): **V3 playback passed in the Windows X4
+executable under Proton**, using a synthetic local motion source at `07364e54`.
+All 26 packets were acknowledged (enrollment plus 25 movement updates). With
+source game time held at zero and capture time advancing, the ship moved exactly
+20 metres; final position error was zero. Native logs contain interpolation,
+extrapolation and 1,005 readbacks. STOP and pause were confirmed, and owned
+cleanup and pinned-input preservation passed. Movement-update intervals were
+0.344-0.404 seconds; INITIAL to STOP took 9.904 seconds. This is not a five-second
+flight, a throughput result, a real server/TLS test or native Windows evidence.
+The seven assembled Windows fixture tests also passed, with real loopback
+transports and simulated Windows/game endpoints. See
+[the Windows V3 evidence](AUTHORITY-CLIENT-PLAYBACK-20261117.md#windows-v3-capture-clock-playback-under-proton-2026-11-18).
+
+**The first native Linux V3 attempt with a real source failed** at
 `a3296cf1`. Three source samples carried monotonic capture time and explicit
 real-second velocity through the shared source path; only ACK 1 was retained.
 Initial alignment again had zero readback error. The client next reported
 sequence 3 and refused a 261.570595-metre running correction. Capture gaps were
 0.888236 and 0.777787 seconds; capture-to-queue delay was 0.60-0.65 seconds.
 Game time ran near real time in these intervals. Thus V3 is wired into X4, but
-has not solved the existing cadence problem or proven running playback. No
+has not solved the existing cadence problem or proven running playback from
+the real source. No
 STOP/release completion was proven. Do not repeat the unchanged native attempt
 or increase the 0.75-second continuity, 1-second freshness, 50-metre running
 correction or 3-metre initial-readback bounds.
