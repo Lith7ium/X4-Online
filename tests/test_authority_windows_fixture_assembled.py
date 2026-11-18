@@ -50,7 +50,20 @@ class AssembledFixtureSessionTest(unittest.TestCase):
     def test_failed_motion_stop_prevents_pause_receipt_and_still_closes_process(self):
         self.run_assembled(motion_enabled=True, bad_stop=True)
 
-    def run_assembled(self, *, motion_enabled=False, bad_stop=False):
+    def test_v3_clocks_rates_and_stop_survive_assembled_windows_path(self):
+        self.run_assembled(motion_enabled=True, sample_version=3)
+
+    def test_v3_duplicate_capture_never_dispatches_another_bind(self):
+        self.run_assembled(motion_enabled=True, sample_version=3, invalid_motion='capture_duplicate')
+
+    def test_v3_regressed_capture_never_dispatches_another_bind(self):
+        self.run_assembled(motion_enabled=True, sample_version=3, invalid_motion='capture_regression')
+
+    def test_v3_version_switch_never_dispatches_another_bind(self):
+        self.run_assembled(motion_enabled=True, sample_version=3, invalid_motion='version_switch')
+
+    def run_assembled(self, *, motion_enabled=False, bad_stop=False,
+                      sample_version=1, invalid_motion=None):
         content = gzip.compress(registry_xml().encode('ascii'))
         source = self.root / 'source.save'
         source.write_bytes(content)
@@ -89,6 +102,25 @@ class AssembledFixtureSessionTest(unittest.TestCase):
         source_sample = dict(version=1, epoch=REGISTRY_EPOCH, generation='8'*32,
                              index=1, sequence=1, sector_macro='sector_a', source_time=1,
                              x=10, y=20, z=30, velocity={'x': 1, 'y': 2, 'z': 3})
+        source_samples = [source_sample]
+        if sample_version == 3:
+            # Capture seconds advance at a different rate from game seconds,
+            # including a game-clock stall. Neither clock is rewritten.
+            source_samples = []
+            for sequence, game_time, capture_time in ((1, 10, 100), (2, 10, 100.2), (3, 10.01, 100.4)):
+                value = {key: item for key, item in source_sample.items() if key != 'velocity'}
+                value.update(version=3, sequence=sequence, source_time=game_time,
+                             capture_time=capture_time, x=9+sequence,
+                             real_velocity=None if sequence == 1 else {'x': 1, 'y': 2, 'z': 3})
+                source_samples.append(value)
+            if invalid_motion:
+                source_samples = source_samples[:2]
+                if invalid_motion == 'version_switch':
+                    source_samples[1] = {**source_sample, 'sequence': 2, 'source_time': 11}
+                else:
+                    source_samples[1]['capture_time'] = 100 if invalid_motion == 'capture_duplicate' else 99
+        expected_bind_count = 1 if invalid_motion else len(source_samples)
+        bind_kind = 'BIND3' if sample_version == 3 else 'BIND'
 
         def control_server():
             try:
@@ -124,12 +156,15 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                     outgoing = [command]
                     if motion_enabled:
                         outgoing += [dict(version=1, kind='motion_snapshot', connection_handle=1,
-                            session_epoch=offer.world_epoch, incarnation='7'*32, request_id=source_sample['sequence'],
-                            sample=source_sample), {**command, 'request_id': 3, 'operation': 'pause'}]
+                            session_epoch=offer.world_epoch, incarnation='7'*32, request_id=value['sequence'],
+                            sample=value) for value in source_samples]
+                        outgoing.append({**command, 'request_id': 3, 'operation': 'pause'})
                     for command in outgoing:
                         connection.sendall(json.dumps(command).encode() + b'\n')
                         reply = stream.readline()
                         if not reply and bad_stop and command.get('operation') == 'pause':
+                            break
+                        if not reply and invalid_motion and command.get('kind') == 'motion_snapshot':
                             break
                         receipts.append(json.loads(reply))
                     receipt_ready.set()
@@ -212,6 +247,11 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                 lease = lease_match.group(1)
                 motion_context = {}
                 if motion_enabled:
+                    # V3 selection is carried by the packet, without enabling
+                    # an unrequested saved fixture or changing installer flags.
+                    for option in ('saved_playback_fixture', 'saved_replica_control_fixture',
+                                   'saved_initial_alignment_fixture'):
+                        test.assertNotIn('authority_client_motion_' + option + '=', config)
                     for name in ('lease', 'attempt', 'epoch', 'generation'):
                         match = re.search('authority_client_motion_' + name + r'="([0-9a-f]{32})"', config)
                         test.assertIsNotNone(match)
@@ -245,9 +285,16 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                                 parts = data.decode('ascii').split('|')
                                 test.assertEqual(parts[:3], ['M', *prefix])
                                 motion_messages.append(parts[3])
-                                if parts[3] == 'BIND':
-                                    test.assertEqual(parts[5:11], [*identity, '1', '1', 'sector_a', motion_digest(source_sample)])
-                                    test.assertEqual(parts[11:], ['1', '10', '20', '30', '1', '2', '3'])
+                                if parts[3] == bind_kind:
+                                    value = source_samples[len(motion_messages)-1]
+                                    test.assertEqual(parts[5:11], [*identity, '1', str(value['sequence']),
+                                                                'sector_a', motion_digest(value)])
+                                    numeric_keys = ('source_time', 'capture_time', 'x', 'y', 'z') if sample_version == 3 else ('source_time', 'x', 'y', 'z')
+                                    numeric = [format(value[key], '.17g') for key in numeric_keys]
+                                    velocity = value['real_velocity'] if sample_version == 3 else value['velocity']
+                                    rate = ['-', '-', '-'] if velocity is None else [format(velocity[key], '.17g') for key in ('x', 'y', 'z')]
+                                    test.assertEqual(len(parts), 19 if sample_version == 3 else 18)
+                                    test.assertEqual(parts[11:], numeric + rate)
                                     reply = ['R', *prefix, 'BOUND', *parts[4:11]]
                                 elif parts[3] == 'STOP':
                                     reply = ['R', *prefix, 'WRONG' if bad_stop else 'STOPPED', *parts[4:]]
@@ -273,7 +320,7 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                                     raise AssertionError('unexpected UDP command')
                                 commands.append(parts[4])
                                 if motion_enabled and parts[4] == 'pause':
-                                    test.assertEqual(motion_messages, ['BIND', 'STOP'])
+                                    test.assertEqual(motion_messages, [bind_kind]*expected_bind_count + ['STOP'])
                                 udp.sendto('|'.join(('RECEIPT', *parts[1:], 'confirmed')).encode(), peer)
                                 if motion_enabled and parts[4] == 'resume':
                                     test.assertIsNone(self.motion_thread)
@@ -288,6 +335,8 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                 return self.thread is not None and self.thread.is_alive()
 
             def close(self):
+                if motion_enabled and not self.cleanup_confirmed:
+                    test.assertEqual(motion_messages, [bind_kind]*expected_bind_count + ['STOP'])
                 self.done.set()
                 if self.motion_thread is not None:
                     self.motion_thread.join(3)
@@ -336,16 +385,20 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                     dll_sha256=dll_digest, deadline=time.monotonic() + 15, keepalive_interval=.2,
                     stop_requested=receipt_ready.is_set, io_timeout=3, participant_timeout=3,
                     motion_request={'generation': '8'*32, 'indices': [1], 'timeout': 1} if motion_enabled else None)
-                if bad_stop:
+                if invalid_motion:
+                    expected_error = 'version changed' if invalid_motion == 'version_switch' else 'capture time'
+                    with self.assertRaisesRegex(ValueError, expected_error):
+                        fixture_session.run_fixture_session(**options)
+                elif bad_stop:
                     with self.assertRaisesRegex(ValueError, 'foreign motion stop'):
                         fixture_session.run_fixture_session(**options)
                 else:
                     result = fixture_session.run_fixture_session(**options)
-            if not bad_stop:
-                expected = {'client_admitted': True, 'participant_receipts': 3 if motion_enabled else 1,
+            if not bad_stop and not invalid_motion:
+                expected = {'client_admitted': True, 'participant_receipts': 2+len(source_samples) if motion_enabled else 1,
                             'owned_cleanup_confirmed': True, 'configuration_redacted': True}
                 if motion_enabled:
-                    expected.update(motion_receipts=1, motion_stop_confirmed=True)
+                    expected.update(motion_receipts=len(source_samples), motion_stop_confirmed=True)
                 self.assertEqual(result, expected)
             self.assertEqual(len(claims), 1)
             self.assertTrue(registry_keepalives)
@@ -353,14 +406,17 @@ class AssembledFixtureSessionTest(unittest.TestCase):
             self.assertEqual(claims[0].receipt.attempt_id, offer.attempt_id)
             self.assertTrue(claims[0].load_event_observed)
             self.assertTrue(claims[0].paused_observed)
-            self.assertEqual(len(receipts), 2 if bad_stop else 3 if motion_enabled else 1)
+            self.assertEqual(len(receipts), 2 if bad_stop or invalid_motion else 2+len(source_samples) if motion_enabled else 1)
             self.assertEqual(receipts[0]['status'], 'confirmed')
             self.assertEqual(receipts[0]['operation'], 'resume')
             self.assertEqual(receipts[0]['request_id'], 1)
             if motion_enabled:
-                self.assertEqual(motion_messages, ['BIND', 'STOP'])
+                self.assertEqual(motion_messages, [bind_kind]*expected_bind_count + ['STOP'])
                 self.assertEqual(receipts[1]['kind'], 'motion_receipt')
-            self.assertEqual(commands, ['resume', 'pause'] if motion_enabled and not bad_stop else ['resume'])
+                for value, receipt in zip(source_samples[:expected_bind_count], receipts[1:]):
+                    self.assertEqual(receipt['request_id'], value['sequence'])
+                    self.assertEqual(receipt['sample_sha256'], motion_digest(value))
+            self.assertEqual(commands, ['resume', 'pause'] if motion_enabled and not bad_stop and not invalid_motion else ['resume'])
             self.assertEqual(errors, [])
             self.assertTrue(processes[0].cleanup_confirmed)
             self.assertFalse((workspace.view / 'extensions' / 'x4_lan_lab' / 'ui' / 'config.lua').exists())
