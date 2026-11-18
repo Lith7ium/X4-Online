@@ -42,6 +42,71 @@ class GuardTests(unittest.TestCase):
             self.assertTrue(another.check());self.assertTrue(another.check())
             self.assertGreaterEqual(sha.call_count,2)
 
+    def test_metadata_check_never_reads_compressed_save(self):
+        original_read=os.read
+        save_identity=(self.cp.path.stat().st_dev,self.cp.path.stat().st_ino)
+        def checked_read(fd,size):
+            info=os.fstat(fd)
+            if (info.st_dev,info.st_ino)==save_identity:
+                raise AssertionError('metadata check read compressed save')
+            return original_read(fd,size)
+        with mock.patch.object(subject.os,'read',side_effect=checked_read), \
+             mock.patch.object(subject.registry,'saved_status',side_effect=AssertionError('unexpected parse')), \
+             mock.patch.object(subject.witness,'verify',side_effect=AssertionError('unexpected parse')):
+            self.assertTrue(self.guard.check_metadata())
+            self.assertTrue(self.guard.check_metadata())
+
+    def test_metadata_check_rejects_small_file_mutation_and_replacement(self):
+        for name in ('CURRENT','CONFIRMED','manifest.json'):
+            for operation in ('mutate','replace'):
+                with self.subTest(name=name,operation=operation):
+                    path=(self.cp.path.parent/name if name=='manifest.json' else self.store.directory/name)
+                    data=path.read_bytes()
+                    if operation=='mutate':path.write_bytes(data+b' ')
+                    else:
+                        replacement=self.root/'replacement';replacement.write_bytes(data)
+                        os.replace(replacement,path)
+                    try:
+                        with self.assertRaises((ValueError,OSError)):self.guard.check_metadata()
+                    finally:path.write_bytes(data)
+                    self.guard=subject.WitnessSourceGuard(self.store,self.cp)
+
+    def test_metadata_check_rejects_save_mutation_replacement_and_directory_replacement(self):
+        original=self.cp.path.read_bytes()
+        for operation in ('mutate','replace','directory','root'):
+            with self.subTest(operation=operation):
+                if operation=='mutate':
+                    before=self.cp.path.stat();data=bytearray(original);data[len(data)//2]^=1
+                    self.cp.path.write_bytes(data)
+                    os.utime(self.cp.path,ns=(before.st_atime_ns,before.st_mtime_ns))
+                elif operation=='replace':
+                    replacement=self.root/'replacement';replacement.write_bytes(original)
+                    os.replace(replacement,self.cp.path)
+                else:
+                    path=self.cp.path.parent if operation=='directory' else self.store.directory
+                    retained=path.with_name(path.name+'-retained');path.rename(retained)
+                    path.mkdir()
+                try:
+                    with self.assertRaises((ValueError,OSError)):self.guard.check_metadata()
+                finally:
+                    if operation in ('directory','root'):
+                        path.rmdir();retained.rename(path)
+                    else:self.cp.path.write_bytes(original)
+                self.guard=subject.WitnessSourceGuard(self.store,self.cp)
+
+    def test_full_check_detects_changed_bytes_even_if_metadata_is_reported_unchanged(self):
+        # Model the documented metadata-only limitation without claiming an
+        # ordinary writer can restore ctime. Full check must still hash bytes.
+        before=self.cp.path.stat();data=bytearray(self.cp.path.read_bytes());data[len(data)//2]^=1
+        self.cp.path.write_bytes(data)
+        identity=subject._identity
+        def frozen_save_metadata(info):
+            if (info.st_dev,info.st_ino)==(before.st_dev,before.st_ino):return identity(before)
+            return identity(info)
+        with mock.patch.object(subject,'_identity',side_effect=frozen_save_metadata):
+            self.assertTrue(self.guard.check_metadata())
+            with self.assertRaisesRegex(ValueError,'compressed bytes changed'):self.guard.check()
+
     def test_pointer_or_manifest_changes_fail_closed(self):
         for name in ('CURRENT','CONFIRMED','manifest.json'):
             with self.subTest(name=name):

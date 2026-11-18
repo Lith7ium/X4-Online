@@ -3,6 +3,8 @@
 Initial construction fully validates the confirmed checkpoint, marker and
 registry/witness relationships. Later checks hash the exact compressed bytes
 and fence pointer, manifest and file identities without re-parsing XML.
+The optional metadata-only check is for a bounded caller-owned phase between
+full checks. It does not establish unchanged save bytes or exclude writers.
 The caller must still fence writers; no check can prevent a later mutation.
 """
 import hashlib
@@ -64,6 +66,20 @@ def _read_file(parent, name, *, limit, expected=None, digest=False):
     finally: os.close(fd)
 
 
+def _stat_file(parent, name, *, limit):
+    """Pin/check a regular file's identity without reading its contents."""
+    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parent)
+    try:
+        before=_same_path(fd,parent,name)
+        if not stat.S_ISREG(before.st_mode) or before.st_size>limit:
+            raise ValueError('source file invalid')
+        after=_same_path(fd,parent,name)
+        if _identity(before)!=_identity(after):
+            raise ValueError('source changed during metadata check')
+        return (_identity(after),None,after.st_size)
+    finally: os.close(fd)
+
+
 class WitnessSourceGuard:
     """Not a writer lock; use only under the existing isolated-source fence."""
     def __init__(self,store,checkpoint):
@@ -96,7 +112,7 @@ class WitnessSourceGuard:
             raise ValueError('source changed during initialization')
         self.check()
 
-    def _capture(self):
+    def _capture(self, *, metadata_only=False):
         root=_open_dir(str(self.store.directory))
         try:
             directory=_open_dir(self.checkpoint.checkpoint_id,parent=root)
@@ -105,8 +121,11 @@ class WitnessSourceGuard:
                 cur=_read_file(root,'CURRENT',limit=4096)
                 conf=_read_file(root,'CONFIRMED',limit=4096)
                 manifest=_read_file(directory,'manifest.json',limit=4096)
-                save=_read_file(directory,'save.xml.gz',limit=self.checkpoint.size,digest=True)
-                # Re-read metadata after hashing, including name identities.
+                if metadata_only:
+                    save=_stat_file(directory,'save.xml.gz',limit=self.checkpoint.size)
+                else:
+                    save=_read_file(directory,'save.xml.gz',limit=self.checkpoint.size,digest=True)
+                # Re-read metadata after checking the save, including name identities.
                 if (cur!=_read_file(root,'CURRENT',limit=4096) or
                     conf!=_read_file(root,'CONFIRMED',limit=4096) or
                     manifest!=_read_file(directory,'manifest.json',limit=4096) or
@@ -116,7 +135,8 @@ class WitnessSourceGuard:
                     _identity(os.stat(str(self.store.directory),follow_symlinks=False))!=root_id or
                     _identity(os.stat(self.checkpoint.checkpoint_id,dir_fd=root,follow_symlinks=False))!=directory_id):
                     raise ValueError('source directory changed during check')
-                if (save[1],save[2])!=(self.checkpoint.sha256,self.checkpoint.size):
+                if (save[2]!=self.checkpoint.size or
+                    (not metadata_only and save[1]!=self.checkpoint.sha256)):
                     raise ValueError('source compressed bytes changed')
                 return {'directories':(root_id,directory_id),
                         'files':(cur[0],conf[0],manifest[0],save[0]),'bytes':(cur[1],conf[1],manifest[1])}
@@ -125,4 +145,16 @@ class WitnessSourceGuard:
 
     def check(self):
         if self._capture()!=self._baseline: raise ValueError('witness source changed')
+        return True
+
+    def check_metadata(self):
+        """Check pinned identities and exact small metadata, without save reads.
+
+        Only for a bounded caller-owned phase between full check() boundaries.
+        This detects ordinary metadata/identity changes; it is neither proof of
+        unchanged compressed bytes nor a writer lock. The caller fences writers
+        and owns the decision to enter/leave that phase.
+        """
+        if self._capture(metadata_only=True)!=self._baseline:
+            raise ValueError('witness source changed')
         return True
