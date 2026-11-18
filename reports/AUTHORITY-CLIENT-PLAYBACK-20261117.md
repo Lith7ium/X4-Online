@@ -4,11 +4,75 @@ Internal development on the authoritative fork. Client work takes priority;
 GPU-free server development is deferred while the user seeks a hosted test server.
 The overall Windows/Linux Internet gameplay goal remains unmet.
 
-Current client increment, 18 November: an opt-in bounded live input now feeds
-the existing playback worker, preserving source positions, game timestamps and
-unknown/known velocities. The admitted TCP owner can deliver to this input on
-its existing reader thread. This increment has offline evidence only; native
-attempt 08 below remains the latest X4 trial.
+Current client increment, 18 November: both the independent bounded live-input
+path and an explicit paired-supervisor playback path are now wired in code.
+The paired path uses the existing retained TCP owner and fresh join checkpoint.
+These increments have offline evidence only; native attempt 08 below remains
+the latest X4 trial. No Windows or Internet gameplay is established.
+
+## Paired source and client integration, 18 November
+
+The shared supervisor accepts `--diagnostic-saved-playback` only for one private
+witness-join client, registry index 1318, and ordinary repeated source sampling.
+Local-pair and one-shot setter modes are mutually exclusive with playback.
+The fresh join ticket, marker and saved registry remain verified by the existing
+admission path. Playback additionally pins the recovery registry status, content
+XML and four compatible MD scripts; it does not substitute the historical
+native08 save hash for the fresh checkpoint.
+
+This path uses `LazyMotion` directly, not the independent `NativePlayback`
+worker or its queue. The first actual source packet, sequence 1, is unchanged
+and serves only as enrollment; Lua discards its pose. After its TCP receipt,
+the observer requires client INITIAL and an initial source/client distance no
+greater than 50 metres. Source packets 2–26 retain their sequence, generation,
+game time, XYZ and nullable velocity. There is no synthetic enrollment packet
+or sequence translation in this paired path.
+
+The diagnostic attempts 26 confirmed source samples, paced at 0.2 real seconds,
+within a 15-second sampling deadline. Source STOP precedes a 1.25-second silence,
+the checkpoint helper's full-check STOP, and client worker STOP. Read-only log
+correlation requires native movement and a final frozen target consistent with
+the last actual source pose and the existing 0.35-second prediction horizon.
+TCP receipts alone cannot pass this check. The departure pause and save must
+still succeed before the overall supervisor result succeeds.
+
+Repeated compressed-save hashes were identified in the diagnostic guard path;
+this is harness overhead, not evidence of excessive X4 universe simulation cost.
+`PlaybackSamplingWindow` pins the two private read-only input saves and brackets
+at most 60 seconds with full digest checks. During that phase it checks file
+identity/metadata, original checkpoint pointers/manifests and the fresh checkpoint
+helper, retaining process, membership, script and IPC checks. Its helper request
+scope permits the existing pump's nested local-save check without adding a
+reader. Failure remains sticky. This assumes exclusive writers and FD ownership;
+metadata is not proof that all intervening bytes were unchanged.
+
+The private native08 Wait/velocity intervention and release observer are not
+installed by this new switch. The next native runner must explicitly reuse and
+pin those private artifacts, observe release, and retain the normal final save
+gate. General NPC authority and exact AI/velocity restoration remain unresolved.
+No native paired trial was run for this increment.
+
+Focused validation, without an expensive full-suite rerun:
+
+- Paired client configuration/installation and real TCP-to-UDP forwarding:
+  **40 tests passed in 6.115s**. Log:
+  `../x4-paired-client-playback-20261118/.local/paired-playback-focused-20261118.log`.
+- Source probe regression: **20 tests passed in 7.245s**, including the real
+  local TCP/UDP 26-sample flow, with simulated source and client engine edges.
+  Log: `.local/paired-source-regression-20261118.log`.
+- Supervisor gates/finalization: **36 tests passed in 0.289s**. Log:
+  `.local/paired-supervisor-only-20261118.log`. The preceding combined command
+  passed its 12 playback tests but failed to import the supervisor tests without
+  `PYTHONPATH=tests`; only the affected supervisor module was rerun.
+- After the helper STOP hook was connected, **15 final focused tests passed in
+  7.132s**: the 26-sample source flow, evidence parser and metadata window. The
+  real checkpoint helper exercises its production pump and retained client
+  save checks through CHECK, metadata CHECK and full STOP. Log:
+  `.local/paired-playback-final-20261118.log`.
+
+No tests in these batches were skipped. Readback logs/engine behavior in these
+new tests are simulated; native08 evidence remains separate. Earlier full-suite
+failures and unavailable prerequisites have not been resolved by these checks.
 
 ## Live input integration, 18 November
 
@@ -40,16 +104,16 @@ Validation was split to avoid repeating unchanged checks:
 - Both batches passed with no skips. No X4, Windows, WAN or full-suite rerun was
   performed. Earlier full-suite failures and missing prerequisites remain open.
 
-Next native integration should reuse the one-lock/two-process ownership in
+The paired integration above reuses the one-lock/two-process ownership in
 `authority_recovered_loopback_server.py` and `authority_recovered_server_client.py`.
 Launching two independent CLIs would conflict with their ownership checks. That
 supervisor already verifies the fresh join ticket/marker against the confirmed
-checkpoint; connect its registry and archived-script lineage to the playback
-fixture instead of replacing the old pinned save hash. Use the normal source
-sampler for repeated actual samples: its optional `local_pair` delivery stops
+checkpoint. It connects registry and compatible-script lineage to the playback
+fixture without replacing the old pinned save hash. It uses the normal source
+sampler for repeated actual samples: optional `local_pair` delivery stops
 after one two-point estimate. Keep source STOP, client drain/STOP, private release
-observation and pause ordered. Readiness/EOF coordination and fresh-checkpoint
-support are still outstanding; no new native trial has been attempted.
+observation and pause ordered. Native verification of the paired path remains
+outstanding; no new native trial has been attempted.
 
 ## Implementation
 

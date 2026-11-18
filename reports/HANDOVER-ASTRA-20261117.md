@@ -8,8 +8,11 @@
 > exact prior order after releasing temporary control. General NPC control,
 > exact AI restoration and Windows/Internet gameplay remain unproven. A bounded
 > live-input path now preserves source samples and connects through the existing
-> admitted TCP owner; its current evidence is offline only. The shared native
-> supervisor and fresh join checkpoint still need integration. Start with
+> admitted TCP owner. The shared supervisor now also wires an explicit bounded
+> source-to-client playback diagnostic through fresh checkpoint admission and
+> metadata guards between full digest boundaries. Both increments have offline
+> evidence only; the paired native run and private release observation remain
+> outstanding. Start with
 > [the current client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md) and
 > [the playback guide](../docs/AUTHORITY-CLIENT-PLAYBACK.md). The original handover
 > below records the earlier checkpoint, not the current branch tip.

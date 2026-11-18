@@ -138,10 +138,33 @@ Observed source-game/receipt-time ratios do not prove equal simulation speeds.
 
 A TCP receipt confirms queue acceptance only. Native readbacks and drained STOP
 remain separate requirements. This input does not install the private NPC Wait
-and velocity intervention. The pinned original checkpoint restriction remains;
-a real server's newly saved join checkpoint still needs its verified lineage
-connected through the shared two-process supervisor. This code increment alone
-does not establish a native source-to-client flight.
+and velocity intervention. The independent CLI retains its pinned original
+checkpoint restriction. The paired supervisor below instead connects the fresh
+join checkpoint through its existing verified admission path. Neither wiring
+increment establishes a native source-to-client flight.
+
+## Paired supervisor diagnostic
+
+The existing two-process supervisor also has an explicit
+`--diagnostic-saved-playback` mode. It requires `--registry-witness-join`,
+`--diagnostic-client`, `--diagnostic-source-index 1318` and
+`--diagnostic-client-motion`, with the pinned recovery registry and script
+lineage. Pair delivery and one-shot apply are forbidden. Fresh checkpoint
+admission remains mandatory. This is an internal experiment, not a playable mode.
+
+Unlike the independent worker above, the paired path's existing TCP owner sends
+the first actual source packet as enrollment and preserves source sequences
+through its single UDP bridge. It waits for client INITIAL after that receipt,
+then gathers 25 further packets, drains and stops both ends, and correlates
+native readbacks with the source. Its bounded metadata phase has full save
+digest checks at the boundaries and retains other live guards. The ordinary
+save-check path remains unchanged outside this explicit mode.
+
+This wiring has real local TCP/UDP tests with simulated engine edges only.
+The switch does not install the private native08 NPC Wait/velocity override or
+release observer. A native paired runner still needs those pinned artifacts and
+must pass departure saving as well as movement/STOP/release observation. See
+[the current paired integration report](../reports/AUTHORITY-CLIENT-PLAYBACK-20261117.md).
 
 ## Validation and next native boundary
 

@@ -35,6 +35,46 @@ from test_authority_trusted_marker_load_session import XML, MARKER, claim_for
 
 
 class WitnessJoinModeTests(unittest.TestCase):
+    def test_playback_requires_the_pinned_single_client_mode(self):
+        defaults = SimpleNamespace()
+        self.assertIsNone(MODULE.diagnostic_saved_playback(defaults, False, None, False, False, None))
+        args = SimpleNamespace(diagnostic_saved_playback=True)
+        context = [True, 1318, True, False, None]
+        self.assertEqual(MODULE.diagnostic_saved_playback(args, *context), 'recovery_enh_870')
+        for position, invalid in enumerate((False, 687, False, True, 'recovery_enh_870')):
+            changed = context.copy()
+            changed[position] = invalid
+            with self.subTest(position=position), self.assertRaises(ValueError):
+                MODULE.diagnostic_saved_playback(args, *changed)
+        with self.assertRaises(ValueError):
+            MODULE.diagnostic_saved_playback(SimpleNamespace(diagnostic_saved_playback=1), *context)
+
+    def test_playback_finish_requires_all_receipts_and_native_readback(self):
+        for fault in (None, 'short', 'missing_readback', 'unchanged', 'worker_running'):
+            with self.subTest(fault=fault):
+                active = SimpleNamespace(finish=Mock(return_value={'finished': True}))
+                observation = {'source_stopped_before_disconnect': True,
+                    'client_motion_receipts_confirmed': True, 'client_worker_stop_confirmed': True,
+                    'client_receipt_sample_sha256': ['a' * 64] * 26,
+                    'playback_readback': {'source_samples': 26, 'native_position_changed': True}}
+                if fault == 'short': observation['client_receipt_sample_sha256'].pop()
+                if fault == 'missing_readback': del observation['playback_readback']
+                if fault == 'unchanged': observation['playback_readback']['native_position_changed'] = False
+                if fault == 'worker_running': observation['client_worker_stop_confirmed'] = False
+                clients = []
+                def finish():
+                    return MODULE.finish_source_diagnostic(active, clients, [('guard', 'save', 'pump')],
+                        verify=lambda: None, verify_after=lambda: None, probe=lambda *_: observation,
+                        require_client_receipts=True, saved_playback=True)
+                if fault is None:
+                    self.assertEqual(finish(), (observation, {'finished': True}))
+                    active.finish.assert_called_once_with()
+                    self.assertEqual(clients, [])
+                else:
+                    with self.assertRaises(RuntimeError): finish()
+                    active.finish.assert_not_called()
+                    self.assertEqual(clients, [active])
+
     def test_saved_apply_only_for_explicit_fixture_and_pair_delivery(self):
         self.assertIsNone(MODULE.diagnostic_saved_apply(SimpleNamespace(),False,None,False))
         args=SimpleNamespace(diagnostic_saved_apply=True)

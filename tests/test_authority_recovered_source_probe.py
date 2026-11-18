@@ -620,13 +620,15 @@ class Probe(unittest.TestCase):
                 verify_process=lambda:None, client_motion=True, verify_stopped=lambda:None,
                 saved_playback_fixture='recovery_enh_870', playback_sample_observer=observe,
                 playback_begin=lambda: events.append(('begin', time.monotonic())) or True,
-                playback_checkpoint_check=lambda: True)
+                playback_checkpoint_check=lambda: True,
+                playback_checkpoint_stop=lambda: events.append(('checkpoint_stop_hook', time.monotonic())) or guard.stop())
             self.assertEqual(observed, expected)
             self.assertEqual([row[1] for row in case.received], expected)
             self.assertEqual(result['client_receipt_sample_sha256'], [motion_digest(s) for s in expected])
             times = dict(events)
             self.assertLess(events.index(('begin', times['begin'])), 1)
             self.assertGreaterEqual(times['guard_stop']-times['source_stop'], 1.25)
+            self.assertLessEqual(times['checkpoint_stop_hook'], times['guard_stop'])
             self.assertLess(times['source_stop'], times['guard_stop'])
             self.assertLess(times['guard_stop'], times['client_stop'])
             self.assertEqual(result['saved_playback']['source_sample_count'], 26)

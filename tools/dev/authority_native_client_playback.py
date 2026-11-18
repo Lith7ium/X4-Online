@@ -273,26 +273,14 @@ def validate_plan(initial, driver):
     return records
 
 
-class Playback:
-    def __init__(self, sock, settings, installation, registry_nonce, ticket, marker,
-                 driver, deadline, log, out, paths):
-        self.sock, self.settings, self.installation = sock, settings, installation
-        self.registry_nonce, self.ticket, self.marker = registry_nonce, dict(ticket), marker
-        self.driver, self.deadline, self.log, self.out = driver, deadline, log, out
-        self.paths = paths
-        self.thread = None
-        self.abort, self.release, self.stopped = threading.Event(), threading.Event(), threading.Event()
-        self.messages = queue.Queue(maxsize=2)
-        self.evidence = dict(enabled=True, worker_joined=False, stopped_confirmed=False,
-                             native_velocity_proven=False, native_server_tested=False)
-        self.failure = None
+class PlaybackLog:
+    """Read-only append history shared by independent and paired diagnostics."""
+    def __init__(self, path):
+        self.log = path
         self._log_identity = None
         self._log_bytes = b''
 
-    def verify_registry(self):
-        return registry.verify_log(self.log, self.registry_nonce, STATUS, self.ticket, self.marker, load_gate='marker')
-
-    def records(self):
+    def read(self):
         evidence = registry.recovery.marked.file_evidence
         def check_snapshot(identity, data):
             if self._log_identity is not None and identity != self._log_identity:
@@ -320,6 +308,28 @@ class Playback:
         result = parse_records(before[2])
         self._log_identity, self._log_bytes = before[0][:2], before[2]
         return result
+
+
+class Playback:
+    def __init__(self, sock, settings, installation, registry_nonce, ticket, marker,
+                 driver, deadline, log, out, paths):
+        self.sock, self.settings, self.installation = sock, settings, installation
+        self.registry_nonce, self.ticket, self.marker = registry_nonce, dict(ticket), marker
+        self.driver, self.deadline, self.log, self.out = driver, deadline, log, out
+        self.paths = paths
+        self.thread = None
+        self.abort, self.release, self.stopped = threading.Event(), threading.Event(), threading.Event()
+        self.messages = queue.Queue(maxsize=2)
+        self.evidence = dict(enabled=True, worker_joined=False, stopped_confirmed=False,
+                             native_velocity_proven=False, native_server_tested=False)
+        self.failure = None
+        self._log_reader = PlaybackLog(self.log)
+
+    def verify_registry(self):
+        return registry.verify_log(self.log, self.registry_nonce, STATUS, self.ticket, self.marker, load_gate='marker')
+
+    def records(self):
+        return self._log_reader.read()
 
     def start(self, process, protected):
         if self.thread is not None:

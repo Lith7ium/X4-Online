@@ -155,7 +155,10 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         identity, verify, verify_process, timeout=90, candidate_indices=None,
         client_motion=False, verify_stopped=None, diagnostics=None,
         diagnostic_timeouts=None, private_long_diagnostic=False, sector_poll=None, sector_stop=None,
-        sector_arm=None, sector_incarnation=None, saved_apply_fixture=None, record_apply_intent=None):
+        sector_arm=None, sector_incarnation=None, saved_apply_fixture=None, record_apply_intent=None,
+        saved_playback_fixture=None, playback_sample_observer=None,
+        playback_begin=None, playback_checkpoint_check=None, playback_checkpoint_stop=None):
+    from authority_paired_playback_evidence import SAMPLE_COUNT, SAMPLE_INTERVAL, DRAIN_SECONDS
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -184,6 +187,15 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or not callable(verify) or not callable(verify_process)
             or type(client_motion) is not bool
             or type(private_long_diagnostic) is not bool
+            or (saved_playback_fixture is None and any(callback is not None for callback in
+                (playback_sample_observer, playback_begin, playback_checkpoint_check, playback_checkpoint_stop)))
+            or (saved_playback_fixture is not None and
+                (saved_playback_fixture != 'recovery_enh_870' or index != 1318 or
+                 settings['epoch'] != '4ba7be438ebb04ec5bb85fdb95b5a488' or
+                 not client_motion or pair_delivery or 'local_pair' in settings or
+                 candidate_indices is not None or saved_apply_fixture is not None or
+                 sector_poll is not None or not all(callable(callback) for callback in
+                 (playback_sample_observer, playback_begin, playback_checkpoint_check, playback_checkpoint_stop))))
             or (saved_apply_fixture is None and record_apply_intent is not None)
             or (saved_apply_fixture is not None and
                 (saved_apply_fixture != 'recovery_enh_870' or index != 1318 or
@@ -245,9 +257,10 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     else:
         control = peer_socket = peer = participant = client_motion_config = None
     deadline = min(guard.deadline, time.monotonic() + timeout)
+    sampling_deadline = None
 
     def check_deadline():
-        if time.monotonic() >= deadline:
+        if time.monotonic() >= deadline or (sampling_deadline is not None and time.monotonic() >= sampling_deadline):
             raise TimeoutError('source diagnostic deadline')
         if control is not None and (host._control is not control or
                 active.participant is not participant or
@@ -304,6 +317,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     if diagnostics is not None:
         diagnostics.enter('initial_verification')
     pump.activate(host=host, guard=pump_guard)
+    if saved_playback_fixture and checked_operation(playback_begin) is not True:
+        raise RuntimeError('playback sampling boundary unconfirmed')
     active_guard()
     executable_stat = os.stat(Path('/proc') / str(identity[0]) / 'exe')
     process = {'pid': identity[0], 'start_ticks': identity[1],
@@ -316,13 +331,14 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         if (world._baseline != pinned_baseline or world.session.state != 'running'
                 or world.session.pending is not None or world.session.baseline_id is not None):
             return False
+        checkpoint_check = guard.check if playback_checkpoint_check is None else playback_checkpoint_check
         if diagnostics is None:
-            return guard.check() is True
+            return checkpoint_check() is True
         diagnostics.saved_checkpoint_guard_calls += 1
         site = diagnostics.guard_call_site()
         started_at = time.monotonic()
         try:
-            return guard.check() is True
+            return checkpoint_check() is True
         finally:
             elapsed = time.monotonic() - started_at
             diagnostics.saved_checkpoint_guard_seconds += elapsed
@@ -401,7 +417,11 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     if diagnostics is not None:
         diagnostics.enter('collect_samples')
     samples = []
-    for _ in range(1 if pair_delivery else 20):
+    required_samples = SAMPLE_COUNT if saved_playback_fixture else (1 if pair_delivery else 2)
+    if saved_playback_fixture:
+        sampling_deadline = min(deadline, time.monotonic() + 15)
+    for _ in range(required_samples * 4 if saved_playback_fixture else (1 if pair_delivery else 20)):
+        next_pull_at = time.monotonic() + (SAMPLE_INTERVAL if saved_playback_fixture else .1)
         previous_count = len(staged_samples)
         if diagnostics is not None:
             diagnostics.pull_attempts += 1
@@ -430,17 +450,25 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                 if diagnostics is not None:
                     diagnostics.confirmed_client_receipts += 1
             samples.append(staged_samples[-1])
+            if saved_playback_fixture and checked_operation(playback_sample_observer, copy.deepcopy(samples[-1])) is not True:
+                raise RuntimeError('playback sample observation unconfirmed')
             if diagnostics is not None:
                 diagnostics.samples_received = len(samples)
-            if len(samples) == (1 if pair_delivery else 2):
+            if len(samples) == required_samples:
                 break
         elif received is not None:
             raise RuntimeError('uncaptured motion receipt')
         elif diagnostics is not None:
             diagnostics.empty_pulls += 1
-        time.sleep(.1)
-    if len(samples) != (1 if pair_delivery else 2):
-        raise RuntimeError('pair sample unavailable' if pair_delivery else 'two server source samples unavailable')
+        if saved_playback_fixture:
+            while time.monotonic() < next_pull_at:
+                active_guard()
+                time.sleep(min(.05, max(0, next_pull_at-time.monotonic())))
+        else:
+            time.sleep(.1)
+    if len(samples) != required_samples:
+        raise RuntimeError('required server source samples unavailable')
+    sampling_deadline = None
     if sector_poll is not None:
         # The receipt above belongs to this already admitted incarnation. The
         # local owner starts its read only after sending the correlated BOUND.
@@ -471,9 +499,17 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     if checked_operation(source.stop_remote) is not True:
         raise RuntimeError('source stop unconfirmed')
     active_guard()
+    if saved_playback_fixture:
+        # Keep both games running. No new source sample is dispatched during
+        # the existing client's hard-age/readback interval before its STOP.
+        silence_until = time.monotonic() + DRAIN_SECONDS
+        while time.monotonic() < silence_until:
+            active_guard()
+            time.sleep(min(.05, max(0, silence_until-time.monotonic())))
     if diagnostics is not None:
         diagnostics.enter('stop_checkpoint_guard')
-    if checked_operation(guard.stop) is not True:
+    checkpoint_stop = guard.stop if playback_checkpoint_stop is None else playback_checkpoint_stop
+    if checked_operation(checkpoint_stop) is not True:
         raise RuntimeError('checkpoint guard stop unconfirmed')
     active_guard()
     if client_motion:
@@ -539,4 +575,9 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         result['second_sample_velocity_present'] = public_samples[1]['velocity'] is not None
     if apply_observation is not None:
         result['saved_apply'] = apply_observation
+    if saved_playback_fixture:
+        result['saved_playback'] = {'fixture': saved_playback_fixture,
+                                  'source_sample_count': len(samples),
+                                  'enrollment_sequence': 1,
+                                  'silence_before_client_stop_seconds': DRAIN_SECONDS}
     return result

@@ -245,6 +245,16 @@ def diagnostic_saved_apply(args, witness_join, source_index, pair_delivery):
     return 'recovery_enh_870' if enabled else None
 
 
+def diagnostic_saved_playback(args, witness_join, source_index, client_motion, local_pair, saved_apply):
+    """Opt into one bounded ENH-870 playback through the retained TCP owner."""
+    enabled = getattr(args, 'diagnostic_saved_playback', False)
+    if type(enabled) is not bool or (enabled and
+            (witness_join is not True or source_index != 1318 or client_motion is not True or
+             local_pair is not False or saved_apply is not None)):
+        raise ValueError('saved playback requires one pinned witness client without pair or setter mode')
+    return 'recovery_enh_870' if enabled else None
+
+
 def record_saved_apply_intent(out, sample):
     """Durably mark a possible effect before dispatch; never overwrite a marker."""
     from authority.experimental_tcp_motion import motion_digest
@@ -311,11 +321,13 @@ def diagnostic_guard_timing(args, source_enabled):
 
 def finish_source_diagnostic(active, active_clients, guard_context, *, verify, probe,
                              verify_after=None, require_client_receipts=False, pair_delivery=False,
-                             sector_intermediate_result=None):
+                             sector_intermediate_result=None, saved_playback=False):
     """Fence a retained client until the source probe has cooperatively stopped."""
     if (active_clients or len(guard_context)!=1 or not callable(verify) or not callable(probe) or
             (verify_after is not None and not callable(verify_after)) or type(require_client_receipts) is not bool or
             type(pair_delivery) is not bool or (pair_delivery and not require_client_receipts) or
+            type(saved_playback) is not bool or (saved_playback and
+                (not require_client_receipts or pair_delivery or sector_intermediate_result is not None)) or
             (sector_intermediate_result is not None and
              (type(sector_intermediate_result) is not dict or not pair_delivery))):
         raise ValueError('single source diagnostic context required')
@@ -325,16 +337,21 @@ def finish_source_diagnostic(active, active_clients, guard_context, *, verify, p
     if (type(observation) is not dict or observation.get('source_stopped_before_disconnect') is not True):
         raise RuntimeError('source stop not confirmed before client finish')
     if require_client_receipts:
+        from authority_paired_playback_evidence import SAMPLE_COUNT
+        expected_receipts = SAMPLE_COUNT if saved_playback else (1 if pair_delivery else 2)
         receipts = observation.get('client_receipt_sample_sha256')
         if (observation.get('client_motion_receipts_confirmed') is not True
                 or observation.get('client_worker_stop_confirmed') is not True
-                or type(receipts) is not list or len(receipts) != (1 if pair_delivery else 2)
+                or type(receipts) is not list or len(receipts) != expected_receipts
                 or (pair_delivery and (observation.get('pair_delivery') is not True or
                     observation.get('pair_sample_velocity_present') is not True))
                 or any(type(value) is not str or not re.fullmatch(r'[0-9a-f]{64}', value)
                        for value in receipts)):
-            raise RuntimeError('one pair client receipt and worker stop required' if pair_delivery else
-                               'two client receipts and worker stop required')
+            raise RuntimeError('expected client receipts and worker stop required')
+        if saved_playback and (type(observation.get('playback_readback')) is not dict or
+                observation['playback_readback'].get('native_position_changed') is not True or
+                observation['playback_readback'].get('source_samples') != SAMPLE_COUNT):
+            raise RuntimeError('paired native playback readback required')
     (verify if verify_after is None else verify_after)()
     active_clients.remove(active)
     client_result = active.finish()
@@ -390,9 +407,12 @@ def redact_stopped_server_config(config, remaining):
     config.write_text(redact_recovery_config(config.read_text(encoding='ascii')),encoding='ascii')
 
 
-def verify_witness_source(store, checkpoint, guard, source_scripts):
+def verify_witness_source(store, checkpoint, guard, source_scripts, *, check_source=None):
     """Fence the pinned source and the witness scripts at every owner guard."""
-    if guard is None:
+    if check_source is not None:
+        if guard is None or not callable(check_source) or check_source() is not True:
+            raise ValueError('bounded witness source check failed')
+    elif guard is None:
         # Create diagnostics start from a registry without a sealed witness.
         if store.latest_marked_confirmed()!=checkpoint or live.sha(checkpoint.path)!=checkpoint.sha256:
             raise ValueError('witness diagnostic source changed')
@@ -757,6 +777,7 @@ def run(args):
     active_clients = []
     guard_context = []
     fixture_save_guards = None
+    playback_window = None
     try:
         measure_seconds = diagnostic_process_measure_seconds(args)
         fixture_mode = getattr(args, 'fixture_overlap', False)
@@ -811,6 +832,8 @@ def run(args):
         client_motion=diagnostic_client_motion(args,source_enabled)
         pair_delivery=diagnostic_local_pair_delivery(args,local_pair,client_motion)
         saved_apply_fixture=diagnostic_saved_apply(args,witness_join,source_index,pair_delivery)
+        saved_playback_fixture=diagnostic_saved_playback(args,witness_join,source_index,
+            client_motion,local_pair,saved_apply_fixture)
         client_sector=diagnostic_client_sector(args,pair_delivery)
         guard_timing=diagnostic_guard_timing(args,source_enabled)
         long_motion=diagnostic_long_motion(args,witness_join,source_enabled,client_motion)
@@ -883,6 +906,10 @@ def run(args):
         if getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or witness_phase:
             import authority_recovery_registry_status as registry_check
             registry_expected=registry_check.saved_status(checkpoint)
+            if saved_playback_fixture:
+                from authority_native_client_playback import STATUS
+                if registry_expected != STATUS:
+                    raise ValueError('saved playback requires the pinned recovery registry')
             if saved_apply_fixture is not None and (registry_expected[0] != 'ready' or
                     registry_expected[1] != '4ba7be438ebb04ec5bb85fdb95b5a488'):
                 raise ValueError('saved apply registry epoch differs from pinned fixture')
@@ -916,6 +943,15 @@ def run(args):
             verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
             witness_nonce=secrets.token_hex(16)
             protected.extend(witness_check.install(case,witness_nonce,registry_expected[1],registry_expected[2],witness_phase,allow_resume=witness_join))
+        if saved_playback_fixture:
+            from authority_playback_sampling_window import PlaybackSamplingWindow
+            playback_window = PlaybackSamplingWindow(live.sha, witness_source_guard)
+            result['paired_playback'] = {'fixture': saved_playback_fixture,
+                'save_guard_mode': 'metadata_between_digest_boundaries',
+                'exclusive_writer_and_fd_owner_assumed': True,
+                'unchanged_bytes_between_boundaries_proven': False,
+                'native_velocity_proven': False, 'windows_tested': False,
+                'save_guard_metrics': playback_window.metrics}
         source_settings=None
         if source_enabled:
             if any(index>registry_expected[2] for index in (source_candidates or (source_index,))):
@@ -981,12 +1017,16 @@ def run(args):
         def verify():
             check()
             if identity is None: raise RuntimeError('recovery receipt without owned X4')
-            save_valid = (live.sha(target) == checkpoint.sha256 if fixture_save_guards is None else
-                          fixture_save_guards.check(target, checkpoint.sha256))
+            if playback_window is not None:
+                save_valid = playback_window.check_save(target, checkpoint.sha256)
+            else:
+                save_valid = (live.sha(target) == checkpoint.sha256 if fixture_save_guards is None else
+                              fixture_save_guards.check(target, checkpoint.sha256))
             if not save_valid or any(live.sha(p) != h for p,h in expected.items()):
                 raise ValueError('recovery save or protected configuration changed')
             if witness_check:
-                verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts)
+                verify_witness_source(source_store,checkpoint,witness_source_guard,witness_source_scripts,
+                    **({'check_source': playback_window.check_source} if playback_window is not None else {}))
             check()
         peer = bridge.activate(sock, watch, lease, epoch, deadline, check, verify)
         if registry_check is not None:
@@ -1396,9 +1436,11 @@ def run(args):
                     check_base=base_diagnostic if source_enabled else None,
                     check_server_base=verify if source_enabled else None,
                     witness_guard_ready=guard_ready if source_enabled else None,
+                    verify_client_save=playback_window.check_save if playback_window is not None else None,
                     client_motion=({'indices':list(source_candidates or (source_index,)),
                         'generation':source_settings['generation'],'timeout':client_motion_timeout,
                         **({'saved_apply_fixture':saved_apply_fixture} if saved_apply_fixture else {}),
+                        **({'saved_playback_fixture':saved_playback_fixture} if saved_playback_fixture else {}),
                         **({'player_sector':True} if client_sector else {})} if client_motion else None))
                 if source_enabled:
                     import authority_recovered_source_probe
@@ -1410,8 +1452,28 @@ def run(args):
                                 tuple(world.session.players)!=expected_members):
                             raise RuntimeError('stopped client or membership changed')
                         verify();cancel_diagnostic()
+                        return True
                     def run_source(guard,saved,pump,active):
                         source_context=dict(source_settings,epoch=guard.status[1],baseline=guard.status[2])
+                        playback_options = {}
+                        if saved_playback_fixture:
+                            from authority_paired_playback_evidence import PairedPlaybackEvidence
+                            client_log = diagnostic_out/'client/case/home/.config/EgoSoft/X4/45841/engine-output.log'
+                            evidence = PairedPlaybackEvidence(client_log,
+                                guard=lambda: (verify_diagnostic() is None), deadline=deadline)
+                            def process_guard():
+                                base_diagnostic()
+                                return True
+                            def begin_playback():
+                                return playback_window.open(
+                                    [(target, checkpoint.sha256), (active.save_target, active.save_digest)],
+                                    guard, process_guard=process_guard,
+                                    deadline=min(deadline, time.monotonic() + 60))
+                            playback_options = {'saved_playback_fixture': saved_playback_fixture,
+                                'playback_begin': begin_playback,
+                                'playback_checkpoint_check': lambda: playback_window.check_checkpoint(guard),
+                                'playback_checkpoint_stop': lambda: playback_window.stop_checkpoint(guard),
+                                'playback_sample_observer': evidence.received}
                         # X4's source owner has its own 120-second pending-operation
                         # deadlines, including binding begun at resume. A longer
                         # host budget does not extend those or guarantee completion.
@@ -1420,23 +1482,30 @@ def run(args):
                             budgets = {'total': 2400 if long_motion else 1200, 'source_bind_stage': 120,
                                        'source_operation': 600 if long_motion else 300,
                                        'tcp_send': 480 if long_motion else 240, 'client_bind': client_motion_timeout}
-                        return run_source_probe_with_progress(result,authority_recovered_source_probe.run,sock=source_sock,
+                        observation = run_source_probe_with_progress(result,authority_recovered_source_probe.run,sock=source_sock,
                             include_guard_callsites=guard_timing,
                             settings=source_context,index=source_index,baseline=saved,guard=guard,pump=pump,
                             active=active,host=host,world=world,identity=identity,verify=verify_diagnostic,
                             verify_process=check,candidate_indices=source_candidates,client_motion=client_motion,
                             verify_stopped=verify if client_motion else None, diagnostic_timeouts=budgets,
                             private_long_diagnostic=long_motion,
+                            **playback_options,
                             **({'saved_apply_fixture':saved_apply_fixture,
                                 'record_apply_intent':lambda sample: record_saved_apply_intent(out, sample)}
                                if saved_apply_fixture else {}),
                             **({'sector_poll':active.sector_poll,'sector_stop':active.sector_stop,
                                 'sector_arm':active.sector_arm,
                                 'sector_incarnation':active.participant._sector_incarnation} if client_sector else {}))
+                        if saved_playback_fixture:
+                            observation['playback_readback'] = evidence.stopped(stopped_guard=verify_motion_stopped)
+                            playback_window.close(process_guard=process_guard)
+                            result['paired_playback']['readback_before_departure'] = observation['playback_readback']
+                        return observation
                     result['source_diagnostic'],diagnostic_result=finish_source_diagnostic(
                         diagnostic_result,active_clients,guard_context,verify=verify_diagnostic,probe=run_source,
                         verify_after=verify_motion_stopped if client_motion else None,
                         require_client_receipts=client_motion,pair_delivery=pair_delivery,
+                        saved_playback=saved_playback_fixture is not None,
                         sector_intermediate_result=result if client_sector else None)
                 if count != 1:
                     baseline = diagnostic_client.settle_departure(host, world, control, diagnostic.server_tcp, deadline, verify_diagnostic,
@@ -1483,6 +1552,9 @@ def run(args):
         result['error'] = str(error) or type(error).__name__
     finally:
         errors=[]
+        if playback_window is not None:
+            try: playback_window.cleanup()
+            except BaseException as error: errors.append('playback save guard cleanup: '+type(error).__name__)
         for number in handlers:
             try: signal.signal(number,signal.SIG_IGN)
             except BaseException as error: errors.append('cannot fence signals: '+type(error).__name__)
@@ -1593,6 +1665,7 @@ def main():
     parser.add_argument('--diagnostic-local-pair-delivery',action='store_true',help='deliver exactly one known-rate local pair sample to the private client')
     parser.add_argument('--diagnostic-client-sector',action='store_true',help='observe one private client sector after its pair receipt')
     parser.add_argument('--diagnostic-saved-apply',action='store_true',help='private one-shot ENH-870 preflight and possible write; not gameplay')
+    parser.add_argument('--diagnostic-saved-playback',action='store_true',help='private bounded ENH-870 source playback and native readback; not gameplay')
     parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     parser.add_argument('--diagnostic-process-measure-seconds', type=float, metavar='SECONDS',
