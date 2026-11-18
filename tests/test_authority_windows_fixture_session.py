@@ -21,6 +21,8 @@ class FixtureSessionTests(unittest.TestCase):
         self.start_error = self.poll_error = self.registration_error = self.close_error = None
         self.controller_error = self.redact_error = self.workspace_close_error = None
         self.construct_error = None
+        self.poll_hook = lambda: None
+        self.poll_result = True
         self.final_log_extra = b''
         self.offer = Offer(world_epoch='a'*32, connection_handle=1, baseline_id=2, load_generation=3,
             checkpoint_id='checkpoint-'+'b'*32, sha256='c'*64, attempt_id='d'*32, size=10, name='j1.xml.gz')
@@ -98,7 +100,8 @@ class FixtureSessionTests(unittest.TestCase):
             def poll(self, timeout):
                 test.calls.append(('session_poll', timeout))
                 if test.poll_error: raise test.poll_error
-                return True
+                test.poll_hook()
+                return test.poll_result
             def close(self): test.calls.append('session_close')
         self.session = Session
 
@@ -194,6 +197,42 @@ class FixtureSessionTests(unittest.TestCase):
         with patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]):
             with self.assertRaises(TimeoutError):
                 self.run_session(deadline=101.0, stop_requested=late_stop)
+        self.assertIn('process_close', self.calls)
+        self.assertIn('redact', self.calls)
+
+    def test_fast_polls_are_paced_but_slow_polls_are_not(self):
+        for poll_duration, expected_sleep in ((0, .05), (.06, 0)):
+            with self.subTest(poll_duration=poll_duration):
+                clock = [100.0]
+                sleeps = []
+                self.poll_result = False
+                self.poll_hook = lambda: clock.__setitem__(0, clock[0] + poll_duration)
+                def sleep(duration):
+                    sleeps.append(duration)
+                    clock[0] += duration
+                with patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(subject.time, 'sleep', side_effect=sleep):
+                    result = self.run_session(deadline=101.0)
+                self.assertEqual(result['participant_receipts'], 0)
+                if expected_sleep:
+                    self.assertEqual(len(sleeps), 1)
+                    self.assertAlmostEqual(sleeps[0], expected_sleep)
+                else:
+                    self.assertEqual(sleeps, [])
+
+    def test_idle_sleep_cannot_extend_deadline_into_success(self):
+        clock = [100.0]
+        sleeps = []
+        self.poll_result = False
+        def sleep(duration):
+            sleeps.append(duration)
+            clock[0] += duration
+        with patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(subject.time, 'sleep', side_effect=sleep):
+            with self.assertRaises(TimeoutError):
+                self.run_session(deadline=100.03)
+        self.assertEqual(len(sleeps), 1)
+        self.assertAlmostEqual(sleeps[0], .03)
         self.assertIn('process_close', self.calls)
         self.assertIn('redact', self.calls)
 

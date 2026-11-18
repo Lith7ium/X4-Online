@@ -120,8 +120,15 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         raise RuntimeError('fixture process or workspace changed')
                     if stop:
                         break
+                    poll_started = time.monotonic()
                     if session.poll(.1):
                         commands += 1
+                    now = time.monotonic()
+                    if now >= deadline:
+                        raise TimeoutError('fixture session deadline expired')
+                    delay = min(.05 - (now - poll_started), deadline - now)
+                    if delay > 0:
+                        time.sleep(delay)
                 result = {'client_admitted': True, 'participant_receipts': commands}
             except BaseException as error:
                 original = error
