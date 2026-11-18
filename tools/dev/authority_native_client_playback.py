@@ -22,6 +22,7 @@ from authority_tcp_job_client_live import socket_owner
 from authority_tcp_native_worker import check_process
 import authority_recovered_client_motion_install as motion_install
 import authority_recovered_client_registry as registry
+from authority_native_client_stream import LiveSourceInput
 
 EPOCH = '4ba7be438ebb04ec5bb85fdb95b5a488'
 STATUS = ('ready', EPOCH, 10082, '4498b099b8741fccbe1f189cbcb7e8da5a7b08de48d7d57e0caf95baa692e72a')
@@ -72,6 +73,18 @@ for _code in (
     _ERROR_CODES[_code] = _code
 
 
+for _code in (
+    'stream_invalid_limits', 'stream_invalid_wait', 'stream_readiness_timeout',
+    'stream_not_accepting', 'stream_invalid_receipt', 'stream_invalid_sample',
+    'stream_foreign_identity', 'stream_regressed_sample', 'stream_limit_exceeded',
+    'stream_overflow', 'stream_invalid_eof', 'stream_producer_failed',
+    'stream_already_started', 'stream_not_ready', 'stream_closed',
+    'stream_consumer_fenced', 'stream_initial_offset_exceeded', 'stream_enrolment_time_conflict',
+    'stream_despawn_unsupported',
+):
+    _ERROR_CODES[_code] = _code
+
+
 def failure_details(error):
     """Only fixed codes/types cross the diagnostic boundary; never raw text."""
     name = next((kind.__name__ for kind in (KeyboardInterrupt, TimeoutError, ValueError, OSError, RuntimeError)
@@ -86,8 +99,10 @@ def read_config(path, args, driver):
         if driver is not None:
             raise ValueError('playback_config_required')
         return None
-    if not callable(driver):
+    if not callable(driver) and type(driver) is not LiveSourceInput:
         raise ValueError('playback_python_driver_required')
+    if type(driver) is LiveSourceInput and driver.identity != (EPOCH, 1318, SECTOR):
+        raise ValueError('stream_foreign_identity')
     if any(getattr(args, name, None) is not None for name in
            ('archived_identity_fixture', 'archived_identity_fixture_sha256', 'expected_content_sha256')):
         raise ValueError('playback_compatibility_options_conflict')
@@ -316,10 +331,13 @@ class Playback:
         ipc = None
         phase = 'ready'
         next_file_check = 0
+        stream_records = []
         def guard():
             nonlocal next_file_check
             if self.abort.is_set() or time.monotonic() >= self.deadline:
                 raise RuntimeError('playback_worker_fenced')
+            if type(self.driver) is LiveSourceInput:
+                self.driver.check()
             check_process(process)
             if time.monotonic() >= next_file_check:
                 evidence = registry.recovery.marked.file_evidence
@@ -357,12 +375,16 @@ class Playback:
                 self.abort.wait(.01)
             origin = time.monotonic()
             phase = 'driver'
-            samples = validate_plan(initial, self.driver)
-            for sequence, sample in enumerate(samples, 2):
-                wait_until(origin+sample['after'])
-                packet = dict(base, sequence=sequence, source_time=initial['game_time']+sample['after'],
-                              **{key: sample[key] for key in ('x', 'y', 'z', 'velocity')})
-                ipc(packet, False)
+            if type(self.driver) is LiveSourceInput:
+                phase = 'stream'
+                samples = self._stream_samples(ipc, base, initial, guard, stream_records)
+            else:
+                samples = validate_plan(initial, self.driver)
+                for sequence, sample in enumerate(samples, 2):
+                    wait_until(origin+sample['after'])
+                    packet = dict(base, sequence=sequence, source_time=initial['game_time']+sample['after'],
+                                  **{key: sample[key] for key in ('x', 'y', 'z', 'velocity')})
+                    ipc(packet, False)
             phase = 'stop'
             # Runtime max_age is min(timeout, 1). Silence lets the next native
             # callback read back the final write, then stop writing on hard age.
@@ -385,19 +407,79 @@ class Playback:
                     not any(math.dist([initial[a] for a in ('x', 'y', 'z')],
                                       [row['actual_'+a] for a in ('x', 'y', 'z')]) > .02 for row in reads)):
                 raise ValueError('native_playback_movement_unconfirmed')
-            self.messages.put_nowait(dict(initial=initial, summaries=summaries, stopped=stopped,
-                delivered_samples=len(samples), stopped_confirmed=True, native_position_changed=True))
+            message = dict(initial=initial, summaries=summaries, stopped=stopped,
+                delivered_samples=len(samples), stopped_confirmed=True, native_position_changed=True)
+            if type(self.driver) is LiveSourceInput:
+                message['live_source'] = self._stream_report(stream_records, complete=True)
+            self.messages.put_nowait(message)
             self.stopped.set()
             # Keep IPC teardown on its owner thread, after the main owner has
             # fenced X4. TCP/participant objects are never called from here.
             self.release.wait()
             ipc.close()
         except BaseException as error:
-            self.messages.put_nowait(dict(failure_phase=phase, **failure_details(error)))
+            if type(self.driver) is LiveSourceInput:
+                self.driver._close()
+            message = dict(failure_phase=phase, **failure_details(error))
+            if type(self.driver) is LiveSourceInput:
+                message['live_source'] = self._stream_report(stream_records, complete=False)
+            self.messages.put_nowait(message)
         finally:
             ipc = None
 
+    def _stream_samples(self, ipc, base, initial, guard, provenance):
+        source = self.driver
+        source._ready(initial)
+        while True:
+            item = source._next(guard=guard, abort=self.abort, deadline=self.deadline)
+            if item is None:
+                break
+            sample, received_at = item
+            if not provenance:
+                if math.dist([initial[axis] for axis in ('x', 'y', 'z')],
+                             [sample[axis] for axis in ('x', 'y', 'z')]) > 50:
+                    raise ValueError('stream_initial_offset_exceeded')
+                if sample['source_time'] <= 0:
+                    raise ValueError('stream_enrolment_time_conflict')
+            wire_sequence = len(provenance) + 2
+            packet = dict(base, sequence=wire_sequence,
+                          **{key: copy.deepcopy(sample[key]) for key in ('source_time', 'x', 'y', 'z', 'velocity')})
+            guard()
+            dispatched_at = source.validate_dispatch(received_at)
+            record = {key: copy.deepcopy(sample[key]) for key in
+                      ('epoch', 'index', 'sector_macro', 'sequence', 'source_time', 'x', 'y', 'z', 'velocity')}
+            record.update(wire_sequence=wire_sequence, producer_received_at=received_at,
+                          dispatched_at=dispatched_at, delivery_status='dispatch_started',
+                          source_generation_sha256=hashlib.sha256(sample['generation'].encode('ascii')).hexdigest())
+            provenance.append(record)
+            ipc(packet, False)
+            record.update(delivery_status='bound', acknowledged_at=time.monotonic())
+        if len(provenance) < 2:
+            raise ValueError('stream_invalid_eof')
+        return provenance
+
+    def _stream_report(self, provenance, *, complete):
+        records = copy.deepcopy(provenance)
+        first, last = (records[0], records[-1]) if records else (None, None)
+        game_elapsed = last['source_time'] - first['source_time'] if records else 0
+        receipt_elapsed = last['producer_received_at'] - first['producer_received_at'] if records else 0
+        consumer_elapsed = last['dispatched_at'] - first['dispatched_at'] if records else 0
+        return dict(samples=records, input_complete=complete,
+            local_generation_sha256=hashlib.sha256(self.settings['generation'].encode('ascii')).hexdigest(),
+            wire_enrolment_sequence=1, wire_sequence_mapping='delivery_ordinal_plus_one',
+            source_game_elapsed=game_elapsed, producer_receipt_elapsed=receipt_elapsed,
+            consumer_elapsed=consumer_elapsed,
+            observed_source_game_per_receipt_second=game_elapsed/receipt_elapsed if receipt_elapsed > 0 else None,
+            arbitrary_clock_equivalence_proven=False)
+
+    def _capture_stream_failure(self):
+        code = self.driver.failure_code() if type(self.driver) is LiveSourceInput else None
+        if code and self.failure is None:
+            self.evidence.update(failure_phase='stream', failure_type='ValueError', failure_code=code)
+            self.failure = RuntimeError('native_playback_worker_failed')
+
     def _drain_messages(self, *, publish_stopped):
+        self._capture_stream_failure()
         while True:
             try:
                 message = self.messages.get_nowait()
@@ -406,7 +488,7 @@ class Playback:
             self.evidence.update(message)
             if 'failure_phase' in message:
                 self.failure = RuntimeError('native_playback_worker_failed')
-            if publish_stopped and message.get('stopped_confirmed'):
+            if publish_stopped and self.failure is None and message.get('stopped_confirmed'):
                 temporary = self.out/'playback-stopped.tmp'
                 with temporary.open('x', encoding='utf-8') as stream:
                     json.dump(self.evidence, stream)
@@ -439,6 +521,8 @@ class Playback:
             raise RuntimeError('native_fence_required_before_playback_cleanup')
         self.abort.set()
         self.release.set()
+        if type(self.driver) is LiveSourceInput:
+            self.driver._close()
         if self.thread is not None:
             self.thread.join(6)
             if self.thread.is_alive():
