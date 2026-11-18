@@ -207,6 +207,42 @@ class ObservedSessionTest(unittest.TestCase):
         self.assertEqual(client.fileno(), -1)
         self.assertEqual(controller.sock.fileno(), -1)
 
+    def test_motion_budget_reserves_ready_stop_and_native_control_deadlines(self):
+        class MotionControl:
+            timeout = .75
+
+            def __init__(self):
+                self.events = []
+
+            def __call__(self, sample, despawn):
+                return True
+
+            def before_control(self, operation):
+                self.events.append(('before', operation))
+                return True
+
+            def after_control(self, operation):
+                self.events.append(('after', operation))
+                return True
+
+        owner, client, bound, deadline = self.connect()
+        controller = LocalParticipantControl(enabled=True, timeout=2)
+        self.addCleanup(controller.close)
+        self.start_fake_participant(controller)
+        self.log = b''.join(self.log_parts())
+        motion = MotionControl()
+        session = ObservedClientSession(owner, bound, controller, slot='save_009',
+            read_log=lambda: self.log, guard=lambda: True, deadline=deadline,
+            apply_motion=motion, motion_control=motion)
+        self.addCleanup(session.close)
+        self.assertTrue(session.start())
+        # READY and STOP each get .75s, native control 2s, framing 1s.
+        self.assertEqual(owner._participant._timeout, 4.5)
+        while not self.replies:
+            session.poll(.1)
+        self.assertEqual(self.replies[0]['status'], 'confirmed')
+        self.assertEqual(motion.events, [('before', 'resume'), ('after', 'resume')])
+
     def test_registry_gate_admits_then_refuses_a_late_registry_fault(self):
         owner, client, bound, deadline = self.connect()
         controller = LocalParticipantControl(enabled=True, timeout=2)

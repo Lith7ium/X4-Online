@@ -115,7 +115,9 @@ class FixtureSessionTests(unittest.TestCase):
 
         class Session:
             def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
-                         registry_status, registry_nonce):
+                         registry_status, registry_nonce, apply_motion, motion_control):
+                test.assertIsNone(apply_motion)
+                test.assertIsNone(motion_control)
                 test.assertEqual(registry_status, test.registry_status)
                 test.assertEqual(registry_nonce, test.registry_nonce)
                 test.calls.append(('session_create', owner is test.owner, bound == test.bound, slot, guard()))

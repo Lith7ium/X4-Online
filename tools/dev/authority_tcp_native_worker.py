@@ -36,15 +36,12 @@ from authority.local_participant_control import LocalParticipantControl
 from authority.load_messages import MAX_INTEGER, MAX_MESSAGE, _pairs, _reject_constant
 from authority.trusted_load_messages import decode_load_claim
 from authority.experimental_participant_motion_ipc import ExperimentalParticipantMotionIPC
-from authority.experimental_tcp_motion import motion_value
+from authority.participant_motion import ParticipantMotion, RECOVERY_SETTER_FIXTURE, RECOVERY_SETTER_EPOCH, RECOVERY_SETTER_INDEX
 from authority.experimental_tcp_client_authority_motion import grant_value
 
 MAX_CONFIG=16384
 MAX_IPC=256
 _HEX=re.compile(r'[0-9a-f]{32}\Z')
-RECOVERY_SETTER_FIXTURE = 'recovery_enh_870'
-RECOVERY_SETTER_EPOCH = '4ba7be438ebb04ec5bb85fdb95b5a488'
-RECOVERY_SETTER_INDEX = 1318
 
 
 def parse_json(raw):
@@ -243,78 +240,27 @@ class GuardedParticipant:
     def close(self): self.controller.close()
 
 
-class LazyMotion:
-    """One participant-thread UDP owner, first bound only after resume."""
-    def __init__(self,sock,cfg,guard):
-        self.sock,self.cfg,self.guard=sock,cfg,guard
-        self.running=False;self.stopped=False;self.bridge=None
-        self.destination=sock.getsockname()
-        self._playback_previous = None
-    def _bind(self):
-        self.guard()
-        if self.bridge is None:
-            # Imported here to avoid a module cycle when this file is __main__.
+class LazyMotion(ParticipantMotion):
+    """Adapt Linux process validation to the shared one-shot motion owner."""
+
+    def __init__(self, sock, config, guard):
+        destination = sock.getsockname()
+
+        def checked_guard():
+            guard()
+            return True
+
+        def validate_peer(address):
+            checked_guard()
+            # Import here to avoid a module cycle when this file is __main__.
             from authority_tcp_job_client_live import socket_owner
-            def peer(address):
-                self.guard()
-                return self.sock.getsockname()==self.destination and socket_owner(address,self.destination,self.cfg['client_process']) is True
-            def context():
-                self.guard()
-                return self.running and self.sock.getsockname()==self.destination
-            m=self.cfg['motion']
-            self.bridge=ExperimentalParticipantMotionIPC(self.sock,enabled=True,lease=m['lease'],attempt=m['attempt'],
-                epoch=m['epoch'],generation=m['generation'],guard=context,validate_peer=peer,timeout=m['timeout'],
-                allow_apply=m.get('saved_apply_fixture') == RECOVERY_SETTER_FIXTURE,stop_enabled=True)
-            self.bridge.wait_ready()
-        self.guard()
-    def __call__(self,sample,despawn):
-        if not self.running or self.stopped or despawn is not False:raise RuntimeError('motion while paused or unsupported despawn')
-        playback = self.cfg['motion'].get('saved_playback_fixture') == RECOVERY_SETTER_FIXTURE
-        if playback:
-            sample = motion_value(sample)
-            if (sample['version'] != 1 or sample['epoch'] != RECOVERY_SETTER_EPOCH or
-                    sample['generation'] != self.cfg['motion']['generation'] or
-                    sample['index'] != RECOVERY_SETTER_INDEX or
-                    sample['sector_macro'] != 'cluster_06_sector001_macro'):
-                raise ValueError('recovery playback sample mismatch')
-            previous = self._playback_previous
-            if previous is None:
-                # Lua consumes the actual first sample as enrollment only. Never
-                # renumber, translate its pose, or fabricate its source clock.
-                if sample['sequence'] != 1:
-                    raise ValueError('recovery playback must enroll source sequence one')
-            elif sample['sequence'] <= previous[0] or sample['source_time'] <= previous[1]:
-                raise ValueError('recovery playback source regressed')
-        self._bind()
-        confirmed = self.bridge(sample,despawn)
-        if playback and confirmed is True:
-            self._playback_previous = (sample['sequence'], sample['source_time'])
-        return confirmed
-    def _check_setter_sample(self, sample):
-        """Fence the only permitted recovery fixture before any setter IPC."""
-        if not self.running or self.stopped or self.cfg['motion'].get('saved_apply_fixture') != RECOVERY_SETTER_FIXTURE:
-            raise RuntimeError('recovery setter unavailable')
-        if (type(sample) is not dict or sample.get('epoch') != RECOVERY_SETTER_EPOCH or
-                type(sample.get('index')) is not int or sample['index'] != RECOVERY_SETTER_INDEX or
-                sample.get('generation') != self.cfg['motion']['generation']):
-            raise ValueError('recovery setter sample mismatch')
-    def preflight(self, sample):
-        self._check_setter_sample(sample)
-        self._bind()
-        return self.bridge.preflight(sample)
-    def apply_once(self, sample):
-        self._check_setter_sample(sample)
-        self._bind()
-        return self.bridge.apply_once(sample)
-    def stop(self):
-        if self.stopped:return True
-        if not self.running:raise RuntimeError('motion stop cannot be confirmed before resume')
-        self._bind()
-        if self.bridge.stop_remote() is not True:raise RuntimeError('client motion stop unconfirmed')
-        self.running=False;self.stopped=True;return True
-    def close(self):
-        if self.bridge is None:self.sock.close()
-        elif self.bridge.state not in ('closed','failed'):self.bridge.close()
+            return (sock.getsockname() == destination and
+                    socket_owner(address, destination, config['client_process']) is True)
+
+        super().__init__(sock, config, checked_guard, validate_peer,
+                         ipc_factory=lambda *args, **kwargs: ExperimentalParticipantMotionIPC(*args, **kwargs))
+        # Keep the worker's former attribute available to its diagnostic callers.
+        self.cfg = config
 
 
 class LazyClientAuthority:

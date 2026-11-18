@@ -56,6 +56,26 @@ class FixtureCliTests(unittest.TestCase):
             self.assertFalse(window())
             self.assertTrue(window())
 
+    def test_motion_config_is_explicit_bounded_and_fixture_checked(self):
+        path = self.root / 'motion.json'
+        request = {'generation': '1' * 32, 'indices': [1318], 'timeout': 5,
+                   'saved_playback_fixture': 'recovery_enh_870'}
+        path.write_text(json.dumps(request))
+        self.assertEqual(cli.read_motion_request(path), request)
+        for invalid in (None, {**request, 'indices': [1]}, {**request, 'timeout': 30},
+                        {**request, 'generation': 'bad'}, {**request, 'extra': True}):
+            with self.subTest(invalid=invalid):
+                path.write_text(json.dumps(invalid))
+                with self.assertRaises(ValueError):
+                    cli.read_motion_request(path)
+
+    def test_motion_request_counts_both_ipc_deadlines_in_overall_limit(self):
+        from authority.windows_fixture_session import validate_motion_request
+        request = {'generation': '1' * 32, 'indices': [1318], 'timeout': 30}
+        validate_motion_request(request, participant_timeout=239)
+        with self.assertRaisesRegex(ValueError, 'bounded'):
+            validate_motion_request(request, participant_timeout=240)
+
     def test_failure_does_not_print_exception_text_or_credentials(self):
         arguments = ['--connection-file', str(self.connection), '--game', str(self.root / 'game'),
                      '--view-container', str(self.root / 'view'), '--out', str(self.root / 'out'),

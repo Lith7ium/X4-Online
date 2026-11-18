@@ -1,5 +1,35 @@
 # X4 multiplayer: handover for Astra
 
+Current client checkpoint: the Windows fixture CLI now accepts an optional
+private `--motion-config` for an existing server stream. It shares the Linux
+overlay and one-attempt `ParticipantMotion` lifecycle, including deferred READY
+after resume, native Windows UDP-peer ownership checks, source position/velocity
+delivery, and confirmed STOP before pause or process exit. It does not configure
+the server stream. Binding-only mode does not write positions; playback remains
+restricted to the existing recovery fixture at index 1318. No alignment snap,
+clock change, server redesign or normal profile changes were made.
+
+Validation: 23 shared-overlay tests passed. The extracting agent reported 32
+shared-lifecycle/legacy tests passing (original output not retained), with focused
+follow-ups for receipt counting and captured socket ownership. Of 61 Windows
+integration tests, 59 initially passed; two failed because a new test request ID
+did not match its source sequence. Both passed after correcting that fixture.
+Two additional tests passed after fixing the command budget to cover lazy READY
+and STOP separately: controller timeout + 2 * motion timeout + 1, at most 300s.
+The assembled tests carry actual position/velocity through local TLS/TCP/UDP
+and reject a false STOP before pause while still cleaning up. Windows APIs and
+X4 remain simulated. Logs and usage are in the
+[Windows guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#optional-motion-diagnostic).
+No native game, Wine, Windows, WAN or full-suite run was repeated. A read-only
+inspection of the existing isolated offered checkpoint confirmed the two
+identity-fixture ships; the identity admission gate remains unchanged.
+
+Next evidence needed is native Windows startup/ABI behavior and successful
+paired movement. The failed 88m Linux initial alignment and source/client clock
+questions below remain unresolved and await user decisions; do not silently
+change either. GPU-free server development stays deferred per the user's
+client-first priority. Earlier entries below record the preceding steps.
+
 The Windows fixture CLI now derives registry status from the exact staged
 checkpoint before overlay installation or X4 startup. All five XML passes can
 pump the load connection on its owner thread; callback failure aborts the join.
@@ -9,8 +39,8 @@ with a synthetic gzip/XML registry. A delayed parser chunk forced a real
 keepalive before admission. Windows APIs and X4 remain simulated; no native
 Windows, game, full-size save, WAN or full-suite run was made. Logs:
 `.local/windows-registry-session-20261118.log` and
-`.local/windows-registry-assembled-20261118.log`. Motion overlay/IPC lifecycle
-integration remains next; this does not yet send ship movements on Windows.
+`.local/windows-registry-assembled-20261118.log`. At that point motion overlay/IPC
+integration was pending; the current optional integration is described above.
 The reader change passed 28 focused pump/marker/registry tests, including
 propagation across all five passes and unchanged cancellation exceptions:
 `.local/registry-inspection-pump-20261118.log`.
@@ -33,7 +63,7 @@ and require its correlated epoch/count receipt before admission. Existing
 wrappers preserve their APIs. Focused validation passed 22 core tests plus 48
 overlay/parser/session tests, including generated Lua with a simulated engine
 and local TCP/UDP with scripted participants. Evidence and limits are in the
-[Windows guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#remaining-motion-integration).
+[Windows guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#shared-registry-and-motion-integration).
 The CLI orchestration above now uses the reader's optional pump between bounded
 chunks. Do not block the connection owner during a live load without pumping.
 No native game, Windows, WAN, full-suite or full-size save reinspection was run
@@ -47,9 +77,9 @@ remote UDP endpoint. Fourteen simulated-API tests passed; the process-owner
 module passed 15 tests plus one new focused native-handle recheck test. A Zig
 0.15.2 x86-64 Windows compile against MinGW headers confirmed the table layout
 and API declaration. No native Windows, X4 or full-suite run was made. The
-validator is ready for the existing motion IPC's `validate_peer` hook but is
-not yet wired into the fixture CLI; its overlay/lifecycle integration remains
-next. See the [Windows guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#remaining-motion-integration)
+validator now serves the existing motion IPC's `validate_peer` hook in the
+optional fixture CLI path. See the
+[Windows guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#shared-registry-and-motion-integration)
 for private evidence paths and limitations. No initial alignment, clock basis,
 server architecture or normal profile changes were made.
 
@@ -75,9 +105,9 @@ module passed; subsequent focused checks including a new controller-fault
 regression passed (final two checks: 0.407s). The tests use real local TCP/UDP
 and the real motion IPC adapter with a simulated engine peer. Private output:
 `.local/observed-motion-session-20261118.log`. No X4, full-suite, Windows or WAN
-test was repeated. This hook is not yet wired into the Windows fixture CLI;
-its next required piece is the motion overlay/lifecycle using the new Windows
-peer validator, as described in the updated Windows client guide.
+test was repeated. The optional Windows fixture integration described above
+now uses this hook together with the shared motion lifecycle and Windows peer
+validator.
 
 Read-only inspection of native05's offered/staged checkpoint resolved saved
 index 1318 to ENH-870 and recorded its saved movement fields. The saved position

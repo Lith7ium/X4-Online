@@ -23,8 +23,8 @@ def _unique_fields(pairs):
     return result
 
 
-def read_connection_settings(path):
-    """Read bounded credentials without putting them on the command line."""
+def _read_settings(path):
+    """Read one bounded private JSON file without printing its contents."""
     path = Path(path)
     info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or
@@ -35,7 +35,12 @@ def read_connection_settings(path):
         data = stream.read(4097)
     if len(data) > 4096:
         raise ValueError('connection file too large')
-    settings = json.loads(data, object_pairs_hook=_unique_fields)
+    return json.loads(data, object_pairs_hook=_unique_fields)
+
+
+def read_connection_settings(path):
+    """Read bounded credentials without putting them on the command line."""
+    settings = _read_settings(path)
     expected = {'server_host', 'server_port', 'server_fingerprint',
                 'shared_key', 'file_token', 'file_slot'}
     if type(settings) is not dict or set(settings) != expected:
@@ -53,6 +58,16 @@ def read_connection_settings(path):
             raise ValueError('invalid connection credential format')
     settings['shared_key'] = bytes.fromhex(settings['shared_key'])
     return settings
+
+
+def read_motion_request(path):
+    """Read an explicit source stream for the optional one-attempt diagnostic."""
+    from authority.windows_fixture_session import validate_motion_request
+    request = _read_settings(path)
+    validate_motion_request(request, participant_timeout=30)
+    if request is None:
+        raise ValueError('motion settings object required')
+    return request
 
 
 class ObservationWindow:
@@ -82,6 +97,8 @@ def parser():
     result.add_argument('--network-dll', type=Path, required=True)
     result.add_argument('--network-dll-sha256', required=True,
                         help='independently verified SHA-256 of the Windows network DLL')
+    result.add_argument('--motion-config', type=Path,
+                        help='optional private JSON for an existing server motion stream; one attempt only')
     result.add_argument('--timeout', type=float, default=600, help='overall deadline in seconds (max 3600)')
     result.add_argument('--observe-seconds', type=float, default=30,
                         help='time to poll after admission; does not request a server resume')
@@ -103,6 +120,11 @@ def run(args):
         if not path.is_absolute():
             raise ValueError('absolute diagnostic paths required')
     settings = read_connection_settings(args.connection_file)
+    motion_request = None
+    if args.motion_config is not None:
+        if not args.motion_config.is_absolute():
+            raise ValueError('absolute motion settings path required')
+        motion_request = read_motion_request(args.motion_config)
 
     # Import only for a requested Windows run, so --help and config checks do
     # not require platform-specific APIs or touch game resources.
@@ -116,6 +138,7 @@ def run(args):
         deadline=time.monotonic() + args.timeout,
         keepalive_interval=args.keepalive_seconds,
         stop_requested=ObservationWindow(args.observe_seconds),
+        motion_request=motion_request,
     )
 
 

@@ -23,6 +23,7 @@ sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests')]
 from authority import experimental_windows_fixture_overlay as overlay
 from authority import windows_fixture_session as fixture_session
 from authority.experimental_tcp_control import offer_request
+from authority.experimental_tcp_motion import motion_digest
 from authority.experimental_tls_tunnel import start_server
 from authority.load_messages import Offer
 from authority.trusted_load_messages import decode_load_claim, encode_bound_offer
@@ -41,10 +42,19 @@ class AssembledFixtureSessionTest(unittest.TestCase):
     _create_view = workspace_fixture.WindowsFixtureWorkspaceTests._create_view
 
     def test_download_admit_command_and_cleanup_over_real_local_transports(self):
+        self.run_assembled()
+
+    def test_motion_waits_for_resume_then_stops_before_pause(self):
+        self.run_assembled(motion_enabled=True)
+
+    def test_failed_motion_stop_prevents_pause_receipt_and_still_closes_process(self):
+        self.run_assembled(motion_enabled=True, bad_stop=True)
+
+    def run_assembled(self, *, motion_enabled=False, bad_stop=False):
         content = gzip.compress(registry_xml().encode('ascii'))
         source = self.root / 'source.save'
         source.write_bytes(content)
-        offer = Offer(world_epoch='a' * 32, connection_handle=1, baseline_id=1, load_generation=1,
+        offer = Offer(world_epoch='9' * 32, connection_handle=1, baseline_id=1, load_generation=1,
                       attempt_id='c' * 32, checkpoint_id='checkpoint-' + 'd' * 32,
                       sha256=hashlib.sha256(content).hexdigest(), size=len(content), name='j1.xml.gz')
         bound = MarkerBoundOffer(offer, 'b' * 32)
@@ -75,6 +85,10 @@ class AssembledFixtureSessionTest(unittest.TestCase):
         inspecting_registry = threading.Event()
         registry_keepalives = []
         errors, claims, receipts, commands = [], [], [], []
+        motion_messages, motion_peers = [], []
+        source_sample = dict(version=1, epoch=REGISTRY_EPOCH, generation='8'*32,
+                             index=1, sequence=1, sector_macro='sector_a', source_time=1,
+                             x=10, y=20, z=30, velocity={'x': 1, 'y': 2, 'z': 3})
 
         def control_server():
             try:
@@ -107,8 +121,17 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                                                    'attempt_id': offer.attempt_id}).encode() + b'\n')
                     command = {'version': 1, 'kind': 'participant_command', 'epoch': offer.world_epoch,
                                'connection_handle': 1, 'request_id': 1, 'operation': 'resume'}
-                    connection.sendall(json.dumps(command).encode() + b'\n')
-                    receipts.append(json.loads(stream.readline()))
+                    outgoing = [command]
+                    if motion_enabled:
+                        outgoing += [dict(version=1, kind='motion_snapshot', connection_handle=1,
+                            session_epoch=offer.world_epoch, incarnation='7'*32, request_id=source_sample['sequence'],
+                            sample=source_sample), {**command, 'request_id': 3, 'operation': 'pause'}]
+                    for command in outgoing:
+                        connection.sendall(json.dumps(command).encode() + b'\n')
+                        reply = stream.readline()
+                        if not reply and bad_stop and command.get('operation') == 'pause':
+                            break
+                        receipts.append(json.loads(reply))
                     receipt_ready.set()
                     stop.wait(10)
             except BaseException as error:
@@ -162,6 +185,7 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                 self.done = threading.Event()
                 self.cleanup_confirmed = False
                 self.thread = None
+                self.motion_thread = None
                 processes.append(self)
 
             def start(self, view, *, profile_id, guard):
@@ -186,6 +210,15 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                 test.assertEqual(registry_context.group(2), REGISTRY_EPOCH + '|2')
                 destination = ('127.0.0.1', int(port_match.group(1)))
                 lease = lease_match.group(1)
+                motion_context = {}
+                if motion_enabled:
+                    for name in ('lease', 'attempt', 'epoch', 'generation'):
+                        match = re.search('authority_client_motion_' + name + r'="([0-9a-f]{32})"', config)
+                        test.assertIsNotNone(match)
+                        motion_context[name] = match.group(1)
+                    match = re.search(r'authority_client_motion_port=(\d+)', config)
+                    test.assertIsNotNone(match)
+                    motion_context['destination'] = ('127.0.0.1', int(match.group(1)))
                 fields = '|'.join(str(value) for value in (offer.world_epoch, 1, 1, 1,
                                   offer.checkpoint_id, offer.sha256, offer.attempt_id, 'save_009'))
                 workspace.log_path.write_text('[X4LAN] AUTH_DOWNLOAD_LOAD load_requested|' + fields + '\n' +
@@ -193,6 +226,36 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                     '[X4LAN] AUTH_RECOVERY_REGISTRY ' + registry_context.group(1) +
                     '|startup|' + registry_context.group(2) + '\n' +
                     '[X4LAN] AUTH_DOWNLOAD_LOAD pause_observed|' + fields + '\n')
+
+                def motion_participant():
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+                            udp.bind(('127.0.0.1', 0))
+                            udp.settimeout(.05)
+                            motion_peers.append(udp.getsockname())
+                            prefix = [motion_context['lease'], motion_context['attempt']]
+                            identity = [motion_context['epoch'], motion_context['generation']]
+                            udp.sendto('|'.join(['R', *prefix, 'READY', *identity]).encode(),
+                                       motion_context['destination'])
+                            while not self.done.is_set():
+                                try:
+                                    data, peer = udp.recvfrom(1024)
+                                except socket.timeout:
+                                    continue
+                                parts = data.decode('ascii').split('|')
+                                test.assertEqual(parts[:3], ['M', *prefix])
+                                motion_messages.append(parts[3])
+                                if parts[3] == 'BIND':
+                                    test.assertEqual(parts[5:11], [*identity, '1', '1', 'sector_a', motion_digest(source_sample)])
+                                    test.assertEqual(parts[11:], ['1', '10', '20', '30', '1', '2', '3'])
+                                    reply = ['R', *prefix, 'BOUND', *parts[4:11]]
+                                elif parts[3] == 'STOP':
+                                    reply = ['R', *prefix, 'WRONG' if bad_stop else 'STOPPED', *parts[4:]]
+                                else:
+                                    raise AssertionError('unexpected motion command')
+                                udp.sendto('|'.join(reply).encode(), peer)
+                    except BaseException as error:
+                        errors.append(error)
 
                 def participant():
                     try:
@@ -209,7 +272,13 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                                 if len(parts) != 5 or parts[:3] != ['CMD', lease, offer.world_epoch]:
                                     raise AssertionError('unexpected UDP command')
                                 commands.append(parts[4])
+                                if motion_enabled and parts[4] == 'pause':
+                                    test.assertEqual(motion_messages, ['BIND', 'STOP'])
                                 udp.sendto('|'.join(('RECEIPT', *parts[1:], 'confirmed')).encode(), peer)
+                                if motion_enabled and parts[4] == 'resume':
+                                    test.assertIsNone(self.motion_thread)
+                                    self.motion_thread = threading.Thread(target=motion_participant, name='fake-x4-motion')
+                                    self.motion_thread.start()
                     except BaseException as error:
                         errors.append(error)
                 self.thread = threading.Thread(target=participant, name='fake-x4-participant')
@@ -220,6 +289,9 @@ class AssembledFixtureSessionTest(unittest.TestCase):
 
             def close(self):
                 self.done.set()
+                if self.motion_thread is not None:
+                    self.motion_thread.join(3)
+                    test.assertFalse(self.motion_thread.is_alive())
                 if self.thread is not None:
                     self.thread.join(3)
                     if self.thread.is_alive():
@@ -255,25 +327,40 @@ class AssembledFixtureSessionTest(unittest.TestCase):
             # substituted; installation and every transport remain real.
             with patch.object(overlay, '_windows_save_path', return_value=r'C:\Private\45841\save'), \
                  patch.object(fixture_session, 'saved_status', side_effect=inspect_with_slow_first_chunk), \
+                 patch.object(fixture_session, 'WindowsMotionPeer',
+                              side_effect=lambda process, sock: lambda peer: peer in motion_peers), \
                  patch.object(fixture_session, 'WindowsX4Process', FakeX4Process):
-                result = fixture_session.run_fixture_session(enabled=True, workspace=workspace,
+                options = dict(enabled=True, workspace=workspace,
                     server_host='127.0.0.1', server_port=port, server_fingerprint=fingerprint,
                     shared_key=b'k' * 32, file_token='f' * 32, file_slot=1, windows_dll=dll,
                     dll_sha256=dll_digest, deadline=time.monotonic() + 15, keepalive_interval=.2,
-                    stop_requested=receipt_ready.is_set, io_timeout=3, participant_timeout=3)
-            self.assertEqual(result, {'client_admitted': True, 'participant_receipts': 1,
-                                      'owned_cleanup_confirmed': True, 'configuration_redacted': True})
+                    stop_requested=receipt_ready.is_set, io_timeout=3, participant_timeout=3,
+                    motion_request={'generation': '8'*32, 'indices': [1], 'timeout': 1} if motion_enabled else None)
+                if bad_stop:
+                    with self.assertRaisesRegex(ValueError, 'foreign motion stop'):
+                        fixture_session.run_fixture_session(**options)
+                else:
+                    result = fixture_session.run_fixture_session(**options)
+            if not bad_stop:
+                expected = {'client_admitted': True, 'participant_receipts': 3 if motion_enabled else 1,
+                            'owned_cleanup_confirmed': True, 'configuration_redacted': True}
+                if motion_enabled:
+                    expected.update(motion_receipts=1, motion_stop_confirmed=True)
+                self.assertEqual(result, expected)
             self.assertEqual(len(claims), 1)
             self.assertTrue(registry_keepalives)
             self.assertEqual(claims[0].marker, bound.marker)
             self.assertEqual(claims[0].receipt.attempt_id, offer.attempt_id)
             self.assertTrue(claims[0].load_event_observed)
             self.assertTrue(claims[0].paused_observed)
-            self.assertEqual(len(receipts), 1)
+            self.assertEqual(len(receipts), 2 if bad_stop else 3 if motion_enabled else 1)
             self.assertEqual(receipts[0]['status'], 'confirmed')
             self.assertEqual(receipts[0]['operation'], 'resume')
             self.assertEqual(receipts[0]['request_id'], 1)
-            self.assertEqual(commands, ['resume'])
+            if motion_enabled:
+                self.assertEqual(motion_messages, ['BIND', 'STOP'])
+                self.assertEqual(receipts[1]['kind'], 'motion_receipt')
+            self.assertEqual(commands, ['resume', 'pause'] if motion_enabled and not bad_stop else ['resume'])
             self.assertEqual(errors, [])
             self.assertTrue(processes[0].cleanup_confirmed)
             self.assertFalse((workspace.view / 'extensions' / 'x4_lan_lab' / 'ui' / 'config.lua').exists())

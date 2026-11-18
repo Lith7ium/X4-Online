@@ -91,6 +91,42 @@ class FixtureOverlayTest(unittest.TestCase):
                 self.install(**changes)
             self.assertEqual(list((self.view / 'extensions').iterdir()), [])
 
+    def test_playback_overlay_reuses_motion_modules_and_stop_gate(self):
+        settings = dict(port=23456, lease='1'*32, attempt='2'*32, generation='3'*32,
+                        nonce='4'*32, router_generation='5'*32, index=1318, timeout=5,
+                        saved_playback_fixture='recovery_enh_870')
+        status = ('ready', '4ba7be438ebb04ec5bb85fdb95b5a488', 10082, '9'*64)
+        manifest = self.install(registry_status=status, registry_nonce='6'*32, motion_settings=settings)
+        target = self.view / 'extensions/x4_lan_lab'
+        for name, digest in manifest.items():
+            self.assertEqual(hashlib.sha256((target/name).read_bytes()).hexdigest(), digest)
+        paths = [item.attrib['name'] for item in ET.parse(target/'ui.xml').iter('file')]
+        for before, after in (('local_udp_module.lua', 'authority_recovered_client_motion.lua'),
+                              ('replica_motion_binding.lua', 'saved_motion_apply.lua'),
+                              ('motion_playback.lua', 'authority_recovered_client_motion.lua'),
+                              ('authority_recovered_client_motion.lua', 'authority_two_x4_participant_probe.lua')):
+            self.assertLess(paths.index('ui/'+before), paths.index('ui/'+after))
+        control = (target/'ui/authority_two_x4_participant_probe.lua').read_text()
+        self.assertIn("client_motion:state()=='stopped'", control)
+        self.assertIn('saved_playback_fixture=cfg.authority_client_motion_saved_playback_fixture', control)
+        self.assertIn('X4LAN_RECOVERED_CLIENT_LOAD_READY', (target/'ui/authority_download_load_probe.lua').read_text())
+        self.assertNotIn('md/authority_saved_motion_apply.xml', manifest)  # Playback uses native setters, not the one-shot MD route.
+        root = Path(__file__).resolve().parents[1]
+        for path in paths:
+            subprocess.run(['luajit', '-b', str(target/path), str(target/'compiled.out')],
+                           check=True, capture_output=True, cwd=root)
+
+    def test_motion_context_collision_refuses_before_writing(self):
+        settings = dict(port=23456, lease='1'*32, attempt='2'*32, generation='3'*32,
+                        nonce='4'*32, router_generation='5'*32, index=1, timeout=5)
+        status = ('ready', '8'*32, 2, '9'*64)
+        for altered in ({**settings, 'port': self.options['participant_port']},
+                        {**settings, 'lease': self.options['participant_lease']},
+                        {**settings, 'generation': '6'*32}):
+            with self.subTest(altered=altered), self.assertRaisesRegex(ValueError, 'overlaps'):
+                self.install(registry_status=status, registry_nonce='6'*32, motion_settings=altered)
+            self.assertEqual(list((self.view/'extensions').iterdir()), [])
+
     def test_bad_input_fails_before_creating_any_extension(self):
         for changes in ({'new_test_view': False}, {'participant_port': 0},
                         {'participant_lease': 'bad'}, {'dll_sha256': '0' * 64},

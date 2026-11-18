@@ -14,7 +14,8 @@ MARKER_TAG = b'AUTH_MARKER '
 REGISTRY_TAG = b'[X4LAN] AUTH_RECOVERY_REGISTRY '
 TICKET_FIELDS = ('world_epoch', 'connection_handle', 'baseline_id', 'load_generation',
                  'checkpoint_id', 'sha256', 'attempt_id', 'slot')
-STREAM_FAULTS = (b'auth_participant error', b'auth_identity load error')
+STREAM_FAULTS = (b'auth_participant error', b'auth_identity load error',
+                 b'auth_recovered_client_motion error', b'auth_client_playback failure')
 
 
 def validate_client_receipts(data, ticket, marker):

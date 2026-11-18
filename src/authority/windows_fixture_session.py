@@ -7,6 +7,7 @@ session. The workspace owns the profile/view/log and must keep them exclusive.
 import math
 import re
 import secrets
+import socket
 import time
 
 from .checkpoints import Checkpoint
@@ -15,8 +16,10 @@ from .experimental_windows_fixture_overlay import install_fixture_overlay
 from .load_observations import BoundReceiptStream
 from .local_participant_control import LocalParticipantControl
 from .observed_client_session import ObservedClientSession
+from .participant_motion import ParticipantMotion
 from .saved_registry import saved_status
 from .windows_x4_process import WindowsX4Process
+from .windows_motion_peer import WindowsMotionPeer
 
 
 class FixtureCleanupError(RuntimeError):
@@ -35,10 +38,56 @@ def _annotate(error, message):
         pass
 
 
+def validate_motion_request(request, participant_timeout):
+    """Validate the caller-selected server stream; no lease is inferred."""
+    if request is None:
+        return
+    fields = {'generation', 'indices', 'timeout'}
+    if (type(request) is not dict or
+            set(request) not in (fields, fields | {'saved_playback_fixture'}) or
+            type(request['generation']) is not str or
+            not re.fullmatch(r'[0-9a-f]{32}', request['generation']) or
+            type(request['indices']) is not list or not 1 <= len(request['indices']) <= 32 or
+            any(type(index) is not int or not 1 <= index <= 200000 for index in request['indices']) or
+            len(set(request['indices'])) != len(request['indices']) or
+            type(request['timeout']) not in (int, float) or not math.isfinite(request['timeout']) or
+            not 0 < request['timeout'] <= 30 or request['timeout'] >= participant_timeout or
+            participant_timeout + 2 * request['timeout'] + 1 > 300):
+        raise ValueError('invalid bounded client motion request')
+    if 'saved_playback_fixture' in request and (
+            request['saved_playback_fixture'] != 'recovery_enh_870' or request['indices'] != [1318]):
+        raise ValueError('invalid saved playback request')
+
+
+def _motion_settings(request, registry_status, bound, controller, registry_nonce, port):
+    """Combine one explicit source generation with fresh local IPC contexts."""
+    if not registry_status or registry_status[0] != 'ready':
+        raise ValueError('client motion requires an initialized saved registry')
+    excluded = {registry_status[1], bound.offer.world_epoch, bound.offer.attempt_id,
+                bound.offer.checkpoint_id.removeprefix('checkpoint-'), controller.lease, registry_nonce}
+    if request['generation'] in excluded:
+        raise ValueError('motion generation overlaps an existing context')
+    excluded.add(request['generation'])
+    settings = {'port': port, 'generation': request['generation'], 'timeout': request['timeout']}
+    for name in ('lease', 'attempt', 'nonce', 'router_generation'):
+        token = secrets.token_hex(16)
+        while token in excluded:
+            token = secrets.token_hex(16)
+        excluded.add(token)
+        settings[name] = token
+    if len(request['indices']) == 1:
+        settings['index'] = request['indices'][0]
+    else:
+        settings['indices'] = list(request['indices'])
+    if 'saved_playback_fixture' in request:
+        settings['saved_playback_fixture'] = request['saved_playback_fixture']
+    return settings
+
+
 def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         server_fingerprint, shared_key, file_token, file_slot,
                         windows_dll, dll_sha256, deadline, keepalive_interval,
-                        stop_requested, io_timeout=30, participant_timeout=30):
+                        stop_requested, io_timeout=30, participant_timeout=30, motion_request=None):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -69,6 +118,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
             type(file_token) is not str or not re.fullmatch(r'[0-9a-f]{32}', file_token) or
             type(dll_sha256) is not str or not re.fullmatch(r'[0-9a-f]{64}', dll_sha256)):
         raise ValueError('invalid enabled fixture session configuration')
+    validate_motion_request(motion_request, participant_timeout)
 
     outer_error = None
     try:
@@ -78,6 +128,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 file_slot=file_slot, deadline=deadline, io_timeout=io_timeout,
                 keepalive_interval=keepalive_interval) as owner:
             controller = process = session = None
+            motion_socket = motion = None
             launch_attempted = overlay_registered = False
             original = None
             cleanup_errors = []
@@ -98,10 +149,17 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     raise RuntimeError('fixture workspace unavailable after registry inspection')
                 registry_nonce = secrets.token_hex(16)
                 controller = LocalParticipantControl(enabled=True, timeout=participant_timeout)
+                motion_settings = None
+                if motion_request is not None:
+                    motion_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    motion_socket.bind(('127.0.0.1', 0))
+                    motion_settings = _motion_settings(motion_request, registry_status, bound,
+                        controller, registry_nonce, motion_socket.getsockname()[1])
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
                     participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256,
-                    registry_status=registry_status, registry_nonce=registry_nonce)
+                    registry_status=registry_status, registry_nonce=registry_nonce,
+                    motion_settings=motion_settings)
                 workspace.register_overlay(hashes)
                 overlay_registered = True
                 def launch_guard():
@@ -118,9 +176,14 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                             process.is_running() is True and workspace.guard() is True and
                             time.monotonic() < deadline)
 
+                if motion_settings is not None:
+                    motion = ParticipantMotion(motion_socket,
+                        {'motion': {**motion_settings, 'epoch': registry_status[1]}}, running_guard,
+                        WindowsMotionPeer(process, motion_socket))
                 session = ObservedClientSession(owner, bound, controller, slot='save_009',
                     read_log=workspace.read_log, guard=running_guard, deadline=deadline,
-                    registry_status=registry_status, registry_nonce=registry_nonce)
+                    registry_status=registry_status, registry_nonce=registry_nonce,
+                    apply_motion=motion, motion_control=motion)
                 if session.start() is not True:
                     raise RuntimeError('fixture admission unconfirmed')
                 commands = 0
@@ -147,10 +210,32 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     delay = min(.05 - (now - poll_started), deadline - now)
                     if delay > 0:
                         time.sleep(delay)
+                if motion is not None and motion.confirmed_samples == 0:
+                    raise RuntimeError('client motion diagnostic consumed no source sample')
                 result = {'client_admitted': True, 'participant_receipts': commands}
+                if motion is not None:
+                    result['motion_receipts'] = motion.confirmed_samples
             except BaseException as error:
                 original = error
             finally:
+                if motion is not None:
+                    try:
+                        if motion.running and not motion.stopped:
+                            motion.stop()
+                        if result is not None and not motion.stopped:
+                            raise RuntimeError('client motion stop unconfirmed')
+                        motion.close()
+                        if result is not None:
+                            result['motion_stop_confirmed'] = True
+                    except BaseException:
+                        cleanup_errors.append('client motion stop or cleanup unconfirmed')
+                # A construction failure can leave only the bound socket. On
+                # an IPC failure, close it even if cooperative STOP was lost.
+                if motion_socket is not None:
+                    try:
+                        motion_socket.close()
+                    except BaseException:
+                        cleanup_errors.append('client motion socket cleanup failed')
                 if process is not None:
                     try:
                         closed = process.close()

@@ -8,7 +8,6 @@ FD handoff, all process/checkpoint/STOP fences, final log checks and redaction.
 The recovered-server supervisor uses this only in its opt-in private diagnostic;
 it is not a gameplay or cross-platform client.
 """
-import math
 import os
 from pathlib import Path
 import re
@@ -16,27 +15,15 @@ import stat
 import xml.etree.ElementTree as ET
 import authority_load_live as load
 import authority_two_x4_resume_live as participant
+from authority.client_motion_overlay import (
+    HEX, MD, MODULES, PLAYER_SECTOR_MD, PLAYER_SECTOR_MODULE,
+    RECOVERY_APPLY_EPOCH, RECOVERY_APPLY_FIXTURE, RECOVERY_APPLY_MD,
+    RECOVERY_APPLY_MODULE, RECOVERY_PLAYBACK_MODULE, SECRET_FIELDS,
+    append_load_ready_hook, render_motion_config, select_motion_sources,
+    transform_motion_control, validate_motion_settings,
+)
 
 ROOT=Path(__file__).resolve().parents[2]
-HEX=re.compile(r'[0-9a-f]{32}\Z')
-MODULES=(
- ('tools/dev/authority_registry_resolve_string.lua','authority_registry_resolve_string.lua'),
- ('src/authority/lua/replica_motion_binding.lua','replica_motion_binding.lua'),
- ('src/authority/lua/saved_baseline_motion_binding.lua','saved_baseline_motion_binding.lua'),
- ('src/authority/lua/motion_buffer.lua','motion_buffer.lua'),
- ('src/authority/lua/client_motion_event_router.lua','client_motion_event_router.lua'),
- ('src/authority/lua/motion_client_owner.lua','motion_client_owner.lua'),
- ('tools/dev/authority_recovered_client_motion.lua','authority_recovered_client_motion.lua'),
-)
-MD=('authority_saved_baseline_motion_bind.xml','authority_replica_motion_bind.xml')
-SECRET_FIELDS=('lease','attempt','generation','nonce','router_generation')
-PLAYER_SECTOR_MODULE=('src/authority/lua/player_sector_interest.lua','player_sector_interest.lua')
-PLAYER_SECTOR_MD='authority_player_sector_interest.xml'
-RECOVERY_APPLY_FIXTURE='recovery_enh_870'
-RECOVERY_APPLY_EPOCH='4ba7be438ebb04ec5bb85fdb95b5a488'
-RECOVERY_APPLY_MODULE=('src/authority/lua/saved_motion_apply.lua','saved_motion_apply.lua')
-RECOVERY_APPLY_MD='authority_saved_motion_apply.xml'
-RECOVERY_PLAYBACK_MODULE=('src/authority/lua/motion_playback.lua','motion_playback.lua')
 
 
 def read_ticket_token(config, field, *, prefix=''):
@@ -104,43 +91,13 @@ class Installation:
 
 def install(case,profile,status,settings):
     """Extend existing disposable client after load/control/registry installation."""
-    if (type(status) is not tuple or len(status)!=4 or status[0]!='ready' or
-        type(status[1]) is not str or not HEX.fullmatch(status[1]) or
-        type(status[2]) is not int or not 1<=status[2]<=200000 or
-        type(status[3]) is not str or not re.fullmatch(r'[0-9a-f]{64}',status[3])):
-        raise ValueError('observed saved registry required')
-    fields={'port','lease','attempt','generation','nonce','router_generation','timeout'}
-    if (type(settings) is not dict or
-        set(settings)-{'player_sector','saved_apply_fixture','saved_playback_fixture'} not in (fields|{'index'},fields|{'indices'})):
-        raise ValueError('invalid client motion settings')
+    selection=validate_motion_settings(status,settings)
+    status=selection.status
+    settings=selection.settings
     saved_apply_fixture=settings.get('saved_apply_fixture')
-    if 'saved_apply_fixture' in settings and (
-        saved_apply_fixture != RECOVERY_APPLY_FIXTURE or status[1] != RECOVERY_APPLY_EPOCH or
-        settings.get('index') != 1318 or 'indices' in settings):
-        raise ValueError('invalid recovery saved-apply fixture')
     saved_playback_fixture=settings.get('saved_playback_fixture')
-    if 'saved_playback_fixture' in settings and (
-        saved_playback_fixture != RECOVERY_APPLY_FIXTURE or status[1] != RECOVERY_APPLY_EPOCH or
-        settings.get('index') != 1318 or 'indices' in settings or 'saved_apply_fixture' in settings):
-        raise ValueError('invalid recovery saved-playback fixture')
     player_sector=settings.get('player_sector')
-    if 'player_sector' in settings:
-        if (type(player_sector) is not dict or set(player_sector) not in
-            ({'incarnation','nonce'}, {'incarnation','nonce','after_bound'}) or
-            ('after_bound' in player_sector and player_sector['after_bound'] is not True) or
-            any(type(player_sector[name]) is not str or not HEX.fullmatch(player_sector[name])
-                for name in ('incarnation','nonce'))):
-            raise ValueError('invalid player sector settings')
-    indices=[settings['index']] if 'index' in settings else settings['indices']
-    if (type(indices) is not list or not 1<=len(indices)<=32 or
-        any(type(n) is not int or not 1<=n<=status[2] for n in indices) or len(set(indices))!=len(indices)):
-        raise ValueError('invalid client motion indices')
-    if (type(settings['port']) is not int or not 1<=settings['port']<=65535 or
-        type(settings['timeout']) not in (int,float) or not math.isfinite(settings['timeout']) or
-        not 0<settings['timeout']<=30):raise ValueError('invalid client motion bounds')
     tokens=[settings[k] for k in SECRET_FIELDS]
-    if any(type(x) is not str or not HEX.fullmatch(x) for x in tokens) or len(set(tokens+[status[1]]))!=6:
-        raise ValueError('invalid or colliding client motion tokens')
     case,profile=Path(case),Path(profile)
     if (case.is_symlink() or profile.is_symlink() or not profile.resolve().is_relative_to(case.resolve()) or
         profile.name!='45841' or (profile/'save').is_symlink() or not (profile/'save').is_dir()):
@@ -202,11 +159,10 @@ def install(case,profile,status,settings):
     submission_hook="  assert(state:submit('isolated-client',epoch,tonumber(id),op))\n"
     if saved_playback_fixture is not None and ctl.count(submission_hook)!=1:
         raise ValueError('client pause submission hook missing or ambiguous')
-    modules=MODULES if player_sector is None else (*MODULES[:-1],PLAYER_SECTOR_MODULE,MODULES[-1])
-    md_names=MD if player_sector is None else (*MD,PLAYER_SECTOR_MD)
+    motion_control=transform_motion_control(ctl,settings)
+    load_text=append_load_ready_hook(load_text)
+    modules,md_names=select_motion_sources(settings)
     if saved_apply_fixture is not None:
-        modules=(*modules[:-1],RECOVERY_APPLY_MODULE,modules[-1])
-        md_names=(*md_names,RECOVERY_APPLY_MD)
         apply_sources=(ROOT/RECOVERY_APPLY_MODULE[0],ROOT/'tools/dev'/RECOVERY_APPLY_MD)
         if (any(path.is_symlink() or not path.is_file() for path in apply_sources) or
             'ui/'+RECOVERY_APPLY_MODULE[1] in manifest_files):
@@ -216,7 +172,6 @@ def install(case,profile,status,settings):
         for source,name in playback_modules:
             if ((ROOT/source).is_symlink() or not (ROOT/source).is_file() or 'ui/'+name in manifest_files):
                 raise ValueError('saved playback overlay source or manifest is invalid')
-        modules=(*modules[:-1],*playback_modules,modules[-1])
     if player_sector is not None:
         sector_sources=(ROOT/PLAYER_SECTOR_MODULE[0],ROOT/'tools/dev'/PLAYER_SECTOR_MD)
         if (any(path.is_symlink() or not path.is_file() for path in sector_sources) or
@@ -233,51 +188,8 @@ def install(case,profile,status,settings):
     for name,target in zip(md_names,files[len(modules):]):
         with target.open('xb') as out:out.write((ROOT/'tools/dev'/name).read_bytes())
     manifest.write_text(mf.replace(manifest_hook,''.join('    <file name="ui/'+name+'" />\n' for _,name in modules)+manifest_hook),encoding='utf-8')
-    config_add=',authority_client_motion_enabled=true,authority_client_motion_epoch="'+status[1]+'",authority_client_motion_baseline='+str(status[2])
-    config_add+=',authority_client_motion_port='+str(settings['port'])
-    if 'index' in settings:config_add+=',authority_client_motion_index='+str(settings['index'])
-    else:config_add+=',authority_client_motion_indices={'+','.join(map(str,indices))+'}'
-    config_add+=',authority_client_motion_timeout='+format(settings['timeout'],'.17g')
-    for name in SECRET_FIELDS:config_add+=',authority_client_motion_'+name+'="'+settings[name]+'"'
-    if saved_apply_fixture is not None:
-        config_add+=',authority_client_motion_saved_apply_fixture="'+saved_apply_fixture+'"'
-    if saved_playback_fixture is not None:
-        config_add+=',authority_client_motion_saved_playback_fixture="'+saved_playback_fixture+'"'
-    if player_sector is not None:
-        for name in ('incarnation','nonce'):
-            config_add+=',authority_client_motion_player_sector_'+name+'="'+player_sector[name]+'"'
+    config_add=render_motion_config(status,settings)
     config.write_text(cfg[:-2]+config_add+'}\n',encoding='ascii');config.chmod(0o600)
-    loader.write_text(load_text+"\nfunction X4LAN_RECOVERED_CLIENT_LOAD_READY() return state=='done' and not failed end\n",encoding='utf-8')
-    code=''' if cfg.authority_client_motion_enabled then
-  if not client_motion and X4LAN_RECOVERED_CLIENT_LOAD_READY() and not ffi.C.IsGamePaused() then
-   client_motion=assert(X4LAN_RECOVERED_CLIENT_MOTION.new_x4({enabled=true,port=cfg.authority_client_motion_port,
-    epoch=cfg.authority_client_motion_epoch,baseline=cfg.authority_client_motion_baseline,index=cfg.authority_client_motion_index,
-    indices=cfg.authority_client_motion_indices,
-    lease=cfg.authority_client_motion_lease,attempt=cfg.authority_client_motion_attempt,generation=cfg.authority_client_motion_generation,
-    nonce=cfg.authority_client_motion_nonce,router_generation=cfg.authority_client_motion_router_generation,
-    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))
-  end
-  if client_motion then assert(client_motion:tick())end
- end
-'''
-    if saved_apply_fixture is not None:
-        code=code.replace('    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
-                          '    saved_apply_fixture=cfg.authority_client_motion_saved_apply_fixture,\n'
-                          '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
-    if saved_playback_fixture is not None:
-        code=code.replace('    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
-                          '    saved_playback_fixture=cfg.authority_client_motion_saved_playback_fixture,\n'
-                          '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
-        # Reject pause before the existing engine state machine can dispatch it.
-        # The caller must obtain/drain STOPPED before requesting native pause.
-        pause_guard="  assert(op~='pause' or not client_motion or client_motion:state()=='stopped','client playback STOP required before pause')\n"
-        ctl=ctl.replace(submission_hook,pause_guard+submission_hook)
-    if player_sector is not None:
-        after_bound=',after_bound=true' if player_sector.get('after_bound') is True else ''
-        code=code.replace('    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))',
-                          '    player_sector={incarnation=cfg.authority_client_motion_player_sector_incarnation,nonce=cfg.authority_client_motion_player_sector_nonce'+after_bound+'},\n'
-                          '    timeout=cfg.authority_client_motion_timeout,expected_save_path=cfg.authority_load_save_path}))')
-    ctl=ctl.replace(local_hook,local_hook+'ffi.cdef[[bool IsGamePaused(void);]]\nlocal client_motion=nil\n')
-    ctl=ctl.replace(validity_hook," if not ffi.C.IsPlayerValid() then if client_motion then error('client motion player lost') end;return end\n")
-    control.write_text(ctl.replace(control_hook,control_hook+code),encoding='utf-8')
+    loader.write_text(load_text,encoding='utf-8')
+    control.write_text(motion_control,encoding='utf-8')
     return Installation([config,manifest,control,loader,*files],config,settings)

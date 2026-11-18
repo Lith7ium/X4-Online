@@ -28,8 +28,16 @@ class _CheckedParticipant:
 
     def _call(self, operation, handles):
         session = self._session
+        if session._motion_control is not None:
+            if session._motion_control.before_control(operation) is not True:
+                raise RuntimeError('motion preparation did not confirm')
+            if not session._check():
+                raise RuntimeError('client log became incomplete before command')
         if getattr(session.controller, operation)(handles) is not True:
             raise RuntimeError('local participant did not confirm')
+        if session._motion_control is not None:
+            if session._motion_control.after_control(operation) is not True:
+                raise RuntimeError('motion transition did not confirm')
         if not session._check():
             raise RuntimeError('client log became incomplete during command')
         return True
@@ -52,7 +60,8 @@ class ObservedClientSession:
     """
 
     def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
-                 apply_motion=None, registry_status=None, registry_nonce=None):
+                 apply_motion=None, registry_status=None, registry_nonce=None,
+                 motion_control=None):
         if not isinstance(owner, ExperimentalClientOwner) or not isinstance(controller, LocalParticipantControl):
             raise ValueError('client owner and local controller required')
         if owner._thread is not threading.current_thread():
@@ -63,6 +72,16 @@ class ObservedClientSession:
         try:
             if apply_motion is not None and not callable(apply_motion):
                 raise ValueError('motion consumer must be callable')
+            motion_timeout = 0
+            if motion_control is not None:
+                motion_timeout = getattr(motion_control, 'timeout', None)
+                if (apply_motion is not motion_control or
+                        not callable(getattr(motion_control, 'before_control', None)) or
+                        not callable(getattr(motion_control, 'after_control', None)) or
+                        type(motion_timeout) not in (int, float) or not math.isfinite(motion_timeout) or
+                        not 0 < motion_timeout < controller.timeout or
+                        controller.timeout + 2 * motion_timeout + 1 > 300):
+                    raise ValueError('bounded motion lifecycle matching the consumer required')
             if (not callable(read_log) or not callable(guard) or type(deadline) not in (int, float) or
                     not math.isfinite(deadline) or deadline <= time.monotonic()):
                 raise ValueError('bounded session callbacks required')
@@ -83,6 +102,8 @@ class ObservedClientSession:
             self._load = owner._load
             self._slot, self._read_log, self._guard, self._deadline = slot, read_log, guard, float(deadline)
             self._apply_motion = apply_motion
+            self._motion_control = motion_control
+            self._participant_timeout = controller.timeout + 2 * motion_timeout + 1
             self._socket, self._lease = controller.sock, controller.lease
             self._controller_timeout = controller.timeout
             self._hook = self._wait_hook
@@ -204,8 +225,9 @@ class ObservedClientSession:
             self.owner.paused(attempt, True)
             if not self._check(): raise RuntimeError('client log became incomplete')
             self._state = 'activating'
-            # Leave one second for participant framing around its controller.
-            activate_options = {'participant_timeout': self._controller_timeout + 1}
+            # A first pause may need both lazy READY and STOPPED before the
+            # native pause. Each IPC has its own timeout, plus framing time.
+            activate_options = {'participant_timeout': self._participant_timeout}
             if self._apply_motion is not None:
                 activate_options['apply_motion'] = self._checked_motion
             self.owner.activate(attempt, _CheckedParticipant(self), **activate_options)

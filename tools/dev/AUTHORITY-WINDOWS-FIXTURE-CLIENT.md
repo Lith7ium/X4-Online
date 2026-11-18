@@ -3,9 +3,10 @@
 `authority_windows_fixture_client.py` composes the existing encrypted client
 connection, checkpoint transfer, fixture overlay, Windows X4 process owner and
 observed participant session. It is an opt-in developer diagnostic. It does
-not install a playable multiplayer client, replicate ships, or send player
-actions. A successful result records a bounded load/admission observation and
-owned-process cleanup, not gameplay or Internet acceptance.
+not install a playable multiplayer client or send player actions. Optional
+motion diagnostics can consume an existing server stream and select the narrow
+recovery playback experiment described below. A successful result records
+bounded observations and owned-process cleanup, not gameplay or Internet acceptance.
 
 ## Prerequisites
 
@@ -145,7 +146,71 @@ X4, loads the right profile on Windows, completes Internet admission, or
 supports the user's shared-world gameplay goal. A native Windows run is still
 required.
 
-## Remaining motion integration
+## Optional motion diagnostic
+
+The CLI can now install and own the existing motion receiver using
+`--motion-config C:\X4Test\motion.json`. This is a separate private JSON file:
+
+```json
+{
+  "generation": "32_LOWERCASE_HEXADECIMAL_SOURCE_GENERATION",
+  "indices": [1318],
+  "timeout": 5,
+  "saved_playback_fixture": "recovery_enh_870"
+}
+```
+
+Replace the generation placeholder with the generation of an already configured
+server motion stream. The flag does not start that source or configure the
+server. The downloaded checkpoint must have an initialized registry, and the
+server must send matching registry indices and generation. The existing marked
+identity-fixture checkpoint is still required. Local IPC contexts are generated
+fresh and must be distinct from the checkpoint, registry and participant contexts.
+
+Omit `saved_playback_fixture` for a binding-only diagnostic: it checks delivery
+and local binding receipts without writing ship positions. Its `indices` list
+can contain 1–32 unique indices, but the existing receiver binds one track on
+its first accepted sample; this is not simultaneous multi-ship playback. The
+only enabled playback fixture is `recovery_enh_870`, registry index 1318,
+with the existing fixed registry epoch and sector checks. Its first source
+sequence must be one. Position, velocity, sequence and source time pass through
+unchanged. Initial alignment, movement limits and clock semantics are unchanged.
+
+Readiness is deferred until the first sample or STOP after confirmed resume.
+Pause must receive STOPPED before the native pause is dispatched. STOP is also
+attempted before process cleanup; its failure prevents a successful diagnostic.
+This is one motion attempt: once stopped, that lease cannot resume. At least
+one confirmed motion receipt is required for a positive motion diagnostic;
+such a receipt alone does not prove a native position write or visible movement.
+
+The motion timeout is positive, below the CLI's 30-second local control timeout,
+and at most 30 seconds. The participant command budget reserves local control
+plus two motion deadlines plus one second: a first pause may need READY and
+STOPPED separately. The example uses 41 seconds; the server must allow more
+than that for its response. The combined client budget cannot exceed 300 seconds.
+
+The shared overlay extraction passed 23 focused tests. The shared lifecycle
+extraction passed 32 focused tests according to the agent's run, followed by
+focused checks for receipt counting and captured socket ownership; the original
+32-test output was not saved to a file. The Windows integration run had 61 tests:
+59 passed, and two new assembled motion tests exposed a test request ID that did
+not match its sample sequence. After correcting only that fixture, both failed
+tests passed. Two further checks passed for the corrected READY/STOP timeout budget.
+Private logs: `.local/client-motion-overlay-20261118.log`,
+`.local/windows-client-motion-integration-20261118.log`,
+`.local/windows-client-motion-integration-rerun-20261118.log` and
+`.local/windows-motion-budget-20261118.log`.
+
+The assembled motion tests use actual local TLS/file/TCP/UDP and the actual IPC
+adapter, including position and velocity delivery. They check STOP before pause
+and refuse a positive pause receipt when STOP evidence is wrong, while still
+closing the owned process. Windows ownership APIs and X4 are simulated; these
+tests do not execute the Windows DLL or engine setter. Native Windows playback
+and Internet operation remain untested. The preceding paired Linux experiment
+also failed its unchanged 50m initial alignment guard at approximately 88m;
+continuous paired motion remains unproven.
+
+## Shared registry and motion integration
 
 The registry prerequisite now has shared building blocks. The saved verifier
 and status reader live in `authority.registry_evidence` and
@@ -188,11 +253,12 @@ including cancellation during the final component pass without translating
 the callback's exception into a save-format failure. Private log:
 `.local/registry-inspection-pump-20261118.log`.
 
-The observed session can accept an optional motion consumer through the existing
-TCP owner. This CLI does not supply one. Reuse the existing
-`ExperimentalParticipantMotionIPC` and Lua motion owner when wiring the native
-path; do not create a second TCP reader. The overlay still needs the matching
-saved-registry/motion scripts and their lifecycle, including STOP before X4 exit.
+The observed session uses the existing TCP owner's optional motion consumer.
+With `--motion-config`, this CLI supplies `ParticipantMotion` and the matching
+shared overlay scripts. The same object handles control transitions and owns
+the existing `ExperimentalParticipantMotionIPC`; there is no second TCP reader.
+`WindowsMotionPeer` validates the local peer, and the session stops motion before
+pause or X4 exit. Linux tooling uses the same lifecycle and overlay helpers.
 
 The motion scripts now share `replica_motion_binding.normalize_profile_save_path`
 for their profile checks. It accepts absolute POSIX, Windows drive and UNC paths

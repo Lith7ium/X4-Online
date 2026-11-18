@@ -22,6 +22,10 @@ import stat
 
 from .trusted_load_messages import encode_bound_offer
 from .client_registry_overlay import extend_load_probe
+from .client_motion_overlay import (
+    SECRET_FIELDS, append_load_ready_hook, render_motion_config,
+    select_motion_sources, transform_motion_control, validate_motion_settings,
+)
 from lockstep.launcher import extension
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -73,7 +77,7 @@ def _windows_save_path(value):
 
 def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                             participant_port, participant_lease, windows_dll, dll_sha256,
-                            registry_status=None, registry_nonce=None):
+                            registry_status=None, registry_nonce=None, motion_settings=None):
     """Create one absent x4_lan_lab in an exclusively owned new test view.
 
     A failure after creation leaves an owned partial extension for inspection;
@@ -88,6 +92,9 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     and clean up the owned configuration after X4 stops.
     Optional registry status must come from the verified offered checkpoint;
     the Lua gate checks its epoch/count before the ordinary pause receipt.
+    Optional motion settings reuse the Linux client's modules and update hooks.
+    They require this registry gate and a distinct UDP port/context. The caller
+    must stop motion before pause/exit; this builder starts no process or socket.
     """
     if new_test_view is not True:
         raise ValueError('exclusive new test view required')
@@ -158,6 +165,39 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     if registry_status is not None:
         ui_files.insert(ui_files.index('ui/authority_download_load_probe.lua'),
                         'ui/recovery_registry_status.lua')
+    if motion_settings is not None:
+        selection = validate_motion_settings(registry_status, motion_settings)
+        motion_settings = selection.settings
+        tokens = [motion_settings[name] for name in SECRET_FIELDS]
+        contexts = tokens + [registry_status[1], participant_lease, offer.world_epoch,
+                             offer.attempt_id, registry_nonce,
+                             offer.checkpoint_id.removeprefix('checkpoint-')]
+        if (registry_nonce is None or motion_settings['port'] == participant_port or
+                len(set(contexts)) != len(contexts)):
+            raise ValueError('client motion context overlaps existing control')
+        player_sector = motion_settings.get('player_sector')
+        if player_sector is not None:
+            sector_tokens = [player_sector['incarnation'], player_sector['nonce']]
+            if len(set(contexts + sector_tokens)) != len(contexts) + 2:
+                raise ValueError('client player sector context overlaps existing context')
+        modules, md_names = select_motion_sources(motion_settings)
+        for source, name in modules:
+            data = _source(ROOT / source, 1024 * 1024)
+            if name == 'motion_buffer.lua':
+                if data.count(b'return M\n') != 1:
+                    raise ValueError('unexpected motion buffer module')
+                data = data.replace(b'return M\n', b'X4LAN_MOTION_BUFFER=M\nreturn M\n')
+            files['ui/' + name] = data
+        for name in md_names:
+            files['md/' + name] = _source(ROOT / 'tools/dev' / name, 1024 * 1024)
+        control_name = 'ui/authority_two_x4_participant_probe.lua'
+        load_name = 'ui/authority_download_load_probe.lua'
+        files[control_name] = transform_motion_control(
+            files[control_name].decode('utf-8'), motion_settings).encode('utf-8')
+        files[load_name] = append_load_ready_hook(files[load_name].decode('utf-8')).encode('utf-8')
+        config = config[:-2] + render_motion_config(registry_status, motion_settings) + '}\n'
+        insertion = ui_files.index(control_name)
+        ui_files[insertion:insertion] = ['ui/' + name for _, name in modules]
     files.update({'ui/config.lua': config.encode('ascii'),
                   'ui.xml': extension.ui_xml(ui_files).encode('utf-8'),
                   'content.xml': extension.CONTENT.encode('utf-8'),

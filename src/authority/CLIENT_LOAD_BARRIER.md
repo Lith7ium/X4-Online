@@ -1,9 +1,10 @@
 # Experimental client load observations
 
 `lua/client_load_barrier.lua` and `lua/x4_client_load_engine.lua` are opt-in
-building blocks. Loading them registers nothing and starts no X4 action. No
-production launcher or deployed network session currently uses them; isolated
-Linux diagnostics use them under a dedicated supervisor.
+building blocks. Loading them registers nothing and starts no X4 action.
+Isolated Linux diagnostics and the opt-in Windows fixture CLI compose them
+under dedicated supervisors. This is diagnostic integration, not a production
+launcher or deployed multiplayer session.
 
 For an isolated experiment, a trusted supervisor must create a fresh, private,
 immutable UI configuration before starting one exclusively controlled X4
@@ -68,18 +69,42 @@ inspection and the pause receipt, and rejects missing, repeated, mismatched or
 late fault records. The observed header contains epoch/count only: the saved
 mapping fingerprint does not establish a live actor mapping. The caller must
 keep the load connection alive during potentially long checkpoint inspection.
-The Windows fixture CLI does not yet select or orchestrate this optional path.
+The Windows fixture CLI now inspects the staged checkpoint with load keepalive
+pumping and requires the correlated registry receipt in its live and final log.
+This wiring has not been validated with native Windows X4.
 
 An optional `apply_motion(sample, despawn)` consumer can connect this session to
 the existing participant motion IPC. The session checks its active owner,
 process/profile guard and evolving log before and after consumption, before the
 TCP participant can acknowledge it. A fault after dispatch cannot undo an X4
-effect, but prevents a positive receipt. The callback must bound its own work
-within the participant timeout (controller timeout plus one second);
-its readiness, socket ownership, pause handling, STOP and cleanup remain the
+effect, but prevents a positive receipt. Without `motion_control`, the callback
+must bound its own work; readiness, pause handling, STOP and cleanup remain the
 caller's responsibility. With no callback, incoming motion stays unsupported.
-This connection does not add movement to the Windows fixture CLI: its overlay
-and native motion-peer ownership still need integration and native validation.
+
+For lifecycle integration, pass the same `ParticipantMotion` object as both
+`apply_motion` and `motion_control`. Its positive, finite timeout must be shorter
+than the controller timeout. The participant command budget is
+`controller.timeout + 2 * motion_control.timeout + 1` seconds and must not
+exceed 300 seconds: lazy READY and the following IPC exchange each have their
+own motion timeout, plus one second for framing. With the CLI controller timeout
+of 30 seconds and a motion timeout of 5 seconds, this budget is 41 seconds; the
+server must allow more than that budget. Resume marks motion running only after
+the local controller confirms;
+READY binds lazily on the first resumed sample, or on STOP if no sample arrived.
+Motion STOP must confirm before the local pause command. STOP is irreversible
+for that lease: a later resume is rejected. This is a single attempt; an
+uncertain dispatch or receipt must not be retried as if nothing happened.
+`ObservedClientSession.close()` still does not stop or close the motion owner.
+
+`tools/dev/authority_windows_fixture_client.py --motion-config <absolute-path>`
+optionally selects an existing server stream. The fixture session installs the
+motion overlay, owns a separate UDP socket, validates the Windows peer and passes
+one `ParticipantMotion` object through both session hooks. It requires at least
+one confirmed source sample for motion success, attempts STOP before process
+exit when motion is running, closes the motion owner and independently confirms
+owned-process cleanup. The default fixture path remains load/participant only.
+This wiring is not native Windows validation or proof of general gameplay,
+Internet operation, or a shared world.
 
 These primitives provide no authenticated event transport or independent
 cross-reload proof. The isolated supervisor treats its correlated observations as
@@ -111,8 +136,9 @@ process and its identity, ordered load/marker/pause observations, and a bounded
 pause/resume controller. Observations passed to the owner are trusted caller
 assertions, not independently verified game events. While waiting for them, the
 caller must pump the load connection often enough when keepalive is enabled.
-There is no Windows process integration or real-X4 validation of this owner,
-no authenticated X4 event channel, and no proof of which file X4 reads. The
+The opt-in Windows fixture session now composes this owner with process and
+workspace guards, but has no native Windows X4 validation. There is no
+authenticated X4 event channel or proof of which file X4 reads. The
 owner has no production launcher integration and does not establish gameplay. Focused local tests use
 real wire and file-service components with simulated X4 observations and
 controller results; they do not establish native Windows or Internet behavior.
