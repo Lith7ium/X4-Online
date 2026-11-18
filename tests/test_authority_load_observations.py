@@ -75,6 +75,33 @@ class ClientLoadObservations(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validate(self.snapshot)
 
+    def test_stream_accepts_fragmented_records_then_rejects_late_duplicate(self):
+        stream = observations.BoundReceiptStream(self.bound, slot='save_009')
+        self.assertFalse(stream.feed(self.request[:10]))
+        self.assertFalse(stream.feed(self.request[10:] + self.marker + self.pause[:-1]))
+        self.assertTrue(stream.feed(b'\n'))
+        self.assertTrue(stream.feed(b'unrelated\r\n'))
+        with self.assertRaisesRegex(ValueError, 'out of order'):
+            stream.feed(self.request)
+        with self.assertRaisesRegex(RuntimeError, 'stream failed'):
+            stream.feed(b'')
+
+    def test_stream_rejects_errors_and_limits_without_treating_them_as_pending(self):
+        for data in (self.pause, b'[X4LAN] AUTH_MARKER load ERROR\n',
+                     b'[X4LAN] AUTH_PARTICIPANT ERROR bad\n', b'[X4LAN] AUTH_IDENTITY load ERROR\n'):
+            with self.subTest(data=data[:30]):
+                stream = observations.BoundReceiptStream(self.bound, slot='save_009')
+                with self.assertRaises(ValueError):
+                    stream.feed(data)
+        stream = observations.BoundReceiptStream(self.bound, slot='save_009')
+        with patch.object(observations, 'MAX_LINE', 3):
+            with self.assertRaisesRegex(ValueError, 'line too long'):
+                stream.feed(b'xxxx')
+        stream = observations.BoundReceiptStream(self.bound, slot='save_009')
+        with patch.object(observations, 'MAX_LOG', 3):
+            with self.assertRaisesRegex(ValueError, 'oversized'):
+                stream.feed(b'xxxx')
+
 
 if __name__ == '__main__':
     unittest.main()

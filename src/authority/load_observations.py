@@ -12,6 +12,7 @@ LOAD_TAG = b'[X4LAN] AUTH_DOWNLOAD_LOAD '
 MARKER_TAG = b'AUTH_MARKER '
 TICKET_FIELDS = ('world_epoch', 'connection_handle', 'baseline_id', 'load_generation',
                  'checkpoint_id', 'sha256', 'attempt_id', 'slot')
+STREAM_FAULTS = (b'auth_participant error', b'auth_identity load error')
 
 
 def validate_client_receipts(data, ticket, marker):
@@ -60,3 +61,62 @@ def validate_bound_offer_receipts(data, bound, *, slot):
     ticket = {name: getattr(offer, name) for name in TICKET_FIELDS if name != 'slot'}
     ticket['slot'] = slot
     return validate_client_receipts(data, ticket, bound.marker)
+
+
+class BoundReceiptStream:
+    """Incrementally check one bounded, ordered offer log and later records.
+
+    The caller must supply consecutive bytes from the same owned log. A
+    completed sequence is not admission or proof of X4/process provenance.
+    """
+
+    def __init__(self, bound, *, slot):
+        encode_bound_offer(bound)
+        offer = Offer(**{name: getattr(bound.offer, name) for name in Offer.__dataclass_fields__})
+        if (type(slot) is not str or len(slot) != 8 or not slot.startswith('save_') or
+                not slot[5:].isascii() or not slot[5:].isdigit()):
+            raise ValueError('invalid local save slot')
+        ticket = {name: getattr(offer, name) for name in TICKET_FIELDS if name != 'slot'}
+        ticket['slot'] = slot
+        fields = '|'.join(str(ticket[key]) for key in TICKET_FIELDS)
+        self._expected = (
+            ('load', ('load_requested|' + fields).encode('ascii')),
+            ('marker', b'load INSPECTED ' + bound.marker.encode('ascii')),
+            ('load', ('pause_observed|' + fields).encode('ascii')),
+        )
+        self._stage = 0
+        self._carry = b''
+        self._size = 0
+        self._failed = False
+
+    def feed(self, data):
+        """Return true only after all records and the current line complete."""
+        if self._failed:
+            raise RuntimeError('load observation stream failed')
+        try:
+            if type(data) is not bytes or self._size + len(data) > MAX_LOG:
+                raise ValueError('client log incomplete or oversized')
+            self._size += len(data)
+            lines = (self._carry + data).split(b'\n')
+            self._carry = lines.pop()
+            if len(self._carry) > MAX_LINE:
+                raise ValueError('client log line too long')
+            for line in lines:
+                if len(line) > MAX_LINE:
+                    raise ValueError('client log line too long')
+                lowered = line.lower()
+                if any(marker in lowered for marker in STREAM_FAULTS):
+                    raise ValueError('client script reported an error')
+                rows = []
+                if LOAD_TAG in line:
+                    rows.append(('load', line.split(LOAD_TAG, 1)[1].strip()))
+                if MARKER_TAG in line:
+                    rows.append(('marker', line.split(MARKER_TAG, 1)[1].strip()))
+                for row in rows:
+                    if self._stage >= len(self._expected) or row != self._expected[self._stage]:
+                        raise ValueError('load and marker observations differ or are out of order')
+                    self._stage += 1
+            return self._stage == len(self._expected) and not self._carry
+        except BaseException:
+            self._failed = True
+            raise

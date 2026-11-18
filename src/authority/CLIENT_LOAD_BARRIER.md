@@ -36,6 +36,27 @@ process provenance and file continuity. Offer size and name are not logged;
 the helpers do not prove loaded bytes, authorize admission, or establish
 native Windows behavior.
 
+`ObservedClientSession` connects an already staged `ExperimentalClientOwner`
+and a fresh `LocalParticipantControl` to caller-supplied log snapshots and a
+process/profile guard. It requires an enabled load keepalive, a load deadline
+no later than its session deadline, and a controller timeout of at most 299
+seconds; the participant timeout includes one additional second for framing.
+`start()` enrolls and claims once after ordered observations, and `poll()`
+checks the log before and after using the existing participant connection.
+The controller hook checks the same guard while waiting without recursively
+reading TCP. An incomplete trailing log line defers a new dispatch; if it
+appears during a command or poll, the session faults, and a prior effect or
+receipt cannot be rolled back. The reader returns immutable full snapshots of
+at most 8 MiB; it may retain the same bytes object after confirming unchanged
+contents for efficient polling. Changed snapshots must preserve the entire
+previous prefix. This is a bounded diagnostic, not a general long-running log
+solution. Callback and I/O
+calls cannot be interrupted by these deadlines. Checks are sampled, not an
+atomic guarantee. The caller owns and must independently fence the actual X4
+process, profile and log provenance; `close()` closes the network owners but
+does not stop X4 or check events after close. No native Windows or Internet
+session is established by the synthetic TCP/UDP tests.
+
 These primitives provide no authenticated event transport or independent
 cross-reload proof. The isolated supervisor treats its correlated observations as
 trusted assertions for experimental admission, not as proof of the loaded file.
