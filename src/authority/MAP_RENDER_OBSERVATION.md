@@ -58,8 +58,14 @@ passed a closed/open/closed map lifecycle. The opened map returned one raw local
 component, and owned-process cleanup completed. This validates the basic native
 read path for that case, not viewport/radar semantics or useful ship coverage.
 
-The next native check should vary pan, zoom, map filters and an offscreen
-selection while comparing raw lists and identified components.
+The next [six-view native comparison](../../reports/AUTHORITY-MAP-VIEW-NATIVE-20261118.md)
+confirmed player zoom and camera restoration, but the requested fixture focus
+and pan did not match readback. Every view returned only the player object.
+This does not pass the intended visibility test: the controlled offscreen
+condition was not established, so the unchanged list proves neither clipping
+nor its absence. Future checks need known/visible control objects and a verified
+camera change before testing map filters or offscreen selection.
+
 `authority_sector_read_live.py` supplies an existing
 single-X4 load/cleanup owner; its `state == 'done'` update path can call a private
 probe without adding another update hook. Its old checkpoint requires the

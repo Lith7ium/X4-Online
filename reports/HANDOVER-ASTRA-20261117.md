@@ -78,6 +78,11 @@ Its focused offline test passed with real LuaJIT buffers and simulated engine
 calls. It has no network or automatic UI hook. A subsequent isolated Linux
 native run passed closed/open/closed observation with one raw component and
 completed cleanup; see [the native evidence](AUTHORITY-MAP-RENDER-NATIVE-20261118.md).
+The follow-up [six-view comparison](AUTHORITY-MAP-VIEW-NATIVE-20261118.md) completed
+its observations but did not pass the intended visibility test: player zoom and
+restoration matched, while fixture focus and pan did not. Every raw list held
+only the player. Server-side ship selection from a reported viewed area has
+been proposed to the user; no subscription behavior is implemented or approved.
 Actual viewport/radar semantics, ship coverage and Windows remain unproven; see the
 [contract and next native check](../src/authority/MAP_RENDER_OBSERVATION.md).
 
