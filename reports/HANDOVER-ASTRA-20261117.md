@@ -1,5 +1,10 @@
 # X4 multiplayer: handover for Astra
 
+Latest result: paired native04 reached one confirmed client receipt, then failed
+the initial 50m alignment bound. No continuous paired movement was proven.
+Cleanup passed; no X4 remains. The full details and following diagnostic fix are
+in the current client report. Native03 below is retained as preceding context.
+
 > Client-first continuation, 18 November: server graphics work remains deferred.
 > The bounded live-input path and explicit fresh-checkpoint paired playback
 > diagnostic are wired through the admitted TCP owner. Native paired attempt 03
@@ -33,9 +38,14 @@ The updated real TCP/UDP fixture passes with simulated engine edges. Full guards
 still surround checkpoint operations; file/registry/log changes during the last
 lightweight peer check can be detected only at the next full boundary, after a
 dispatch. Initial bind, worker STOP and ordinary callers retain full checks.
-Native attempt 04 is now pending with these two changes and unchanged limits.
-See the current report for the real-helper/context measurements and precise
-limits; inspect its result before starting another run.
+Native attempt 04 exercised these changes with unchanged limits. Its first
+source pull completed in 1.341s with one confirmed client receipt, then the
+observer rejected initial separation greater than 50m. Overall FAILED; no
+continuous paired movement or STOP/release was proven. All cleanup and source
+integrity checks passed. The source position was not persisted on that error
+path; a following offline-tested correction now preserves the bounded initial
+comparison before rejecting it. Do not infer the exact separation or its cause
+from native04. See the current report before deciding on another native attempt.
 
 ## Objective and decisions from the user
 
@@ -156,3 +166,10 @@ Windows named pipes and MSI, a Windows Zig cross-check, a released lane tool,
 and missing optional x4-re/stock-data inputs. Complete private output is in
 `.local/check-cpu-throttle-20261117.log` and remains local. The checkpoint is an
 experimental work-in-progress, not a passing release candidate.
+
+A later read-only trace review located that error at initial participant HELLO,
+before candidate selection or the fourth sample. The retained error did not
+distinguish zero matching UDP rows from duplicates. The diagnostic now appends
+only that count, without addresses or ports; ten socket-owner tests passed,
+including injected zero/two-match cases. This improves future evidence and does
+not establish the historical failure's cause or resolve the full-suite result.

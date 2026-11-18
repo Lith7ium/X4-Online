@@ -170,10 +170,34 @@ Six such contexts per aggregate guard would account for roughly 6.59s over the
 counted flow; this is a partial cost estimate, not an end-to-end prediction.
 Evidence: `.local/private-client-context-profile-20261118/context-profile-result.json`.
 
-Paired native attempt 04 was then started with manifest
+Paired native attempt 04 ran with manifest
 `.local/authority-paired-playback-reviewed-20261118-05.json`, unchanged time limits
-and success criteria. Its outcome is pending; do not treat a started run as
-evidence of success. Output: `.local/private-paired-playback-native-20261118-04/`.
+and success criteria. It **failed** with
+`paired playback initial offset exceeds fixture bound`. Unlike attempt 03, it
+confirmed one actual client receipt and logged client Wait/timing/zero-velocity
+request and INITIAL records. The first source pull completed in 1.341s; the
+observer rejected the initial source/client distance as greater than 50m.
+This is total pull time including validation, not isolated network latency.
+The complete diagnostic took 11.561s: initial verification 1.220s, bind 2.916s,
+register 5.963s and collection 1.462s. It recorded 114 aggregate guards and 34
+checkpoint checks. Only one source sample was prevalidated and one receipt
+confirmed; zero samples passed the playback observer. No continuous source-led
+movement, full 26-sample timing, STOP/release or departure save was demonstrated.
+
+The client INITIAL position was (-115822.9140625, -5642.81982421875,
+127614.65625) at client game time 20.995694222. The source sample was not retained
+on this error path, so the exact distance, direction and source sampling time
+cannot be reconstructed from these artifacts. Independent client motion during
+binding is a hypothesis, not an established diagnosis. The fixture bound remains
+50m. A follow-up now retains a bounded source/client comparison before enforcing
+that bound, including both positions, game times and measured separation; it
+does not count a rejected sample as accepted. All six evidence tests passed.
+This diagnostic addition has not been exercised in X4.
+
+Outer cleanup, Xauthority cleanup, source preservation, source-code pins and
+Steam identity checks passed. A subsequent process scan found no X4 process or
+global X4 lock. The run remains an overall failure. Evidence:
+`.local/private-paired-playback-native-20261118-04/{result.json,trial-result.json,paired-server/result.json}`.
 
 A separate read-only code review tightened intermediate native readbacks:
 each SUMMARY now independently checks actual-to-target distance, and log reads

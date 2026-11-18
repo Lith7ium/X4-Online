@@ -1474,6 +1474,12 @@ def run(args):
                             client_log = diagnostic_out/'client/case/home/.config/EgoSoft/X4/45841/engine-output.log'
                             evidence = PairedPlaybackEvidence(client_log,
                                 guard=lambda: (verify_diagnostic() is None), deadline=deadline)
+                            def observe_playback(sample):
+                                try:
+                                    return evidence.received(sample)
+                                finally:
+                                    if evidence.initial_comparison is not None:
+                                        result['paired_playback']['initial_comparison'] = dict(evidence.initial_comparison)
                             def process_guard():
                                 base_diagnostic()
                                 return True
@@ -1488,7 +1494,7 @@ def run(args):
                                 'playback_liveness_check': active.participant.check_active_liveness,
                                 'playback_checkpoint_check': lambda: playback_window.check_checkpoint(guard),
                                 'playback_checkpoint_stop': lambda: playback_window.stop_checkpoint(guard),
-                                'playback_sample_observer': evidence.received}
+                                'playback_sample_observer': observe_playback}
                         # X4's source owner has its own 120-second pending-operation
                         # deadlines, including binding begun at resume. A longer
                         # host budget does not extend those or guarantee completion.

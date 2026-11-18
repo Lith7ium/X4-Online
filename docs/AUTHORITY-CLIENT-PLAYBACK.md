@@ -24,8 +24,9 @@ identities. That scope includes UDP/TCP waits under the unchanged 15-second
 sampling deadline. An additional X4 can be detected only after a client effect,
 or missed if it exits before the final check. This assumes exclusive ownership
 of the isolated test processes. No scope spans the entire sampling window;
-normal checks remain outside pulls and before teardown. The new correction has
-passed the focused TCP/UDP fixture, but has not been exercised with X4.
+normal checks remain outside pulls and before teardown. The correction passed
+the focused TCP/UDP fixture and was subsequently exercised in native attempt 04
+below; the full 26-sample native flow remains unproven.
 
 The private paired path also separates frequent liveness checks from full
 protected-context checks. Helper wait pumps and repeated peer checks retain
@@ -35,8 +36,13 @@ bind/handoff and worker STOP retain their original guards. File, registry or
 client-log changes during the final lightweight peer check are detected at the
 next full boundary, possibly after dispatch. There is no cached validation or
 deadline increase. The ordinary path still uses full checks throughout.
-The focused real TCP/UDP fixture passes with simulated engine edges; this change
-has no native result yet.
+The focused real TCP/UDP fixture passes with simulated engine edges. Native
+attempt 04 then confirmed its first client receipt after a 1.341s source pull,
+but failed the initial source/client distance bound (>50m). This is an overall
+failure, with no continuous paired movement or STOP/release proof. Cleanup and
+source preservation passed. Its source position was lost on the failure path;
+the following diagnostic correction retains both positions and their separation
+without changing the bound. That correction has only offline evidence so far.
 
 ## Data and lifetime
 

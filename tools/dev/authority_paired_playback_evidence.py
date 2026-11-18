@@ -25,6 +25,7 @@ class PairedPlaybackEvidence:
         self.deadline = deadline
         self.samples = []
         self.initial = None
+        self.initial_comparison = None
 
     def _wait_for(self, field, *, guard=None):
         check = self.guard if guard is None else guard
@@ -56,8 +57,21 @@ class PairedPlaybackEvidence:
             raise ValueError('paired playback source lifetime or clock differs')
         if not self.samples:
             self.initial, _, _ = self._wait_for(0)
-            if math.dist([value[axis] for axis in ('x', 'y', 'z')],
-                         [self.initial[axis] for axis in ('x', 'y', 'z')]) > 50:
+            initial_offset = math.dist([value[axis] for axis in ('x', 'y', 'z')],
+                                       [self.initial[axis] for axis in ('x', 'y', 'z')])
+            # Retain this bounded comparison even when admission fails. A
+            # receipt is not an accepted movement sample, and a failure must
+            # not lose the positions needed to investigate that distinction.
+            self.initial_comparison = {
+                **{'source_' + axis: value[axis] for axis in ('x', 'y', 'z')},
+                **{'client_' + axis: self.initial[axis] for axis in ('x', 'y', 'z')},
+                'source_game_time': value['source_time'],
+                'client_game_time': self.initial['game_time'],
+                'client_local_time': self.initial['local_time'],
+                'offset_metres': initial_offset, 'limit_metres': 50,
+                'within_bound': initial_offset <= 50,
+            }
+            if initial_offset > 50:
                 raise ValueError('paired playback initial offset exceeds fixture bound')
         self.samples.append(value)
         return True

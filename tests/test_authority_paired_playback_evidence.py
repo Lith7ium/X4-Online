@@ -114,6 +114,14 @@ class PairedEvidence(unittest.TestCase):
                 evidence=self.evidence(path)
                 with self.assertRaises(ValueError): evidence.received(source_sample(1)|mutation)
                 self.assertEqual(evidence.samples, [])
+                if mutation == {'x': 1051}:
+                    self.assertEqual(evidence.initial_comparison['offset_metres'], 51)
+                    self.assertEqual(evidence.initial_comparison['source_x'], 1051)
+                    self.assertEqual(evidence.initial_comparison['client_x'], 1000)
+                    self.assertEqual(evidence.initial_comparison['source_game_time'], 100.2)
+                    self.assertFalse(evidence.initial_comparison['within_bound'])
+                else:
+                    self.assertIsNone(evidence.initial_comparison)
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'engine.log'; path.write_bytes(native_log())
             evidence=self.evidence(path); evidence.received(source_sample(1))
