@@ -64,5 +64,24 @@ readback limits remain unchanged.
 This client path has passed simulated clocks and native-ABI substitutes,
 including interpolation with stalled game time, prediction, expiry and STOP
 release. No native X4 V3 playback, Windows or Internet result is established.
-The next step is explicit source-session opt-in and a correlated native oracle
-that validates both clocks; ordinary source sessions still default to V1.
+The recovered source session explicitly accepts `real_time_motion=true` in its
+installer settings and uses the loaded net module's monotonic clock for native
+capture. This experiment excludes candidate selection and the legacy local-pair
+fixture. Ordinary source sessions still default to V1. The bounded supervisor
+exposes `--diagnostic-real-time-motion` only with latest ENH-870 saved playback;
+source validation rejects a different version before delivery.
+
+The paired log reader selects `sample_version=3` explicitly and requires a
+matching capture-clock row for each position event. Initial and stopped clocks
+must match the first and final acknowledged sample respectively. A summary may
+describe a write read back after a newer delivery, so it matches a unique
+acknowledged clock within that event's received-sample count; the rendered
+sequence cannot be newer than that clock's sample. Game and capture values
+must both match. Pending log pairs retain file identity and observed bytes
+across retries. Final prediction uses `real_velocity`, with no comparison of
+source and client clock origins.
+
+The composed source probe has passed a 26-sample real loopback UDP/TCP test with
+simulated source/client endpoints and a stalled game clock. The native oracle
+has passed synthetic log fixtures. The next step is a fresh pinned two-X4 V3
+attempt, including its original ownership, checkpoint and cleanup checks.

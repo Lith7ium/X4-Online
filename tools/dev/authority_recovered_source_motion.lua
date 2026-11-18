@@ -27,6 +27,13 @@ function M.new(c)
  assert(c.epoch~=c.generation and c.epoch~=c.nonce and c.epoch~=c.saved_nonce and c.nonce~=c.saved_nonce and c.generation~=c.saved_nonce and c.generation~=c.nonce)
  assert(c.nonce:sub(1,16)~=c.saved_nonce:sub(1,16))
  assert(type(c.baseline)=='number' and c.baseline%1==0 and c.baseline>=1 and c.baseline<=200000)
+ assert(c.real_time_motion==nil or type(c.real_time_motion)=='boolean')
+ if c.real_time_motion then
+  assert(type(c.capture_clock)=='function')
+  assert(c.local_pair==nil and c.selection==nil, 'real-time motion requires baseline-only mode')
+ end
+ local real_time_motion=c.real_time_motion==true
+ local capture_clock=c.capture_clock
  for _,k in ipairs({'running','guard','register','bootstrap_factory','sampler_factory','ipc_factory','shutdown_factory','fault'})do
   assert(type(c[k])=='function',k..' required')
  end
@@ -84,6 +91,7 @@ function M.new(c)
   end}))
  sampler=assert(c.sampler_factory({enabled=true,epoch=c.epoch,generation=c.generation,nonce=c.nonce,
   guard=active,saved_baseline_limit=c.baseline,saved_baseline_guard=saved_guard,
+  real_time_motion=real_time_motion,capture_clock=capture_clock,
   binding_guard=function()return false end,fault=function(reason)fail('sampler_'..tostring(reason))end}))
  local function route(value)
   route_failure=nil
@@ -259,8 +267,16 @@ end
 
 function M.new_x4(c)
  assert(type(c)=='table' and type(c.expected_save_path)=='string' and type(c.port)=='number')
+ assert(c.real_time_motion==nil or type(c.real_time_motion)=='boolean')
+ local real_time_motion=c.real_time_motion==true
+ if real_time_motion then assert(c.local_pair==nil and c.selection==nil, 'real-time motion requires baseline-only mode') end
  local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);bool IsGamePaused(void);const char* GetSaveFolderPath(void);]]
  local C=ffi.C;local netlib=assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
+ local capture_clock
+ if real_time_motion then
+  assert(type(netlib.monotonic)=='function', 'monotonic capture clock required')
+  capture_clock=netlib.monotonic
+ end
  local net=assert(netlib.open('127.0.0.1',c.port))
  assert(type(net.pending)=='function')
  -- receive() returns nil both for an empty queue and after consuming an empty
@@ -317,6 +333,7 @@ function M.new_x4(c)
  end
  return M.new({enabled=true,epoch=c.epoch,generation=c.generation,nonce=c.nonce,saved_nonce=c.saved_nonce,selection=selection,
   local_pair=local_pair,clock=GetCurRealTime,timeout=c.timeout,
+  real_time_motion=real_time_motion,capture_clock=capture_clock,
   baseline=c.baseline,running=function()return not C.IsGamePaused()end,guard=environment,
   register=function(f)return RegisterEvent('X4AuthorityJobDescriptorProbe.Result',function(_,value)f(value)end)~=false end,
   bootstrap_factory=function(o)

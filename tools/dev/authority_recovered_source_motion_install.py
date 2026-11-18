@@ -29,8 +29,12 @@ def install(case,profile,status,settings):
         type(status[3]) is not str or not re.fullmatch(r'[0-9a-f]{64}',status[3])):
         raise ValueError('confirmed registry status required')
     fields={'port','lease','attempt','generation','nonce','saved_nonce','timeout'}
-    if type(settings) is not dict or set(settings) not in (fields,fields|{'selection'},fields|{'local_pair'}):
+    allowed_fields = (fields, fields | {'selection'}, fields | {'local_pair'})
+    if type(settings) is not dict or (set(settings) - {'real_time_motion'}) not in allowed_fields:
         raise ValueError('invalid motion settings')
+    real_time_motion = settings.get('real_time_motion', False)
+    if type(real_time_motion) is not bool or (real_time_motion and ('selection' in settings or 'local_pair' in settings)):
+        raise ValueError('real-time motion requires baseline-only mode')
     if type(settings['port']) is not int or not 1<=settings['port']<=65535:
         raise ValueError('invalid motion port')
     if (type(settings['timeout']) not in (int,float) or not math.isfinite(settings['timeout']) or
@@ -106,6 +110,8 @@ def install(case,profile,status,settings):
     manifest.write_text(mf.replace(manifest_hook,module_xml+manifest_hook),encoding='utf-8')
     add=',authority_recovered_source_motion=true,authority_motion_epoch="'+status[1]+'",authority_motion_baseline='+str(status[2])
     add+=',authority_motion_port='+str(settings['port'])+',authority_motion_timeout='+format(settings['timeout'],'.17g')
+    if real_time_motion:
+        add+=',authority_motion_real_time=true'
     for name in ('lease','attempt','generation','nonce','saved_nonce'):
         add+=',authority_motion_'+name+'="'+settings[name]+'"'
     if selection is not None:
@@ -124,6 +130,9 @@ def install(case,profile,status,settings):
   if recovered_motion then assert(recovered_motion:tick())end
  end
 '''
+    if real_time_motion:
+        owner_add=owner_add.replace('expected_save_path=cfg.authority_load_save_path}))',
+            'expected_save_path=cfg.authority_load_save_path,real_time_motion=cfg.authority_motion_real_time}))')
     if selection is not None:
         owner_add=owner_add.replace('expected_save_path=cfg.authority_load_save_path}))',
             'expected_save_path=cfg.authority_load_save_path,selection={nonce=cfg.authority_motion_candidate_nonce,candidates=cfg.authority_motion_candidate_indices}}))')

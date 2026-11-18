@@ -263,6 +263,29 @@ def diagnostic_latest_playback(args, saved_playback, long_motion):
     return enabled
 
 
+def diagnostic_real_time_motion(args, saved_playback, latest_playback):
+    """Opt into v3 only for bounded latest ENH-870 playback."""
+    enabled = getattr(args, 'diagnostic_real_time_motion', False)
+    if type(enabled) is not bool or (enabled and
+            (saved_playback != 'recovery_enh_870' or latest_playback is not True)):
+        raise ValueError('real-time motion requires latest bounded ENH-870 saved playback')
+    return enabled
+
+
+def require_real_time_observation(observation):
+    """Require the public source result to preserve its explicit v3 units."""
+    if type(observation) is not dict or observation.get('motion_version') != 3:
+        raise RuntimeError('real-time motion observation required')
+    samples = observation.get('samples')
+    if (type(samples) is not list or len(samples) < 2 or
+            type(observation.get('second_sample_real_velocity_present')) is not bool or
+            any(type(sample) is not dict or sample.get('version') != 3 or
+                'capture_time' not in sample or 'real_velocity' not in sample or 'velocity' in sample
+                for sample in samples) or
+            observation['second_sample_real_velocity_present'] != (samples[1]['real_velocity'] is not None)):
+        raise RuntimeError('real-time motion sample fields missing')
+
+
 def record_saved_apply_intent(out, sample):
     """Durably mark a possible effect before dispatch; never overwrite a marker."""
     from authority.experimental_tcp_motion import motion_digest
@@ -864,6 +887,7 @@ def run(args):
         guard_timing=diagnostic_guard_timing(args,source_enabled)
         long_motion=diagnostic_long_motion(args,witness_join,source_enabled,client_motion)
         latest_playback=diagnostic_latest_playback(args,saved_playback_fixture,long_motion)
+        real_time_motion=diagnostic_real_time_motion(args,saved_playback_fixture,latest_playback)
         owner_diagnostic = getattr(args, 'diagnostic_single_owner', False)
         if (type(owner_diagnostic) is not bool or
                 (owner_diagnostic and (not getattr(args, 'diagnostic_client', False) or source_enabled or
@@ -994,6 +1018,8 @@ def run(args):
                 reserved.add(value);return value
             source_settings={'port':source_sock.getsockname()[1],'lease':fresh(),'attempt':fresh(),
                 'generation':fresh(),'nonce':fresh(),'saved_nonce':fresh(),'timeout':120}
+            if real_time_motion:
+                source_settings['real_time_motion'] = True
             if source_candidates is not None:
                 source_settings['selection']={'nonce':fresh(),'candidates':source_candidates}
             if local_pair:
@@ -1500,6 +1526,8 @@ def run(args):
                             from authority_paired_playback_evidence import PairedPlaybackEvidence
                             client_log = diagnostic_out/'client/case/home/.config/EgoSoft/X4/45841/engine-output.log'
                             evidence_options = {'latest': True} if latest_playback else {}
+                            if real_time_motion:
+                                evidence_options['sample_version'] = 3
                             evidence = PairedPlaybackEvidence(client_log,
                                 guard=lambda: (verify_diagnostic() is None), deadline=deadline, **evidence_options)
                             def observe_playback(sample):
@@ -1549,6 +1577,8 @@ def run(args):
                             **({'sector_poll':active.sector_poll,'sector_stop':active.sector_stop,
                                 'sector_arm':active.sector_arm,
                                 'sector_incarnation':active.participant._sector_incarnation} if client_sector else {}))
+                        if real_time_motion:
+                            require_real_time_observation(observation)
                         if saved_playback_fixture:
                             observation['playback_readback'] = evidence.stopped(stopped_guard=verify_motion_stopped)
                             playback_window.close(process_guard=process_guard)
@@ -1733,6 +1763,7 @@ def main():
     parser.add_argument('--diagnostic-saved-apply',action='store_true',help='private one-shot ENH-870 preflight and possible write; not gameplay')
     parser.add_argument('--diagnostic-saved-playback',action='store_true',help='private bounded ENH-870 source playback and native readback; not gameplay')
     parser.add_argument('--diagnostic-latest-playback',action='store_true',help='use replaceable position delivery for bounded saved playback')
+    parser.add_argument('--diagnostic-real-time-motion',action='store_true',help='use v3 real-time capture in bounded latest saved playback')
     parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     parser.add_argument('--diagnostic-process-measure-seconds', type=float, metavar='SECONDS',

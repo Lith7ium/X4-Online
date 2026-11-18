@@ -10,21 +10,26 @@ import math
 import threading
 import time
 
-from authority.experimental_tcp_motion import motion_digest, motion_value
+from authority.experimental_tcp_motion import check_motion_progress, motion_digest, motion_value
 
 
 def collect_latest_playback(*, source, motion, host, recipient, deadline, check,
-                            scope=None, sample_count=26, interval=.2, progress=None):
+                            scope=None, sample_count=26, interval=.2, progress=None,
+                            sample_version=1):
     """Collect one registered track, drain its final ACK, then fence new motion.
 
     ``check`` must return True and must not pump a socket owner. ``scope`` is
     an optional per-operation identity-context factory. Callbacks are bounded
     caller responsibilities. ``progress`` receives detached, bounded counters
-    and sample lists, including on failure. All recorded times are host
-    monotonic observations; no source/client clock origins are compared.
+    and sample lists, including on failure. Operation and receipt times are
+    host monotonic observations; no source/client clock origins are compared.
+    ``sample_version`` explicitly pins legacy game-clock samples (1, default)
+    or capture-clock samples (3). Version 3 timing rows additionally retain
+    source game time and source capture time in their original clock domains.
     """
     if (not callable(check) or (scope is not None and not callable(scope)) or
             type(sample_count) is not int or not 2 <= sample_count <= 26 or
+            type(sample_version) is not int or sample_version not in (1, 3) or
             type(interval) not in (int, float) or not math.isfinite(interval) or not 0 < interval <= 1 or
             type(deadline) not in (int, float) or not math.isfinite(deadline) or
             (progress is not None and type(progress) is not dict) or
@@ -145,15 +150,22 @@ def collect_latest_playback(*, source, motion, host, recipient, deadline, check,
         if sample is not None:
             value = motion_value(sample)
             sequence = len(queued) + 1
-            if (value['version'] != 1 or value['sequence'] != sequence or
+            if (value['version'] != sample_version or value['sequence'] != sequence or
                     (value['epoch'], value['generation'], value['index']) != track_key or
-                    (queued and (value['sector_macro'] != queued[0]['sector_macro'] or
-                                 value['source_time'] <= queued[-1]['source_time']))):
+                    (queued and value['sector_macro'] != queued[0]['sector_macro'])):
                 raise RuntimeError('latest playback source identity or sequence changed')
+            try:
+                check_motion_progress(value, queued[-1] if queued else None)
+            except ValueError as error:
+                raise RuntimeError('latest playback source clocks or version changed') from error
             queued.append(value)
             known[sequence] = (value, motion_digest(value))
-            stats['sample_times'].append({'sequence': sequence, 'queued_at': now(),
-                'pull_elapsed_seconds': now() - pending_started_at})
+            sample_timing = {'sequence': sequence, 'queued_at': now(),
+                'pull_elapsed_seconds': now() - pending_started_at}
+            if sample_version == 3:
+                sample_timing['source_time'] = value['source_time']
+                sample_timing['capture_time'] = value['capture_time']
+            stats['sample_times'].append(sample_timing)
         else:
             stats['empty_pulls'] += 1
         pending_started_at = None

@@ -193,8 +193,10 @@ class PlaybackLogPending(ValueError):
     """Only append/incomplete snapshots may be retried within bounded waits."""
 
 
-def parse_records(data):
+def parse_records(data, *, sample_version=1):
     """Parse bounded, fixed-field native readbacks; BOUND is not a position ACK."""
+    if type(sample_version) is not int or sample_version not in (1, 3):
+        raise ValueError('unsupported_playback_sample_version')
     if len(data) > MAX_LOG or (data and not data.endswith(b'\n')):
         raise ValueError('invalid_playback_log')
     if b'AUTH_RECOVERED_CLIENT_MOTION ERROR' in data:
@@ -247,7 +249,81 @@ def parse_records(data):
                 if fields['uncertain'] != '0' or fields['drained'] != '1' or fields['report'] != len(summaries):
                     raise ValueError('uncertain_native_playback_stop')
                 stopped = fields
+    if sample_version == 3:
+        _attach_capture_records(data, initial, summaries, stopped)
     return initial, summaries, stopped
+
+
+def _capture_fields(raw):
+    try:
+        items = raw.decode('ascii').split()
+        fields = dict(item.split('=', 1) for item in items)
+    except (ValueError, UnicodeError):
+        raise ValueError('invalid_capture_clock_record') from None
+    if len(fields) != len(items):
+        raise ValueError('duplicate_capture_clock_field')
+    return fields
+
+
+def _attach_capture_records(data, initial, summaries, stopped):
+    """Pair each native position event with its separately labeled clocks."""
+    clock_tag = b'[X4LAN] AUTH_CLIENT_CAPTURE_CLOCK '
+    alignment_tag = b'[X4LAN] AUTH_CLIENT_INITIAL_ALIGNMENT '
+    rows = iter(([initial] if initial is not None else []) + summaries +
+                ([stopped] if stopped is not None else []))
+    pending = None
+    alignment = None
+    position_started = False
+    for line in data.splitlines():
+        if b'AUTH_CLIENT_CAPTURE_CLOCK' in line and clock_tag not in line:
+            raise ValueError('invalid_capture_clock_record')
+        if alignment_tag in line:
+            if pending is not None or alignment is not None or position_started:
+                raise ValueError('unexpected_alignment_clock_record')
+            fields = _capture_fields(line.split(alignment_tag, 1)[1])
+            expected = {'version', 'epoch', 'index', 'source_sequence', 'source_time',
+                        'arrival', 'local_time', 'error', 'tolerance'}
+            expected.update(prefix + axis for prefix in ('before_', 'target_', 'actual_') for axis in ('x', 'y', 'z'))
+            if (set(fields) != expected or fields['version'] != '1' or
+                    fields['epoch'] != EPOCH or fields['index'] != '1318'):
+                raise ValueError('foreign_alignment_clock_record')
+            for key in expected - {'version', 'epoch', 'index'}:
+                fields[key] = _number(fields[key], integer=key == 'source_sequence')
+            if fields['source_sequence'] != 1 or min(fields[key] for key in
+                    ('source_time', 'arrival', 'local_time', 'error', 'tolerance')) < 0:
+                raise ValueError('invalid_alignment_clock_record')
+            alignment = fields
+            pending = ('INITIAL_ALIGNMENT', fields)
+        elif TAG in line:
+            if pending is not None:
+                raise ValueError('missing_capture_clock_record')
+            kind = line.split(TAG, 1)[1].split(None, 1)[0].decode('ascii')
+            position_started = True
+            pending = (kind, next(rows))
+        elif clock_tag in line:
+            if pending is None:
+                raise ValueError('unmatched_capture_clock_record')
+            fields = _capture_fields(line.split(clock_tag, 1)[1])
+            expected = {'version', 'kind', 'epoch', 'index', 'render_sequence',
+                        'latest_source_time', 'latest_capture_time', 'local_time'}
+            kind, row = pending
+            if (set(fields) != expected or fields['version'] != '1' or fields['kind'] != kind or
+                    fields['epoch'] != EPOCH or fields['index'] != '1318'):
+                raise ValueError('foreign_capture_clock_record')
+            for key in ('render_sequence', 'latest_source_time', 'latest_capture_time', 'local_time'):
+                fields[key] = _number(fields[key], integer=key == 'render_sequence')
+                if fields[key] < 0:
+                    raise ValueError('invalid_capture_clock_record')
+            if (fields['render_sequence'] != row['source_sequence'] or
+                    fields['local_time'] != row['local_time'] or
+                    (kind == 'INITIAL_ALIGNMENT' and fields['latest_source_time'] != row['source_time'])):
+                raise ValueError('capture_clock_native_correlation_differs')
+            row['capture_clock'] = fields
+            pending = None
+    if pending is not None:
+        raise PlaybackLogPending('capture_clock_record_pending')
+    if alignment is not None and initial is not None:
+        initial['initial_alignment_clock'] = alignment
 
 
 def validate_plan(initial, driver):
@@ -275,8 +351,11 @@ def validate_plan(initial, driver):
 
 class PlaybackLog:
     """Read-only append history shared by independent and paired diagnostics."""
-    def __init__(self, path):
+    def __init__(self, path, *, sample_version=1):
+        if type(sample_version) is not int or sample_version not in (1, 3):
+            raise ValueError('unsupported_playback_sample_version')
         self.log = path
+        self.sample_version = sample_version
         self._log_identity = None
         self._log_bytes = b''
 
@@ -294,19 +373,26 @@ class PlaybackLog:
                 return evidence._read_regular(self.log, MAX_LOG, collect=True)
             except evidence.EvidenceFileGrowing as error:
                 check_snapshot(error.fingerprint[:2], error.partial)
+                self._log_identity, self._log_bytes = error.fingerprint[:2], error.partial
                 raise PlaybackLogPending('playback_log_appending') from None
         before = read()
         check_snapshot(before[0][:2], before[2])
+        # The second read can report growth before returning a full snapshot.
+        # Its partial bytes must preserve this first observation as well.
+        self._log_identity, self._log_bytes = before[0][:2], before[2]
         after = read()
         check_snapshot(after[0][:2], after[2])
         if after != before:
             if after[0][:2] == before[0][:2] and len(after[2]) > len(before[2]) and after[2].startswith(before[2]):
+                self._log_identity, self._log_bytes = after[0][:2], after[2]
                 raise PlaybackLogPending('playback_log_appending')
             raise ValueError('playback_log_changed')
+        # A pending row/pair is still an observed append-only prefix. Retain it
+        # before parsing, so a retry cannot accept replacement or rewritten data.
+        self._log_identity, self._log_bytes = before[0][:2], before[2]
         if before[2] and not before[2].endswith(b'\n'):
             raise PlaybackLogPending('playback_log_line_pending')
-        result = parse_records(before[2])
-        self._log_identity, self._log_bytes = before[0][:2], before[2]
+        result = parse_records(before[2], sample_version=self.sample_version)
         return result
 
 

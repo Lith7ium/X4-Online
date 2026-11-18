@@ -149,15 +149,23 @@ class Probe(unittest.TestCase):
                     subject.run(**kwargs)
                 self.assertEqual(events, [])
 
-    def context(self, stop=True):
+    def context(self, stop=True, sample_version=1):
         events=[];baseline=object();settings={'epoch':'a'*32,'baseline':2,'lease':'b'*32,'attempt':'c'*32,'generation':'d'*32}
         world=SimpleNamespace(session=SimpleNamespace(state='running',pending=None,baseline_id=None),_baseline=(7,baseline))
         guard=SimpleNamespace(status=('ready','a'*32,2,'e'*64),deadline=time.monotonic()+100,check=Mock(return_value=True),
             stop=Mock(side_effect=lambda:events.append('guard_stop') or True))
         pump=SimpleNamespace(activate=Mock(side_effect=lambda **kw:events.append('pump_active')))
         active=SimpleNamespace(participant=SimpleNamespace(check_active=Mock(return_value=True)))
-        def sample(seq):return {'index':1,'sequence':seq,'sector_macro':'test','source_time':seq,
-            'x':0,'y':0,'z':0,'velocity':None,'epoch':'a'*32,'generation':'d'*32}
+        def sample(sequence):
+            value = {'version': sample_version, 'index': 1, 'sequence': sequence,
+                     'sector_macro': 'test', 'source_time': sequence,
+                     'x': 0, 'y': 0, 'z': 0, 'velocity': None,
+                     'epoch': 'a'*32, 'generation': 'd'*32}
+            if sample_version == 3:
+                value.pop('velocity')
+                value.update(source_time=0, capture_time=100+sequence*.2,
+                             real_velocity=None if sequence == 1 else {'x': 0, 'y': 0, 'z': 0})
+            return value
         samples=iter([sample(1),sample(2)])
         class Source:
             def request_candidate(self):events.append('candidate');return 1
@@ -618,7 +626,38 @@ class Probe(unittest.TestCase):
     def test_latest_real_udp_tcp_keeps_enrollment_and_final_receipt_with_slow_consumer(self):
         self.exercise_twenty_six_samples(use_identity_scope=True, use_liveness_check=True, latest=True)
 
-    def exercise_twenty_six_samples(self, *, use_identity_scope, use_liveness_check=False, latest=False):
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process and socket ownership required')
+    def test_capture_clock_latest_real_udp_tcp_preserves_game_stall_and_real_rates(self):
+        self.exercise_twenty_six_samples(use_identity_scope=True, use_liveness_check=True,
+                                        latest=True, real_time_motion=True)
+
+    def test_capture_clock_mode_is_explicit_and_validated_before_binding(self):
+        for options in ({'real_time_motion': 1}, {'real_time_motion': None},
+                        {'real_time_motion': True, 'local_pair': {}},
+                        {'real_time_motion': True, 'selection': {}}):
+            with self.subTest(options=options):
+                events, kwargs, _ = self.context()
+                kwargs['settings'].update(options)
+                with self.assertRaisesRegex(ValueError, 'real-time motion'):
+                    subject.run(**kwargs)
+                self.assertEqual(events, [])
+
+    def test_configured_source_version_mismatch_fails_before_delivery(self):
+        for real_time_motion in (False, True):
+            with self.subTest(real_time_motion=real_time_motion):
+                events, kwargs, bind = self.context(sample_version=1 if real_time_motion else 3)
+                kwargs['settings']['real_time_motion'] = real_time_motion
+                with patch.object(subject, 'ExperimentalTCPJobDelivery'), \
+                     patch.object(subject, 'ExperimentalTCPMotion'), \
+                     patch.object(subject, 'bind_running_source_motion', side_effect=bind), \
+                     patch.object(subject.os, 'stat', return_value=SimpleNamespace(st_dev=1, st_ino=2)):
+                    with self.assertRaisesRegex(RuntimeError, 'configured motion version'):
+                        subject.run(**kwargs)
+                self.assertEqual(events.count('pull'), 1)
+                self.assertNotIn('source_stop', events)
+
+    def exercise_twenty_six_samples(self, *, use_identity_scope, use_liveness_check=False,
+                                   latest=False, real_time_motion=False):
         """Real UDP/TCP and ownership guards, with a simulated source/client."""
         from tests import test_authority_experimental_tcp_motion as fixture
         from test_authority_paired_playback_evidence import source_sample
@@ -627,6 +666,12 @@ class Probe(unittest.TestCase):
         events, errors = [], []
         sock = source = thread = None
         expected = [source_sample(n) for n in range(1, 27)]
+        if real_time_motion:
+            for sample in expected:
+                sample['version'] = 3
+                sample['capture_time'] = 100+sample['sequence']*.2
+                sample['source_time'] = 0  # A game-clock stall must not stop capture-clock playback.
+                sample['real_velocity'] = sample.pop('velocity')
         try:
             conn = case.case.connect(); case.case.offer_and_claim(conn)
             case.client(conn, 1, delay=.35 if latest else 0); case.case.host.tick(.1)
@@ -636,6 +681,8 @@ class Probe(unittest.TestCase):
             source.connect(sock.getsockname()); source.settimeout(10)
             settings = dict(epoch=expected[0]['epoch'], baseline=10082, lease='1'*32,
                             attempt='2'*32, generation='c'*32)
+            if real_time_motion:
+                settings['real_time_motion'] = True
             def source_peer():
                 try:
                     prefix = ['S', settings['lease'], settings['attempt']]
@@ -650,9 +697,14 @@ class Probe(unittest.TestCase):
                             reply = prefix+['SAVED_REGISTERED']+identity+[request, packet[7], packet[8]]
                         elif packet[3] == 'PULL':
                             sample = expected[count]; count += 1
-                            rate = ['-', '-', '-'] if sample['velocity'] is None else [str(sample['velocity'][a]) for a in ('x','y','z')]
-                            reply = prefix+['SAMPLE']+identity+[request, '1318', str(count), sample['sector_macro'],
-                                str(sample['source_time']), str(sample['x']), str(sample['y']), str(sample['z'])]+rate
+                            velocity = sample['real_velocity'] if real_time_motion else sample['velocity']
+                            rate = ['-', '-', '-'] if velocity is None else [str(velocity[a]) for a in ('x','y','z')]
+                            marker = 'SAMPLE3' if real_time_motion else 'SAMPLE'
+                            times = [str(sample['source_time'])]
+                            if real_time_motion:
+                                times.append(str(sample['capture_time']))
+                            reply = prefix+[marker]+identity+[request, '1318', str(count), sample['sector_macro']]+times+[
+                                str(sample['x']), str(sample['y']), str(sample['z'])]+rate
                         elif packet[3] == 'STOP':
                             self.assertEqual(count, 26)
                             events.append(('source_stop', time.monotonic()))
@@ -745,6 +797,17 @@ class Probe(unittest.TestCase):
             self.assertEqual(scope_depth[0], 0)
             self.assertEqual([row[1] for row in case.received], observed)
             self.assertEqual(result['client_receipt_sample_sha256'], [motion_digest(s) for s in observed])
+            if real_time_motion:
+                self.assertEqual(result['motion_version'], 3)
+                self.assertTrue(result['second_sample_real_velocity_present'])
+                self.assertNotIn('second_sample_velocity_present', result)
+                for actual, original in zip(result['samples'], observed, strict=True):
+                    self.assertNotIn('velocity', actual)
+                    for key in ('version', 'source_time', 'capture_time', 'real_velocity'):
+                        self.assertEqual(actual[key], original[key])
+                for actual, original in zip(result['latest_playback']['stats']['sample_times'], expected, strict=True):
+                    self.assertEqual(actual['source_time'], original['source_time'])
+                    self.assertEqual(actual['capture_time'], original['capture_time'])
             times = dict(events)
             self.assertLess(events.index(('begin', times['begin'])), 1)
             self.assertGreaterEqual(times['guard_stop']-times['source_stop'], 1.25)

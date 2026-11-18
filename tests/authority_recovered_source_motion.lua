@@ -6,7 +6,7 @@ local I=dofile('src/authority/lua/source_motion_ipc.lua')
 local G=dofile('src/authority/lua/source_motion_shutdown.lua')
 local C=dofile('tools/dev/authority_registry_motion_candidate.lua')
 local lease,attempt,epoch,gen,nonce,saved=string.rep('a',32),string.rep('b',32),string.rep('c',32),string.rep('d',32),string.rep('e',32),string.rep('f',32)
-local function rig(with_selection,bootstrap_mode)
+local function rig(with_selection,bootstrap_mode,real_time_motion)
  local now=1;local paused=false;local alive=true;local input,out,events,issued,faults={},{},{},{},{}
  local reports={};local selection,selector_obj
  if with_selection then selection={nonce=string.rep('9',32),candidates={1,2},
@@ -22,7 +22,8 @@ local function rig(with_selection,bootstrap_mode)
   end}
  end
  local net={send=function(_,v)out[#out+1]=v;return true end,receive=function()return table.remove(input,1)end,pending=function()return #input>0 end}
- local session=assert(M.new({enabled=true,epoch=epoch,generation=gen,nonce=nonce,saved_nonce=saved,baseline=2,selection=selection,
+ local session=assert(M.new({enabled=true,epoch=epoch,generation=gen,nonce=nonce,saved_nonce=saved,baseline=2,selection=selection,real_time_motion=real_time_motion,
+  capture_clock=real_time_motion and function()return now*2 end or nil,
   running=function()return not paused end,guard=function()return alive end,register=function(f)events[1]=f;return true end,
   fault=function(v)faults[#faults+1]=v end,
   bootstrap_factory=function(o)
@@ -41,8 +42,10 @@ local function rig(with_selection,bootstrap_mode)
    o.reader_factory=function(row,actor,request)
     return {start=function()issued[#issued+1]={kind='sample',request=request};return true end,
      tick=function()return true end,response=function()
-      return true,{epoch=epoch,index=row.index,sequence=row.sequence,descriptor_atomic=false,sector_identity_proven=false,
+      local sample={epoch=epoch,index=row.index,sequence=row.sequence,descriptor_atomic=false,sector_identity_proven=false,
        sector_macro='sector_a',local_sector_key='42',game_before_pose=now,game_after_pose=now,x=now,y=2,z=3}
+      if o.real_time_motion then sample.capture_before_pose=o.capture_clock();sample.capture_after_pose=o.capture_clock() end
+      return true,sample
      end}
    end
    return S.new(o)
@@ -106,8 +109,8 @@ for _,followup in ipairs({'', 'P|'..lease..'|'..attempt..'|PULL'..suffix..'|2'})
  assert(app:tick());assert(not app:tick() and app:state()=='failed')
  for _,v in ipairs(out)do assert(not v:find('|CANDIDATE|',1,true))end
 end
-local function initial()
- local app,input,out,events,issued,faults,pause,clock=rig()
+local function initial(real_time_motion)
+ local app,input,out,events,issued,faults,pause,clock=rig(nil,nil,real_time_motion)
  assert(out[1]=='S|'..lease..'|'..attempt..'|HELLO'..suffix)
  input[1]='P|'..lease..'|'..attempt..'|BOUND'..suffix;assert(app:tick())
  input[1]='P|'..lease..'|'..attempt..'|REGISTER_SAVED'..suffix..'|1|1|2';assert(app:tick())
@@ -125,6 +128,16 @@ do
  input[1]='P|'..lease..'|'..attempt..'|STOP'..suffix..'|4';assert(app:tick() and app:state()=='stopped')
  assert(out[#out]:find('|STOPPED|',1,true));pause(true);assert(app:tick())
  events[1]('late');assert(app:state()=='failed' and #faults>=1);assert(not app:tick())
+end
+-- Opt-in v3 uses capture seconds, not game seconds, for the rate.
+do
+ local app,input,out,events,issued,_,_,clock=initial(true)
+ input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|2';assert(app:tick())
+ events[1](issued[2].request..'|ok')
+ assert(out[#out]=='S|'..lease..'|'..attempt..'|SAMPLE3'..suffix..'|2|1|1|sector_a|1|2|1|2|3|-|-|-')
+ clock(2);input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|3';assert(app:tick())
+ events[1](issued[3].request..'|ok')
+ assert(out[#out]=='S|'..lease..'|'..attempt..'|SAMPLE3'..suffix..'|3|1|2|sector_a|2|4|2|2|3|0.5|0|0')
 end
 -- Pause loss before STOP and a foreign event fail, with no shutdown receipt.
 do local app,_,out,events,_,faults,pause=initial();pause(true);assert(not app:tick() and app:state()=='failed' and #faults>=1)

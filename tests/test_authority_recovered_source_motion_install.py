@@ -77,6 +77,25 @@ class RecoveredMotionTests(unittest.TestCase):
  def test_real_lua_modules_compose_with_simulated_x4(self):
   subprocess.run(['luajit','tests/authority_recovered_source_motion.lua'],cwd=ROOT,check=True,capture_output=True,timeout=5)
 
+ def test_real_time_motion_opt_in_and_invalid_combinations(self):
+  cfg=self.ui/'config.lua';before=cfg.read_bytes()
+  for value in (None, 1, 'true'):
+   self.settings['real_time_motion']=value
+   with self.assertRaises(ValueError):self.install()
+   self.assertEqual(before,cfg.read_bytes())
+  self.settings['real_time_motion']=True
+  for option,value in (('selection',{'nonce':'6'*32,'candidates':(1,)}),
+                       ('local_pair',{'nonce':'6'*32,'index':1})):
+   self.settings[option]=value
+   with self.assertRaises(ValueError):self.install()
+   self.assertEqual(before,cfg.read_bytes())
+   del self.settings[option]
+  self.install()
+  self.assertIn('authority_motion_real_time=true',cfg.read_text())
+  owner=(self.ui/'authority_world_bridge_probe.lua').read_text()
+  self.assertIn('real_time_motion=cfg.authority_motion_real_time',owner)
+  subprocess.run(['luajit','-b',str(self.ui/'authority_world_bridge_probe.lua'),'/dev/null'],check=True,capture_output=True)
+
  def test_candidate_overlay_is_explicit_and_preserves_existing_md(self):
   before={p:p.read_bytes() for p in self.md.iterdir()}
   self.settings['selection']={'nonce':'6'*32,'candidates':(1,2)}

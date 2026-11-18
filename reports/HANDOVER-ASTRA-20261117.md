@@ -16,15 +16,20 @@ below are superseded. Position-only v3 schema, source capture and transport are
 implemented with focused synthetic and real-loopback checks. BIND3 and the
 capture-time client playback path now also pass fake-native composition checks,
 including initial alignment, ongoing writes, freshness expiry and STOP/release.
-Older client-authority and one-shot apply paths still refuse V3. The next step is
-explicit source-session wiring and a native oracle for both clocks;
+Older client-authority and one-shot apply paths still refuse V3. Explicit
+source-session wiring and the native log oracle now also support V3: the probe
+passed 26 samples over real loopback UDP/TCP with simulated endpoints, and
+synthetic log checks validate both clocks against acknowledged samples. Source
+settings use `real_time_motion=true`; the bounded supervisor flag is
+`--diagnostic-real-time-motion` with latest ENH-870 playback. The next step is a
+new pinned two-X4 attempt of this complete path;
 do not retry the old native performance fixture unchanged. See
 [the implementation evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#first-implementation-checkpoint).
 Native/client gameplay integration remains unproven. GPU-free server work stays deferred. Goal remains active and the full
 Linux/Windows Internet gameplay objective remains unmet.
 The historical full-suite failure was retried individually with current
 diagnostics and passed; this does not resolve the previous full-run failure or
-26 environment/platform skips. No full suite or X4 launch was repeated here.
+26 environment/platform skips. No X4 V3 launch has been performed yet.
 See [the latest native result](AUTHORITY-CLIENT-PLAYBACK-20261117.md#unprofiled-process-helper-comparison-2026-11-18)
 and [the approved clock direction](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#approved-direction-2026-11-18).
 

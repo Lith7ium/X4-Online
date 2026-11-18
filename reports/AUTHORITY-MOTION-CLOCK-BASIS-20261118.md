@@ -156,3 +156,42 @@ The previously failing full-suite worker test passed individually with current
 socket-count diagnostics. Its original intermittent failure remains unexplained;
 the earlier full run and 26 platform/data-dependent skips are not a pass.
 No full suite, native X4, Windows or Internet trial was repeated at this stage.
+
+## Source-session and correlated evidence integration
+
+The source installer and Lua runtime now accept an explicit, default-off
+`real_time_motion` setting. The native factory uses `net.monotonic` adjacent to
+the pose query. The latest collector, source probe and bounded supervisor retain
+both clocks and real velocity. The source probe refuses a configuration/version
+mismatch before delivery. The supervisor restricts its new flag to the existing
+bounded ENH-870 latest-playback diagnostic; legacy local-pair and candidate
+selection modes remain outside this experiment.
+
+The V3 paired oracle requires the separate native capture-clock rows. It
+correlates both clocks to acknowledged original samples and uses real velocity
+for final prediction. A summary may describe a previous write read back after
+a newer delivery, so its clock can match an earlier acknowledged sample within
+the recorded delivery count. Initial and final clocks must still match their
+exact source samples. The reader retains file identity and observed bytes even
+while waiting for a trailing clock row; replacement, truncation and rewriting
+during that wait are refused. Optional initial-alignment records retain the
+3-metre readback bound and original local arrival-age check.
+
+Focused validation, without starting X4:
+
+- Ten source installer/fake-Lua-runtime tests passed.
+- Thirteen collector tests passed, including 0/0.5/1/2-times game-clock rates,
+  explicit configuration, real-rate preservation and clock/version refusals.
+- Three supervisor option/result tests passed.
+- Four probe methods passed in 7.215 seconds. The integrated method sends 26
+  V3 samples through real loopback UDP/TCP with simulated endpoints, a stalled
+  game clock and a slow recipient. Enrollment and final receipt remain
+  protected; intermediate positions can coalesce, with both clocks retained.
+- Thirty distinct evidence methods passed across the initial batch and focused
+  follow-ups, using synthetic log records. Independent review found and fixed
+  loss of the observed log prefix during pending-pair retries and during growth
+  on a second read. Both legacy and V3 readers now preserve the first observation.
+
+These checks establish protocol and evidence composition, not real X4 cadence,
+native movement, Windows compatibility or Internet play. Existing motion limits
+were not increased, and no ordinary configuration silently enables V3.

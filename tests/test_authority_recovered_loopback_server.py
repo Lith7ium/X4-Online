@@ -45,6 +45,30 @@ class WitnessJoinModeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MODULE.diagnostic_latest_playback(SimpleNamespace(diagnostic_latest_playback=1), 'recovery_enh_870', False)
 
+    def test_real_time_motion_requires_latest_pinned_saved_playback(self):
+        self.assertFalse(MODULE.diagnostic_real_time_motion(SimpleNamespace(), None, False))
+        args = SimpleNamespace(diagnostic_real_time_motion=True)
+        self.assertTrue(MODULE.diagnostic_real_time_motion(args, 'recovery_enh_870', True))
+        for saved, latest in ((None, True), ('other', True), ('recovery_enh_870', False)):
+            with self.subTest(saved=saved, latest=latest), self.assertRaises(ValueError):
+                MODULE.diagnostic_real_time_motion(args, saved, latest)
+        with self.assertRaises(ValueError):
+            MODULE.diagnostic_real_time_motion(SimpleNamespace(diagnostic_real_time_motion=1), 'recovery_enh_870', True)
+
+    def test_real_time_observation_preserves_both_clocks_and_rate(self):
+        sample = {'version': 3, 'source_time': 1, 'capture_time': 2, 'real_velocity': None}
+        observation = {'motion_version': 3, 'samples': [dict(sample), dict(sample)],
+                       'second_sample_real_velocity_present': False}
+        MODULE.require_real_time_observation(observation)
+        self.assertEqual(observation['samples'][0], sample)
+        for changed in ('capture_time', 'real_velocity', 'version'):
+            bad = dict(observation, samples=[dict(sample), dict(sample)])
+            del bad['samples'][1][changed]
+            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                MODULE.require_real_time_observation(bad)
+        bad = dict(observation, second_sample_real_velocity_present=True)
+        with self.assertRaises(RuntimeError): MODULE.require_real_time_observation(bad)
+
     def test_latest_finish_requires_same_ack_subsequence_in_receipts_and_readback(self):
         for fault in (None, 'missing_first', 'missing_final', 'reordered', 'readback_disagrees', 'missing_capture', 'wrong_count'):
             with self.subTest(fault=fault):

@@ -180,6 +180,13 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         playback_begin=None, playback_checkpoint_check=None, playback_checkpoint_stop=None, playback_identity_scope=None,
         playback_liveness_check=None, latest_playback=False, playback_checkpoint_lifetime=None):
     from authority_paired_playback_evidence import SAMPLE_COUNT, SAMPLE_INTERVAL, DRAIN_SECONDS
+    real_time_motion = settings.get('real_time_motion', False)
+    if (type(real_time_motion) is not bool or
+            (real_time_motion and (candidate_indices is not None or 'selection' in settings or
+                                   'local_pair' in settings or saved_apply_fixture is not None or
+                                   sector_poll is not None))):
+        raise ValueError('real-time motion requires baseline-only mode')
+    sample_version = 3 if real_time_motion else 1
     if playback_identity_scope is not None and (saved_playback_fixture is None or not callable(playback_identity_scope)):
         raise ValueError('invalid playback identity scope')
     if playback_liveness_check is not None and (saved_playback_fixture is None or not callable(playback_liveness_check)):
@@ -396,6 +403,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     def capture_sample(value):
         # Source IPC calls this before initiating TCP delivery. Rejection
         # after pull() returns would be too late to prevent a client effect.
+        if type(value) is not dict or value.get('version') != sample_version:
+            raise RuntimeError('source snapshot differs from the configured motion version')
         if pair_delivery:
             if (type(value) is not dict or value.get('index') != index or value.get('sequence') != 2 or
                     value.get('velocity') is None):
@@ -482,7 +491,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         latest_collection = checked_operation(collect_latest_playback,
             source=source, motion=motion, host=host, recipient=selected_recipient,
             deadline=sampling_deadline, check=active_guard, scope=playback_identity_scope,
-            sample_count=required_samples, interval=SAMPLE_INTERVAL, progress=progress)
+            sample_count=required_samples, interval=SAMPLE_INTERVAL, progress=progress,
+            sample_version=sample_version)
         if latest_collection['queued_samples'] != staged_samples:
             raise RuntimeError('queued playback samples differ from validated source captures')
         samples = latest_collection['acknowledged_samples']
@@ -634,7 +644,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     if diagnostics is not None:
         diagnostics.enter('close_source')
     checked_operation(source.close)
-    public_fields = ('sequence', 'sector_macro', 'source_time', 'x', 'y', 'z', 'velocity')
+    public_fields = ('sequence', 'sector_macro', 'source_time', 'x', 'y', 'z')
+    public_fields += ('version', 'capture_time', 'real_velocity') if real_time_motion else ('velocity',)
     public_samples = [{key: sample[key] for key in public_fields} for sample in samples]
     if diagnostics is not None:
         diagnostics.enter('complete')
@@ -656,6 +667,9 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     if pair_delivery:
         result['pair_delivery'] = True
         result['pair_sample_velocity_present'] = public_samples[0]['velocity'] is not None
+    elif real_time_motion:
+        result['motion_version'] = 3
+        result['second_sample_real_velocity_present'] = public_samples[1]['real_velocity'] is not None
     else:
         result['second_sample_velocity_present'] = public_samples[1]['velocity'] is not None
     if apply_observation is not None:

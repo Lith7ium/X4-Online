@@ -7,7 +7,7 @@ import copy
 import math
 import time
 
-from authority.experimental_tcp_motion import motion_value
+from authority.experimental_tcp_motion import check_motion_progress, motion_value
 from authority_native_client_playback import EPOCH, SECTOR, PlaybackLog, PlaybackLogPending
 
 SAMPLE_COUNT = 26
@@ -17,14 +17,15 @@ PREDICTION_HORIZON = .35  # Existing motion_buffer.lua default; not a new policy
 
 
 class PairedPlaybackEvidence:
-    def __init__(self, path, *, guard, deadline, latest=False):
-        if (type(latest) is not bool or not callable(guard) or
+    def __init__(self, path, *, guard, deadline, latest=False, sample_version=1):
+        if (type(latest) is not bool or type(sample_version) is not int or sample_version not in (1, 3) or not callable(guard) or
                 not math.isfinite(deadline) or deadline <= time.monotonic()):
             raise ValueError('bounded playback evidence context required')
-        self.reader = PlaybackLog(path)
+        self.reader = PlaybackLog(path, sample_version=sample_version)
         self.guard = guard
         self.deadline = deadline
         self.latest = latest
+        self.sample_version = sample_version
         self.samples = []
         self.initial = None
         self.initial_comparison = None
@@ -56,15 +57,31 @@ class PairedPlaybackEvidence:
             previous_sequence = self.samples[-1]['sequence'] if self.samples else 0
             sequence_valid = (previous_sequence < value['sequence'] <= SAMPLE_COUNT and
                               (bool(self.samples) or value['sequence'] == 1))
-        if (value['version'] != 1 or value['epoch'] != EPOCH or value['index'] != 1318 or
+        if (value['version'] != self.sample_version or value['epoch'] != EPOCH or value['index'] != 1318 or
                 value['sector_macro'] != SECTOR or not sequence_valid or
                 len(self.samples) >= SAMPLE_COUNT):
             raise ValueError('paired playback source identity or sequence differs')
-        if self.samples and (value['generation'] != self.samples[-1]['generation'] or
-                             value['source_time'] <= self.samples[-1]['source_time']):
+        if self.samples and value['generation'] != self.samples[-1]['generation']:
             raise ValueError('paired playback source lifetime or clock differs')
+        check_motion_progress(value, self.samples[-1] if self.samples else None)
         if not self.samples:
             self.initial, _, _ = self._wait_for(0)
+            if self.sample_version == 3:
+                self._check_capture_clock(self.initial, value)
+                alignment = self.initial.get('initial_alignment_clock')
+                if alignment is not None:
+                    self._check_capture_clock(alignment, value)
+                    target = [alignment['target_' + axis] for axis in ('x', 'y', 'z')]
+                    actual = [alignment['actual_' + axis] for axis in ('x', 'y', 'z')]
+                    initial_pose = [self.initial[axis] for axis in ('x', 'y', 'z')]
+                    readback_error = math.dist(actual, target)
+                    arrival_age = alignment['local_time'] - alignment['arrival']
+                    if (target != [value[axis] for axis in ('x', 'y', 'z')] or
+                            alignment['tolerance'] != 3 or alignment['error'] > 3 or
+                            readback_error > 3 or not math.isclose(readback_error, alignment['error'], abs_tol=1e-6) or
+                            not 0 <= arrival_age < 1 or self.initial['local_time'] < alignment['local_time'] or
+                            math.dist(actual, initial_pose) > 3):
+                        raise ValueError('initial alignment differs from source pose or readback')
             initial_offset = math.dist([value[axis] for axis in ('x', 'y', 'z')],
                                        [self.initial[axis] for axis in ('x', 'y', 'z')])
             # Retain this bounded comparison even when admission fails. A
@@ -79,10 +96,19 @@ class PairedPlaybackEvidence:
                 'offset_metres': initial_offset, 'limit_metres': 50,
                 'within_bound': initial_offset <= 50,
             }
+            if self.sample_version == 3:
+                self.initial_comparison['source_capture_time'] = value['capture_time']
             if initial_offset > 50:
                 raise ValueError('paired playback initial offset exceeds fixture bound')
         self.samples.append(value)
         return True
+
+    @staticmethod
+    def _check_capture_clock(row, sample):
+        clock = row.get('capture_clock')
+        if (type(clock) is not dict or clock['latest_source_time'] != sample['source_time'] or
+                clock['latest_capture_time'] != sample['capture_time']):
+            raise ValueError('paired playback source capture clocks differ')
 
     def stopped(self, *, stopped_guard):
         """Validate native drain and the final source-derived predicted target."""
@@ -94,13 +120,14 @@ class PairedPlaybackEvidence:
         if not complete or initial != self.initial or not summaries:
             raise ValueError('paired playback evidence incomplete')
         final = self.samples[-1]
+        velocity = final['real_velocity'] if self.sample_version == 3 else final['velocity']
         if (stopped['source_sequence'] != final['sequence'] or stopped['samples'] != sample_count or
-                stopped['readbacks'] < 2 or stopped['phase'] != 'frozen' or final['velocity'] is None):
+                stopped['readbacks'] < 2 or stopped['phase'] != 'frozen' or velocity is None):
             raise ValueError('paired playback final sample not observed')
         acknowledged_ordinals = {sample['sequence']: ordinal
                                  for ordinal, sample in enumerate(self.samples, 1)}
         for row in [*summaries, stopped]:
-            if self.latest:
+            if self.latest or self.sample_version == 3:
                 # Interpolation may still report an earlier acknowledged source
                 # after later deliveries. Its count must include that delivery.
                 ordinal = acknowledged_ordinals.get(row['source_sequence'])
@@ -112,7 +139,21 @@ class PairedPlaybackEvidence:
                     math.dist([row['actual_' + axis] for axis in ('x', 'y', 'z')],
                               [row['target_' + axis] for axis in ('x', 'y', 'z')]) > 3):
                 raise ValueError('paired playback readback mismatch')
-        predicted = [final[axis] + final['velocity'][axis] * PREDICTION_HORIZON for axis in ('x', 'y', 'z')]
+            if self.sample_version == 3:
+                if row is stopped:
+                    self._check_capture_clock(row, final)
+                else:
+                    # A readback can describe a previous write after a newer
+                    # BIND. Its clocks must identify an acknowledged sample
+                    # already delivered by this row, at or beyond its render.
+                    clock = row['capture_clock']
+                    matching = [sample for sample in self.samples[:row['samples']]
+                                if sample['source_time'] == clock['latest_source_time'] and
+                                sample['capture_time'] == clock['latest_capture_time'] and
+                                sample['sequence'] >= row['source_sequence']]
+                    if len(matching) != 1:
+                        raise ValueError('paired playback source capture clocks differ')
+        predicted = [final[axis] + velocity[axis] * PREDICTION_HORIZON for axis in ('x', 'y', 'z')]
         target = [stopped['target_' + axis] for axis in ('x', 'y', 'z')]
         actual = [stopped['actual_' + axis] for axis in ('x', 'y', 'z')]
         if math.dist(predicted, target) > .05 or math.dist(actual, target) > 3:
@@ -132,4 +173,8 @@ class PairedPlaybackEvidence:
         if self.latest:
             result.update(latest=True, acknowledged_sequences=list(acknowledged_ordinals),
                           final_source_sequence=final['sequence'])
+        if self.sample_version == 3:
+            result.update(sample_version=3, clock_basis='capture_time',
+                          source_capture_elapsed=final['capture_time'] - self.samples[0]['capture_time'],
+                          capture_clocks_correlated=True)
         return result

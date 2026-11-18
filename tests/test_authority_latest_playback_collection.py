@@ -46,6 +46,7 @@ class FakeOwners:
         self.defer_flags = []
         self.tick_hook = lambda: None
         self.next_sequence = lambda sequence: sequence
+        self.transform_sample = lambda sample: sample
         self.latest = SimpleNamespace(blocked=False, world_blocked=False)
         self.session = SimpleNamespace(state='running', pending=None,
             players=((1, 'client'),), ready_players=((1, 'client'),))
@@ -79,6 +80,7 @@ class FakeOwners:
         sample = dict(version=1, epoch=self.key[0], generation=self.key[1], index=1318,
             sequence=sequence, sector_macro='sector_a', source_time=self.clock.value,
             x=self.clock.value, y=2, z=3, velocity=None)
+        sample = self.transform_sample(sample)
         self.source.state = 'ready'
         self.queued.append(copy.deepcopy(sample))
         self.track['sequence'] = sequence
@@ -166,6 +168,89 @@ class LatestPlaybackCollectionTests(unittest.TestCase):
         self.assertNotEqual(owners.queued[0]['x'], -1)
         progress['stats']['sample_times'].clear()
         self.assertEqual(len(result['stats']['sample_times']), 6)
+
+    def capture_owners(self, *, game_rate=1):
+        owners = FakeOwners(self.clock)
+        def capture_sample(sample):
+            sample['version'] = 3
+            sample['capture_time'] = sample['source_time']
+            sample['source_time'] = 100 + (sample['sequence'] - 1) * .2 * game_rate
+            sample['real_velocity'] = None if sample['sequence'] == 1 else {'x': 1, 'y': 0, 'z': 0}
+            del sample['velocity']
+            return sample
+        owners.transform_sample = capture_sample
+        return owners
+
+    def test_capture_mode_retains_clocks_rates_receipts_and_detached_timing(self):
+        for game_rate in (0, .5, 1, 2):
+            with self.subTest(game_rate=game_rate):
+                owners = self.capture_owners(game_rate=game_rate)
+                progress = {}
+                result = self.collect(owners, sample_version=3, progress=progress)
+                self.assertEqual([row['sequence'] for row in result['queued_samples']], list(range(1, 7)))
+                self.assertEqual([row['sequence'] for row in result['acknowledged_samples']], [1, 6])
+                self.assertEqual(owners.barriers, 1)
+                self.assertEqual(result['queued_samples'], owners.queued)
+                self.assertEqual(result['acknowledged_samples'], [owners.queued[0], owners.queued[-1]])
+                for sample, timing in zip(result['queued_samples'], result['stats']['sample_times']):
+                    self.assertEqual(sample['version'], 3)
+                    self.assertNotIn('velocity', sample)
+                    self.assertEqual(timing['source_time'], sample['source_time'])
+                    self.assertEqual(timing['capture_time'], sample['capture_time'])
+                result['queued_samples'][-1]['real_velocity']['x'] = 99
+                result['stats']['sample_times'][0]['capture_time'] = -1
+                self.assertEqual(progress['queued_samples'][-1]['real_velocity']['x'], 1)
+                self.assertGreater(progress['stats']['sample_times'][0]['capture_time'], 0)
+                self.assertEqual(owners.queued[-1]['real_velocity']['x'], 1)
+
+    def test_capture_mode_rejects_clock_regression_stall_version_and_field_mix(self):
+        for fault in ('capture_stall', 'capture_regression', 'game_regression',
+                      'version', 'legacy_rate', 'frame'):
+            with self.subTest(fault=fault):
+                owners = self.capture_owners()
+                transform = owners.transform_sample
+                def corrupt(sample):
+                    value = transform(sample)
+                    if value['sequence'] == 2:
+                        if fault == 'capture_stall':
+                            value['capture_time'] = owners.queued[0]['capture_time']
+                        elif fault == 'capture_regression':
+                            value['capture_time'] = owners.queued[0]['capture_time'] - .1
+                        elif fault == 'game_regression':
+                            value['source_time'] = owners.queued[0]['source_time'] - .1
+                        elif fault == 'version':
+                            value['version'] = 1
+                            value['velocity'] = value.pop('real_velocity')
+                            del value['capture_time']
+                        elif fault == 'legacy_rate':
+                            value['velocity'] = None
+                        elif fault == 'frame':
+                            value['sector_macro'] = 'sector_b'
+                    return value
+                owners.transform_sample = corrupt
+                progress = {}
+                with self.assertRaises((ValueError, RuntimeError)):
+                    self.collect(owners, sample_version=3, progress=progress)
+                self.assertEqual(progress['queued_sequences'], [1])
+                self.assertEqual(owners.failures, 1)
+                self.assertEqual(owners.barriers, 0)
+
+    def test_sample_version_is_explicit_and_strict_with_legacy_stats_unchanged(self):
+        for version in (False, True, 0, 2, 3.0, '3', None):
+            with self.subTest(version=version):
+                owners = FakeOwners(self.clock)
+                with self.assertRaises(ValueError):
+                    self.collect(owners, sample_version=version)
+                self.assertEqual(owners.begins, [])
+        for requested, captured in ((1, True), (3, False)):
+            owners = self.capture_owners() if captured else FakeOwners(self.clock)
+            with self.assertRaisesRegex(RuntimeError, 'source identity or sequence'):
+                self.collect(owners, sample_version=requested)
+            self.assertEqual(owners.barriers, 0)
+        owners = FakeOwners(self.clock)
+        result = self.collect(owners)
+        self.assertEqual(set(result['stats']['sample_times'][0]),
+                         {'sequence', 'queued_at', 'pull_elapsed_seconds'})
 
     def test_unsent_first_frame_is_never_replaced(self):
         owners = FakeOwners(self.clock, unsent_ticks=10)
