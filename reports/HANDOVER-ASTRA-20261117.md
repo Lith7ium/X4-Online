@@ -1,5 +1,20 @@
 # X4 multiplayer: handover for Astra
 
+The Windows fixture CLI now derives registry status from the exact staged
+checkpoint before overlay installation or X4 startup. All five XML passes can
+pump the load connection on its owner thread; callback failure aborts the join.
+Overlay, observed session and final log verification share one status/nonce.
+The 15 lifecycle tests passed, as did the assembled local TLS/file/TCP/UDP test
+with a synthetic gzip/XML registry. A delayed parser chunk forced a real
+keepalive before admission. Windows APIs and X4 remain simulated; no native
+Windows, game, full-size save, WAN or full-suite run was made. Logs:
+`.local/windows-registry-session-20261118.log` and
+`.local/windows-registry-assembled-20261118.log`. Motion overlay/IPC lifecycle
+integration remains next; this does not yet send ship movements on Windows.
+The reader change passed 28 focused pump/marker/registry tests, including
+propagation across all five passes and unchanged cancellation exceptions:
+`.local/registry-inspection-pump-20261118.log`.
+
 Motion profile checks now share lexical path normalization for absolute POSIX,
 Windows drive and UNC paths. Case and interior separators remain significant;
 relative paths, dot segments, device prefixes and other profiles are rejected.
@@ -19,11 +34,10 @@ wrappers preserve their APIs. Focused validation passed 22 core tests plus 48
 overlay/parser/session tests, including generated Lua with a simulated engine
 and local TCP/UDP with scripted participants. Evidence and limits are in the
 [Windows guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#remaining-motion-integration).
-CLI orchestration is still missing: derive the status from the exact verified
-download while maintaining keepalive, then supply it consistently to installer,
-session and the final-log check. Do not call the multi-pass reader synchronously
-on the connection-owning thread during a live load. No native game, Windows,
-WAN, full-suite or full-size save reinspection was run for this extraction.
+The CLI orchestration above now uses the reader's optional pump between bounded
+chunks. Do not block the connection owner during a live load without pumping.
+No native game, Windows, WAN, full-suite or full-size save reinspection was run
+for this extraction.
 
 Latest Windows client continuation adds `WindowsMotionPeer`, using fresh IP
 Helper UDP owner tables and the existing process owner's held handle/job. It

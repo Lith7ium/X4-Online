@@ -29,7 +29,9 @@ owned-process cleanup, not gameplay or Internet acceptance.
   supplied by the server.
 - A running authority server with the existing load/participant protocol,
   keepalive enabled, and a marked checkpoint containing the two identity
-  fixture ships. An arbitrary personal save is not suitable.
+  fixture ships. Its saved ship registry must be either recognizably uninitialized
+  or structurally consistent; ambiguous state is refused before X4 starts.
+  An arbitrary personal save is not suitable.
 
 Expose the server's existing loopback control and file services through the
 [existing TLS server bridge](../../src/authority/EXPERIMENTAL-TLS-TUNNEL.md#example-setup).
@@ -156,9 +158,16 @@ monitor later registry faults. The status must describe the exact verified
 download; no new server metadata field has been introduced. A live epoch/count
 receipt is not a runtime proof of the entire saved mapping.
 
-The CLI has not yet been wired to inspect the download and enable this path.
-Keepalive must continue during the multi-pass XML inspection; directly blocking
-the connection owner on a large save would not preserve that requirement.
+The CLI now enables this gate: after copying the verified download into the new
+save slot, it inspects that exact staged file before installing the overlay or
+launching X4. All registry passes retain their digest and file-stability checks.
+The streaming reader calls `owner.poll()` between bounded reads and parser
+chunks, on the existing connection-owning thread. Callback failure aborts the
+join. Workspace and deadline checks surround the inspection. Overlay, live
+session and final log verification use the same saved status and fresh nonce.
+An uninitialized registry remains a supported diagnostic input; this does not
+initialize it or make it ready for motion.
+
 The extraction passed 22 focused existing tests. Another 48 focused tests
 covered shared overlay installation, log parsing and session admission, including
 execution of the generated Windows Lua gate with a simulated engine and real
@@ -166,6 +175,18 @@ local TCP/UDP with scripted participants. Logs:
 `.local/windows-registry-core-20261118.log` and
 `.local/windows-registry-overlay-20261118.log`. No real save was reparsed, and
 no X4, native Windows, WAN or full-suite test was repeated.
+
+The CLI wiring passed 15 lifecycle tests and the assembled local TLS/file/TCP/UDP
+test, now using a small synthetic gzip/XML registry. The latter delays a parser
+chunk to require and observe a real keepalive during inspection, on the same
+client thread. It then verifies the generated registry context, admission,
+resume receipt and cleanup. X4 and Windows APIs remain simulated. Private logs:
+`.local/windows-registry-session-20261118.log` and
+`.local/windows-registry-assembled-20261118.log`.
+The streaming-reader change passed 28 focused marker/registry/pump tests,
+including cancellation during the final component pass without translating
+the callback's exception into a save-format failure. Private log:
+`.local/registry-inspection-pump-20261118.log`.
 
 The observed session can accept an optional motion consumer through the existing
 TCP owner. This CLI does not supply one. Reuse the existing

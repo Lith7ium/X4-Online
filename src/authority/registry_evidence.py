@@ -10,7 +10,7 @@ from xml.parsers import expat
 import zlib
 
 from .checkpoints import Checkpoint
-from .marker_evidence import _parse, MarkerEvidenceError
+from .marker_evidence import _parse, MarkerEvidenceError, _PumpCallbackError
 
 DECIMAL = re.compile(r'[1-9][0-9]{0,8}\Z')
 COMPONENT = re.compile(r'\[0x([0-9a-f]+)\]\Z')
@@ -24,7 +24,7 @@ class RegistryEvidenceError(ValueError):
 
 def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None,
            include_sector_parents=False, include_mapping_fingerprint=False,
-           expected_components=None):
+           expected_components=None, pump=None):
     if (not isinstance(checkpoint, Checkpoint) or not isinstance(expected_epoch, str)
             or not EPOCH.fullmatch(expected_epoch) or type(expected_count) is not int
             or not 1 <= expected_count <= MAX_ENTRIES):
@@ -70,7 +70,7 @@ def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None,
                 fields[name] = dict(attrs)
 
     try:
-        _parse(checkpoint, find_state)
+        _parse(checkpoint, find_state, pump=pump)
         if ((script_count, cue_count, variable_set_count) != (1, 1, 1)
                 or set(fields) != {'$ships', '$byship', '$last', '$epoch', '$faulted'}):
             raise RegistryEvidenceError('missing or ambiguous state')
@@ -154,7 +154,7 @@ def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None,
             elif len(path) > 5 and path[:4] == ['savegame', 'script', 'refs', 'ref'] and active in ('forward', 'reverse'):
                 raise RegistryEvidenceError('nested table element')
 
-        _parse(checkpoint, collect)
+        _parse(checkpoint, collect, pump=pump)
         if pending is not None or seen != {'forward': 1, 'reverse': 1, 'epoch': 1} or epoch_value != expected_epoch:
             raise RegistryEvidenceError('missing or inconsistent references or epoch')
         if (len(forward) != expected_count or len(reverse) != expected_count
@@ -212,7 +212,7 @@ def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None,
                 if any(parent.get('class') == 'dockingbay' for parent in parent_components):
                     docked += 1
 
-        _parse(checkpoint, components)
+        _parse(checkpoint, components, pump=pump)
         if len(found) != expected_count:
             raise RegistryEvidenceError('registered components missing')
         if expected_rows is not None and any(found[forward[index]] != macro for index, macro in expected_rows):
@@ -231,6 +231,8 @@ def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None,
                           ships_with_non_zone_component_parent=non_zone_parent, ships_under_dockingbay=docked,
                           sector_runtime_mapping_proven=False, position_or_velocity_proven=False)
         return result
+    except _PumpCallbackError as error:
+        raise error.error
     except RegistryEvidenceError:
         raise
     except (OSError, EOFError, expat.ExpatError, zlib.error, MarkerEvidenceError) as error:

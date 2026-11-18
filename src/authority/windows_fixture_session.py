@@ -6,13 +6,16 @@ session. The workspace owns the profile/view/log and must keep them exclusive.
 """
 import math
 import re
+import secrets
 import time
 
+from .checkpoints import Checkpoint
 from .experimental_client_session import client_connection
 from .experimental_windows_fixture_overlay import install_fixture_overlay
 from .load_observations import BoundReceiptStream
 from .local_participant_control import LocalParticipantControl
 from .observed_client_session import ObservedClientSession
+from .saved_registry import saved_status
 from .windows_x4_process import WindowsX4Process
 
 
@@ -45,6 +48,11 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
     ``stop_requested`` is called only after admission. It and the workspace
     callbacks must be bounded and cannot be interrupted by the deadline. No
     profile is deleted or reused here.
+
+    The staged save is inspected on this same thread before launching X4.
+    Its streaming reader pumps the load connection between bounded chunks.
+    The saved registry header is then required in both the live and final log;
+    this does not independently prove runtime actor identity.
     """
     if (enabled is not True or not callable(stop_requested) or
             type(deadline) not in (int, float) or not math.isfinite(deadline) or
@@ -80,11 +88,20 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     raise RuntimeError('fixture workspace unavailable')
                 bound = owner.request_offer()
                 download = owner.download(workspace.download_dir)
-                owner.copy_to_new_slot(download, workspace.save_dir / 'save_009.xml.gz')
+                staged_path = owner.copy_to_new_slot(download, workspace.save_dir / 'save_009.xml.gz')
+                if time.monotonic() >= deadline or workspace.guard() is not True:
+                    raise RuntimeError('fixture workspace unavailable before registry inspection')
+                checkpoint = Checkpoint(bound.offer.checkpoint_id, staged_path, bound.offer.sha256,
+                                        bound.offer.size, bound.marker)
+                registry_status = saved_status(checkpoint, pump=owner.poll)
+                if time.monotonic() >= deadline or workspace.guard() is not True:
+                    raise RuntimeError('fixture workspace unavailable after registry inspection')
+                registry_nonce = secrets.token_hex(16)
                 controller = LocalParticipantControl(enabled=True, timeout=participant_timeout)
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
-                    participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256)
+                    participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256,
+                    registry_status=registry_status, registry_nonce=registry_nonce)
                 workspace.register_overlay(hashes)
                 overlay_registered = True
                 def launch_guard():
@@ -102,7 +119,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                             time.monotonic() < deadline)
 
                 session = ObservedClientSession(owner, bound, controller, slot='save_009',
-                    read_log=workspace.read_log, guard=running_guard, deadline=deadline)
+                    read_log=workspace.read_log, guard=running_guard, deadline=deadline,
+                    registry_status=registry_status, registry_nonce=registry_nonce)
                 if session.start() is not True:
                     raise RuntimeError('fixture admission unconfirmed')
                 commands = 0
@@ -147,7 +165,9 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                             raise RuntimeError('fixture workspace unavailable')
                         final_log = workspace.read_log()
                         if (type(final_log) is not bytes or len(final_log) > 8 << 20 or
-                                not BoundReceiptStream(bound, slot='save_009').feed(final_log) or
+                                not BoundReceiptStream(bound, slot='save_009',
+                                    registry_status=registry_status,
+                                    registry_nonce=registry_nonce).feed(final_log) or
                                 workspace.guard() is not True):
                             raise RuntimeError('final fixture observations incomplete')
                     except BaseException:

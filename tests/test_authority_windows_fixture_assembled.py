@@ -4,6 +4,7 @@ Real TLS, file transfer, workspace, overlay, log parsing, TCP and UDP are used.
 This is not a Windows, X4, Internet or gameplay test.
 """
 import asyncio
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -28,6 +29,7 @@ from authority.trusted_load_messages import decode_load_claim, encode_bound_offe
 from authority.trusted_marker_load_session import MarkerBoundOffer
 from lockstep.launcher.joinfiles import FileService
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY, listening_socket
+from test_authority_registry_save_evidence import xml as registry_xml, EPOCH as REGISTRY_EPOCH
 import test_authority_windows_fixture_workspace as workspace_fixture
 
 
@@ -39,7 +41,7 @@ class AssembledFixtureSessionTest(unittest.TestCase):
     _create_view = workspace_fixture.WindowsFixtureWorkspaceTests._create_view
 
     def test_download_admit_command_and_cleanup_over_real_local_transports(self):
-        content = b'isolated synthetic checkpoint'
+        content = gzip.compress(registry_xml().encode('ascii'))
         source = self.root / 'source.save'
         source.write_bytes(content)
         offer = Offer(world_epoch='a' * 32, connection_handle=1, baseline_id=1, load_generation=1,
@@ -70,6 +72,8 @@ class AssembledFixtureSessionTest(unittest.TestCase):
         port = tls_listener.getsockname()[1]
         stop = threading.Event()
         receipt_ready = threading.Event()
+        inspecting_registry = threading.Event()
+        registry_keepalives = []
         errors, claims, receipts, commands = [], [], [], []
 
         def control_server():
@@ -94,6 +98,8 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                         frame = json.loads(line)
                         if frame.get('kind') != 'keepalive':
                             break
+                        if inspecting_registry.is_set():
+                            registry_keepalives.append(frame['sequence'])
                         connection.sendall(json.dumps({'version': 1, 'kind': 'alive',
                             'attempt_id': frame['attempt_id'], 'sequence': frame['sequence']}).encode() + b'\n')
                     claims.append(decode_load_claim(line.rstrip(b'\n')))
@@ -174,12 +180,18 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                 test.assertIsNotNone(lease_match)
                 test.assertEqual((installed / 'native' / 'x4lan_net_64.dll').read_bytes(), dll.read_bytes())
                 test.assertEqual((workspace.save_dir / 'save_009.xml.gz').read_bytes(), content)
+                load_probe = (installed / 'ui' / 'authority_download_load_probe.lua').read_text('ascii')
+                registry_context = re.search(r"nonce='([0-9a-f]{32})',expected='([^']+)'", load_probe)
+                test.assertIsNotNone(registry_context)
+                test.assertEqual(registry_context.group(2), REGISTRY_EPOCH + '|2')
                 destination = ('127.0.0.1', int(port_match.group(1)))
                 lease = lease_match.group(1)
                 fields = '|'.join(str(value) for value in (offer.world_epoch, 1, 1, 1,
                                   offer.checkpoint_id, offer.sha256, offer.attempt_id, 'save_009'))
                 workspace.log_path.write_text('[X4LAN] AUTH_DOWNLOAD_LOAD load_requested|' + fields + '\n' +
                     '[X4LAN] AUTH_MARKER load INSPECTED ' + bound.marker + '\n' +
+                    '[X4LAN] AUTH_RECOVERY_REGISTRY ' + registry_context.group(1) +
+                    '|startup|' + registry_context.group(2) + '\n' +
                     '[X4LAN] AUTH_DOWNLOAD_LOAD pause_observed|' + fields + '\n')
 
                 def participant():
@@ -218,10 +230,31 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                 self.cleanup_confirmed = True
                 return True
 
+        original_saved_status = fixture_session.saved_status
+        calling_thread = threading.get_ident()
+
+        def inspect_with_slow_first_chunk(checkpoint, *, pump):
+            # A delayed first chunk forces a real keepalive during inspection,
+            # without a large save or substituting the parser/digest checks.
+            first_chunk = True
+            def delayed_pump():
+                nonlocal first_chunk
+                test.assertEqual(threading.get_ident(), calling_thread)
+                if first_chunk:
+                    first_chunk = False
+                    time.sleep(.25)
+                pump()
+            inspecting_registry.set()
+            try:
+                return original_saved_status(checkpoint, pump=delayed_pump)
+            finally:
+                inspecting_registry.clear()
+
         try:
             # Only Windows path rendering and the OS/X4 process boundary are
             # substituted; installation and every transport remain real.
             with patch.object(overlay, '_windows_save_path', return_value=r'C:\Private\45841\save'), \
+                 patch.object(fixture_session, 'saved_status', side_effect=inspect_with_slow_first_chunk), \
                  patch.object(fixture_session, 'WindowsX4Process', FakeX4Process):
                 result = fixture_session.run_fixture_session(enabled=True, workspace=workspace,
                     server_host='127.0.0.1', server_port=port, server_fingerprint=fingerprint,
@@ -231,6 +264,7 @@ class AssembledFixtureSessionTest(unittest.TestCase):
             self.assertEqual(result, {'client_admitted': True, 'participant_receipts': 1,
                                       'owned_cleanup_confirmed': True, 'configuration_redacted': True})
             self.assertEqual(len(claims), 1)
+            self.assertTrue(registry_keepalives)
             self.assertEqual(claims[0].marker, bound.marker)
             self.assertEqual(claims[0].receipt.attempt_id, offer.attempt_id)
             self.assertTrue(claims[0].load_event_observed)

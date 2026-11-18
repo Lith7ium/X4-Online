@@ -26,14 +26,33 @@ class MarkerEvidenceError(ValueError):
     """The saved marker is missing, ambiguous, malformed or different."""
 
 
+class _PumpCallbackError(Exception):
+    """Keep pump failures out of verifier I/O translation; callers unwrap them."""
+
+    def __init__(self, error):
+        self.error = error
+
+
+def _pump_once(pump):
+    if pump is None:
+        return
+    try:
+        pump()
+    except BaseException as error:
+        raise _PumpCallbackError(error) from error
+
+
 class _DigestReader:
-    def __init__(self, raw):
+    def __init__(self, raw, pump=None):
         self.raw = raw
+        self.pump = pump
         self.digest = hashlib.sha256()
         self.size = 0
 
     def read(self, size=-1):
+        _pump_once(self.pump)
         block = self.raw.read(_CHUNK if size < 0 else min(size, _CHUNK))
+        _pump_once(self.pump)
         self.size += len(block)
         if self.size > MAX_COMPRESSED:
             raise MarkerEvidenceError('compressed save exceeds limit')
@@ -41,7 +60,7 @@ class _DigestReader:
         return block
 
 
-def _parse(checkpoint, callback, *, characters=None):
+def _parse(checkpoint, callback, *, characters=None, pump=None):
     parser = expat.ParserCreate()
     path = []
     def start(name, attrs):
@@ -67,20 +86,23 @@ def _parse(checkpoint, callback, *, characters=None):
         before = os.fstat(raw.fileno())
         if not stat.S_ISREG(before.st_mode):
             raise MarkerEvidenceError('checkpoint is not a regular file')
-        reader = _DigestReader(raw)
+        reader = _DigestReader(raw, pump)
         total = 0
         with gzip.GzipFile(fileobj=reader, mode='rb') as stream:
             while True:
                 block = stream.read(_CHUNK)
+                _pump_once(pump)
                 if not block:
                     break
                 total += len(block)
                 if total > MAX_XML:
                     raise MarkerEvidenceError('decompressed save exceeds limit')
                 parser.Parse(block, False)
+                _pump_once(pump)
                 if total - parser.CurrentByteIndex > _MAX_TOKEN:
                     raise MarkerEvidenceError('XML token exceeds limit')
             parser.Parse(b'', True)
+            _pump_once(pump)
         after = os.fstat(raw.fileno())
         if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
                 after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):

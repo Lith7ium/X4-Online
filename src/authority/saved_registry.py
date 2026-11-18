@@ -1,7 +1,7 @@
 """Read saved ship-registry status from one compressed X4 checkpoint."""
 import re
 
-from .marker_evidence import _parse
+from .marker_evidence import _parse, _PumpCallbackError
 from . import registry_evidence
 
 _HEX32 = re.compile(r'[0-9a-f]{32}\Z')
@@ -21,7 +21,7 @@ def checkpoint_status(expected, actual):
     return actual
 
 
-def saved_status(checkpoint):
+def _saved_status(checkpoint, pump):
     """Return initialized epoch, last index and mapping hash from saved XML."""
     script_count = cue_count = variable_set_count = state_child_count = 0
     active_registry_script = active_state_cue = False
@@ -60,7 +60,7 @@ def saved_status(checkpoint):
         if active_registry_script and active_state_cue and in_state_cue and value.strip():
             state_has_text = True
 
-    _parse(checkpoint, inspect_state, characters=detect_state_text)
+    _parse(checkpoint, inspect_state, characters=detect_state_text, pump=pump)
     if script_count == 0 and cue_count == 0:
         return ('uninitialized',)
     if (script_count, cue_count, variable_set_count, state_child_count) == (1, 1, 0, 0) and not state_has_text:
@@ -96,12 +96,20 @@ def saved_status(checkpoint):
               attributes.get('id') == epoch_reference['value']):
             epoch_references.append(attributes.get('string'))
 
-    _parse(checkpoint, find_epoch)
+    _parse(checkpoint, find_epoch, pump=pump)
     if (len(epoch_references) != 1 or not isinstance(epoch_references[0], str) or
             not _HEX32.fullmatch(epoch_references[0])):
         raise ValueError('missing or ambiguous saved epoch')
 
     epoch = epoch_references[0]
     evidence = registry_evidence.verify(
-        checkpoint, epoch, entry_count, include_mapping_fingerprint=True)
+        checkpoint, epoch, entry_count, include_mapping_fingerprint=True, pump=pump)
     return ('ready', epoch, entry_count, evidence['mapping_sha256'])
+
+
+def saved_status(checkpoint, *, pump=None):
+    """Return saved registry status, optionally pumping between bounded reads."""
+    try:
+        return _saved_status(checkpoint, pump)
+    except _PumpCallbackError as error:
+        raise error.error

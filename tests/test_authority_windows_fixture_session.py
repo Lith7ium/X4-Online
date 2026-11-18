@@ -21,6 +21,12 @@ class FixtureSessionTests(unittest.TestCase):
         self.start_error = self.poll_error = self.registration_error = self.close_error = None
         self.controller_error = self.redact_error = self.workspace_close_error = None
         self.construct_error = None
+        self.inspection_error = self.keepalive_error = None
+        self.inspection_hook = lambda: None
+        self.registry_status = ('ready', '8'*32, 2, '9'*64)
+        self.registry_nonce = '7'*32
+        self.registry_log = ('[X4LAN] AUTH_RECOVERY_REGISTRY ' + self.registry_nonce +
+                             '|startup|' + self.registry_status[1] + '|2\n').encode('ascii')
         self.poll_hook = lambda: None
         self.poll_result = True
         self.final_log_extra = b''
@@ -30,7 +36,7 @@ class FixtureSessionTests(unittest.TestCase):
         fields = '|'.join(str(v) for v in ('a'*32, 1, 2, 3, self.offer.checkpoint_id, self.offer.sha256,
                                            self.offer.attempt_id, 'save_009')).encode('ascii')
         self.log = (b'[X4LAN] AUTH_DOWNLOAD_LOAD load_requested|' + fields + b'\n'
-                    b'[X4LAN] AUTH_MARKER load INSPECTED ' + b'e'*32 + b'\n'
+                    b'[X4LAN] AUTH_MARKER load INSPECTED ' + b'e'*32 + b'\n' + self.registry_log +
                     b'[X4LAN] AUTH_DOWNLOAD_LOAD pause_observed|' + fields + b'\n')
         test = self
 
@@ -58,7 +64,21 @@ class FixtureSessionTests(unittest.TestCase):
                 test.calls.append(('download', directory)); return Path('/private/download/input')
             def copy_to_new_slot(self, source, target):
                 test.calls.append(('stage', source, target)); return target
+            def poll(self):
+                test.calls.append('load_keepalive')
+                if test.keepalive_error: raise test.keepalive_error
         self.owner = Owner()
+
+        def inspect_registry(checkpoint, *, pump):
+            test.calls.append(('inspect_registry', checkpoint))
+            test.assertEqual(checkpoint.path, test.workspace.save_dir / 'save_009.xml.gz')
+            test.assertEqual((checkpoint.checkpoint_id, checkpoint.sha256, checkpoint.size, checkpoint.marker),
+                             (test.offer.checkpoint_id, test.offer.sha256, test.offer.size, test.bound.marker))
+            pump()
+            test.inspection_hook()
+            if test.inspection_error: raise test.inspection_error
+            return test.registry_status
+        self.inspect_registry = inspect_registry
 
         @contextmanager
         def connection(**_options):
@@ -94,7 +114,10 @@ class FixtureSessionTests(unittest.TestCase):
         self.process = Process
 
         class Session:
-            def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline):
+            def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
+                         registry_status, registry_nonce):
+                test.assertEqual(registry_status, test.registry_status)
+                test.assertEqual(registry_nonce, test.registry_nonce)
                 test.calls.append(('session_create', owner is test.owner, bound == test.bound, slot, guard()))
             def start(self): test.calls.append('session_start'); return True
             def poll(self, timeout):
@@ -106,6 +129,8 @@ class FixtureSessionTests(unittest.TestCase):
         self.session = Session
 
         def install(view, **options):
+            test.assertEqual(options['registry_status'], test.registry_status)
+            test.assertEqual(options['registry_nonce'], test.registry_nonce)
             test.calls.append(('install', view, options['bound_offer'] == test.bound,
                                options['participant_port'], options['participant_lease']))
             return {'ui/config.lua':'0'*64}
@@ -122,6 +147,8 @@ class FixtureSessionTests(unittest.TestCase):
              patch.object(subject, 'LocalParticipantControl', self.controller), \
              patch.object(subject, 'WindowsX4Process', self.process), \
              patch.object(subject, 'ObservedClientSession', self.session), \
+             patch.object(subject, 'saved_status', self.inspect_registry), \
+             patch.object(subject.secrets, 'token_hex', return_value=self.registry_nonce), \
              patch.object(subject, 'install_fixture_overlay', self.install):
             return subject.run_fixture_session(**options)
 
@@ -133,11 +160,35 @@ class FixtureSessionTests(unittest.TestCase):
         self.assertIn(('controller_create', True, 30), self.calls)
         self.assertIn(('install', self.workspace.view, True, 12345, 'f'*32), self.calls)
         self.assertIn(('process_start', self.workspace.view, 45841, True), self.calls)
+        self.assertLess(self.calls.index('load_keepalive'), self.calls.index(('controller_create', True, 30)))
         self.assertLess(self.calls.index('session_start'), self.calls.index(('session_poll', .1)))
         for before, after in (('process_close', 'read_log'), ('read_log', 'session_close'),
                               ('session_close', 'redact'), ('redact', 'tls_exit'),
                               ('tls_exit', 'workspace_close')):
             self.assertLess(self.calls.index(before), self.calls.index(after))
+
+    def test_registry_or_keepalive_failure_prevents_installation_and_launch(self):
+        for field in ('inspection_error', 'keepalive_error'):
+            with self.subTest(field=field):
+                self.calls.clear()
+                setattr(self, field, RuntimeError('registry inspection aborted'))
+                try:
+                    with self.assertRaisesRegex(RuntimeError, 'registry inspection aborted'):
+                        self.run_session()
+                    self.assertFalse(any(isinstance(call, tuple) and call[0] in
+                        ('install', 'controller_create', 'process_create', 'session_create') for call in self.calls))
+                    self.assertIn('tls_exit', self.calls)
+                    self.assertIn('workspace_close', self.calls)
+                finally:
+                    setattr(self, field, None)
+
+    def test_inspection_cannot_outlive_deadline_and_then_launch(self):
+        clock = [100.0]
+        self.inspection_hook = lambda: clock.__setitem__(0, 102.0)
+        with patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaisesRegex(RuntimeError, 'after registry inspection'):
+                self.run_session(deadline=101.0)
+        self.assertFalse(any(isinstance(call, tuple) and call[0] == 'install' for call in self.calls))
 
     def test_uncertain_stop_retains_process_and_never_redacts(self):
         self.stop_confirmed = False
@@ -179,6 +230,16 @@ class FixtureSessionTests(unittest.TestCase):
             self.run_session()
         self.assertIn('redact', self.calls)
         self.assertLess(self.calls.index('process_close'), self.calls.index('read_log'))
+
+    def test_final_registry_missing_changed_or_duplicated_prevents_success(self):
+        original_log = self.log
+        for replacement in (b'', self.registry_log.replace(b'|2\n', b'|3\n'), self.registry_log*2):
+            with self.subTest(replacement=replacement):
+                self.calls.clear()
+                self.log = original_log.replace(self.registry_log, replacement)
+                with self.assertRaisesRegex(subject.FixtureCleanupError, 'observations unconfirmed'):
+                    self.run_session()
+                self.assertIn('redact', self.calls)
 
     def test_primary_error_is_not_masked_by_workspace_cleanup(self):
         self.poll_error = ValueError('poll failed')
