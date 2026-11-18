@@ -53,13 +53,18 @@ LuaJIT uint64 buffers and simulated native getters. It preserves
 enumeration calls for a closed map. No X4, Windows, Internet or full-suite run
 was performed for this change.
 
-The next native check should sample a closed/open/closed map in one disposable
-client, then vary pan, zoom, map filters and an offscreen selection while
-comparing raw lists. `authority_sector_read_live.py` supplies an existing
+The subsequent [single Linux native run](../../reports/AUTHORITY-MAP-RENDER-NATIVE-20261118.md)
+passed a closed/open/closed map lifecycle. The opened map returned one raw local
+component, and owned-process cleanup completed. This validates the basic native
+read path for that case, not viewport/radar semantics or useful ship coverage.
+
+The next native check should vary pan, zoom, map filters and an offscreen
+selection while comparing raw lists and identified components.
+`authority_sector_read_live.py` supplies an existing
 single-X4 load/cleanup owner; its `state == 'done'` update path can call a private
 probe without adding another update hook. Its old checkpoint requires the
 archived registry script, independently pinned to SHA-256
 `8b7c9887c9c1476e45fe84a60243547d96e09b11d4c40fabd151930af517e939`,
-rather than today's changed script. This is a preparation note, not an installed
-or tested native runner. Only after native semantics are established should
-these local observations drive server interest.
+rather than today's changed script. The private runner and its source hashes
+are recorded in the native report. Only after native semantics are established
+should these local observations drive server interest.

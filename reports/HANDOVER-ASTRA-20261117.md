@@ -75,8 +75,10 @@ The vanilla map source has since supplied a concrete candidate:
 read-only `map_render_observation.lua` captures that raw list without the menu's
 selected/targeted/stored-object additions, preserving exact local uint64 IDs.
 Its focused offline test passed with real LuaJIT buffers and simulated engine
-calls. It has no network or automatic UI hook. Actual viewport/radar semantics
-and native operation are still unproven; see the
+calls. It has no network or automatic UI hook. A subsequent isolated Linux
+native run passed closed/open/closed observation with one raw component and
+completed cleanup; see [the native evidence](AUTHORITY-MAP-RENDER-NATIVE-20261118.md).
+Actual viewport/radar semantics, ship coverage and Windows remain unproven; see the
 [contract and next native check](../src/authority/MAP_RENDER_OBSERVATION.md).
 
 > Client-first continuation, 18 November: server graphics work remains deferred.
