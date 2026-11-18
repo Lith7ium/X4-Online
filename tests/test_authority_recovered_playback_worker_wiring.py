@@ -67,6 +67,29 @@ class PlaybackSetup(unittest.TestCase):
         self.assertNotIn('saved_apply_fixture', participant.motion_worker_config)
         participant.redact()
 
+    def test_fresh_verified_mapping_is_accepted_without_historical_digest(self):
+        fixture = prepare_pinned_fixture(self)
+        fresh_status = (*playback.STATUS[:3], 'd'*64)
+        self.assertNotEqual(fresh_status, playback.STATUS)
+        participant = client.ServerClient(time.monotonic()+5, fixture.case, keep_worker=True)
+        self.addCleanup(participant.cleanup_diagnostic)
+        paths = participant.prepare_client_motion(fixture.case, fixture.profile, fresh_status,
+            dict(indices=[1318], generation='3'*32, timeout=2, saved_playback_fixture=FIXTURE),
+            dict(world_epoch='e'*32, attempt_id='f'*32))
+        self.assertIn(fixture.ui/'motion_playback.lua', paths)
+        self.assertEqual(participant.motion_worker_config['saved_playback_fixture'], FIXTURE)
+
+    def test_lineage_path_fences_still_reject_foreign_and_symlink_profiles(self):
+        fixture = prepare_pinned_fixture(self)
+        linked_case = fixture.case.parent/'linked-case'
+        linked_case.symlink_to(fixture.case, target_is_directory=True)
+        linked_profile = fixture.profile.parent/'linked-profile'
+        linked_profile.symlink_to(fixture.profile, target_is_directory=True)
+        for case, profile in ((linked_case, fixture.profile), (fixture.case, linked_profile),
+                              (fixture.ui, fixture.profile)):
+            with self.subTest(case=case, profile=profile), self.assertRaisesRegex(ValueError, 'lineage'):
+                client.verify_playback_install_inputs(case, profile, playback.STATUS)
+
     def test_invalid_option_or_status_refuses_before_install_or_socket(self):
         request = dict(indices=[1318], generation='3'*32, timeout=2, saved_playback_fixture=FIXTURE)
         status = ('ready', EPOCH, 10082, 'd'*64)
@@ -78,7 +101,13 @@ class PlaybackSetup(unittest.TestCase):
                  (request, ('pending', EPOCH, 10082, 'd'*64)),
                  (request, ('ready', EPOCH, 100, 'd'*64)),
                  (request, ('ready', EPOCH, 10082.0, playback.STATUS[3])),
-                 (request, ('ready', EPOCH, 10082, 'invalid'))]
+                 (request, ('ready', EPOCH, 10082, 'invalid')),
+                 (request, ('ready', EPOCH, True, 'd'*64)),
+                 (request, ('ready', EPOCH, '10082', 'd'*64)),
+                 (request, ('ready', EPOCH, 10082, 'D'*64)),
+                 (request, ('ready', EPOCH, 10082, 123)),
+                 (request, ('ready', EPOCH, 10082)),
+                 (request, ['ready', EPOCH, 10082, 'd'*64])]
         with patch('authority_recovered_client_motion_install.install') as install:
             for request_value, status_value in cases:
                 participant = client.ServerClient(time.monotonic()+5, Path('/unused'), keep_worker=True)

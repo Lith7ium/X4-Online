@@ -34,8 +34,11 @@ def verify_playback_install_inputs(case, profile, status):
     import authority_native_client_playback as playback
 
     case, profile = Path(case), Path(profile)
-    if (type(status) is not tuple or status != playback.STATUS or
+    # A join save can renumber native component references. Its full status is
+    # already bound to the fresh checkpoint/witness by run_one's guard.
+    if (type(status) is not tuple or len(status) != 4 or status[:3] != playback.STATUS[:3] or
             any(type(value) is not type(expected) for value, expected in zip(status, playback.STATUS)) or
+            not re.fullmatch(r'[0-9a-f]{64}', status[3]) or
             case.is_symlink() or profile.is_symlink() or profile.name != '45841' or
             not profile.resolve().is_relative_to(case.resolve())):
         raise ValueError('invalid recovery playback lineage')
