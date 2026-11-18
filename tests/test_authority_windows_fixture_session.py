@@ -1,0 +1,215 @@
+"""Lifecycle composition with test doubles; no Windows, X4 or network run."""
+from contextlib import contextmanager
+from pathlib import Path
+import sys
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'src'))
+from authority import windows_fixture_session as subject
+from authority.load_messages import Offer
+from authority.trusted_marker_load_session import MarkerBoundOffer
+
+
+class FixtureSessionTests(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self.stop_confirmed = True
+        self.start_error = self.poll_error = self.registration_error = self.close_error = None
+        self.controller_error = self.redact_error = self.workspace_close_error = None
+        self.construct_error = None
+        self.final_log_extra = b''
+        self.offer = Offer(world_epoch='a'*32, connection_handle=1, baseline_id=2, load_generation=3,
+            checkpoint_id='checkpoint-'+'b'*32, sha256='c'*64, attempt_id='d'*32, size=10, name='j1.xml.gz')
+        self.bound = MarkerBoundOffer(self.offer, 'e'*32)
+        fields = '|'.join(str(v) for v in ('a'*32, 1, 2, 3, self.offer.checkpoint_id, self.offer.sha256,
+                                           self.offer.attempt_id, 'save_009')).encode('ascii')
+        self.log = (b'[X4LAN] AUTH_DOWNLOAD_LOAD load_requested|' + fields + b'\n'
+                    b'[X4LAN] AUTH_MARKER load INSPECTED ' + b'e'*32 + b'\n'
+                    b'[X4LAN] AUTH_DOWNLOAD_LOAD pause_observed|' + fields + b'\n')
+        test = self
+
+        class Workspace:
+            view = Path('/private/view')
+            save_dir = Path('/private/45841/save')
+            download_dir = Path('/private/download')
+            def prepare(self): test.calls.append('workspace_prepare')
+            def guard(self): test.calls.append('workspace_guard'); return True
+            def register_overlay(self, hashes):
+                test.calls.append(('register_overlay', hashes))
+                if test.registration_error: raise test.registration_error
+            def read_log(self): test.calls.append('read_log'); return test.log + test.final_log_extra
+            def redact_config(self):
+                test.calls.append('redact')
+                if test.redact_error: raise test.redact_error
+            def close(self):
+                test.calls.append('workspace_close')
+                if test.workspace_close_error: raise test.workspace_close_error
+        self.workspace = Workspace()
+
+        class Owner:
+            def request_offer(self): test.calls.append('offer'); return test.bound
+            def download(self, directory):
+                test.calls.append(('download', directory)); return Path('/private/download/input')
+            def copy_to_new_slot(self, source, target):
+                test.calls.append(('stage', source, target)); return target
+        self.owner = Owner()
+
+        @contextmanager
+        def connection(**_options):
+            test.calls.append('tls_enter')
+            try: yield test.owner
+            finally: test.calls.append('tls_exit')
+        self.connection = connection
+
+        class Controller:
+            def __init__(self, *, enabled, timeout):
+                test.calls.append(('controller_create', enabled, timeout))
+                self.lease = 'f'*32
+                self.sock = SimpleNamespace(getsockname=lambda: ('127.0.0.1', 12345))
+            def close(self):
+                test.calls.append('controller_close')
+                if test.controller_error: raise test.controller_error
+        self.controller = Controller
+
+        class Process:
+            def __init__(self, *, enabled):
+                test.calls.append(('process_create', enabled))
+                if test.construct_error: raise test.construct_error
+                self.cleanup_confirmed = False
+            def start(self, view, *, profile_id, guard):
+                test.calls.append(('process_start', view, profile_id, guard()))
+                if test.start_error: raise test.start_error
+            def is_running(self): test.calls.append('process_running'); return True
+            def close(self):
+                test.calls.append('process_close')
+                if test.close_error: raise test.close_error
+                self.cleanup_confirmed = test.stop_confirmed
+                return test.stop_confirmed
+        self.process = Process
+
+        class Session:
+            def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline):
+                test.calls.append(('session_create', owner is test.owner, bound == test.bound, slot, guard()))
+            def start(self): test.calls.append('session_start'); return True
+            def poll(self, timeout):
+                test.calls.append(('session_poll', timeout))
+                if test.poll_error: raise test.poll_error
+                return True
+            def close(self): test.calls.append('session_close')
+        self.session = Session
+
+        def install(view, **options):
+            test.calls.append(('install', view, options['bound_offer'] == test.bound,
+                               options['participant_port'], options['participant_lease']))
+            return {'ui/config.lua':'0'*64}
+        self.install = install
+
+    def run_session(self, **changes):
+        stops = iter((False, True))
+        options = dict(enabled=True, workspace=self.workspace, server_host='example.test', server_port=443,
+            server_fingerprint='1'*64, shared_key=b'2'*32, file_token='3'*32, file_slot=1,
+            windows_dll=Path('/private/net.dll'), dll_sha256='4'*64, deadline=time.monotonic()+10,
+            keepalive_interval=1, stop_requested=lambda: next(stops))
+        options.update(changes)
+        with patch.object(subject, 'client_connection', self.connection), \
+             patch.object(subject, 'LocalParticipantControl', self.controller), \
+             patch.object(subject, 'WindowsX4Process', self.process), \
+             patch.object(subject, 'ObservedClientSession', self.session), \
+             patch.object(subject, 'install_fixture_overlay', self.install):
+            return subject.run_fixture_session(**options)
+
+    def test_stages_starts_polls_then_stops_before_tls_and_redaction(self):
+        result = self.run_session()
+        self.assertEqual(result, {'client_admitted':True, 'participant_receipts':1,
+                                  'owned_cleanup_confirmed':True, 'configuration_redacted':True})
+        self.assertIn(('stage', Path('/private/download/input'), Path('/private/45841/save/save_009.xml.gz')), self.calls)
+        self.assertIn(('controller_create', True, 30), self.calls)
+        self.assertIn(('install', self.workspace.view, True, 12345, 'f'*32), self.calls)
+        self.assertIn(('process_start', self.workspace.view, 45841, True), self.calls)
+        self.assertLess(self.calls.index('session_start'), self.calls.index(('session_poll', .1)))
+        for before, after in (('process_close', 'read_log'), ('read_log', 'session_close'),
+                              ('session_close', 'redact'), ('redact', 'tls_exit'),
+                              ('tls_exit', 'workspace_close')):
+            self.assertLess(self.calls.index(before), self.calls.index(after))
+
+    def test_uncertain_stop_retains_process_and_never_redacts(self):
+        self.stop_confirmed = False
+        with self.assertRaises(subject.FixtureCleanupError) as caught:
+            self.run_session()
+        self.assertIsInstance(caught.exception.process_owner, self.process)
+        self.assertIs(caught.exception.workspace, self.workspace)
+        self.assertNotIn('redact', self.calls)
+        self.assertLess(self.calls.index('process_close'), self.calls.index('tls_exit'))
+        self.assertIn('workspace_close', self.calls)
+
+    def test_launch_error_preserved_and_uncertain_owner_available(self):
+        self.start_error = RuntimeError('launch failed')
+        self.stop_confirmed = False
+        with self.assertRaisesRegex(RuntimeError, 'launch failed') as caught:
+            self.run_session()
+        self.assertIsInstance(caught.exception.fixture_cleanup.process_owner, self.process)
+        self.assertNotIn('redact', self.calls)
+        self.assertIn('controller_close', self.calls)
+
+    def test_failed_registration_leaves_unregistered_files_untouched(self):
+        self.registration_error = ValueError('register failed')
+        with self.assertRaisesRegex(ValueError, 'register failed'):
+            self.run_session()
+        self.assertNotIn('redact', self.calls)
+        self.assertNotIn('process_close', self.calls)
+        self.assertIn('controller_close', self.calls)
+
+    def test_constructor_failure_before_launch_allows_owned_redaction(self):
+        self.construct_error = RuntimeError('process unavailable')
+        with self.assertRaisesRegex(RuntimeError, 'process unavailable'):
+            self.run_session()
+        self.assertIn('redact', self.calls)
+        self.assertNotIn('process_close', self.calls)
+
+    def test_final_duplicate_prevents_success_but_still_redacts(self):
+        self.final_log_extra = b'[X4LAN] AUTH_MARKER load INSPECTED ' + b'e'*32 + b'\n'
+        with self.assertRaisesRegex(subject.FixtureCleanupError, 'observations unconfirmed'):
+            self.run_session()
+        self.assertIn('redact', self.calls)
+        self.assertLess(self.calls.index('process_close'), self.calls.index('read_log'))
+
+    def test_primary_error_is_not_masked_by_workspace_cleanup(self):
+        self.poll_error = ValueError('poll failed')
+        self.workspace_close_error = OSError('workspace failed')
+        with self.assertRaisesRegex(ValueError, 'poll failed') as caught:
+            self.run_session()
+        self.assertTrue(any('fixture workspace cleanup failed' in note for note in caught.exception.__notes__))
+        self.assertIn('redact', self.calls)
+        self.assertLess(self.calls.index('process_close'), self.calls.index('tls_exit'))
+
+    def test_stop_callback_after_deadline_never_reports_success(self):
+        clock = [100.0]
+        def late_stop():
+            clock[0] = 102.0
+            return True
+        with patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaises(TimeoutError):
+                self.run_session(deadline=101.0, stop_requested=late_stop)
+        self.assertIn('process_close', self.calls)
+        self.assertIn('redact', self.calls)
+
+    def test_invalid_credentials_do_not_prepare(self):
+        cases = ({'shared_key':'2'*32}, {'shared_key':b'short'},
+                 {'server_fingerprint':'A'*64}, {'file_token':'3'*31})
+        for changes in cases:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.run_session(**changes)
+        self.assertEqual(self.calls, [])
+
+    def test_no_opt_in_does_not_prepare(self):
+        with self.assertRaises(ValueError):
+            self.run_session(enabled=False)
+        self.assertEqual(self.calls, [])
+
+
+if __name__ == '__main__':
+    unittest.main()
