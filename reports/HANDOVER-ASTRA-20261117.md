@@ -1,5 +1,21 @@
 # X4 multiplayer: handover for Astra
 
+Latest continuation: one two-Linux-X4 attempt of explicit latest playback at
+`3d88b804` failed. Three source samples were queued, sequence 1 was ACKed, and
+native sequence 3 was refused at 282.922 m with no running write. Initial
+alignment again had zero readback error. Source gaps were 0.933 and 0.814 s,
+above the unchanged 0.75 s continuity limit. Three source polls used 1.535 s;
+code review found repeated synchronous checkpoint-helper requests within normal
+latest polling. Investigate batching those checks at explicit operation
+boundaries while retaining checkpoint integrity, lifetime and STOP checks.
+No change to clock mapping or playback limits is authorized by this result.
+Do not rerun the unchanged native test. Cleanup and source preservation passed.
+The native artifact's top-level progress counters incorrectly show zero; its
+nested latest ledger is authoritative. A subsequent reporting fix and one
+focused no-network check now retain these counters even on failure.
+See [the latest result and next investigation](AUTHORITY-CLIENT-PLAYBACK-20261117.md#actual-source-latest-position-attempt-2026-11-18).
+The entries below preserve prior implementation and test history.
+
 Latest actual-source result: the approved initial placement at `dfa12f09`
 removed a 77.406 m offset with zero native readback error in one two-Linux-X4
 run. The next held target required 221.975 m and was correctly refused by the

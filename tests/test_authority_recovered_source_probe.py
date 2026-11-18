@@ -36,6 +36,57 @@ def cleanup_motion_fixture(case):
 
 
 class Probe(unittest.TestCase):
+    def test_latest_diagnostic_snapshot_retains_partial_progress_without_changing_legacy(self):
+        legacy = subject.SourceProbeDiagnostics()
+        legacy.samples_received = 2
+        legacy.confirmed_client_receipts = 2
+        legacy.pull_attempts = 3
+        legacy.empty_pulls = 1
+        legacy.last_pull_seconds = .7
+        snapshot = legacy.snapshot()
+        expected = {'samples_received': 2, 'confirmed_client_receipts': 2,
+                    'pull_attempts': 3, 'empty_pulls': 1, 'last_pull_seconds': .7}
+        self.assertEqual({key: snapshot[key] for key in expected}, expected)
+        self.assertNotIn('latest_collection', snapshot)
+
+        diagnostics = subject.SourceProbeDiagnostics()
+        diagnostics.latest_collection = {}
+        initial = diagnostics.snapshot()
+        for key in ('samples_received', 'confirmed_client_receipts', 'pull_attempts'):
+            self.assertEqual(initial[key], 0)
+        self.assertIsNone(initial['last_pull_seconds'])
+        diagnostics.latest_collection = {
+            'state': 'failed', 'queued_sequences': [1, 2, 3], 'acknowledged_sequences': [1],
+            'stats': {'operations': {'begin': {'calls': 4}}, 'empty_pulls': 1,
+                      'sample_times': [{'sequence': 3, 'pull_elapsed_seconds': .12}]}}
+        partial = diagnostics.snapshot()
+        self.assertEqual(partial['samples_received'], 3)
+        self.assertEqual(partial['confirmed_client_receipts'], 1)
+        self.assertEqual(partial['pull_attempts'], 4)
+        self.assertEqual(partial['empty_pulls'], 1)
+        self.assertEqual(partial['last_pull_seconds'], .12)
+        partial['latest_collection']['queued_sequences'].append(4)
+        partial['latest_collection']['stats']['operations']['begin']['calls'] = 99
+        partial['latest_collection']['stats']['sample_times'][0]['pull_elapsed_seconds'] = 99
+        retained = diagnostics.snapshot()
+        self.assertEqual(retained['samples_received'], 3)
+        self.assertEqual(retained['pull_attempts'], 4)
+        self.assertEqual(retained['last_pull_seconds'], .12)
+        self.assertEqual(diagnostics.samples_received, 0)
+        self.assertEqual(diagnostics.confirmed_client_receipts, 0)
+        self.assertEqual(diagnostics.pull_attempts, 0)
+
+        diagnostics.latest_collection = {
+            'queued_samples': [{'sequence': 1}, {'sequence': 2}, {'sequence': 3}],
+            'acknowledged_samples': [{'sequence': 1}, {'sequence': 3}],
+            'stats': {'operations': {'begin': {'calls': 3}},
+                      'sample_times': [{'sequence': 3, 'pull_elapsed_seconds': .08}]}}
+        complete = diagnostics.snapshot()
+        self.assertEqual(complete['samples_received'], 3)
+        self.assertEqual(complete['confirmed_client_receipts'], 2)
+        self.assertEqual(complete['pull_attempts'], 3)
+        self.assertEqual(complete['last_pull_seconds'], .08)
+
     def test_saved_apply_preflight_and_durable_intent_order(self):
         for outcome in ('near', 'ready', 'far', 'intent_error', 'apply_error'):
             with self.subTest(outcome=outcome):

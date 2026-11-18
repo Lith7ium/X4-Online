@@ -22,7 +22,11 @@ from authority_tcp_native_worker import check_process
 
 
 class SourceProbeDiagnostics:
-    """Non-secret progress and guard costs; never performs a guard itself."""
+    """Non-secret progress and guard costs; never performs a guard itself.
+
+    Latest-mode last_pull_seconds measures source begin-to-queue elapsed time,
+    rather than the serialized pull-and-client-receipt interval.
+    """
 
     _TRACE_FILES = frozenset({
         'authority_recovered_source_probe.py', 'experimental_source_motion_ipc.py',
@@ -111,7 +115,19 @@ class SourceProbeDiagnostics:
                 'prevalidated_samples': self.prevalidated_samples,
                 'confirmed_client_receipts': self.confirmed_client_receipts}
         if self.latest_collection is not None:
-            result['latest_collection'] = copy.deepcopy(self.latest_collection)
+            latest = copy.deepcopy(self.latest_collection)
+            result['latest_collection'] = latest
+            # Failure retains published sequence progress; success retains samples.
+            queued = latest.get('queued_samples', latest.get('queued_sequences', []))
+            acknowledged = latest.get('acknowledged_samples', latest.get('acknowledged_sequences', []))
+            stats = latest.get('stats', {})
+            result['samples_received'] = len(queued)
+            result['confirmed_client_receipts'] = len(acknowledged)
+            result['pull_attempts'] = stats.get('operations', {}).get('begin', {}).get('calls', 0)
+            result['empty_pulls'] = stats.get('empty_pulls', 0)
+            sample_times = stats.get('sample_times', [])
+            if sample_times:
+                result['last_pull_seconds'] = sample_times[-1]['pull_elapsed_seconds']
         if self.include_guard_callsites:
             result['guard_call_sites'] = [
                 {'guard': kind, 'phase': phase,

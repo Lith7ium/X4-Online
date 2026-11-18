@@ -4,12 +4,13 @@ Internal development on the authoritative fork. Client work takes priority;
 GPU-free server development is deferred while the user seeks a hosted test server.
 The overall Windows/Linux Internet gameplay goal remains unmet.
 
-Latest native result, 18 November: the approved initial alignment at `dfa12f09`
-worked with the first real source-X4 pose, removing a 77.406 m initial offset
-with zero measured readback error. The paired run still failed: the second
-sample requested a 221.975 m running correction, correctly refused by the
-unchanged 50 m bound. No ongoing paired movement or release was established.
-See [the actual-source alignment evidence](#actual-source-initial-alignment-2026-11-18).
+Latest native result, 18 November: latest-position collection at `3d88b804`
+queued three actual source samples; only sequence 1 has a confirmed host ACK.
+Initial alignment again had zero readback error. Native playback then refused
+sequence 3 at a 282.922 m correction, above the unchanged 50 m bound. No ongoing
+paired movement or STOP/release was established. Source gaps remained above
+0.75 s; repeated synchronous checkpoint requests remain in the source polling
+path. See [the latest collection result](#actual-source-latest-position-attempt-2026-11-18).
 
 Earlier client increment, 18 November: both the independent bounded live-input
 path and an explicit paired-supervisor playback path are now wired in code.
@@ -1086,3 +1087,78 @@ Focused validation, not a full-suite result:
 No new native game run has exercised this integration. One fresh bounded native
 attempt is planned; passing these checks does not establish delivery cadence,
 sustained paired motion or a solution to the recorded sparse-gap failure.
+
+
+## Actual-source latest-position attempt (2026-11-18)
+
+One bounded two-Linux-X4 run at `3d88b804` exercised the explicit latest path,
+shared replica control and initial alignment. The overall run failed. The
+collector retained three queued source samples and one exact ACK (sequence 1).
+The client recorded two accepted buffer samples, followed by a held target
+from source sequence 3 and a distance refusal of 282.922322685 m. Its actual
+position was still the initially aligned pose; running readbacks were zero and
+uncertainty was zero. Sequence 3 reaching native playback does not imply a
+successful ACK or write. The two accepted samples are consistent with sequence
+2 being replaced by the latest transport; no sequence-2 native pose is recorded.
+Sequence 2 was queued 0.258714023 s before the host observed ACK 1, establishing
+that source collection no longer waits serially for that first receipt.
+
+The original source gaps were 0.932711615 s and 0.814234745 s. Both exceed the
+unchanged 0.75 s continuity limit, and the delivered 1-to-3 source gap was
+1.746946360 s. Initial placement again matched the actual first source pose with
+zero native readback error, after removing a 116.285769516 m initial offset
+at an original recipient arrival age of 0.294062644 s. The client's
+INITIAL-to-refusal elapsed interval was 1.657656261 s on its own local and game clocks; these intervals do not
+establish a mapping to the source clock.
+
+Collection lasted 3.036759084 s before the client-log refusal. Three source poll
+calls consumed 1.534717814 s total (maximum 0.521126269 s); four begin calls used
+0.318302698 s, 28 surrounding collector checks used 0.412190919 s and six TCP
+pump calls used 0.095063349 s. Queue observations were separated by 0.919951081 s
+and 0.841803357 s on the host clock. The broader probe's guard totals span
+binding and registration too and may overlap; they must not be added as
+independent CPU costs. These are diagnostic wall times, not a server simulation
+benchmark or a quantified cause of the entire delay.
+
+Code inspection localized remaining synchronous work: normal `poll_latest()`
+does not select the no-IPC saved lifetime guard. Its nested `_check()` calls
+still reach `saved_baseline_guard` -> `check_checkpoint` -> `check_metadata`,
+which requests the helper and pumps while waiting. The TCP source guard already
+uses lifetime-only checks. The next investigation is to retain substantive
+checkpoint checks at explicit operation boundaries while avoiding duplicate
+requests inside one operation. This has not yet been implemented or measured;
+do not simply remove checkpoint validation or widen playback bounds.
+
+Failure revealed a diagnostics bug: top-level legacy counters remained zero,
+although the retained `latest_collection` correctly recorded three queued
+samples, one ACK and four begin calls. Snapshot reporting now derives latest
+counters from that detached progress, including empty pulls and last completed
+begin-to-queue duration. One focused no-network regression method passed;
+serialized counters remain unchanged. The original native artifact is preserved
+as written and predates this reporting correction.
+
+Owned cgroup/process and Xauthority cleanup, unchanged pinned source/code and
+Steam identities were confirmed. No STOP, shared release, departure save,
+sustained motion, native Windows, Internet, visual smoothness or gameplay was
+proved. There was no native retry or full-suite rerun.
+
+Private artifacts are `.local/private-paired-latest-native-20261118-01/`, with
+both raw engine logs, `trial-result.json` and all three
+`source-captures-before-delivery.json` samples. The latter SHA-256 is
+`d5b8722c1cadacc32de2806caf630880ec51dcfb553f9dfb7458348d49a80997`.
+Manifest `authority-paired-latest-reviewed-20261118-01.json` contains 488 pins,
+SHA-256 `eec01045aeb9d4a254a0e3f402ad2035a9b2551aaf389eaacbac27870b2777b7`.
+Private scope/trial/evidence helper hashes are respectively
+`0d5c6b428ff215e9ad9dbacbd82672ede1e31aab8e6d5025d442603234b0d72c`,
+`6025aad95931efab33d58e4705ef06221dbaf4c520b4bc71628351f2fc1d8405`,
+`10edb92e4e79305cc7d8952924bc87a549ea1dfe2f7e5444a193f2160606e8f4`.
+
+Offline correlation independently matches all three raw captures to the queued
+ledger and matches native FAILURE sequence 3, time and XYZ to source sample 3.
+Artifact `offline-correlation.json` has SHA-256
+`07eed910b74303713ed9e5ad7fb55f2e707065b96f47431615fce3818635ffbd`.
+The first source callback-to-queue interval was 0.402678544 s and includes the
+private first-capture flush as well as validation/queue work; it cannot be
+attributed entirely to checkpoint IPC. If finer attribution is needed, record
+nested operation spans with inclusive/self-time separation before choosing an
+optimization. Never infer CPU utilization from these wall-time aggregates.
