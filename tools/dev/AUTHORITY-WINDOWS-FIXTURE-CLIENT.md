@@ -22,8 +22,11 @@ owned-process cleanup, not gameplay or Internet acceptance.
 - Two absent output containers under existing directories. The view container
   must be on the game drive. The workspace creates a `game` view inside it;
   official game files are linked and third-party installed mods are omitted.
-- A separately verified Windows network DLL and its SHA-256. The client does
-  not download or trust a DLL supplied by the server.
+- A Windows network DLL built from the current `src/native/net.c`, with its
+  independently verified SHA-256. See the build step below. The historical DLL
+  in `src/lockstep/base/native/` lacks the required `monotonic` function and
+  cannot be used for this client. The client does not download or trust a DLL
+  supplied by the server.
 - A running authority server with the existing load/participant protocol,
   keepalive enabled, and a marked checkpoint containing the two identity
   fixture ships. An arbitrary personal save is not suitable.
@@ -36,6 +39,29 @@ starting the bridge. Its public host/port, verified certificate fingerprint,
 shared key and file-service token must reach the client through a trusted
 channel. This diagnostic does not configure a router or firewall, and this
 combined route has not yet been validated with Windows X4.
+
+## Build the current network DLL
+
+Use the existing builder with Zig 0.15.2 and a new output directory. It can
+cross-build the Windows DLL on Linux; it does not need X4 or modify an installed
+game. For example, from the checkout in PowerShell:
+
+```powershell
+python src/native/build.py --zig C:\Tools\zig\zig.exe `
+  --platform windows --out C:\X4Test\network-build-01
+(Get-FileHash C:\X4Test\network-build-01\x4lan_net_64.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+```
+
+Use that built file as `--network-dll` and its digest as
+`--network-dll-sha256`. When transferring a build to another computer, compare
+the received file's digest with the value obtained from the trusted build
+machine. Computing a digest of an arbitrary downloaded DLL does not verify its
+origin. The explicit digest is an integrity check, not an API/version check.
+
+The current source cross-build passed on Linux with Zig 0.15.2. Static PE
+inspection found the Lua entry point and Windows performance-counter imports;
+loading it inside native Windows X4 remains untested. Details and the local
+artifact digest are in the [build record](../../reports/AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md).
 
 ## Invocation
 
@@ -101,7 +127,18 @@ Nine filesystem tests use real temporary files with Windows commands, profile
 lookup, executable verification and view construction simulated. Twelve
 lifecycle tests and five CLI tests cover orchestration/configuration with
 Windows/X4 doubles. Actual NTFS junction handling and ACL inheritance have not
-been tested. Existing session tests use real local TCP/UDP with simulated X4
-responses. Neither is evidence that this assembled command starts Windows X4,
-loads the right profile on Windows, completes Internet admission, or supports
-the user's shared-world gameplay goal. A native Windows run is still required.
+been tested.
+
+One additional assembled integration test passed using the actual workspace,
+overlay installer, client owner, log parser and session lifecycle over real
+local TLS, file transfer, TCP and UDP. It checks the staged bytes, installed
+configuration, correlated claim, a confirmed resume command and config removal
+after the simulated process stops. The control peer is scripted; Windows APIs,
+game-view creation, Windows path rendering and X4 are simulated. The synthetic
+checkpoint is not a game save, and the dummy DLL and game Lua are not executed.
+This verifies client wiring, not the actual server's admission/save policy.
+
+None of these checks establishes that this assembled command starts Windows
+X4, loads the right profile on Windows, completes Internet admission, or
+supports the user's shared-world gameplay goal. A native Windows run is still
+required.

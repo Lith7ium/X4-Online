@@ -51,6 +51,26 @@ assembled command has not been run with Windows X4; the server must still
 provide a compatible marked identity-fixture checkpoint. See
 [the invocation and validation boundary](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md).
 
+The subsequent assembled client test passed over real local TLS, file transfer,
+TCP and UDP using the actual workspace, overlay and observed-session code.
+Windows setup/process behavior and X4 remain simulated, and the control peer
+is scripted. It validates staging, a correlated claim, one resume receipt and
+cleanup; it does not execute the DLL/Lua or prove the real server lifecycle.
+The final targeted run was one test in 0.459 seconds. No full-suite or native
+game run was repeated. The historical bundled Windows DLL lacks the now-required
+`monotonic` API; a separate current-source Windows cross-build passed and its
+artifact hash is recorded in [the build record](AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md).
+The client guide now specifies that build instead of the historical DLL.
+
+For visibility work, the earlier LAN
+`work/x4-playtest7/extension/x4_lan_lab/ui/identity_game.lua` checks radar contact
+for an already-enumerated, bounded actor list. Its `universe_game.lua` scans
+ships in a sector; neither establishes all actor IDs visible in the current map
+viewport. The current authority player-sector reader likewise reports only a
+local sector. Do not substitute sector membership for the user's requested
+visibility-based interest policy. A concrete map discovery hook remains to be
+identified before that integration is implemented.
+
 > Client-first continuation, 18 November: server graphics work remains deferred.
 > The bounded live-input path and explicit fresh-checkpoint paired playback
 > diagnostic are wired through the admitted TCP owner. Native paired attempt 03
