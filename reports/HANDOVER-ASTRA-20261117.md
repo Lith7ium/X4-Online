@@ -8,13 +8,32 @@ in the current client report. Native03 below is retained as preceding context.
 Client follow-up: `load_observations.py` now extracts the existing ordered
 load/marker/pause parser from Linux tooling for use by either client platform.
 The existing Linux caller delegates to it; Windows process integration remains
-pending. The final focused parser/legacy run passed 12 tests. The one-shot
+pending. The earlier focused parser/legacy run passed 12 tests. The one-shot
 `saved_motion_apply.lua` state machine also has clearer variable names and
 layout; its three existing tests passed, and an independent LuaJIT listing
 comparison found identical instructions and visible constants after excluding
 debug names and source locations. No new X4 run or full-suite run was made.
 The user's decisions on a separate initial position alignment and the motion
 clock basis are still pending; neither behavior has been changed.
+
+The Windows launcher now resolves Documents through the current-user Known
+Folder API rather than assuming `USERPROFILE/Documents`. Four mocked-ABI
+tests passed. Static inspection of the pinned Windows X4 image found the same
+Documents GUID/API call; the final engine profile path and native Windows
+behavior were not tested. See
+[the path evidence](WINDOWS-DOCUMENTS-KNOWN-FOLDER-20261118.md).
+
+`ObservedClientSession` now connects a staged client owner, ordered log
+observations and local UDP control to the existing participant connection.
+Nineteen focused parser/session tests passed in 2.643 seconds, using real local
+TCP, file transfer and UDP with simulated X4 responses. They cover fragmented
+and late error records, altered logs/offers, disconnects, keepalive and owner
+thread constraints. The session checks observations before acknowledging a
+local command; an effect already dispatched before a subsequent fault cannot
+be undone. Its caller still owns X4/process/profile/log provenance and cleanup.
+This bounded diagnostic is not yet connected to a native Windows supervisor.
+See [the client barrier contract](../src/authority/CLIENT_LOAD_BARRIER.md).
+No new X4, Windows, Internet or full-suite run was made for these changes.
 
 > Client-first continuation, 18 November: server graphics work remains deferred.
 > The bounded live-input path and explicit fresh-checkpoint paired playback
