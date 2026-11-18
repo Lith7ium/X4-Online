@@ -183,3 +183,13 @@ The validator is not yet connected to this CLI. Overlay/lifecycle integration,
 native Windows API behavior and real motion still require validation before
 enabling movement here. Initial position alignment and the source/client clock
 basis remain separate unresolved decisions.
+
+Startup sequencing must preserve the existing native experiment's order:
+process the first server resume command, then wait for the Lua motion owner's
+READY, then dispatch motion commands. The UI motion owner starts after resume;
+waiting for READY before polling resume can deadlock. See
+`authority_tcp_job_client_live.py` for that sequence. Loading the motion module
+alone is insufficient: `authority_recovered_client_motion_install.py` also
+installs its construction/tick hook into `authority_download_load_probe.lua`
+and supplies registry, binding and MD dependencies. That installer includes
+Linux-specific setup and cannot simply be called against the Windows view.
