@@ -61,10 +61,13 @@ the received file's digest with the value obtained from the trusted build
 machine. Computing a digest of an arbitrary downloaded DLL does not verify its
 origin. The explicit digest is an integrity check, not an API/version check.
 
-The current source cross-build passed on Linux with Zig 0.15.2. Static PE
-inspection found the Lua entry point and Windows performance-counter imports;
-loading it inside native Windows X4 remains untested. Details and the local
+The current source cross-build passed on Linux with Zig 0.15.2. A later isolated
+Wine run loaded that DLL through the real Windows Lua runtime and passed its
+UDP, timing and close checks. Its outer process-cleanup audit remained
+unconfirmed; no native Windows X4 run was made. Details, limits and the local
 artifact digest are in the [build record](../../reports/AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md).
+The separate [no-game module probe](AUTHORITY-WINDOWS-NETWORK-SMOKE.md) can check
+these prerequisites before arranging a game test.
 
 ## Invocation
 

@@ -1,5 +1,18 @@
 # X4 multiplayer: handover for Astra
 
+Latest independent Windows prerequisite: the current network DLL actually
+loaded through `package.loadlib` in the installed Windows LuaJIT runtime under
+Wine. One bounded process passed all ten module/UDP/clock/close checks and
+exited zero. The outer private-prefix harness recorded failure because several
+same-user process environments were unreadable, leaving its cleanup condition
+unconfirmed; no matching prefix process or readable Wine executable candidate
+was found. Do not relabel that outer run as passing. The test was not repeated.
+No X4, Steam, profile/save, native Windows, WAN or full-suite test was started.
+The new portable no-game probe is `tools/dev/authority_windows_network_smoke.py`;
+evidence, input hashes and boundaries are in the
+[network runtime record](AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md#real-dll-execution-under-wine).
+The initial-placement decision below remains pending and no behavior changed.
+
 Latest read-only follow-up: source setup occurs after the world is running;
 saved-client actor takeover starts only on the first BIND. Native05 reads
 INITIAL after its private Wait/zero-velocity steps, leaving earlier client

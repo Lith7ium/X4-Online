@@ -1,7 +1,8 @@
 # Windows fixture network module build
 
-This is a cross-build and static inspection, not a Windows execution or X4
-participant test. No game or Wine process was started.
+The original step recorded below was a cross-build and static inspection.
+A subsequent isolated Wine execution is recorded separately at the end. Neither
+step is a native Windows or X4 participant test.
 
 ## Why a separate build is needed
 
@@ -38,3 +39,43 @@ that every build environment produces identical bytes.
 The Windows client guide now explicitly calls for a current-source build.
 Native Windows still needs to establish that X4 loads the DLL, resolves its
 loaded Lua runtime, and exchanges participant commands through it.
+
+## Real DLL execution under Wine
+
+At checkout `665fde6b` plus the new
+`tools/dev/authority_windows_network_smoke.py`, one Windows Python process under
+GE-Proton10-29's Wine loaded the existing Windows depot's `lua51_64.dll` read-only
+and created a Lua state. The runtime reported `Lua 5.1;LuaJIT 2.1.0-beta3`.
+Its SHA-256 is
+`e0712ac93f0d7f3a28236d3153b82e85d35e6bcf8e606af250f664580eaf3b63`.
+Lua's real `package.loadlib` then loaded the network DLL identified in the table
+above. No game process, Steam, profile or save was involved; Egosoft files were
+not modified or copied into the repository.
+
+The process exited with code zero and all ten reported checks passed:
+DLL loading, initially empty socket, oversized send rejection, loopback UDP send,
+pending/receive behavior for empty, oversized and ordinary datagrams, advancing
+monotonic time, repeat close and post-close behavior, and Lua state cleanup.
+The clock advanced by 0.0206616 seconds across the timed portion. This exercises
+the actual Windows machine code and its Lua ABI under Wine, not a mocked native
+module. Both the runtime and network DLL hashes were unchanged afterward.
+
+The outer harness nevertheless recorded **overall failure**: its final scan
+could not read every same-user process environment and therefore could not
+confirm its full cleanup condition. The launcher was reaped, the prefix-specific
+wineserver stop/wait commands succeeded, and no matching prefix process was
+found. A later read-only snapshot found no readable Wine executable candidate;
+the unreadable environments belonged to processes named systemd, sd-pam,
+kwin_wayland, polkit-kde-auth and ssh-agent. This later snapshot does not turn
+the original outer failure into a passing complete-process-tree result. The
+DLL test was not repeated to change that classification.
+
+Private evidence: `.local/windows-network-runtime-wine-20261118-01/`, including
+`wine.log`, `client-result.json`, `result.json`, `command.json` and
+`cleanup-followup.json`; the wrapper is
+`.local/windows_network_runtime_wine_20261118.py`. The portable probe and its
+[usage guide](../tools/dev/AUTHORITY-WINDOWS-NETWORK-SMOKE.md) are tracked. The
+probe contains no shipped DLL or Egosoft asset. Its Wine detection and result
+fields explicitly separate Wine from native Windows. Native Windows execution,
+X4's UI loader, game callbacks, Internet transport and shared-world gameplay
+remain untested by this observation. No full test suite was run.
