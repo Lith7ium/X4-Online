@@ -836,7 +836,47 @@ reference conversion. The new MD script passes the local game-schema validator;
 schema validity does not establish runtime behavior.
 The assembled test exposed an event-router assumption that BIND must return
 immediately ready; the router now allows `preparing` only on the explicitly
-enabled saved route. No full suite or actual X4 run was repeated for this
-change. The native08 private-script success above is prior evidence for the
-underlying operations, not evidence that this new shared implementation works
-in X4, Windows, over the Internet, or with actual source-X4 motion.
+enabled saved route. No full suite was repeated. At implementation commit
+`e1cdd201`, the native08 private-script success above was only prior evidence
+for the underlying operations. The following run checks the new shared path.
+
+## Native shared-control smoke (2026-11-18)
+
+One bounded Linux X4 run passed using the shared installer and explicit control
+option at `e1cdd201`. Evidence is retained in
+`.local/private-client-shared-control-native-20261118-01/`. The host engine
+controls and trajectory were synthetic, with the existing authenticated
+loopback TLS participant session and a real isolated X4 client.
+
+The driver selected the shared option without replacing the read-only binder
+or installing the old private Wait/release bridge. Installed Lua/MD hashes and
+the rendered option were checked; the binder matched its repository source.
+The 171-input manifest is
+`.local/authority-client-shared-control-reviewed-20261118-01.json`, SHA256
+`f6333b5c986fa926ed9008ca92bcbf6b662b04636fdbf184a0414ad50af64fee`.
+Its companion source audit records the unchanged historical helpers and the
+tracked inputs matching `e1cdd201`.
+
+- INITIAL reported game time `7.405475807` and x `-116814.9375`.
+  All 25 trajectory updates were delivered. STOPPED reported x `-116794.9375`,
+  unchanged y/z, zero final target error, 694 observations and 585 native pose
+  readbacks. The displacement was exactly 20 m in the recorded coordinates.
+- STOPPED carried `drained=1`, `uncertain=0`, source sequence 26. In the pinned
+  shared implementation, that acknowledgment requires completed preparation,
+  drained playback and confirmed release: the temporary Wait is absent and the
+  captured prior order is current and started across two advancing samples.
+  This run did not separately record the intermediate MD responses or observe
+  subsequent autonomous movement; the release conclusion relies on that
+  executed acknowledgment gate, rather than an independent observer.
+- The real client confirmed one resume and one subsequent pause. The host
+  requested pause only after the playback-stop receipt. Native, participant,
+  TLS, display and scope cleanup passed; reviewed inputs, checkpoint/source
+  and Steam identity remained unchanged. Parent and native client exited zero;
+  no X4 process remained.
+
+This validates the new shared control path for the one Linux fixture. It does
+not validate Windows execution, an actual source-X4 trajectory, initial
+alignment, source/client clock mapping, sustained ownership, physical velocity,
+exact AI-stack restoration, visual smoothness, WAN or gameplay. The existing
+50 m bound and first-sample enrollment behavior remain unchanged. No full-suite
+repeat was needed for this runtime check; earlier suite issues remain open.

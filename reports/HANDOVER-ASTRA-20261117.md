@@ -8,10 +8,15 @@ until drained playback and asynchronous local AI-order release are confirmed.
 The ordinary binder remains read-only and the option defaults off. This is a
 bounded internal fixture, not a general NPC authority policy. See the
 [shared control implementation and limits](AUTHORITY-CLIENT-PLAYBACK-20261117.md#shared-fixture-control-option).
-Focused fake-engine/configuration checks cover the new path; its changed MD
-flow still needs an actual X4 run. The previous private native08 result does not
-validate this new implementation. No initial alignment, clock basis, server
-architecture or normal profile changes were made.
+Focused fake-engine/configuration checks cover the new path. A subsequent
+single Linux X4 run of `e1cdd201` passed: 25 synthetic trajectory updates,
+20 m displacement, confirmed STOP/release followed by a real pause, and clean
+scoped exit. The shared acknowledgment gate supplies the release evidence;
+intermediate MD responses and later autonomous movement were not independently
+recorded. See the [native shared-control evidence](AUTHORITY-CLIENT-PLAYBACK-20261117.md#native-shared-control-smoke-2026-11-18).
+Windows execution of this control path and actual source-X4 motion remain
+unproven. No initial alignment, clock basis, server architecture or normal
+profile changes were made.
 
 Latest client/server evidence: pair 02 passed with actual Linux server X4 and
 Windows X4 under Proton using existing authenticated loopback TLS/file transfer,
