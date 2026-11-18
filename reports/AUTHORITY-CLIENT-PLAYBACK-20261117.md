@@ -1242,3 +1242,19 @@ SHA-256 `acbc700c985d05dee9584fdd0e2c5f402a4be427fa22568f1727503cd7c3b969`.
 Scope helper `authority_paired_batched_scope_20261118_01.py` SHA-256:
 `da992f048a6090390afbff05b6e3bab793713ac6abe22d440d4c228ed588cf2d`.
 The trial and alignment-evidence helpers are unchanged from latest attempt 01.
+
+## Resumed cost investigation (2026-11-18)
+
+The user explicitly resumed the goal after `b361ebb4`. Review confirms that
+each source check still invokes the full context and peer validators twice;
+peer validation scans UDP tables and the owned process's descriptors. Full
+context verification also checks server/client files and process identities.
+Collector operation timings exclude entry/exit of the outer process-discovery
+scope. Their inclusive nested totals therefore cannot isolate the cause of
+the remaining delay.
+
+The next native attempt is for measurement: capture a function profile only
+around collection, including its outer scopes, and preserve it after supervisor
+cleanup. All current guards, thresholds and deadlines remain unchanged. The
+profiler adds overhead, so its timings will locate costs rather than establish
+unprofiled throughput or successful gameplay. No full suite repeat is planned.

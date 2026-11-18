@@ -1,9 +1,12 @@
 # X4 multiplayer: handover for Astra
 
-Work stopped at the user's explicit request after the current test completed.
-The goal is to be paused until the user says the PC is available again. Do not
-start another game or continue implementation on an automatic continuation.
-Latest code checkpoint: `ef867aa6`; this report's commit preserves the result.
+The user explicitly resumed work on 2026-11-18 after checkpoint `b361ebb4`;
+the goal is active again. The earlier pause instructions below are historical.
+Current investigation: profile the bounded latest-position collection to
+separate self time from nested guard costs, without changing playback or
+ownership checks. Instrument only this phase, retain the profile after cleanup,
+and do not interpret a profiled run as a cadence or gameplay acceptance test.
+Latest implementation checkpoint: `ef867aa6`; no subsequent behavior change.
 
 Batched-checks native attempt 01 failed: 3 source samples queued, ACK 1 retained,
 sequence 3 rejected at 287.300 m, no running write. Initial alignment still
