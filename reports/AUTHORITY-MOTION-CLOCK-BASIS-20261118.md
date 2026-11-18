@@ -380,7 +380,12 @@ Private evidence (paths relative to that detached worktree):
 | `.local/bench_guard_allocations_private_20261118.py` | `99393e23f714aaf4d6b5b44f3266e85bbb5f07d83b0e404639b17c5ac84f5ed5` |
 | `.local/guard_allocation_benchmark_20261118.txt` | `9deb3eaa3f70a1e26dffa121692c506a8e49f585efa11009e8990b4e057745a3` |
 
-## Proposed diagnostic guard policy (not implemented or approved)
+## Diagnostic guard policy (approved for bounded experiment, not implemented)
+
+On 2026-11-18 the user explicitly approved this bounded experiment. A subsequent
+request paused the work before implementation or testing began. The following
+scope is authorized for the isolated pair upon resumption; general gameplay
+acceptance remains unproven.
 
 The remaining source path repeatedly revalidates process, socket ownership and
 the saved baseline around external callbacks and I/O. The native attempt records
@@ -390,7 +395,7 @@ timings overlap: they must not be added or treated as isolated CPU costs. Existi
 profile evidence and this run justify investigating that path, but do not prove
 that a particular relaxation will satisfy the movement bounds.
 
-Proposed scope for user review: an explicit diagnostic-only policy for this
+Approved scope: an explicit diagnostic-only policy for this
 isolated source/client pair, with full validation before admission and on
 pause/stop or lifecycle change, and expensive process/socket/checkpoint
 revalidation at a maximum age of 250 milliseconds during motion. If a refresh
@@ -408,8 +413,8 @@ sample could be processed before detection. Start/end validation cannot undo or
 prove the absence of that intermediate effect. Isolated disposable profiles and
 owned cleanup remain required.
 
-Approval would authorize developing and measuring this policy, not declaring it
+Approval authorizes developing and measuring this policy, not declaring it
 safe for general gameplay or claiming native success. First validate the age,
 expiry and lifecycle behavior with simulated changes and representative local
-guard costs. Only then consider another bounded X4 attempt. This proposal changes
-a validation guarantee, so it requires the user's architecture decision.
+guard costs. Only then consider another bounded X4 attempt. The user has accepted
+the changed validation guarantee for this isolated experiment.

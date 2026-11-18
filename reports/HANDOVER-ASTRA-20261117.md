@@ -1,5 +1,19 @@
 # X4 multiplayer: handover for Astra
 
+Pause checkpoint (2026-11-18): the user approved the bounded diagnostic guard
+experiment, then requested a checkpoint and pause to use the PC. The policy is
+**approved for isolated development, not implemented**. Only read-only integration
+inspection had started; no new X4 instance, benchmark or test was launched.
+The review agent was interrupted. Resume only when the user requests it.
+
+Next after resumption: implement the optional maximum-250-ms validation policy
+with full admission/pause/STOP/lifecycle checks and unchanged immediate protocol
+and motion checks. First test expiry, refresh duration and lifecycle invalidation
+without X4; then assess whether one bounded native attempt is justified. Preserve
+the existing audited runners and evidence; any new runner gets its own revision.
+The preceding local checkpoint is `c4d891b3`; its push failed because GitHub DNS
+resolution was unavailable. Do not assume the fork contains the local checkpoints.
+
 Latest follow-up (2026-11-18, no game run): allocation-only process and metadata
 variants preserved the compared observations/error behavior in focused fixtures
 and 80 live pairs each. Separate median savings total about 1.875 ms per guard,
@@ -8,7 +22,7 @@ A Steam-only collector was rejected because skipping unrelated process reads
 changed error behavior. Candidates and evidence remain private and are not
 integrated into pinned runners or production. No further native/full-suite run
 was justified by these isolated timings. See [the evidence and hashes](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#allocation-only-guard-investigation-no-game-run).
-The 250-ms diagnostic policy below is still awaiting the user's decision.
+The 250-ms diagnostic policy below has since been approved for bounded testing.
 
 Current continuation (2026-11-18): **the composed TLS-to-Windows-X4 path applied
 all 26 V3 packets**, using a simulated server and one Windows game under Proton
@@ -59,12 +73,13 @@ passed, including adverse ownership loss during readiness observation. Native
 timing benefit remains unmeasured; no second X4 attempt followed this small change.
 See [the native result and timings](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#first-native-v3-attempt-2026-11-18).
 
-A user question is pending on a separate diagnostic guard policy: expensive
+The user approved a separate diagnostic guard experiment: expensive
 ownership/checkpoint results could be retained for at most 250 milliseconds,
 with admission/lifecycle checks and immediate protocol/motion fences preserved.
 External changes could then be detected late and permit a stale sample. This is
-**not approved or implemented**; do not infer permission from elapsed time or the
-approved capture-clock work. See [the concrete proposal](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#proposed-diagnostic-guard-policy-not-implemented-or-approved).
+**approved for isolated development but not implemented**; the approval does not
+establish native performance or authorize changing the playback bounds. See
+[the approved scope](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#diagnostic-guard-policy-approved-for-bounded-experiment-not-implemented).
 
 The user's additional capture clock and real-second rates are **approved** and
 implemented explicitly as V3; V1/V2 game-time units remain unchanged. BIND3,
@@ -82,7 +97,7 @@ test library after native cleanup (no skips). The other 26 still need
 Windows execution or missing reference inputs. **No complete suite pass** is
 claimed. See [the check evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#full-check-and-fixture-corrections).
 
-Goal remains active. Client work remains the priority; GPU-free server work
+The user requested a pause at this checkpoint. Client work remains the priority; GPU-free server work
 stays deferred. Shared-world Linux/Windows Internet gameplay is not achieved.
 
 The following entries preserve prior checkpoints and their then-current next steps.
