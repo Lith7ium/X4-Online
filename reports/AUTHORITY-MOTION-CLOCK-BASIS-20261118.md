@@ -321,6 +321,21 @@ and cleanup ordering. Full evidence and limitations are recorded in
 The failed real-source Linux attempt above remains unresolved. No repeated
 paired-X4 run or change to the diagnostic guard policy followed this result.
 
+### Composed TLS client path
+
+A subsequent single-game run at `f67aa76e` connected the real TLS/file transport,
+`ObservedClientSession` and `ParticipantMotion` to Windows X4 under Proton.
+The simulated server offered the pinned checkpoint and sent 26 V3 packets.
+All receipts and native clocks correlated; final displacement was 20 metres
+with zero error. However, update gaps were 0.784-0.821 seconds (enrollment to
+first update: 1.525 seconds), all above the 0.75-second continuity bound.
+Native summaries showed only held positions, not interpolation/extrapolation.
+The whole-cycle guard instrumentation recorded 979 calls taking 28.247 seconds
+of wall time. This locates substantial work in the client diagnostic path; it
+does not measure X4 server simulation performance or establish that the proposed
+guard policy will meet cadence. No policy or playback bound was changed.
+See [the complete evidence](AUTHORITY-CLIENT-PLAYBACK-20261117.md#composed-tls-and-windows-x4-v3-playback-2026-11-18).
+
 ## Proposed diagnostic guard policy (not implemented or approved)
 
 The remaining source path repeatedly revalidates process, socket ownership and

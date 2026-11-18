@@ -1483,3 +1483,81 @@ shared-world gameplay. The assembled transport test and this native test are
 separate evidence, not proof of their untested combination. The failed real
 Linux source-to-client run and its cadence problem remain unresolved; see
 [the clock report](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#first-native-v3-attempt-2026-11-18).
+
+## Composed TLS and Windows X4 V3 playback (2026-11-18)
+
+One subsequent run at `f67aa76e` connected the previously separate TLS and native
+Windows-executable paths. A private simulated server used the production TLS
+tunnel and file service to offer the same pinned checkpoint. The production
+client connection downloaded and staged it, `ObservedClientSession` checked
+native load observations and admitted the participant, and `ParticipantMotion`
+delivered V3 through UDP to the shared Lua in Windows X4 under Proton. Linux
+retained process/prefix/socket ownership; Windows process APIs were not used.
+
+The server confirmed resume, enrollment plus 25 movement updates, and pause.
+The shared motion controller confirmed STOP/release before the native pause and
+its TLS receipt. Independent inspection recomputed all 26 canonical packet
+digests, matched the exact TLS receipts and correlated every native clock row
+with the acknowledged source ledger. Source game time stayed zero and capture
+time progressed strictly. The native INITIAL, 21 SUMMARY and STOPPED rows match
+the recorded JSON.
+
+| Observation | Result |
+| --- | --- |
+| Delivered / confirmed packets | 26 / 26 |
+| Native observations / readbacks | 2,328 / 1,805 |
+| Final displacement / position error | 20 m / 0 m |
+| Maximum recorded actual-to-target error | approximately 0.8 m |
+| Enrollment-to-first-update capture interval | 1.525427 s |
+| Movement-update capture intervals | 0.783771-0.821064 s |
+| Source capture elapsed / native INITIAL-to-STOP elapsed | 20.912361 / 21.388478 s |
+| Summary phases | held, held-no-rate |
+| STOP | held-no-rate, drained=1, uncertain=0 |
+| Whole-cycle environment guards | 979 calls, 28.247389 s wall time |
+
+This proves functional application through the composed client path, but **not
+smooth playback**. All 24 movement-update intervals, and the first enrollment
+interval, exceeded the unchanged 0.75-second continuity bound. Interpolation or
+extrapolation was not observed in the summaries. The 28.247-second measurement
+covers guard calls throughout the whole cycle, including work outside the
+INITIAL-to-STOP interval; it must not be added to that interval or interpreted
+as isolated CPU cost. The synthetic trajectory is relative to the native
+initial pose, with initial alignment disabled. It is not an independent test of
+agreement with an actual server ship position. No source X4, native Windows OS,
+WAN, second player or gameplay participated.
+
+Before the game run, review corrected three faults in the new private simulated
+server: failure propagation after the final receipt, unconsumed trailing input,
+and validation errors hidden by concurrent shutdown. A final positive no-game
+TLS/file/admission/keepalive/resume/two-V3/pause/close smoke and a deterministic
+invalid-frame/shutdown race check passed. The latter confirms failure reporting
+after resources are closed. Earlier separate late-fault and coalesced-frame
+checks also passed; only their summaries, not raw traces, are retained. These
+changes affect the private test helper, not production transport guarantees.
+
+The native run exited zero. Shared-session cleanup had no errors; TLS, control
+and file-service threads were stopped with no retained protocol failure. Owned
+game groups and readable matching-prefix processes were absent. Five unrelated
+process environments were unreadable, so whole-system cleanup is not claimed.
+All 505 selected source pins, protected overlay/save inputs and Steam state were
+unchanged. No unchanged native or full-suite rerun followed.
+
+Private evidence:
+
+- `.local/windows-tls-capture-proton-20261118-01/`: `result.json`,
+  `motion-cycle.json`, downloaded checkpoint and raw private-profile engine log.
+- Runner `.local/authority_windows_tls_capture_proton_20261118_01.py`, SHA-256
+  `477f56b347a7471234c62b110adae2330e29f07e2e839eb86d9a58a6e4f94bf1`.
+- Helper `.local/authority_capture_tls_fixture_20261118_01.py`, SHA-256
+  `200d78c4c19c8373e6ac1063dbbb56053e567d008dc87750cab90f95435966e0`.
+- Reviewed manifest `.local/authority-windows-tls-capture-reviewed-20261118-02.json`,
+  SHA-256 `19193f524d449a5ff827fb03911568abb3a46347e19222ed96f405e07f1e876d`.
+  Revision 02 updated only the final helper pin and manifest path after review;
+  the run's full preflight revalidated all pins. Revision 01 remains preserved.
+- Launch log `.local/authority-windows-tls-capture-native-20261118-01.log`.
+- Final positive and shutdown-race smoke commands/scripts/results:
+  `.local/agent-worktrees/windows-v3-20261118-01/.local/emitter-smoke-evidence-20261118-01/`.
+
+The actual-source Linux failure remains open. The separate proposed 250-ms
+diagnostic guard policy is still unapproved and unimplemented; this result does
+not authorize it or predict its performance.
