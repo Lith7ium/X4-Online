@@ -51,7 +51,7 @@ def run_guard(sock, config):
     while True:
         request=parse_json(read_line(sock,512,deadline))
         if (type(request) is not dict or set(request)!={'token','seq','op'} or request['token']!=token or
-            type(request['seq']) is not int or request['seq']!=seq+1 or request['op'] not in ('CHECK','STOP')):
+            type(request['seq']) is not int or request['seq']!=seq+1 or request['op'] not in ('CHECK','CHECK_METADATA','STOP')):
             raise ValueError('invalid guard request')
         seq+=1
         if request['op']=='STOP':
@@ -68,8 +68,13 @@ def run_guard(sock, config):
                     if sock.recv(1)!=b'':raise ValueError('unexpected frame after STOP')
                     break
             return
-        if guard.check() is not True:raise ValueError('guard failed')
-        reply({'token':token,'seq':seq,'event':'CHECKED'})
+        if request['op']=='CHECK_METADATA':
+            if guard.check_metadata() is not True:raise ValueError('guard metadata check failed')
+            event='METADATA_CHECKED'
+        else:
+            if guard.check() is not True:raise ValueError('guard failed')
+            event='CHECKED'
+        reply({'token':token,'seq':seq,'event':event})
 
 
 if __name__ == '__main__':

@@ -213,7 +213,7 @@ class WitnessGuardClient:
     def _request(self,op):
         if self.state!='ready' or threading.get_ident()!=self.owner:
             self.state='failed';raise RuntimeError('guard reentry or unavailable')
-        self.state='checking' if op=='CHECK' else 'stopping'
+        self.state='stopping' if op=='STOP' else 'checking'
         try:
             self._quiet();self.seq+=1
             deadline=min(self.deadline,time.monotonic()+self.timeout)
@@ -221,9 +221,9 @@ class WitnessGuardClient:
             answer=self._read(deadline)
             if (type(answer) is not dict or set(answer)!={'token','seq','event'} or
                 answer['token']!=self.token or type(answer['seq']) is not int or answer['seq']!=self.seq or
-                answer['event']!=('CHECKED' if op=='CHECK' else 'STOPPED')):
+                answer['event']!={'CHECK':'CHECKED','CHECK_METADATA':'METADATA_CHECKED','STOP':'STOPPED'}[op]):
                 raise ValueError('invalid guard response')
-            if op=='CHECK':self._quiet();self.state='ready';return True
+            if op!='STOP':self._quiet();self.state='ready';return True
             # STOPPED is consumed while the helper is still alive. Explicitly
             # acknowledge it with EOF, then require clean exit and peer EOF.
             self._quiet();self.sock.shutdown(socket.SHUT_WR)
@@ -248,6 +248,11 @@ class WitnessGuardClient:
             raise
 
     def check(self):return self._request('CHECK')
+
+    def check_metadata(self):
+        """Metadata-only, not byte proof; caller owns bounded/full-check phases."""
+        return self._request('CHECK_METADATA')
+
     def stop(self):return self._request('STOP')
 
     def _close_ipc_socket(self, attribute, descriptor, identity):

@@ -32,6 +32,39 @@ class GuardHelper(unittest.TestCase):
     def start(self,**kw):
         return client.WitnessGuardClient(self.store,self.cp,registry=self.registry,pump=self.pump,
             deadline=time.monotonic()+kw.get('deadline',5),timeout=kw.get('timeout',2))
+    def test_real_helper_routes_metadata_and_full_checks_without_fallback(self):
+        calls=self.root/'calls'
+        script=self.root/'instrumented-reader.py'
+        script.write_text("import sys, socket\n"
+            +"sys.path[:0]="+repr([str(ROOT/'src'),str(ROOT/'tools/dev')])+"\n"
+            +"from authority_witness_source_guard import WitnessSourceGuard\n"
+            +"import authority_recovered_registry_reader as reader\n"
+            +"from pathlib import Path\n"
+            +"calls=Path("+repr(str(calls))+")\n"
+            +"full=WitnessSourceGuard.check; metadata=WitnessSourceGuard.check_metadata\n"
+            +"def record(kind, method, self):\n"
+            +" with calls.open('a') as stream: stream.write(kind+'\\n')\n"
+            +" return method(self)\n"
+            +"WitnessSourceGuard.check=lambda self:record('full',full,self)\n"
+            +"WitnessSourceGuard.check_metadata=lambda self:record('metadata',metadata,self)\n"
+            +"with socket.socket(fileno=int(sys.argv[1])) as sock: reader.run(sock)\n")
+        with patch.object(client,'READER',script):
+            g=self.start();self.addCleanup(g._cleanup)
+            self.assertEqual(calls.read_text().splitlines(),['full'])
+            self.assertTrue(g.check_metadata());self.assertEqual(g.seq,1);self.assertEqual(g.state,'ready')
+            self.assertTrue(g.check());self.assertEqual(g.seq,2)
+            self.assertTrue(g.check_metadata());self.assertEqual(g.seq,3)
+            self.assertTrue(g.stop());self.assertEqual(g.seq,4)
+        self.assertEqual(calls.read_text().splitlines(),['full','metadata','full','metadata','full'])
+        self.assertEqual(g.state,'stopped');self.assertEqual(g.helper.proc.returncode,0)
+
+    def test_metadata_request_fault_preserves_cleanup_and_never_uses_full_fallback(self):
+        g=self.start();self.addCleanup(g._cleanup)
+        pointer=self.store.directory/'CURRENT';pointer.write_bytes(pointer.read_bytes()+b' ')
+        with self.assertRaises((RuntimeError,ValueError,TimeoutError)):g.check_metadata()
+        self.assertEqual(g.state,'failed');self.assertIsNone(g.helper.pidfd)
+        self.assertIsNotNone(g.helper.proc.poll())
+
     def test_full_guard_check_and_clean_correlated_stop(self):
         g=self.start();self.addCleanup(g._cleanup)
         self.assertEqual(g.status[:3],('ready','a'*32,2))
@@ -329,8 +362,9 @@ time.sleep(10)
             os.close(fd);os.close(read);os.close(write)
 
     def test_reader_rejects_wrong_token_sequence_and_post_stop_frame(self):
-        for case in ('token','sequence','after_stop'):
-            with self.subTest(case=case):
+        for case,op in ((case,op) for case in ('token','sequence','after_stop')
+                        for op in ('CHECK','CHECK_METADATA')):
+            with self.subTest(case=case,op=op):
                 parent,child=socket.socketpair();self.addCleanup(parent.close)
                 helper=OwnedHelper([sys.executable,str(client.READER),str(child.fileno())],
                     registry=self.registry,pass_fds=(child.fileno(),))
@@ -343,13 +377,13 @@ time.sleep(10)
                     def send(value):send_frame(parent,json.dumps(value).encode(),deadline,lambda:None)
                     def read():return parse_json(read_line(parent,1024,deadline))
                     send(config);self.assertEqual(read()['event'],'READY')
-                    request={'token':token,'seq':1,'op':'CHECK'}
+                    request={'token':token,'seq':1,'op':op}
                     if case=='token':request['token']='f'*32
                     elif case=='sequence':request['seq']=2
                     else:request['op']='STOP'
                     send(request)
                     if case=='after_stop':
-                        self.assertEqual(read()['event'],'STOPPED');send({'token':token,'seq':2,'op':'CHECK'})
+                        self.assertEqual(read()['event'],'STOPPED');send({'token':token,'seq':2,'op':op})
                     self.assertNotEqual(helper.proc.wait(timeout=3),0)
                 finally:
                     child.close();parent.close();helper.stop()
