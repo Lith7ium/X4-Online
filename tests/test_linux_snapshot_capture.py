@@ -1,6 +1,6 @@
 """Offline checks for the disposable capture runner; these do not launch X4."""
 import gzip
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import importlib.util
 import os
 from pathlib import Path
@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
@@ -68,6 +69,35 @@ class CaptureTests(unittest.TestCase):
         with mock.patch.object(capture.os, 'geteuid', return_value=0):
             with self.assertRaisesRegex(ValueError, 'unprivileged'):
                 capture.capture(args)
+
+    def test_group_scan_preserves_uid_group_start_filters_and_bad_entry_handling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entries = []
+            for name, group, started in (('103', 77, 10), ('101', 77, 11),
+                                         ('102', 78, 11), ('104', 77, 9),
+                                         ('105', 77, 11), ('106', 77, 11),
+                                         ('107suffix', 77, 11), ('not-a-pid', 77, 11)):
+                path = Path(directory) / name
+                path.mkdir()
+                fields = ['S', '0', str(group)] + ['0'] * 16 + [str(started)]
+                if name != '106':  # A disappearing entry has no readable stat.
+                    text = 'bad stat' if name == '105' else name + ' (name with ) parentheses) ' + ' '.join(fields)
+                    (path / 'stat').write_text(text)
+                entries.append(SimpleNamespace(name=name, path=str(path)))
+            actual_stat = os.stat
+            observed = []
+            def stat(path):
+                observed.append(Path(path).name)
+                value = actual_stat(path)
+                return SimpleNamespace(st_uid=value.st_uid + (Path(path).name == '103'))
+            with mock.patch.object(capture.os, 'scandir', return_value=nullcontext(entries)), \
+                 mock.patch.object(capture.os, 'stat', side_effect=stat):
+                self.assertEqual(capture.owned_group_members(77, 10), [101])
+            self.assertEqual(observed, ['103', '101', '102', '104', '107suffix'])
+
+    def test_group_scan_preserves_unreadable_proc_result(self):
+        with mock.patch.object(capture.os, 'scandir', side_effect=PermissionError):
+            self.assertEqual(capture.owned_group_members(77, 10), [])
 
     def test_cleanup_signals_only_launched_group(self):
         proc = mock.Mock(pid=12345)

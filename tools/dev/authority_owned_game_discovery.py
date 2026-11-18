@@ -82,8 +82,9 @@ class OwnedGameDiscovery:
         row = live.owned_process_identity(pid)
         if row['state'] in ('Z', 'X', 'x') or row['uid'] != os.geteuid():
             raise RuntimeError('owned process exited or changed owner')
+        image = os.stat(f'/proc/{pid}/exe')
         return {**{key: row[key] for key in ('pid', 'start', 'uid', 'group', 'session')},
-                'exe': self._image(Path('/proc')/str(pid)/'exe')}
+                'exe': (image.st_dev, image.st_ino)}
 
     def _targeted(self, entry):
         if threading.get_ident() != self.owner or entry.launcher.poll() is not None:

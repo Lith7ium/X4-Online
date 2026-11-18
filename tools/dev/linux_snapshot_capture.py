@@ -107,12 +107,21 @@ def command_for(case, game, binds, lock, display, auth, username, seed=276944566
 def owned_group_members(group_id, started):
     """Report surviving members of the launched process group, without signalling them."""
     found = []
-    for path in Path('/proc').glob('[0-9]*'):
+    try:
+        # Snapshot names before inspecting entries, as Path.glob did. Do not
+        # reuse DirEntry metadata: each UID observation follows its stat read.
+        with os.scandir('/proc') as entries:
+            process_paths = [entry.path for entry in entries
+                             if entry.name and '0' <= entry.name[0] <= '9']
+    except OSError:
+        return found
+    for process_path in process_paths:
         try:
-            fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
-            if (path.stat().st_uid == os.geteuid() and int(fields[2]) == group_id
+            with open(process_path + '/stat') as stream:
+                fields = stream.read().rsplit(')', 1)[1].split()
+            if (os.stat(process_path).st_uid == os.geteuid() and int(fields[2]) == group_id
                     and int(fields[19]) >= started):
-                found.append(int(path.name))
+                found.append(int(process_path.rsplit('/', 1)[1]))
         except (OSError, ValueError, IndexError):
             continue
     return sorted(found)

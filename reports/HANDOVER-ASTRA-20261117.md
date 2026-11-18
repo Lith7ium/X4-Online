@@ -2,11 +2,21 @@
 
 The user explicitly resumed work on 2026-11-18 after checkpoint `b361ebb4`;
 the goal is active again. The earlier pause instructions below are historical.
-Current investigation: profile the bounded latest-position collection to
-separate self time from nested guard costs, without changing playback or
-ownership checks. Instrument only this phase, retain the profile after cleanup,
-and do not interpret a profiled run as a cadence or gameplay acceptance test.
-Latest implementation checkpoint: `ef867aa6`; no subsequent behavior change.
+The bounded collection profile is now retained. It attributes the largest
+inclusive costs to repeated retained-client/process checks and outer process
+group discovery, not socket ownership. Two samples queued, ACK 1, native
+sequence 2 refused at 249.074 m; no running write. All owned cleanup and pinned
+input preservation passed. The profile perturbs timings and is not a throughput
+or gameplay acceptance test. Three process-query helpers now avoid repeated
+Path objects while preserving fresh reads, comparison order and every callback
+boundary. Separate non-game benchmarks measured 21-31% lower median cost for
+these individual helpers; 19 existing identity/cleanup and 11 snapshot tests
+passed. This does not establish a native cadence improvement. Next: one
+unprofiled paired attempt of these changes, then reassess the actual source
+intervals. Do not widen bounds or silently change the pending clock policy.
+See [the profile evidence](AUTHORITY-CLIENT-PLAYBACK-20261117.md#bounded-collection-profile-2026-11-18).
+See [the small implementation and validation](AUTHORITY-CLIENT-PLAYBACK-20261117.md#process-query-path-allocation-optimization).
+Profiling used `42aab58a`, before the process-query changes in this checkpoint.
 
 Batched-checks native attempt 01 failed: 3 source samples queued, ACK 1 retained,
 sequence 3 rejected at 287.300 m, no running write. Initial alignment still

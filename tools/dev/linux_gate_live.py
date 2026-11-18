@@ -3313,11 +3313,12 @@ def stop_owned_process(proc, started):
 
 def owned_process_identity(pid):
     """Read Linux process identity; names and a bare PID are never authority."""
-    path = Path(f'/proc/{pid}')
-    fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+    directory = f'/proc/{pid}'
+    with open(directory + '/stat') as stream:
+        fields = stream.read().rsplit(')', 1)[1].split()
     return {'pid': pid, 'state': fields[0], 'parent': int(fields[1]),
             'group': int(fields[2]), 'session': int(fields[3]),
-            'start': int(fields[19]), 'uid': path.stat().st_uid}
+            'start': int(fields[19]), 'uid': os.stat(directory).st_uid}
 
 
 def record_owned_game(proc, started, home, executable, uid):

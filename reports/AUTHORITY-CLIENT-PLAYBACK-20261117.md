@@ -1258,3 +1258,106 @@ around collection, including its outer scopes, and preserve it after supervisor
 cleanup. All current guards, thresholds and deadlines remain unchanged. The
 profiler adds overhead, so its timings will locate costs rather than establish
 unprofiled throughput or successful gameplay. No full suite repeat is planned.
+
+## Bounded collection profile (2026-11-18)
+
+One fresh two-Linux-X4 attempt at `42aab58a` profiled only
+`collect_latest_playback`, including its outer identity scopes. The wrapper
+records exactly one invocation, disables profiling on return or exception,
+and exports the profile after supervisor cleanup. No production behavior,
+guard, deadline, playback bound or clock mapping changed.
+
+The collector failed again: two source samples queued, only sequence 1 ACKed,
+sequence 2 refused at 249.073727476 m with `phase=held`, zero running readbacks
+and `uncertain=0`. Its source time and target XYZ equal the original second
+capture; both captures equal the queued ledger. The source interval was
+1.561224082 s. The profiler perturbed execution, so this is not a comparable
+unprofiled cadence measurement or a successful movement test.
+
+The profile contains 5,806,741 calls (5,804,977 primitive) and 3.825380556 s of
+attributed self time. Important **inclusive, overlapping** costs:
+
+| Function/path | Calls | Inclusive seconds |
+| --- | ---: | ---: |
+| Full source `active_guard` | 112 | 2.446 |
+| Retained participant `check_active` | 112 | 1.737 |
+| Client `check_live_context` | 668 | 1.380 |
+| Scoped process `_targeted` | 9,514 | 1.254 |
+| Scoped process `_read` | 19,028 | 1.210 |
+| Full `owned_group_members` scans | 48 | 0.882 |
+| Protected-file `sha` | 27,174 | 0.545 |
+| Source `socket_owner` | 90 | 0.088 |
+
+The principal repeated chain is `active_guard -> verify_diagnostic ->
+check_active -> registry_context -> client_context -> check_live_context`.
+Registry verification brackets its observation with context checks, and the
+motion-log watcher adds another context check. Those contexts reread both
+game identities and protected files. Outer discovery scopes independently scan
+all process entries. The socket-table/descriptor scan is a small part of this
+particular profile, not the first optimization target.
+
+Selected **self** costs are 0.722 s for 86,993 `_io.open` calls, 0.305 s for
+59,372 text reads, and 0.246 s for 72,657 `posix.stat` calls. These are calls,
+not distinct files. Path construction and conversion also contribute. The
+next narrow experiment is to remove repeated pathname-object allocation while
+still rereading the same process fields at every existing boundary. No caching
+of process identity, widening of scopes or removal of guards is implied.
+Microbenchmarks must run without the profiler before another native attempt.
+These costs belong to the Python test/control path and do not demonstrate a
+CPU bottleneck in X4's universe simulation or rented-server performance.
+
+The supervisor and outer scope both terminated; owned-cgroup/Xauthority cleanup,
+pinned source/code preservation and Steam identity preservation passed. A final
+process scan found no X4. Normal profiles were not used. The complete goal,
+including ongoing motion, Windows/WAN, combat, trade and boarding, remains unmet.
+
+Artifacts: `.local/private-paired-profiled-native-20261118-01/`, including
+`latest-playback-collection.pstats` (SHA-256
+`9f976bad1b38b1de6af00c8dc16d63338b671a5b4f7ea7393357cf8d5a4399ac`)
+and `profile-analysis.json` (SHA-256
+`1d091f650b04dffba8ae02e7bcd2100d4e4add2ab0e4f714570d40ca0cfa24d3`).
+The latter retains function rows, correlated source/failure values and cleanup
+results. The 488-pin manifest is
+`.local/authority-paired-profiled-reviewed-20261118-01.json`; the private runner
+and scope have the corresponding `authority_paired_profiled_*_20261118_01.py`
+names. No full test suite was rerun.
+
+## Process-query path allocation optimization
+
+Three hot helpers now use direct string paths and ordinary `open`/`os.stat`
+instead of repeatedly constructing Path objects. `owned_process_identity`
+still reads and parses the process stat record before obtaining its current
+UID. `OwnedGameDiscovery._read` still rejects an exited process or wrong UID
+before obtaining its current executable device/inode. `owned_group_members`
+still scans the complete process directory, snapshots matching names, and
+reads each stat record before checking UID, group and start time in the same
+order. It does not use cached DirEntry metadata. Error handling and sorted
+membership results are retained. No identity result is cached; no guard,
+scope, callback boundary, protocol, deadline or playback threshold is removed.
+
+Unprofiled, alternating non-game microbenchmarks measured the following median
+costs. They do not predict the speedup of the complete native collector:
+
+| Operation | Original | Candidate | Reduction |
+| --- | ---: | ---: | ---: |
+| One process identity read | 19.358 us | 14.495 us | 25.1% |
+| Combined discovery identity/executable read | 27.142 us | 18.818 us | 30.7% |
+| Complete process-group scan | 8.966 ms | 7.039 ms | 21.5% |
+
+The identity benchmark alternated eight batches over self and a settled owned
+sleep process, checking field equality. An initial equality check encountered
+the child's startup transition; that observation was not used as timing data.
+The scan benchmark alternated ten batches of eight scans per implementation
+against one owned non-game parent/child group. All 160 measured scans found
+exactly those two members, and the parent exited cleanly. Concurrent unrelated
+process changes remain possible; these are sequential observations, not an
+atomic process snapshot. Scan evidence is retained in
+`.local/owned-group-scan-comparison-20261118-01.json`.
+
+Nineteen existing discovery/cleanup tests and eleven snapshot tests passed.
+The latter include two added cases for UID/group/start filtering, malformed or
+disappearing entries, digit-prefix names and an unreadable process directory.
+Independent review found no blocker; `git diff --check` passed. The full suite
+was not repeated. One fresh unprofiled two-X4 attempt is needed to determine
+whether these small changes help the measured source cadence; no native
+improvement or successful movement is claimed yet.
