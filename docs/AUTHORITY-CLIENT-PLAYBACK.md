@@ -144,9 +144,16 @@ The native experiment must acknowledge drained STOP before the server-driven
 pause. Default playback and a private finite Wait alone failed when X4's actual
 position jumped more than 700 metres from the unchanged final target. A private
 Wait-plus-zero-linear-velocity contrast passed the complete bounded flow with an
-exact 20-metre endpoint and drained STOP. Neither the Wait script's running state
-nor the intended delay before the velocity request was proven; both MD receipts
-reported the same game time. General NPC control and restoration remain open.
+exact 20-metre endpoint and drained STOP. A subsequent private probe established
+the captured Wait's current/started state and advancing game time/UI updates
+before the velocity request. It again reached the endpoint and drained STOP,
+but failed in its new observation bridge after requesting release. Correcting
+that bridge's object-reference conversion allowed the next bounded trial to
+complete playback, release observation and native pause. Seven read-only samples
+over 6.65 game seconds found the temporary Wait absent, the exact prior order
+current and started, and about 647 metres of native movement. This establishes
+the combined sequence for one saved NPC, not exact AI-stack restoration or a
+general NPC control policy; see the report for separate run outcomes.
 The intervention is not installed by the production path, and the 50-metre
 correction bound remains unchanged. Distinguish this one-ship result from
 AI suppression, visual smoothness and shared-world synchronization. Player

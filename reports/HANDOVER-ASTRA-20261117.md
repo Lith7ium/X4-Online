@@ -3,8 +3,10 @@
 > Client-first continuation, 18 November: server graphics work is deferred at
 > the user's request. The independent native client now includes opt-in buffered
 > playback. Default NPC motion still faults, but a private Wait-plus-zero-velocity
-> trial completed the bounded 20-metre playback/STOP/pause flow. General NPC control,
-> restoration and Windows/Internet gameplay remain unproven. Start with
+> trial completed the bounded 20-metre playback/STOP/pause flow. A later trial
+> also established timing separation and observed the same NPC moving under its
+> exact prior order after releasing temporary control. General NPC control,
+> exact AI restoration and Windows/Internet gameplay remain unproven. Start with
 > [the current client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md) and
 > [the playback guide](../docs/AUTHORITY-CLIENT-PLAYBACK.md). The original handover
 > below records the earlier checkpoint, not the current branch tip.

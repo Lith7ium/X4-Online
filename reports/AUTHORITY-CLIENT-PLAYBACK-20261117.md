@@ -237,6 +237,97 @@ does not claim a clean renderer log or visual smoothness. The next useful work
 is to establish order execution/timing and reversible control of the same actor;
 repeating this unchanged successful trial would add little evidence.
 
+## Native attempt 07: timing established, release observation failed
+
+The private variant in `.local/private-client-playback-native-20261118-07/`
+retained the same trajectory and actor. It required the exact captured Wait to
+be current and `started`, used sequential MD action/delay blocks, and measured
+both game time and a counter in the existing UI update owner. The Wait timeout
+was 30 game seconds. After clean drained STOP, it requested `constantvel=false`
+without linear/angular components and cancelled only its captured Wait order.
+Seven subsequent read-only position observations were intended to cover at
+least six game seconds and check whether the exact prior order was current and
+started again. This remains a private experiment, not a general NPC policy.
+
+The timing records advanced from UI ticks 9 to 23 to 36, with corresponding game
+times 7.150647128, 7.257397182 and 7.357906697. They preceded INITIAL at
+7.458379222. The complete trial **failed**, but these observations establish the
+previously missing timing separation and sampled current/started order checks.
+Playback again reached exactly INITIAL plus 20 metres, with 25 delivered
+trajectory samples, 746 observations, 638 readbacks and STOPPED at sequence 26,
+`drained=1 uncertain=0`.
+
+The release request was logged at game time 13.741809835. The first subsequent
+UI bridge observation failed at approximately 13.85, before any release sample
+was recorded. Neither restored native motion nor return to the prior order is
+established. The host correctly withheld its subsequent pause request. The
+generic bridge failure does not identify its internal failing operation;
+object-reference conversion is an investigation lead, not a proven native cause.
+Native/helper/host/TLS/display cleanup, checkpoint/source pins and Steam identity
+checks passed; no X4 process or native lock remained afterward.
+
+Preparation used four synthetic bridge scenarios with real native inspection
+closures and a fake C ABI, two real-installer tests and three fake-log observer
+tests. They do not execute X4's MD scheduler. A prior variant07 XML passed full
+schema validation; subsequent changes redirected diagnostic logging through
+existing Lua-event elements and received well-formedness validation only.
+Lua logs preserve native float values with `%.17g`; MD's rounded text is not
+used to reconstruct post-release displacement. The independent observer checks
+record order, native STOP, advancing counters/clocks, measured displacement and
+final log identity/content after process exit. It retains negative evidence.
+
+## Native attempt 08: bounded playback, release and pause succeed
+
+The variant07 bridge passed hexadecimal MD references directly to
+`ConvertStringToLuaID`, whereas the established native binder first parses the
+hexadecimal value into an exact decimal key. An offline regression using the
+real native inspection factory and a fake engine that rejects hexadecimal
+conversion input reproduced variant07's first post-STOP failure. Variant08 uses
+the existing exact `parse_hex` conversion and adds fixed failure-stage labels.
+Four lifecycle cases, two failure-stage cases and a fresh real-installer check
+passed. This supports correcting that input contract; the generic native07 log
+cannot independently prove its historical failure's exact cause.
+
+`.local/private-client-playback-native-20261118-08/` changed only that private Lua
+bridge and its diagnostic labels. It retained the same XML, installer, host
+observer, trajectory, movement bounds and final success criteria. The complete
+bounded trial passed, including final native and release-log revalidation:
+
+- The Wait was current and started at the guarded timing steps. Measured UI
+  ticks advanced 8 → 22 → 35, with increasing game times before INITIAL.
+- Twenty-five delivered trajectory samples reached exactly INITIAL plus 20
+  metres. There were 749 observations and 639 readbacks. STOPPED reported source
+  sequence 26, `drained=1 uncertain=0`, and zero endpoint error in the reported
+  float coordinates.
+- After the release request, seven native position samples covered
+  6.651520434 game seconds. The captured temporary Wait was absent and the exact
+  captured prior order was current and started in every sample. Independently
+  recomputed displacement between the first and last samples was
+  647.320048983 metres. These observations were read-only; the playback owner
+  had stopped before release.
+- The host requested pause only after the positive release receipt. One native
+  resume and one later pause were confirmed. Native/helper/host/TLS/display
+  cleanup and checkpoint/source/Steam integrity checks passed. No X4 process or
+  native lock remained, and the reviewed source pins still matched afterward.
+
+The additional independent check is retained as
+`release-independent-observation.json` inside that run directory. This proves
+the tested combined control/release sequence for this one existing NPC. It does
+not prove exact AI-stack restoration, restoration of a previously unknown
+constant-velocity mode, a native velocity readback, or a second resume after the
+final pause. It also does not isolate which release action enabled subsequent
+movement. No general NPC suppression or ownership policy has been installed.
+
+The next integration target is actual source-X4 motion feeding this native
+client. Existing `authority_source_motion_pair_live.py` and
+`authority_source_motion_tcp_worker.py` previously delivered two real source
+samples into a client buffer, without native playback; their actor/frame
+correspondence was not proven. Reuse that exporter while establishing that both
+ends refer to the same registered saved actor and sector coordinate frame.
+Do not repeat the unchanged successful synthetic trajectory as a substitute for
+that missing integration. The earlier full-suite issues remain unresolved;
+these focused changes did not justify repeating the unchanged full suite.
+
 All runs here used one actual Linux client, a synthetic trajectory and synthetic
 host engine controls over loopback TLS. None tested a Windows client, WAN,
 native server, visual smoothness, remote orientation, general AI suppression,
@@ -244,11 +335,16 @@ cross-sector movement, trade, combat or boarding. The complete shared-world goal
 full-suite issues remain unresolved.
 
 Private manifests: `.local/authority-client-playback-reviewed-20261118-01.json`
-through `-06.json`; private runner/trajectory files:
+through `-08.json`; private runner/trajectory files:
 `.local/authority_client_playback_{trial,driver}_20261118.py`. Scope launchers for
-02 through 06 have matching suffixes; 05/06 also pin separate private driver,
+02 through 08 have matching suffixes; 05/06 also pin separate private driver,
 binder and installer-wrapper variants. Their `wait-diagnostic-observation.json`
-records preserve the independently checked outcome and limits. These files,
+records preserve the independently checked outcome and limits. Variants07/08
+also pin the Lua timing/release bridge and `release_observer_20261118.py`; both
+use the new private `authority_client_playback_trial_20261118_07.py` host gate.
+Variant08's bridge SHA256 is
+`3c7f32f21fb7bc3e06e56483b8549408de5cec48b00cb2bfe8493dd12de30c44`.
+These files,
 binaries, saves and private credentials are not committed. Selected dependencies
 are checked before and after runs;
 intermediate mutation and external cgroup migration are outside that evidence.
