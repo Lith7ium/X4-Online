@@ -27,9 +27,12 @@ function M.new(o)
  assert(finite(c.interval) and c.interval>0 and c.interval<=60 and finite(c.timeout) and c.timeout>0 and c.timeout<=120)
  assert(finite(c.min_dt) and finite(c.max_dt) and c.min_dt>0 and c.min_dt<=c.max_dt and c.max_dt<=60)
  assert(c.include_orientation==nil or type(c.include_orientation)=='boolean')
+ assert(c.real_time_motion==nil or type(c.real_time_motion)=='boolean')
+ assert(not (c.real_time_motion and c.include_orientation))
  local state,busy='ready',false
  local entries,order,actors={}, {}, {}
  local cursor,request_number,last_clock,last_game,pending=1,0,nil,nil,nil
+ local last_capture_after=nil
  local api={}
  local function fail(reason)
   if state~='failed' then state='failed';pcall(c.fault,reason)end
@@ -112,7 +115,14 @@ function M.new(o)
     and sample.game_before_pose>=0 and sample.game_after_pose>=sample.game_before_pose and sample.game_after_pose<=1e12
     and finite(sample.x) and finite(sample.y) and finite(sample.z)
     and math.abs(sample.x)<=1e7 and math.abs(sample.y)<=1e7 and math.abs(sample.z)<=1e7)
-   local sampled={sector_macro=sample.sector_macro,local_sector_key=sample.local_sector_key,game_after_pose=sample.game_after_pose,x=sample.x,y=sample.y,z=sample.z}
+   if c.real_time_motion then
+    assert(finite(sample.capture_before_pose) and finite(sample.capture_after_pose) and
+     sample.capture_before_pose>=0 and sample.capture_after_pose>=sample.capture_before_pose and sample.capture_after_pose<=1e12)
+   end
+   local sampled={
+    capture_before_pose=sample.capture_before_pose,capture_after_pose=sample.capture_after_pose,
+    sector_macro=sample.sector_macro,local_sector_key=sample.local_sector_key,
+    game_after_pose=sample.game_after_pose,x=sample.x,y=sample.y,z=sample.z}
    if c.include_orientation then
     sampled.orientation={}
     for _,axis in ipairs({'yaw','pitch','roll'}) do
@@ -124,19 +134,30 @@ function M.new(o)
    sample=sampled
    local t=sample.game_after_pose;assert(not last_game or t>=last_game,'source game clock regressed')
    local previous=e.previous;local velocity,angular_rate=nil,nil
+   local capture_time=sample.capture_after_pose
+   if c.real_time_motion then
+    assert(not last_capture_after or sample.capture_before_pose>=last_capture_after,
+     'source capture clock regressed between readers')
+    assert(not e.last_capture_time or capture_time>e.last_capture_time,'source capture clock did not advance')
+   end
    assert(not e.sent_sector or e.sent_sector~=sample.sector_macro or
     e.sent_local_sector_key==sample.local_sector_key,'sent local sector identity changed under same macro')
-   -- A baseline reset preserves the last emitted game time. A still-paused or
-   -- unchanged clock cannot produce a new sequence with a duplicate time.
-   if not previous and e.last_emitted_time and t==e.last_emitted_time then
+   -- Legacy samples suppress duplicate game times after a baseline reset.
+   -- Real-time samples instead retain both capture-clock progression fences.
+   if not c.real_time_motion and not previous and e.last_emitted_time and t==e.last_emitted_time then
     e.next_due=last_clock+c.interval;pending=nil;state='ready';result=nil;return
    end
+   local rate_interval_seconds=nil
    if previous then
+    rate_interval_seconds=t-previous.time
+    if c.real_time_motion then
+     rate_interval_seconds=capture_time-previous.capture_time
+    end
     assert(t>=previous.last_time,'source game clock regressed')
     assert(previous.sector~=sample.sector_macro or previous.local_sector_key==sample.local_sector_key,
      'local sector identity changed under same macro')
     if previous.sector==sample.sector_macro and previous.local_sector_key==sample.local_sector_key then
-     local dt=t-previous.time
+     local dt=rate_interval_seconds
      if dt>=c.min_dt and dt<=c.max_dt then
       local x,y,z=(sample.x-previous.x)/dt,(sample.y-previous.y)/dt,(sample.z-previous.z)/dt
       if finite(x) and finite(y) and finite(z) and math.abs(x)<=5000 and math.abs(y)<=5000 and math.abs(z)<=5000 then velocity={x=x,y=y,z=z}end
@@ -152,7 +173,7 @@ function M.new(o)
      end
     end
    end
-   if previous and t==previous.last_time then
+   if not c.real_time_motion and previous and t==previous.last_time then
     if previous.sector~=sample.sector_macro or previous.local_sector_key~=sample.local_sector_key then
      e.previous={sector=sample.sector_macro,local_sector_key=sample.local_sector_key,time=t,last_time=t,
       x=sample.x,y=sample.y,z=sample.z,orientation=copy_orientation(sample.orientation)}
@@ -163,12 +184,29 @@ function M.new(o)
    if e.sent_sector and e.sent_sector~=sample.sector_macro then velocity=nil;angular_rate=nil end
    local v={version=c.include_orientation and 2 or 1,epoch=c.epoch,generation=c.generation,index=e.row.index,sequence=e.sequence+1,
     sector_macro=sample.sector_macro,source_time=t,x=sample.x,y=sample.y,z=sample.z,velocity=velocity}
-   if c.include_orientation then v.orientation=sample.orientation;v.angular_rate=angular_rate end
+   if c.real_time_motion then
+    v.version=3
+    v.velocity=nil
+    v.capture_time=capture_time
+    v.real_velocity=velocity
+   elseif c.include_orientation then v.orientation=sample.orientation;v.angular_rate=angular_rate end
    assert(check() and state=='pending')
    result=v
-   last_game=t;e.last_emitted_time=t;e.sequence=e.sequence+1;e.sent_sector=sample.sector_macro;e.sent_local_sector_key=sample.local_sector_key;e.next_due=last_clock+c.interval
-   if not previous or previous.sector~=sample.sector_macro or previous.local_sector_key~=sample.local_sector_key or t-previous.time>=c.min_dt then
-    e.previous={sector=sample.sector_macro,local_sector_key=sample.local_sector_key,time=t,last_time=t,x=sample.x,y=sample.y,z=sample.z,orientation=copy_orientation(sample.orientation)}
+   last_game=t
+   e.last_emitted_time=t
+   if c.real_time_motion then
+    last_capture_after=capture_time
+    e.last_capture_time=capture_time
+   end
+   e.sequence=e.sequence+1
+   e.sent_sector=sample.sector_macro
+   e.sent_local_sector_key=sample.local_sector_key
+   e.next_due=last_clock+c.interval
+   if not previous or previous.sector~=sample.sector_macro or
+      previous.local_sector_key~=sample.local_sector_key or rate_interval_seconds>=c.min_dt then
+    e.previous={capture_time=capture_time,sector=sample.sector_macro,
+     local_sector_key=sample.local_sector_key,time=t,last_time=t,
+     x=sample.x,y=sample.y,z=sample.z,orientation=copy_orientation(sample.orientation)}
    else previous.last_time=t end
    pending=nil;state='ready'
   end)
@@ -195,6 +233,7 @@ end
 function M.new_x4(c)
  if type(c)~='table' or c.enabled~=true then return nil,'disabled' end
  local frozen={};for k,v in pairs(c)do frozen[k]=v end;c=frozen
+ if c.real_time_motion then assert(type(c.capture_clock)=='function') end
  assert(type(c.descriptor)=='table' and type(c.descriptor.new_x4)=='function')
  assert(type(c.resolve)=='table' and type(c.resolve.actor_u64)=='function' and c.resolve==X4LAN_RESOLVE_STRING)
  assert(type(c.expected_save_path)=='string' and type(c.guard)=='function' and type(c.binding_guard)=='function' and type(c.fault)=='function'
@@ -247,6 +286,7 @@ function M.new_x4(c)
  opts.reader_factory=function(row,actor,request)
   return new_descriptor({enabled=true,epoch=c.epoch,request_id=request,timeout=c.timeout,
    row=row,actor=actor,expected_save_path=c.expected_save_path,guard=c.guard,include_local_sector=true,include_orientation=c.include_orientation,
+   include_capture_time=c.real_time_motion,capture_clock=c.capture_clock,
    saved_baseline=row.classification=='saved_baseline' and c.saved_baseline_limit or nil})
  end
  return M.new(opts)

@@ -153,7 +153,7 @@ class ExperimentalTCPClientAuthorityMotion:
                 if answer['sample'] is None:return answer['sample_sha256'] is None
                 try:
                     sample=motion_value(answer['sample']);digest=motion_digest(sample)
-                    return (answer['sample_sha256']==digest and sample['epoch']==self._grant['epoch'] and
+                    return (sample['version'] in (1, 2) and answer['sample_sha256']==digest and sample['epoch']==self._grant['epoch'] and
                             sample['generation']==self._grant['generation'] and sample['index']==self._grant['index'] and
                             sample['sector_macro']==self._grant['sector_macro'] and sample['sequence']==self._last_sequence+1 and
                             (self._last_time is None and sample['velocity'] is None or

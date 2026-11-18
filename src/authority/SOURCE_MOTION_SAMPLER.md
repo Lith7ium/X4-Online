@@ -129,3 +129,14 @@ not native X4 velocity. Tests exercise the Lua owners with simulated X4 and
 transport. The recovery installer and supervisor do not yet expose this option,
 and the diagnostic has not been run natively or demonstrated smooth movement,
 cross-process identity or frame equivalence, or velocity delivery to a client.
+
+The opt-in `real_time_motion=true` sampler produces position-only version 3
+samples. `source_time` remains source game time; `capture_time` is the explicit
+monotonic capture clock read after the pose, in seconds. `real_velocity` is
+metres per capture-clock second, or null when unknown. Equal game timestamps are
+allowed, while capture timestamps must strictly increase per track, including
+across baseline resets. A first sample, frame change, or unsuitable interval
+has unknown rate. Version 3 cannot be combined with `include_orientation`.
+The caller of `new_x4` must explicitly provide `capture_clock`; the transport
+and playback paths do not yet support this version. Native pause guards remain
+in force. Versions 1 and 2 retain their existing game-second rates.

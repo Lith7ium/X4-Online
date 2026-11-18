@@ -21,6 +21,8 @@ _MAX = 9007199254740991
 _COMMON = {'version', 'epoch', 'generation', 'index', 'sequence'}
 _SNAPSHOT = _COMMON | {'sector_macro', 'source_time', 'x', 'y', 'z', 'velocity'}
 _SNAPSHOT_V2 = _SNAPSHOT | {'orientation', 'angular_rate'}
+_SNAPSHOT_V3 = _COMMON | {'sector_macro', 'source_time', 'capture_time',
+                          'x', 'y', 'z', 'real_velocity'}
 
 
 def motion_value(value, *, despawn=False):
@@ -28,9 +30,10 @@ def motion_value(value, *, despawn=False):
     if type(despawn) is not bool or type(value) is not dict:
         raise ValueError('invalid motion fields')
     version = value.get('version')
-    if type(version) is not int or version not in (1, 2) or (despawn and version != 1):
+    if type(version) is not int or version not in (1, 2, 3) or (despawn and version != 1):
         raise ValueError('invalid motion version')
-    expected = _COMMON if despawn else (_SNAPSHOT if version == 1 else _SNAPSHOT_V2)
+    snapshots = {1: _SNAPSHOT, 2: _SNAPSHOT_V2, 3: _SNAPSHOT_V3}
+    expected = _COMMON if despawn else snapshots[version]
     if set(value) != expected:
         raise ValueError('invalid motion fields')
     if any(type(value[k]) is not str or not _TOKEN.fullmatch(value[k]) for k in ('epoch', 'generation')):
@@ -46,7 +49,9 @@ def motion_value(value, *, despawn=False):
             raise ValueError('invalid motion frame')
         if not number(value['source_time'], 0, 1e12) or any(not number(value[k], -1e7, 1e7) for k in ('x','y','z')):
             raise ValueError('invalid motion sample')
-        vel=value['velocity']
+        if version == 3 and not number(value['capture_time'], 0, 1e12):
+            raise ValueError('invalid motion capture time')
+        vel = value['real_velocity'] if version == 3 else value['velocity']
         if vel is not None and (type(vel) is not dict or set(vel)!={'x','y','z'} or
                 any(not number(vel[k], -5000, 5000) for k in ('x','y','z'))):
             raise ValueError('invalid motion rate')
@@ -63,6 +68,39 @@ def motion_value(value, *, despawn=False):
                     any(not number(angular_rate[k], -2 * math.pi, 2 * math.pi) for k in axes)):
                 raise ValueError('invalid angular rate')
     return copy.deepcopy(value)
+
+
+def check_motion_progress(value, previous):
+    """Check validated snapshots' clock, version and frame progression.
+
+    ``previous`` is the prior validated snapshot, or None for a new lifetime.
+    Sequence ordering remains the caller's responsibility.
+    """
+    if previous is None:
+        return
+    if value['version'] != previous['version']:
+        raise ValueError('motion snapshot version changed within lifetime')
+    previous_time = previous['source_time']
+    if value['version'] == 3:
+        if value['source_time'] < previous_time:
+            raise ValueError('source game time regressed')
+        if value['capture_time'] <= previous['capture_time']:
+            raise ValueError('non-monotone capture time')
+        velocity = value['real_velocity']
+    else:
+        if value['source_time'] <= previous_time:
+            raise ValueError('non-monotone source time')
+        velocity = value['velocity']
+    if value['sector_macro'] != previous['sector_macro'] and velocity is not None:
+        raise ValueError('frame transition requires unknown velocity')
+
+
+def _check_snapshot_progress(value, state):
+    previous = None
+    if state['version'] is not None:
+        previous = {'version': state['version'], 'source_time': state['time'],
+                    'capture_time': state['capture_time'], 'sector_macro': state['frame']}
+    check_motion_progress(value, previous)
 
 
 def motion_digest(value, *, despawn=False):
@@ -112,7 +150,8 @@ class ExperimentalTCPMotion:
         if current is not None and not self._tracks[current]['closed']:
             self._failed=True;self._delivery._failed=True;self._delivery._host._failed=True
             raise ValueError('previous lifetime is still active')
-        self._tracks[key]={'sequence':0,'time':None,'sent':None,'frame':None,'closed':False,'peer_frames':{},'peer_samples':{}}
+        self._tracks[key]={'sequence':0,'time':None,'sent':None,'frame':None,'closed':False,
+                           'version':None,'capture_time':None,'peer_frames':{},'peer_samples':{}}
         self._current[(epoch,index)]=key
 
     def send(self, raw, *, despawn=False, guard=None, recipients=None, _source=None):
@@ -135,12 +174,11 @@ class ExperimentalTCPMotion:
             self._failed=True;d._failed=True;host._failed=True
             raise ValueError('unknown, stale or despawned motion')
         if not despawn:
-            if state['time'] is not None and value['source_time']<=state['time']:
+            try:
+                _check_snapshot_progress(value, state)
+            except ValueError:
                 self._failed=True;d._failed=True;host._failed=True
-                raise ValueError('non-monotone source time')
-            if state['frame'] is not None and value['sector_macro']!=state['frame'] and value['velocity'] is not None:
-                self._failed=True;d._failed=True;host._failed=True
-                raise ValueError('frame transition requires unknown velocity')
+                raise
             if state['sent'] is not None and now-state['sent']<self._min_interval:
                 raise ValueError('motion rate limited')
         try:
@@ -216,6 +254,8 @@ class ExperimentalTCPMotion:
             state['sequence']=value['sequence'];state['sent']=time.monotonic();state['closed']=despawn
             if not despawn:
                 state['time']=value['source_time'];state['frame']=value['sector_macro']
+                state['version'] = value['version']
+                state['capture_time'] = value.get('capture_time')
                 for h in selected:
                     peer=('peer_'+str(h),incarnations[h]);state['peer_frames'][peer]=value['sector_macro']
                     state['peer_samples'][peer]=(value['sequence'],motion_digest(value))
@@ -248,10 +288,7 @@ class ExperimentalTCPMotion:
         state=self._tracks.get(key)
         if not state or state['closed'] or value['sequence']<=state['sequence']:
             raise ValueError('unknown, closed or stale motion track')
-        if state['time'] is not None and value['source_time']<=state['time']:
-            raise ValueError('non-monotone source time')
-        if state['frame'] is not None and value['sector_macro']!=state['frame'] and value['velocity'] is not None:
-            raise ValueError('frame transition requires unknown velocity')
+        _check_snapshot_progress(value, state)
         handles,peers=d._peers();incarnations=dict(d._incarnations)
         if not handles: raise RuntimeError('no admitted motion recipients')
         full={('peer_'+str(h),incarnations[h]):h for h in handles}
@@ -300,6 +337,8 @@ class ExperimentalTCPMotion:
             entries.append((conn,peer,key,data,expected,accepted,discarded,_guard))
         survivors=latest.enqueue(entries)
         state['sequence']=value['sequence'];state['time']=value['source_time'];state['frame']=value['sector_macro']
+        state['version'] = value['version']
+        state['capture_time'] = value.get('capture_time')
         for h in selected:
             if peers[h][0] in survivors:reserved[('peer_'+str(h),incarnations[h])]=value['sector_macro']
         self._preflight=None

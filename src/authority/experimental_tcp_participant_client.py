@@ -159,7 +159,7 @@ class ExperimentalTCPParticipantClient:
     def _motion(self, command):
         # The callback must bind the portable identity to the local X4 actor;
         # this adapter itself cannot establish a game binding.
-        from .experimental_tcp_motion import motion_value, motion_digest
+        from .experimental_tcp_motion import check_motion_progress, motion_value, motion_digest
         required_fields = {'version', 'kind', 'connection_handle', 'session_epoch',
                            'incarnation', 'request_id', 'sample'}
         if (self._apply_motion is None or set(command) != required_fields or
@@ -188,10 +188,9 @@ class ExperimentalTCPParticipantClient:
         elif prior_track['closed'] or sample['sequence'] <= prior_track['sequence']:
             raise ValueError('stale motion lifetime')
         if not is_despawn and prior_track:
-            if sample['source_time'] <= prior_track['time']:
-                raise ValueError('non-monotone motion time')
-            if sample['sector_macro'] != prior_track['frame'] and sample['velocity'] is not None:
-                raise ValueError('frame transition requires unknown velocity')
+            previous = {'version': prior_track['version'], 'source_time': prior_track['time'],
+                        'capture_time': prior_track['capture_time'], 'sector_macro': prior_track['frame']}
+            check_motion_progress(sample, previous)
 
         self._quiet()
         self._motion_incarnation = command['incarnation']
@@ -206,6 +205,8 @@ class ExperimentalTCPParticipantClient:
             raise RuntimeError('motion sample not accepted')
         self._motion_preflight = None
         self._motion_tracks[track_key] = {'sequence': sample['sequence'], 'closed': is_despawn,
+            'version': None if is_despawn else sample['version'],
+            'capture_time': None if is_despawn else sample.get('capture_time'),
             'time': None if is_despawn else sample['source_time'],
             'frame': None if is_despawn else sample['sector_macro'],
             'digest': None if is_despawn else sample_digest}
@@ -324,7 +325,7 @@ class ExperimentalTCPParticipantClient:
         if sample is not None:
             if motion_digest(raw_sample) != digest:
                 raise ValueError('authority sample changed during guard')
-            if (sample['epoch'] != self._authority_grant['epoch'] or
+            if (sample['version'] not in (1, 2) or sample['epoch'] != self._authority_grant['epoch'] or
                     sample['generation'] != self._authority_grant['generation'] or
                     sample['index'] != self._authority_grant['index'] or
                     sample['sector_macro'] != self._authority_grant['sector_macro'] or

@@ -13,6 +13,8 @@ function M.new(o)
  assert(token(o.epoch) and token(o.request_id) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
  assert(o.include_local_sector==nil or type(o.include_local_sector)=='boolean')
  assert(o.include_orientation==nil or type(o.include_orientation)=='boolean')
+ assert(o.include_capture_time==nil or type(o.include_capture_time)=='boolean')
+ if o.include_capture_time then assert(type(o.capture_clock)=='function') end
  assert(type(o.row)=='table' and o.row.epoch==o.epoch and integer(o.row.index) and o.actor~=nil)
  if o.saved_baseline~=nil then
   assert(integer(o.saved_baseline) and o.row.index<=o.saved_baseline and o.row.classification=='saved_baseline' and o.row.sequence==nil)
@@ -77,6 +79,8 @@ function M.new(o)
       not finite(sample.game_after) or sample.game_before<query_game or sample.game_after<sample.game_before) then
    return fail('snapshot_invalid')
   end
+  if o.include_capture_time and (not finite(sample.capture_before) or not finite(sample.capture_after) or
+      sample.capture_after<sample.capture_before or sample.capture_after>1e12) then return fail('capture_clock_invalid') end
   if o.include_orientation then
    for _,axis in ipairs({'yaw','pitch','roll'}) do
     if not coord(sample[axis]) or math.abs(sample[axis])>2*math.pi then return fail('orientation_invalid') end
@@ -93,6 +97,9 @@ function M.new(o)
    game_before_request=query_game,game_before_pose=sample.game_before,game_after_pose=sample.game_after,
    sector_identity_proven=false,descriptor_atomic=false,birth_confirmed=false,delivery_confirmed=false}
   -- The key is meaningful only inside this exact X4 process; it must never be sent.
+  if o.include_capture_time then
+   result.capture_before_pose=sample.capture_before;result.capture_after_pose=sample.capture_after
+  end
   if o.include_local_sector then result.local_sector_key=sector_key end
   if o.include_orientation then result.yaw=sample.yaw;result.pitch=sample.pitch;result.roll=sample.roll end
   return true,result
@@ -106,6 +113,9 @@ end
 
 function M.new_x4(cfg)
  if type(cfg)~='table' or cfg.enabled~=true then return nil,'disabled' end
+ local frozen={};for k,v in pairs(cfg) do frozen[k]=v end;cfg=frozen
+ assert(cfg.include_capture_time==nil or type(cfg.include_capture_time)=='boolean')
+ if cfg.include_capture_time then assert(type(cfg.capture_clock)=='function') end
  local saved_baseline=cfg.saved_baseline~=nil
  assert(type(cfg.guard)=='function' and type(cfg.expected_save_path)=='string' and cfg.expected_save_path:sub(1,1)=='/'
   and cfg.expected_save_path:sub(-11)=='/45841/save')
@@ -156,11 +166,14 @@ function M.new_x4(cfg)
  o.snapshot=function(actor,sector_hex)
   local a=X4LAN_RESOLVE_STRING.actor_u64(actor);local s=X4LAN_RESOLVE_STRING.parse_hex(sector_hex)
   assert(a and s and o.guard() and live(a,s))
+  local capture_before=cfg.include_capture_time and cfg.capture_clock() or nil
   local before=tonumber(C.GetCurrentGameTime());local p=C.GetObjectPositionInSector(a)
   local after=tonumber(C.GetCurrentGameTime())
+  local capture_after=cfg.include_capture_time and cfg.capture_clock() or nil
   assert(o.guard() and live(a,s))
   return {sector_local=component_key(s),x=tonumber(p.x),y=tonumber(p.y),z=tonumber(p.z),
-   yaw=tonumber(p.yaw),pitch=tonumber(p.pitch),roll=tonumber(p.roll),game_before=before,game_after=after}
+   yaw=tonumber(p.yaw),pitch=tonumber(p.pitch),roll=tonumber(p.roll),game_before=before,game_after=after,
+   capture_before=capture_before,capture_after=capture_after}
  end
  return M.new(o)
 end

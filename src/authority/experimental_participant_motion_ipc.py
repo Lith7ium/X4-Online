@@ -98,6 +98,8 @@ class ExperimentalParticipantMotionIPC:
         try:
             if despawn is not False:raise ValueError('X4 despawn binding unavailable')
             value=motion_value(raw)
+            if value['version'] == 3:
+                raise ValueError('real-time position motion binding is not implemented')
             if value['epoch']!=self._epoch or value['generation']!=self._generation:
                 raise ValueError('foreign motion identity')
             if self._next>=0xffffffffffffffff:raise RuntimeError('motion request capacity')

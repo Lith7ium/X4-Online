@@ -59,18 +59,59 @@ worktree. Run `python .local/clock-basis/measure.py` from that worktree to
 regenerate the complete rows. These ignored artifacts are local and are not
 part of this report's commit.
 
-## Decision pending
+## Approved direction (2026-11-18)
 
-Two compatible directions need the user's decision before implementation:
+The user approved retaining source game time and adding a monotonic source
+capture timestamp with explicitly real-second motion rates. The alternative
+of estimating clock progression only from arrival times was not selected.
+The performance comparison continued with the old protocol and is now complete;
+it did not test the new timing contract.
 
-1. Retain the existing game-time fields and add an explicitly versioned source
-   monotonic capture time plus a clearly defined real-second rate or adapter.
-   This supplies an additional timing anchor without requiring equal absolute
-   clock origins, but changes the protocol and requires lifecycle handling.
-2. Keep the wire fields unchanged and estimate source-game-time progression
-   from their values and local arrival times. This avoids a wire change, but
-   queueing, jitter, and source stalls are not reliably distinguishable without
-   another timing anchor; uncertain prediction would need conservative bounds.
+Implementation uses a distinct position-only snapshot version 3. `source_time`
+remains X4 game seconds; `capture_time` is read adjacent to the pose using an
+explicit source monotonic clock; `real_velocity` is metres per real second.
+The distinct field name prevents treating legacy game-second velocity as a
+real-second rate. Versions 1 and 2 retain their original schemas and units.
+A track cannot switch versions in place. Version 3 capture time must increase,
+while game time may stay equal but cannot regress. Equal game time does not
+imply a stationary pose: rates derive from observed position differences.
 
-Neither direction has been implemented or chosen. This observation does not
-by itself establish the best network clock or prediction policy.
+First samples, frame changes and unusable derivative intervals carry an unknown
+rate. Capture origins need not equal client clock origins. Source lifecycle and
+generation boundaries still fence clock resets. Actual X4 capture-clock behavior,
+client playback integration and Internet behavior require their own evidence;
+schema and synthetic-clock checks alone cannot establish those outcomes.
+
+## First implementation checkpoint
+
+The position-only V3 contract, pose-adjacent capture, real-second derivative,
+Lua source encoder, Python source bridge and generic TCP receiver are now
+implemented. [The contract and integration boundary](../docs/AUTHORITY-MOTION-V3.md)
+separate this support from native playback, which still refuses V3. The source
+session does not opt in automatically. Shared schema acceptance required
+explicit refusal in older client-authority paths to prevent accidental unit
+mixing. A track pins its snapshot version.
+
+Focused validation, without a native X4 launch:
+
+- The new schema/progression/transport checks and existing motion/latest tests
+  passed together: 54 tests. They cover exact fields, both-clock digests,
+  source-clock stalls/regressions, version switches and legacy native-apply refusal.
+- Two sampler wrappers passed; the pure sampler wrapper passed again after the
+  independent review added cross-track and hidden capture-before regression cases.
+  Synthetic game clocks at 0, 0.5, 1 and 2 times the capture rate preserve the
+  capture-based derivative. These are sampler checks, not playback checks.
+- Five descriptor tests passed, including capture-enabled fake native ABI calls,
+  callback bracketing/copying and invalid callback rejection. No game was started.
+- Source V3, legacy Lua UDP/TCP and encoder checks now pass (five test methods).
+  The first V3 integration exposed the receiver's old strict game-time test;
+  it was corrected. The final retry also corrected a new test's tuple-unpacking
+  mistake. The received samples preserve unknown rates and real-second rates.
+- Three focused tests passed for explicit native-binding/legacy-authority refusal;
+  four existing receiver regressions passed for snapshots/despawn, recipient
+  subsets, reconnect identity and callback mutation.
+
+Independent reviews covered registry append validation, capture ordering and
+source/receiver clock handling. No native cadence, Windows or Internet result
+is claimed. The full suite was not repeated; its previously recorded one error
+and 26 skips remain unresolved and this checkpoint is not whole-project acceptance.

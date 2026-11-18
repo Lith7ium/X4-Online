@@ -41,6 +41,22 @@ do
   x=1,y=2,z=3,orientation={yaw=1,pitch=2,roll=3},velocity={x=4,y=5,z=6}}))
  assert(x:state()=='failed' and #out==2)
 end
+-- V3 preserves real-clock rates, including unknown and measured zero.
+local function v3()return {version=3,epoch=epoch,generation=gen,index=2,sequence=1,sector_macro='sector_a',source_time=42,capture_time=8,x=1,y=2,z=3}end
+for _,case in ipairs({{nil,'-|-|-'},{{x=0,y=0,z=0},'0|0|0'},{{x=1,y=-2,z=3},'1|-2|3'}})do
+ local x,input,out=rig();bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|1';assert(x:tick())
+ local sample=v3();sample.real_velocity=case[1];assert(x:complete(sample))
+ assert(out[#out]=='S|'..lease..'|'..attempt..'|SAMPLE3'..suffix..'|1|2|1|sector_a|42|8|1|2|3|'..case[2])
+end
+for _,alter in ipairs({
+ function(v)v.capture_time=nil end,function(v)v.capture_time=0/0 end,function(v)v.capture_time=-1 end,
+ function(v)v.velocity={x=0,y=0,z=0} end,function(v)v.extra=true end,
+ function(v)v.real_velocity={x=0,y=0} end,function(v)v.real_velocity={x=0,y=0,z=0,extra=1} end,
+ function(v)v.orientation={yaw=0,pitch=0,roll=0} end,
+ function(v)v.version=1;v.velocity=nil;v.real_velocity={x=0,y=0,z=0} end})do
+ local x,input,out=rig();bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|1';assert(x:tick())
+ local sample=v3();alter(sample);assert(not x:complete(sample) and x:state()=='failed' and #out==2)
+end
 do local x,input,out=rig();bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|2';assert(not x:tick())end
 do local x,input,out,clock=rig();bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|1';assert(x:tick());clock(6);assert(not x:tick())end
 do local x,input,out=rig();bind(x,input,out);input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|1';assert(x:tick());input[1]='P|'..lease..'|'..attempt..'|PULL'..suffix..'|2';assert(not x:tick())end

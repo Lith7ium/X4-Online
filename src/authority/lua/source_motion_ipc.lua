@@ -168,11 +168,25 @@ function M.new(c)
    local fields
    if sample==nil then fields={'NO_SAMPLE',c.epoch,c.generation,string.format('%.0f',request)}
    else
-    assert(type(sample)=='table' and getmetatable(sample)==nil and (sample.version==1 or sample.version==2) and sample.epoch==c.epoch and sample.generation==c.generation
+    assert(type(sample)=='table' and getmetatable(sample)==nil and (sample.version==1 or sample.version==2 or sample.version==3) and sample.epoch==c.epoch and sample.generation==c.generation
      and integer(sample.index) and integer(sample.sequence) and type(sample.sector_macro)=='string' and #sample.sector_macro<=128
      and sample.sector_macro:match('^[A-Za-z0-9_]+$') and finite(sample.source_time) and sample.source_time>=0 and sample.source_time<=1e12)
     for _,k in ipairs({'x','y','z'})do assert(finite(sample[k]) and math.abs(sample[k])<=1e7)end
-    local v=sample.velocity
+    local real_time = sample.version == 3
+    local v = sample.velocity
+    if real_time then
+     assert(finite(sample.capture_time) and sample.capture_time >= 0 and sample.capture_time <= 1e12)
+     local allowed = {version=true,epoch=true,generation=true,index=true,sequence=true,
+      sector_macro=true,source_time=true,capture_time=true,x=true,y=true,z=true,real_velocity=true}
+     for key in pairs(sample) do assert(allowed[key], 'unexpected real-time sample field') end
+     v = sample.real_velocity
+     if v ~= nil then
+      assert(type(v)=='table' and getmetatable(v)==nil)
+      for key in pairs(v) do assert(key=='x' or key=='y' or key=='z', 'unexpected real-time rate field') end
+     end
+    else
+     assert(sample.capture_time == nil and sample.real_velocity == nil, 'mixed motion clock versions')
+    end
     if v~=nil then assert(type(v)=='table' and getmetatable(v)==nil);for _,k in ipairs({'x','y','z'})do assert(finite(v[k]) and math.abs(v[k])<=5000)end end
     local angular=sample.angular_rate
     if sample.version==2 then
@@ -185,8 +199,10 @@ function M.new(c)
       for _,k in ipairs({'yaw','pitch','roll'})do assert(finite(angular[k]) and math.abs(angular[k])<=2*math.pi)end
      end
     else assert(sample.orientation==nil and angular==nil) end
-    fields={sample.version==2 and 'SAMPLE2' or 'SAMPLE',c.epoch,c.generation,string.format('%.0f',request),string.format('%.0f',sample.index),
+    local sample_kind = real_time and 'SAMPLE3' or (sample.version==2 and 'SAMPLE2' or 'SAMPLE')
+    fields={sample_kind,c.epoch,c.generation,string.format('%.0f',request),string.format('%.0f',sample.index),
      string.format('%.0f',sample.sequence),sample.sector_macro,string.format('%.17g',sample.source_time)}
+    if real_time then fields[#fields+1] = string.format('%.17g', sample.capture_time) end
     for _,k in ipairs({'x','y','z'})do fields[#fields+1]=string.format('%.17g',sample[k])end
     if sample.version==2 then for _,k in ipairs({'yaw','pitch','roll'})do fields[#fields+1]=string.format('%.17g',sample.orientation[k])end end
     for _,k in ipairs({'x','y','z'})do fields[#fields+1]=v and string.format('%.17g',v[k]) or '-'end

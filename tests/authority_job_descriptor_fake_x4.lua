@@ -1,4 +1,4 @@
-local ffi=require('ffi');ffi.cdef[[void test_context(bool);]]
+local ffi=require('ffi');ffi.cdef[[void test_context(bool);int test_pose_reads(void);]]
 local fake=ffi.load(assert(arg[1]),true);fake.test_context(true)
 local epoch,rid=string.rep('a',32),string.rep('b',32)
 local issued={};local t=1
@@ -16,6 +16,28 @@ end
 local app=M.new_x4(cfg);assert(app:start());assert(issued[1].index==2)
 local ok,row=app:response(response('0x20000000000001'));assert(ok and row.x==1 and row.sector_local==nil)
 assert(not row.sector_identity_proven and not row.descriptor_atomic and not row.birth_confirmed)
+-- Capture readings surround the actual fake-ABI pose call and survive the reader.
+local reads_before=fake.test_pose_reads();local capture_calls=0
+cfg.include_capture_time=true
+cfg.capture_clock=function()
+ capture_calls=capture_calls+1
+ assert(fake.test_pose_reads()==reads_before+capture_calls-1)
+ return 20+capture_calls
+end
+app=M.new_x4(cfg)
+-- Replacing the caller's config after construction cannot replace the clock.
+cfg.capture_clock=function()error('foreign clock')end
+assert(app:start());ok,row=app:response(response('0x20000000000001'))
+assert(ok and capture_calls==2 and row.capture_before_pose==21 and row.capture_after_pose==22)
+assert(fake.test_pose_reads()==reads_before+1)
+for _,values in ipairs({{0/0,2},{2,1}}) do
+ local count=0;cfg.capture_clock=function()count=count+1;return values[count]end
+ app=M.new_x4(cfg);assert(app:start());assert(not app:response(response('0x20000000000001')))
+end
+cfg.capture_clock=nil;assert(not pcall(M.new_x4,cfg))
+cfg.capture_clock=function()error('foreign clock failed')end
+app=M.new_x4(cfg);assert(app:start());assert(not app:response(response('0x20000000000001')))
+cfg.include_capture_time=nil;cfg.capture_clock=nil
 -- Once represented as a double at or above 2^53, a source actor is unsafe.
 issued={};cfg.actor=9007199254740992
 app=M.new_x4(cfg);assert(not app:start());assert(#issued==0)

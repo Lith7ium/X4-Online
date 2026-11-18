@@ -1,5 +1,30 @@
 # X4 multiplayer: handover for Astra
 
+Current continuation (2026-11-18): the unprofiled `2911ee82` attempt failed
+in registry-log observation after one source sample and successful initial
+alignment (zero error); no host ACK or running movement was proven. Cleanup,
+source/code/Steam preservation and the separate no-X4 process scan passed.
+The single sample cannot establish a cadence improvement. A complete unrelated
+append between two registry captures is a reproducible false-positive mechanism;
+the original failing snapshots were not retained. Fix that case without weakening
+prefix/identity/receipt validation before another native attempt. The correction
+is committed at `80371717`; six focused tests pass. No new native attempt followed.
+
+The user has now **approved** additional monotonic capture time and explicit
+real-second rates, retaining game time. Historical pending-clock statements
+below are superseded. Position-only v3 schema, source capture and transport are
+implemented with focused synthetic and real-loopback checks. Native BIND/playback
+and client-authority paths explicitly refuse V3. The next implementation step is
+BIND3 and capture-time playback, followed by the opt-in source-session wiring;
+do not retry the old native performance fixture unchanged. See
+[the implementation evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#first-implementation-checkpoint).
+Native/client gameplay integration remains unproven. GPU-free server work stays deferred. Goal remains active and the full
+Linux/Windows Internet gameplay objective remains unmet.
+See [the latest native result](AUTHORITY-CLIENT-PLAYBACK-20261117.md#unprofiled-process-helper-comparison-2026-11-18)
+and [the approved clock direction](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#approved-direction-2026-11-18).
+
+The following entries preserve prior checkpoints and their then-current next steps.
+
 The user explicitly resumed work on 2026-11-18 after checkpoint `b361ebb4`;
 the goal is active again. The earlier pause instructions below are historical.
 The bounded collection profile is now retained. It attributes the largest

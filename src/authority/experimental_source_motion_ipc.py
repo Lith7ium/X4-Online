@@ -13,13 +13,16 @@ import socket
 import threading
 import time
 from .experimental_source_job_bridge import _SOCKET_OWNERS, _SOCKET_LOCK
-from .experimental_tcp_motion import ExperimentalTCPMotion, motion_value, motion_digest
+from .experimental_tcp_motion import (
+    ExperimentalTCPMotion, check_motion_progress, motion_value, motion_digest,
+)
 from .experimental_tcp_participants import ExperimentalTCPParticipants
 
 _TOKEN=re.compile(r'[0-9a-f]{32}\Z')
 _NUMBER=re.compile(r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z')
 _MAX_PACKET=768
 _MAX=9007199254740991
+_SAMPLE_FORMATS = {'SAMPLE': (1, 17), 'SAMPLE2': (2, 23), 'SAMPLE3': (3, 18)}
 
 class ExperimentalSourceMotionIPC:
     """One owned source request at a time; optional replaceable TCP delivery."""
@@ -378,43 +381,59 @@ class ExperimentalSourceMotionIPC:
             self._last_pull = time.monotonic()
             self._state = 'ready'
             return None
-        full_pose = len(parts) == 23 and parts[:7] == prefix + ['SAMPLE2', self._epoch, self._generation, request]
-        if not full_pose and (len(parts) != 17 or parts[:7] != prefix + ['SAMPLE', self._epoch, self._generation, request]):
+        packet_kind = parts[3] if len(parts) > 3 else None
+        packet_format = _SAMPLE_FORMATS.get(packet_kind)
+        if packet_format is None:
             raise ValueError('foreign source motion response')
+        version, field_count = packet_format
+        expected_header = prefix + [packet_kind, self._epoch, self._generation, request]
+        if len(parts) != field_count or parts[:7] != expected_header:
+            raise ValueError('foreign source motion response')
+        full_pose = version == 2
+        real_time = version == 3
         index, sequence = parts[7:9]
         if not re.fullmatch(r'[1-9][0-9]*', index) or not re.fullmatch(r'[1-9][0-9]*', sequence):
             raise ValueError('invalid motion identity')
         if int(index) not in self._indices:
             raise ValueError('unconfirmed source motion index')
-        time_and_position_fields = parts[10:14]
+        position_start = 12 if real_time else 11
+        time_and_position_fields = parts[10:11] + parts[position_start:position_start + 3]
+        capture_fields = parts[11:12] if real_time else []
         orientation_fields = parts[14:17] if full_pose else []
-        velocity_fields = parts[17:20] if full_pose else parts[14:17]
+        velocity_start = 17 if full_pose else position_start + 3
+        velocity_fields = parts[velocity_start:velocity_start + 3]
         angular_fields = parts[20:23] if full_pose else []
-        if full_pose and ((velocity_fields == ['-', '-', '-']) != (angular_fields == ['-', '-', '-'])):
+        unknown_velocity = velocity_fields == ['-', '-', '-']
+        if full_pose and (unknown_velocity != (angular_fields == ['-', '-', '-'])):
             raise ValueError('incomplete source motion rate')
-        numeric_fields = time_and_position_fields + orientation_fields + ([] if velocity_fields == ['-', '-', '-'] else velocity_fields + angular_fields)
+        numeric_fields = time_and_position_fields + capture_fields + orientation_fields
+        if not unknown_velocity:
+            numeric_fields += velocity_fields + angular_fields
         if any(len(item) > 32 or not _NUMBER.fullmatch(item) for item in numeric_fields):
             raise ValueError('invalid source motion numeric syntax')
         try:
             source_time, x, y, z = map(float, time_and_position_fields)
-            velocity = None if velocity_fields == ['-', '-', '-'] else dict(
+            velocity = None if unknown_velocity else dict(
                 zip(('x', 'y', 'z'), map(float, velocity_fields)))
         except ValueError:
             raise ValueError('invalid source motion number') from None
-        raw_sample = {'version': 2 if full_pose else 1, 'epoch': self._epoch, 'generation': self._generation,
+        raw_sample = {'version': version, 'epoch': self._epoch, 'generation': self._generation,
             'index': int(index), 'sequence': int(sequence), 'sector_macro': parts[9],
-            'source_time': source_time, 'x': x, 'y': y, 'z': z, 'velocity': velocity}
+            'source_time': source_time, 'x': x, 'y': y, 'z': z}
+        if real_time:
+            raw_sample['capture_time'] = float(capture_fields[0])
+            raw_sample['real_velocity'] = velocity
+        else:
+            raw_sample['velocity'] = velocity
         if full_pose:
             axes = ('yaw', 'pitch', 'roll')
             raw_sample['orientation'] = dict(zip(axes, map(float, orientation_fields)))
             raw_sample['angular_rate'] = None if velocity is None else dict(zip(axes, map(float, angular_fields)))
         sample = motion_value(raw_sample)
         previous = self._observed.get(sample['index'])
-        if previous is not None:
-            if sample['sequence'] <= previous['sequence'] or sample['source_time'] <= previous['time']:
-                raise ValueError('stale or non-monotone source motion sample')
-            if sample['sector_macro'] != previous['frame'] and sample['velocity'] is not None:
-                raise ValueError('source frame transition requires unknown velocity')
+        if previous is not None and sample['sequence'] <= previous['sequence']:
+            raise ValueError('stale or non-monotone source motion sample')
+        check_motion_progress(sample, previous)
         if self._validate_sample is not None:
             candidate = copy.deepcopy(sample)
             self._check(deadline, 'pulling')
@@ -442,8 +461,9 @@ class ExperimentalSourceMotionIPC:
             elif self._motion_call(self._motion.send, sample, guard=lambda: self._check(deadline, 'pulling') or True,
                                    recipients=selected) is not True:
                 raise RuntimeError('motion TCP not confirmed')
-        self._observed[sample['index']] = {'sequence': sample['sequence'], 'time': sample['source_time'],
-                                           'frame': sample['sector_macro']}
+        # Keep a detached sample so later callbacks cannot change the clock or
+        # frame baseline used to validate the next source observation.
+        self._observed[sample['index']] = copy.deepcopy(sample)
         self._quiet(deadline, 'pulling')
         self._last_pull = time.monotonic()
         self._state = 'ready'
