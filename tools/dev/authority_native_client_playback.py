@@ -1,8 +1,9 @@
 """Optional, pinned one-fixture playback for the independent native client.
 
-A trusted Python-only driver supplies a finite synthetic path. The worker owns
-only local motion UDP; it never polls the TCP client owner or native controller.
-This is internal client evidence, not a server or synchronized-world test.
+A trusted Python-only driver supplies a finite synthetic path or a bounded
+live input. The worker owns only local motion UDP; it never polls the TCP client
+owner or native controller. This is internal client evidence, not proof of a
+server or synchronized world.
 """
 import copy
 import hashlib

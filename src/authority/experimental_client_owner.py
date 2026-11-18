@@ -115,17 +115,23 @@ class ExperimentalClientOwner:
             return self._load.paused(attempt, paused)
 
     def activate(self, attempt, controller, *, participant_timeout=30,
-                 authority_grant=None, authority_guard=None, pull_authority_motion=None):
+                 authority_grant=None, authority_guard=None, pull_authority_motion=None,
+                 apply_motion=None):
         """Claim the observed load and transfer its socket to one participant.
 
         The caller establishes that the observations and controller belong to
         the same still-live X4 process. A failed or uncertain claim is not retried.
         Motion source lifetime, pause/drain and cleanup remain the caller's duty.
         When enabled, all three authority arguments must be supplied together.
+        An optional motion consumer runs on this owner's thread, using the
+        existing participant protocol. Its receipt confirms consumption only;
+        native movement needs separate evidence. It must bound its own work.
         """
         with self._operation('loading'):
             if self._offer is None:
                 raise RuntimeError('participant requires an offered connection')
+            if apply_motion is not None and not callable(apply_motion):
+                raise ValueError('motion consumer must be callable')
             checked_grant = None
             if any(value is not None for value in
                    (authority_grant, authority_guard, pull_authority_motion)):
@@ -147,7 +153,7 @@ class ExperimentalClientOwner:
                     conn, controller, enabled=True, epoch=self._offer.offer.world_epoch,
                     handle=self._offer.offer.connection_handle, timeout=participant_timeout,
                     authority_grant=checked_grant, authority_guard=authority_guard,
-                    pull_authority_motion=pull_authority_motion)
+                    pull_authority_motion=pull_authority_motion, apply_motion=apply_motion)
             except BaseException:
                 conn.close()
                 raise

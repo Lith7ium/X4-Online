@@ -105,7 +105,8 @@ def verify_receipts(path, ticket, marker):
         raise ValueError('client_receipts_changed')
 
 
-def observe_and_activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result, *, registry_check=None):
+def observe_and_activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result, *,
+                         registry_check=None, motion_consumer=None):
     """No owner load assertion is made until complete native evidence is checked."""
     result['phase'] = 'load_receipts'
     while True:
@@ -136,7 +137,9 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
                   admission_state='indeterminate')
     participant.loading = False  # activate may receive server participant traffic immediately.
     result['phase'] = 'claim'
-    owner.activate(attempt, participant, participant_timeout=min(30, marked.remaining(participant.deadline)))
+    motion_options = {} if motion_consumer is None else {'apply_motion': motion_consumer}
+    owner.activate(attempt, participant, participant_timeout=min(30, marked.remaining(participant.deadline)),
+                   **motion_options)
     guard(full=True)
     result['admission_state'] = 'accepted'
     participant.server_control = True
@@ -311,7 +314,9 @@ def run(args, *, playback_driver=None):
 
                 observe_and_activate(owner, participant, watch, ticket, bound.marker,
                     guard, verify_loaded, result,
-                    registry_check=playback.verify_registry if playback is not None else None)
+                    registry_check=playback.verify_registry if playback is not None else None,
+                    motion_consumer=(playback_driver.accept_motion
+                        if type(playback_driver) is native_playback.LiveSourceInput else None))
                 active_until = time.monotonic()+args.active_seconds
                 if active_until >= deadline:
                     raise TimeoutError('insufficient_active_budget')
@@ -369,6 +374,10 @@ def run(args, *, playback_driver=None):
                     except BaseException:
                         cleanup_errors.append('playback_cleanup_failed')
                     result['playback'] = dict(playback.evidence)
+                    # Joining can reveal a late worker/producer failure after
+                    # finish(). Keep it distinct from successful resource cleanup.
+                    if getattr(playback, 'failure', None) is not None:
+                        evidence_errors.append('playback_failed')
                 if participant is not None:
                     result.update(server_pause_confirmations=participant.confirmations['pause'],
                                   server_resume_confirmations=participant.confirmations['resume'])

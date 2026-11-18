@@ -102,6 +102,29 @@ class NativeClientTests(unittest.TestCase):
         finally:
             participant.close()
 
+    def test_motion_consumer_attached_after_checked_native_load(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory)/'log'
+            log.write_bytes(self.log_bytes())
+            events = []
+            owner = SimpleNamespace(poll=Mock(),
+                load_requested=lambda attempt: events.append('load'),
+                loaded_marker=lambda *args: events.append('marker'),
+                paused=lambda *args: events.append('paused'),
+                activate=Mock(side_effect=lambda *args, **kwargs: events.append('activate')))
+            participant = SimpleNamespace(enroll=Mock(), request=Mock(), deadline=time.monotonic()+10)
+            consumer = Mock()
+            native.observe_and_activate(owner, participant,
+                native.download.ReceiptWatch(log, self.ticket()), self.ticket(), 'd'*32,
+                lambda **kwargs: True, lambda: events.append('verified'), {},
+                registry_check=lambda: events.append('registry'), motion_consumer=consumer)
+            self.assertEqual(events, ['verified', 'registry', 'load', 'marker', 'paused',
+                                      'verified', 'registry', 'activate'])
+            self.assertIs(owner.activate.call_args.kwargs['apply_motion'], consumer)
+            consumer.assert_not_called()
+            self.assertFalse(participant.loading)
+            self.assertTrue(participant.server_control)
+
     def test_main_forwards_argv_and_python_only_driver(self):
         from contextlib import redirect_stdout
         import io
@@ -200,7 +223,7 @@ class NativeClientTests(unittest.TestCase):
     def test_failed_final_evidence_releases_only_fully_fenced_original_lock(self):
         # Use real lock creation/release against a fresh temporary path. All X4,
         # connection and worker behavior is simulated; never touch the host lock.
-        for scenario in ('clean', 'worker_uncertain', 'service_uncertain', 'native_uncertain',
+        for scenario in ('clean', 'late_failure', 'worker_uncertain', 'service_uncertain', 'native_uncertain',
                          'replaced_lock', 'changed_input', 'steam_changed'):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory); out = root/'new'
@@ -252,6 +275,8 @@ class NativeClientTests(unittest.TestCase):
                     def start(self, *args): raise AssertionError('already started')
                     def finish(self): return dict(self.evidence)
                     def records(self):
+                        if scenario == 'late_failure':
+                            return None
                         if scenario == 'changed_input':
                             (out/'case/home/.config/EgoSoft/X4/45841/config.xml').write_text('changed')
                         raise ValueError('native_playback_faulted')
@@ -260,6 +285,8 @@ class NativeClientTests(unittest.TestCase):
                             raise RuntimeError('native_playback_worker_not_joined')
                         self.evidence = dict(worker_joined=True, configuration_redacted=True, cleanup_confirmed=True,
                                              failure_code='native_playback_faulted')
+                        if scenario == 'late_failure':
+                            self.failure = RuntimeError('native_playback_worker_failed')
                         events.append('playback_redacted')
                 playback = Playback()
                 def activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result, **kwargs):
@@ -290,9 +317,10 @@ class NativeClientTests(unittest.TestCase):
                     stack.enter_context(patch.object(native.snapshot, 'LOCK_TARGET', lock_path))
                     result = native.run(args, playback_driver=lambda initial: [])
                 self.assertFalse(result['success'])
-                self.assertFalse(result['final_native_evidence_valid'])
-                self.assertEqual(result['evidence_errors'], ['final_native_evidence_invalid'])
-                if scenario == 'clean':
+                self.assertEqual(result['final_native_evidence_valid'], scenario == 'late_failure')
+                self.assertEqual(result['evidence_errors'],
+                                 ['playback_failed' if scenario == 'late_failure' else 'final_native_evidence_invalid'])
+                if scenario in ('clean', 'late_failure'):
                     self.assertNotIn('cleanup_errors', result)
                     self.assertFalse(lock_path.exists())
                     self.assertTrue(result['owned_cleanup_confirmed'])

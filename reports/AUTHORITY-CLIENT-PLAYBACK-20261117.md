@@ -4,6 +4,53 @@ Internal development on the authoritative fork. Client work takes priority;
 GPU-free server development is deferred while the user seeks a hosted test server.
 The overall Windows/Linux Internet gameplay goal remains unmet.
 
+Current client increment, 18 November: an opt-in bounded live input now feeds
+the existing playback worker, preserving source positions, game timestamps and
+unknown/known velocities. The admitted TCP owner can deliver to this input on
+its existing reader thread. This increment has offline evidence only; native
+attempt 08 below remains the latest X4 trial.
+
+## Live input integration, 18 November
+
+`LiveSourceInput` accepts unchanged portable source samples through either its
+explicit producer API or the existing admitted TCP motion callback. The worker
+keeps the original source sequence/time/velocity in bounded provenance while
+mapping enrollment and deliveries to its local UDP sequence. Unknown initial
+velocity remains unknown. It rejects a first correction beyond the existing
+50-metre fixture bound, stale input, overflow, changed identity and regressing
+source times. EOF enters the existing silence/readback/STOP sequence. The
+temporary NPC control intervention remains private and is not installed here.
+
+Queue acceptance, local UDP binding and native movement are separate outcomes.
+Partial dispatch evidence survives failure. Producer failures remain visible
+after STOP, and a failure discovered during worker join now makes the outer
+result fail even when resource cleanup succeeds. No native outcome from an older
+trial is attributed to this input path.
+
+Validation was split to avoid repeating unchanged checks:
+
+- The stream/playback worker batch passed **22 tests in 4.197 seconds**. It uses
+  the real worker with simulated IPC/native edges, plus the existing local UDP
+  playback test. Log: `../x4-client-live-source-20261118/.local/live-source-focused-20261118.log`.
+- After integration, the owner/native-orchestration batch passed **26 tests in
+  4.049 seconds**. Real TCP tests verify original samples through admission into
+  the queue and refuse receipts for unready, closed or overflowing input. Native
+  load/lifecycle is simulated; existing local UDP control is also covered.
+  Log: `.local/client-live-input-integration-20261118.log`.
+- Both batches passed with no skips. No X4, Windows, WAN or full-suite rerun was
+  performed. Earlier full-suite failures and missing prerequisites remain open.
+
+Next native integration should reuse the one-lock/two-process ownership in
+`authority_recovered_loopback_server.py` and `authority_recovered_server_client.py`.
+Launching two independent CLIs would conflict with their ownership checks. That
+supervisor already verifies the fresh join ticket/marker against the confirmed
+checkpoint; connect its registry and archived-script lineage to the playback
+fixture instead of replacing the old pinned save hash. Use the normal source
+sampler for repeated actual samples: its optional `local_pair` delivery stops
+after one two-point estimate. Keep source STOP, client drain/STOP, private release
+observation and pause ordered. Readiness/EOF coordination and fresh-checkpoint
+support are still outstanding; no new native trial has been attempted.
+
 ## Implementation
 
 Commits `fb47c479` and `03ad32ea` connect the buffered motion controller to the

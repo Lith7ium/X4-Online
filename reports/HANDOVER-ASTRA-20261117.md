@@ -6,7 +6,10 @@
 > trial completed the bounded 20-metre playback/STOP/pause flow. A later trial
 > also established timing separation and observed the same NPC moving under its
 > exact prior order after releasing temporary control. General NPC control,
-> exact AI restoration and Windows/Internet gameplay remain unproven. Start with
+> exact AI restoration and Windows/Internet gameplay remain unproven. A bounded
+> live-input path now preserves source samples and connects through the existing
+> admitted TCP owner; its current evidence is offline only. The shared native
+> supervisor and fresh join checkpoint still need integration. Start with
 > [the current client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md) and
 > [the playback guide](../docs/AUTHORITY-CLIENT-PLAYBACK.md). The original handover
 > below records the earlier checkpoint, not the current branch tip.

@@ -13,9 +13,11 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
+sys.path.insert(0, str(ROOT / 'tools/dev'))
 from authority.experimental_client_owner import ExperimentalClientOwner
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 from authority.experimental_tcp_control import offer_request
+from authority.experimental_tcp_motion import motion_digest
 from authority.load_messages import Offer
 from authority.trusted_load_messages import decode_load_claim, encode_bound_offer
 from authority.trusted_marker_load_session import MarkerBoundOffer
@@ -143,6 +145,139 @@ class ClientOwnerTests(unittest.TestCase):
         return {'version': 1, 'kind': 'authority_motion_pull', 'connection_handle': 1,
                 'session_epoch': 'epoch', 'incarnation': grant['incarnation'],
                 'request_id': request_id, 'grant': copy.deepcopy(grant)}
+
+    @staticmethod
+    def motion_command(sequence):
+        sample = {'version': 1, 'epoch': '1'*32, 'generation': '2'*32,
+                  'index': 3, 'sequence': sequence, 'sector_macro': 'sector_a',
+                  'source_time': 1000. + sequence / 10,
+                  'x': 500. + sequence, 'y': -20., 'z': 30.,
+                  'velocity': None if sequence == 1 else {'x': 10., 'y': 0., 'z': 0.}}
+        return {'version': 1, 'kind': 'motion_snapshot', 'connection_handle': 1,
+                'session_epoch': 'epoch', 'incarnation': '4'*32,
+                'request_id': sequence, 'sample': sample}
+
+    def test_motion_consumer_survives_load_handoff_with_original_samples(self):
+        commands = [self.motion_command(sequence) for sequence in (1, 2)]
+        owner, client, thread, errors, claims, replies = self.connect(authority_commands=commands)
+        bound = self.observe(owner)
+        consumed, consumer_threads = [], []
+
+        def consume(sample, despawn):
+            consumed.append((copy.deepcopy(sample), despawn))
+            consumer_threads.append(threading.get_ident())
+            return True
+
+        owner.activate(bound.offer.attempt_id, Controller(), apply_motion=consume)
+        deadline = time.monotonic() + 4
+        receipts = 0
+        while receipts < len(commands):
+            if owner.poll(.1):
+                receipts += 1
+            if time.monotonic() >= deadline:
+                self.fail('motion receipts timed out')
+        thread.join(4)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(consumed, [(command['sample'], False) for command in commands])
+        self.assertEqual(consumer_threads, [threading.get_ident()] * len(commands))
+        self.assertEqual([reply['sample_sha256'] for reply in replies],
+                         [motion_digest(command['sample']) for command in commands])
+        self.assertTrue(all(reply['kind'] == 'motion_receipt' and reply['status'] == 'accepted'
+                            for reply in replies))
+        owner.close()
+        self.assertEqual(client.fileno(), -1)
+
+    def test_invalid_motion_consumer_closes_before_claim(self):
+        owner, client, thread, errors, claims, _ = self.connect(send_command=False)
+        bound = self.observe(owner)
+        with self.assertRaisesRegex(ValueError, 'motion consumer must be callable'):
+            owner.activate(bound.offer.attempt_id, Controller(), apply_motion=object())
+        self.assertEqual(client.fileno(), -1)
+        thread.join(4)
+        self.assertEqual(errors, [])
+        self.assertEqual(claims, [])
+
+    def test_motion_consumer_failure_fences_connection_without_receipt(self):
+        for mode in ('exception', 'rejected', 'mutated', 'reentry'):
+            with self.subTest(mode=mode):
+                owner, client, thread, errors, _, replies = self.connect(
+                    authority_commands=[self.motion_command(1)])
+                bound = self.observe(owner)
+
+                def consume(sample, despawn):
+                    if mode == 'exception':
+                        raise RuntimeError('injected consumer failure')
+                    if mode == 'mutated':
+                        sample['x'] += 1
+                    if mode == 'reentry':
+                        try:
+                            owner.poll()
+                        except RuntimeError:
+                            pass
+                    return mode != 'rejected'
+
+                owner.activate(bound.offer.attempt_id, Controller(), apply_motion=consume)
+                with self.assertRaises((RuntimeError, ValueError)):
+                    while True:
+                        owner.poll(.1)
+                self.assertEqual(client.fileno(), -1)
+                thread.join(4)
+                self.assertEqual(errors, [])
+                self.assertEqual(replies, [])
+
+    def test_real_motion_protocol_feeds_bounded_stream_without_rewriting_sample(self):
+        from authority_native_client_stream import LiveSourceInput
+
+        commands = [self.motion_command(sequence) for sequence in (1, 2)]
+        source = LiveSourceInput(epoch='1'*32, index=3, sector_macro='sector_a', receipt_max_age=5)
+        self.addCleanup(source._close)
+        # The native INITIAL boundary is simulated; only TCP and the queue are real.
+        source._ready({'x': 500., 'y': -20., 'z': 30., 'game_time': 20.})
+        owner, _, thread, errors, _, replies = self.connect(authority_commands=commands)
+        bound = self.observe(owner)
+        owner.activate(bound.offer.attempt_id, Controller(), apply_motion=source.accept_motion)
+        receipts = 0
+        receipt_deadline = time.monotonic() + 4
+        while receipts < 2:
+            receipts += bool(owner.poll(.1))
+            if time.monotonic() >= receipt_deadline:
+                self.fail('stream receipts timed out')
+        thread.join(4)
+        source.finish()
+        deadline = time.monotonic() + 1
+        abort = threading.Event()
+        for command in commands:
+            sample, received_at = source._next(guard=lambda: True, abort=abort, deadline=deadline)
+            self.assertEqual(sample, command['sample'])
+            self.assertLessEqual(received_at, time.monotonic())
+        self.assertIsNone(source._next(guard=lambda: True, abort=abort, deadline=deadline))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(replies), 2)
+
+    def test_unready_closed_or_full_stream_never_acknowledges_rejected_motion(self):
+        from authority_native_client_stream import LiveSourceInput
+
+        for state in ('unready', 'closed', 'full'):
+            with self.subTest(state=state):
+                source = LiveSourceInput(epoch='1'*32, index=3, sector_macro='sector_a', capacity=1)
+                self.addCleanup(source._close)
+                if state != 'unready':
+                    source._ready({'x': 500., 'y': -20., 'z': 30., 'game_time': 20.})
+                if state == 'closed':
+                    source._close()
+                commands = [self.motion_command(sequence) for sequence in (1, 2)]
+                owner, client, thread, errors, _, replies = self.connect(authority_commands=commands)
+                bound = self.observe(owner)
+                owner.activate(bound.offer.attempt_id, Controller(), apply_motion=source.accept_motion)
+                with self.assertRaises(ValueError):
+                    while True:
+                        owner.poll(.1)
+                self.assertEqual(client.fileno(), -1)
+                thread.join(4)
+                self.assertEqual(errors, [])
+                self.assertEqual(len(replies), 1 if state == 'full' else 0)
 
     def test_authority_callbacks_survive_load_handoff_and_copy_grant(self):
         grant = self.motion_grant()

@@ -85,7 +85,7 @@ another native read. No native handles or connection credentials appear in these
 records.
 
 The independent Linux CLI exposes `--internal-saved-playback-config FILE` only
-with a Python `playback_driver` callback passed to `run` or `main`. This remains
+with a Python `playback_driver` callback or `LiveSourceInput` passed to `run` or `main`. This remains
 a private test interface, not a player-facing network motion service. The strict
 configuration pins the offered checkpoint, registry, complete content file and
 four archived saved MD scripts. Installation and ordered marked-registry checks
@@ -102,6 +102,46 @@ The existing native binder also requires a running game. Generic controller
 pause tests therefore do not establish that a native bind can span a pause;
 the runtime must stop/drain binding before pausing or implement explicit
 suspension. Its existing running-state guard has not been relaxed.
+
+## Bounded live source input
+
+`tools/dev/authority_native_client_stream.py` adds an in-process input for this
+same one-ship diagnostic. Inject an exact `LiveSourceInput` instance with the
+pinned epoch, index and sector as `playback_driver`. The independent client then
+attaches its `accept_motion` callback to the existing admitted TCP owner. It
+does not create another TCP reader. The callable synthetic driver remains
+available for its original diagnostic.
+
+The producer must wait for `wait_ready(timeout)`, which observes the playback
+worker's client INITIAL boundary. It can then send through the existing motion
+protocol, or call `submit(sample, received_at=time.monotonic())` directly in an
+isolated harness. `finish()` explicitly ends this finite input; `fail()` records
+a producer failure. There is no new network readiness or end-of-stream message.
+The future source supervisor must coordinate those boundaries before native use.
+Packets before readiness or after EOF are rejected.
+
+Source XYZ, game time and nullable velocity remain unchanged. Unknown velocity
+is not replaced with zero. Source sequence and generation are retained in the
+diagnostic provenance; local UDP enrollment uses sequence 1, so subsequent
+deliveries receive explicitly recorded local sequence numbers and the existing
+local generation. Generation identifiers are hashed in evidence. The first
+source pose must be within 50 metres of client INITIAL; no coordinate translation
+or clock rewrite is performed to meet that limit.
+
+The queue defaults to two pending samples, at most 64 samples and ten real
+seconds. It rejects overflow, stale or future producer receipts, identity
+changes and regressing sequences/timestamps. These are finite diagnostic limits,
+not the production policy for slow network clients. Receipt age is checked
+before local UDP dispatch. The Lua buffer still timestamps its own UDP arrival;
+the Python receipt time is retained as evidence, not substituted for that arrival.
+Observed source-game/receipt-time ratios do not prove equal simulation speeds.
+
+A TCP receipt confirms queue acceptance only. Native readbacks and drained STOP
+remain separate requirements. This input does not install the private NPC Wait
+and velocity intervention. The pinned original checkpoint restriction remains;
+a real server's newly saved join checkpoint still needs its verified lineage
+connected through the shared two-process supervisor. This code increment alone
+does not establish a native source-to-client flight.
 
 ## Validation and next native boundary
 
