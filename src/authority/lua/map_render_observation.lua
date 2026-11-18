@@ -74,6 +74,9 @@ function M.new(options)
 			end
 			ids[#ids + 1] = component_id
 		end
+		if not same_map(options.get_map, menu, original_handle_key, options.handle_key) then
+			return nil, 'map_changed'
+		end
 
 		local final_count_ok, final_count = pcall(options.get_count, handle)
 		if not final_count_ok or final_count ~= raw_count or

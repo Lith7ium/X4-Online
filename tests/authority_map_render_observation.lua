@@ -64,4 +64,44 @@ assert(failed == nil and reason == 'invalid_component_id')
 local disabled, disabled_reason = observation.new_x4({enabled = false})
 assert(disabled == nil and disabled_reason == 'disabled')
 
+local ffi = require('ffi')
+if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
+local map_handle = ffi.new('UniverseID', 42)
+local exact_large_id = ffi.new('uint64_t', 9007199254740992) + ffi.new('uint64_t', 1)
+local native_ids = {exact_large_id, ffi.new('UniverseID', 0), exact_large_id}
+local native_calls = 0
+local real_ffi = package.loaded.ffi
+package.loaded.ffi = {
+	typeof = ffi.typeof,
+	cdef = function() end,
+	new = ffi.new,
+	cast = ffi.cast,
+	C = {
+		GetNumMapRenderedComponents = function(handle)
+			native_calls = native_calls + 1
+			assert(handle == map_handle)
+			return #native_ids
+		end,
+		GetMapRenderedComponents = function(buffer, capacity, handle)
+			native_calls = native_calls + 1
+			assert(handle == map_handle and capacity == #native_ids)
+			for index, value in ipairs(native_ids) do buffer[index - 1] = value end
+			return #native_ids
+		end,
+	},
+}
+_G.Menus = {{name = 'MapMenu', shown = true, holomap = map_handle,
+	renderedComponents = {'selected-only-extra'}}}
+local native_sampler = assert(observation.new_x4({enabled = true, max_components = 8}))
+snapshot = assert(native_sampler:sample())
+assert(snapshot.raw_count == 3)
+assert(table.concat(snapshot.component_ids, ',') == '9007199254740993,0,9007199254740993')
+assert(not table.concat(snapshot.component_ids, ','):find('selected%-only%-extra'))
+local calls_with_map_open = native_calls
+_G.Menus[1].shown = nil
+snapshot = assert(native_sampler:sample())
+assert(not snapshot.map_open and native_calls == calls_with_map_open)
+_G.Menus = nil
+package.loaded.ffi = real_ffi
+
 print('map renderer observation checks passed')
