@@ -156,6 +156,8 @@ class HookIntegrationTest(unittest.TestCase):
                         out=root/('overlap-%02d' % index); (out/'client/save').mkdir(parents=True)
                         participant=sequential.ServerClient(deadline,root/'source',keep_worker=True)
                         participants.append(participant)
+                        with self.assertRaisesRegex(RuntimeError, 'no retained active worker'):
+                            participant.check_active_liveness()
                         # Freeze prior participants: a changing aggregate here would
                         # make the first participant recursively check itself.
                         def check_previous(previous=tuple(participants[:-1])):
@@ -198,6 +200,48 @@ class HookIntegrationTest(unittest.TestCase):
                                     active_server_check=server_guard)
                         finally: session.accept=original_accept
                         self.assertTrue(result['helper_active'])
+                        calls = []
+                        helper_process = participant.helpers[-1].proc
+                        original_poll = helper_process.poll
+                        original_select = subject.select.select
+                        def record_identity(*_args):
+                            calls.append('identity')
+                            return identity
+                        def record_poll():
+                            calls.append('worker')
+                            return original_poll()
+                        def record_select(read, write, exceptional, timeout):
+                            calls.append('ipc')
+                            return original_select(read, write, exceptional, timeout)
+                        active_guard.side_effect = lambda: calls.append('full') or True
+                        server_guard.side_effect = lambda: calls.append('server') or True
+                        with patch.object(subject.marked.base.client, 'game_identity', side_effect=record_identity), \
+                             patch.object(helper_process, 'poll', side_effect=record_poll), \
+                             patch.object(subject.select, 'select', side_effect=record_select):
+                            self.assertTrue(participant.check_active_liveness())
+                            self.assertEqual(calls, ['identity', 'identity', 'worker', 'ipc', 'identity', 'identity'])
+                            calls.clear()
+                            self.assertTrue(participant.check_active())
+                            self.assertEqual(calls, ['server', 'identity', 'identity', 'full', 'identity', 'identity',
+                                                     'worker', 'ipc', 'identity', 'identity', 'full', 'identity',
+                                                     'identity', 'server'])
+                        active_guard.side_effect = server_guard.side_effect = None
+                        with patch.object(helper_process, 'poll', return_value=1):
+                            with self.assertRaisesRegex(RuntimeError, 'worker exited'):
+                                participant.check_active_liveness()
+                        with patch.object(subject.marked.base.client, 'game_identity',
+                                          side_effect=[identity, identity, None]):
+                            with self.assertRaisesRegex(RuntimeError, 'owned X4 changed'):
+                                participant.check_active_liveness()
+                        world.session._ready.remove(handle)
+                        try:
+                            with self.assertRaisesRegex(RuntimeError, 'admission changed'):
+                                participant.check_active_liveness()
+                        finally:
+                            world.session._ready.add(handle)
+                        with patch.object(subject.select, 'select', return_value=([participant.ipc], [], [])):
+                            with self.assertRaisesRegex(RuntimeError, 'IPC changed'):
+                                participant.check_active_liveness()
                         previous_checks=active_guard.call_count; previous_server=server_guard.call_count
                         self.assertTrue(participant.check_active())
                         self.assertEqual(active_guard.call_count, previous_checks+2)
@@ -228,6 +272,9 @@ class HookIntegrationTest(unittest.TestCase):
                     self.assertFalse(thread.is_alive())
                 if not (control._closed or control._failed): control.close()
                 listener.close(); service.close(); service.thread.join(2)
+            for participant in participants:
+                with self.assertRaisesRegex(RuntimeError, 'no retained active worker'):
+                    participant.check_active_liveness()
 
     def test_eof_check_refuses_unexpected_data(self):
         listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)

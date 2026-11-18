@@ -198,6 +198,17 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
             raise RuntimeError('no retained active worker')
         return self._active_check(server_checked=server_checked)
 
+    def check_active_liveness(self):
+        """Check the retained worker during a private, fully fenced operation.
+
+        The caller must verify the full protected context before and after the
+        enclosing operation. File, registry and log changes during a wait are
+        only detected at those boundaries.
+        """
+        if self._active_check is None:
+            raise RuntimeError('no retained active worker')
+        return self._active_check(server_checked=True, liveness_only=True)
+
     def _pin_motion_stop(self, helper, context, deadline):
         ipc = self.ipc
         process = helper.proc
@@ -491,9 +502,7 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                 if self.first_resume_only:
                     result.update(simulated_second_join=False, pending_operation=None)
                     if self.keep_worker:
-                        def active_check(*, server_checked=False):
-                            if not server_checked and active_server_check is not None: active_server_check()
-                            active_context()
+                        def check_worker_and_peer():
                             if helper.proc.poll() is not None:
                                 raise RuntimeError('active participant worker exited')
                             peer = self.control._peers.get(self.server_tcp)
@@ -503,6 +512,16 @@ class TCPMarkedParticipant(marked.MarkedParticipant):
                             readable, _, exceptional = select.select([self.ipc], [], [self.ipc], 0)
                             if readable or exceptional:
                                 raise RuntimeError('active participant worker IPC changed')
+
+                        def active_check(*, server_checked=False, liveness_only=False):
+                            if liveness_only:
+                                guard_identity()
+                                check_worker_and_peer()
+                                guard_identity()
+                                return True
+                            if not server_checked and active_server_check is not None: active_server_check()
+                            active_context()
+                            check_worker_and_peer()
                             active_context()
                             if not server_checked and active_server_check is not None: active_server_check()
                             return True
