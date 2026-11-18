@@ -4,7 +4,14 @@ Internal development on the authoritative fork. Client work takes priority;
 GPU-free server development is deferred while the user seeks a hosted test server.
 The overall Windows/Linux Internet gameplay goal remains unmet.
 
-Current client increment, 18 November: both the independent bounded live-input
+Latest native result, 18 November: the approved initial alignment at `dfa12f09`
+worked with the first real source-X4 pose, removing a 77.406 m initial offset
+with zero measured readback error. The paired run still failed: the second
+sample requested a 221.975 m running correction, correctly refused by the
+unchanged 50 m bound. No ongoing paired movement or release was established.
+See [the actual-source alignment evidence](#actual-source-initial-alignment-2026-11-18).
+
+Earlier client increment, 18 November: both the independent bounded live-input
 path and an explicit paired-supervisor playback path are now wired in code.
 The paired path uses the existing retained TCP owner and fresh join checkpoint.
 Native paired attempt 03 exercised the synchronous-guard optimization: source
@@ -956,3 +963,92 @@ finite-XYZ check on the native pre-write pose; its new refusal test passed.
 These are simulated engine checks. Neither preceding native smoke enabled this
 new option. Actual source-X4 placement/readback and sustained paired playback
 remain to be demonstrated; no full suite was repeated.
+
+## Actual-source initial alignment (2026-11-18)
+
+One bounded two-Linux-X4 attempt at `dfa12f09` enabled both shared replica
+control and the approved initial-alignment option. It used the real source
+sampler, retained TCP participant and fresh join checkpoint. The ordinary
+binder matched the tracked read-only file; no old private Wait binder or
+release bridge was installed. The overall run failed and must not be counted
+as passing paired playback.
+
+The first source sample was captured before delivery, then correlated offline
+with exactly one `AUTH_CLIENT_INITIAL_ALIGNMENT` preceding native INITIAL.
+Sequence 1, source game time, epoch/index and all three target coordinates
+matched. The original recipient arrival age at readback was 0.285612582 s.
+The ship's pre-alignment offset was 77.405618998 m; measured readback error and
+the subsequent source-to-INITIAL offset were both 0 m. The source's initial
+velocity remained unknown. This establishes the one permitted initial
+placement on this fixture using actual source-X4 data.
+
+The second native observation was `phase=held`, sequence 2. It requested a
+221.974737844 m correction while the actual client position remained at the
+aligned position. The controller refused at `stage=distance`, `uncertain=0`,
+before any running correction. The source-time interval was 1.431247294 s;
+the client's INITIAL-to-failure interval was 1.175777276 s on each of its
+local/game clocks. These are separate elapsed intervals, not a clock-origin
+mapping or proof of equal rates. The second position is retained as the raw
+client FAILURE target; a separate raw second-source capture was not saved.
+
+Read-only code review identified two independent startup problems:
+
+- The wrapper discards the first BIND as enrollment even after verified
+  initial placement. It therefore does not seed the interpolation buffer.
+  Sequence 2 becomes its only sample and is offered directly as a held pose.
+- Seeding alone cannot repair this trace. Its 1.431 s source gap exceeds the
+  existing 0.75 s buffer continuity limit. The original first arrival to
+  failure interval also exceeds the existing 1 s local freshness limit.
+  The run does not isolate the cause of the delivery delay. Guard and pull
+  timings are diagnostic overhead measurements, not server simulation
+  benchmarks.
+
+The result records two prevalidated source samples and one confirmed client
+receipt. No STOP, shared release, final departure save, sustained playback,
+Windows execution, WAN, visual smoothness or gameplay was established.
+Owned cgroup/process and Xauthority cleanup, unchanged source checkpoint,
+selected source pins and Steam identities were confirmed. The source registry
+still uses the approved experimental correspondence, without independent
+historical identity proof. No native retry or full-suite repeat was made.
+
+Private artifacts: `.local/private-paired-alignment-native-20261118-01/`,
+including `first-source-before-delivery.json`, `trial-result.json`, the two
+engine logs and `offline-initial-alignment-correlation.json`. The correlation
+artifact SHA-256 is
+`8d5e97edf2c07ded7a8f3cf7e4a39c6f589e53bf6d06a86140f545dddd1ba498`.
+Reviewed manifest02 contains 487 pins, SHA-256
+`d4539b2ff05af44e371e478c8d4f7d9fad414ab7fb525910f5c30ac83f9d3a7d`.
+The private scope/trial/evidence helper hashes are respectively
+`a67695f46860970058c633d0a6e695a602a7bbef4a5e9253b1c50cdcd16cd908`,
+`ac35d4d9fd62bbecf7eab6c4ee4a97d4c8f550a1275c5ccd73a27f16ebae273f`,
+`faae8ffa649237f27a370b7701cb974f3e38b3f1d7686c541fc045891cd8aaad`.
+Four pure parser/correlation checks passed before launch; the run's partial
+observation was recovered afterward from the preserved inputs because the
+normal success-only final correlation was not reached.
+
+### Follow-up: retain the verified starting sample
+
+The wrapper now forwards the first sample to the playback buffer only when
+initial alignment was explicitly enabled and its native factory succeeded.
+The original source sequence, time and recipient arrival are preserved. The
+ordinary enrollment path still discards its arbitrary target. This is a
+startup continuity correction, not another position warp or a changed clock
+policy.
+
+The focused assembled-client check passed three simulated cases: ordinary
+dummy enrollment remains excluded; dense follow-up samples interpolate from
+the aligned position; and the observed sparse source/local intervals still
+cause a distance refusal with no running write. The existing playback/pause
+regression method also passed its 15 runtime and two pause cases. No native
+rerun was made, because this change alone cannot repair the recorded gap.
+
+A read-only delivery audit found that the paired fixture serializes native
+PULL, validation, TCP delivery, the client's BOUND receipt and evidence checks
+before requesting another sample. Its nominal 0.2 s cadence does not compensate
+when those stages take longer. Existing latest-position source/transport APIs
+offer a single-owner asynchronous path that this fixture does not yet use.
+The next investigation is to connect that already-approved path while retaining
+the first enrollment receipt, lifecycle fences and separate sample/receipt
+accounting. Per-stage timing is needed before attributing the measured delay
+to one component. No producer thread, clock change or threshold relaxation has
+been introduced.

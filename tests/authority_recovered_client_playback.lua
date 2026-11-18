@@ -31,6 +31,18 @@ X4LAN_RESOLVE_STRING=dofile('tools/dev/authority_registry_resolve_string.lua')
 X4LAN_REPLICA_MOTION_BINDING=dofile('src/authority/lua/replica_motion_binding.lua')
 X4LAN_SAVED_BASELINE_MOTION_BINDING=dofile('src/authority/lua/saved_baseline_motion_binding.lua')
 X4LAN_MOTION_BUFFER=dofile('src/authority/lua/motion_buffer.lua')
+local buffer_pushes = {}
+local original_buffer_factory = X4LAN_MOTION_BUFFER.new
+X4LAN_MOTION_BUFFER.new = function(options)
+ local buffer = original_buffer_factory(options)
+ local original_push = buffer.push
+ buffer.push = function(self, snapshot, arrival)
+  buffer_pushes[#buffer_pushes + 1] = {sequence=snapshot.sequence, source_time=snapshot.source_time,
+   x=snapshot.pose[1], arrival=arrival}
+  return original_push(self, snapshot, arrival)
+ end
+ return buffer
+end
 X4LAN_SAVED_MOTION_APPLY=dofile('src/authority/lua/saved_motion_apply.lua')
 X4LAN_MOTION_PLAYBACK=dofile('src/authority/lua/motion_playback.lua')
 X4LAN_CLIENT_MOTION_EVENT_ROUTER=dofile('src/authority/lua/client_motion_event_router.lua')
@@ -44,10 +56,11 @@ local configuration={enabled=true,port=2345,lease=lease,attempt=attempt,epoch=ep
 -- This mode exercises the actual wrapper/owner/playback composition with a
 -- controllable native ownership adapter. MD behavior has separate tests.
 local control_phase, control_preparations, control_releases = 'new', 0, 0
-local controlled_fixture = mode == 'control' or mode == 'alignment'
+local alignment_enabled = mode == 'alignment' or mode == 'alignment_sparse'
+local controlled_fixture = mode == 'control' or alignment_enabled
 if controlled_fixture then
  configuration.saved_replica_control_fixture = 'recovery_enh_870'
- if mode == 'alignment' then
+ if alignment_enabled then
   configuration.saved_initial_alignment_fixture = 'recovery_enh_870'
  end
  X4LAN_SAVED_REPLICA_CONTROL = {new_x4=function(options)
@@ -104,7 +117,7 @@ local function send(sequence,x,source)
   assert(client:tick() and client:state() == 'ready')
  end
 end
-if mode == 'alignment' then
+if alignment_enabled then
  -- Exercise the complete wrapper/router/owner/native-factory composition.
  -- Only the explicitly selected first pose may exceed the ongoing 50 m bound.
  send(1, 1000, 0)
@@ -114,10 +127,35 @@ if mode == 'alignment' then
  assert(logs[2]:find('AUTH_CLIENT_PLAYBACK INITIAL ', 1, true))
  assert(logs[2]:find(' x=1000 y=0 z=0', 1, true))
  assert(client:tick() and ffi.C.TestWrites() == 1)
+ assert(#buffer_pushes == 1 and buffer_pushes[1].sequence == 1)
+ assert(buffer_pushes[1].source_time == 0 and buffer_pushes[1].arrival == 1 and buffer_pushes[1].x == 1000)
+
+ if mode == 'alignment_sparse' then
+  -- Reproduce the observed source/local gaps. Seeding does not relax expiry
+  -- or make the next distant held sample eligible for a running correction.
+  now = 2.01
+  assert(client:tick() and ffi.C.TestWrites() == 1) -- UI expires seq1 before seq2 arrives.
+  now = 2.175777276
+  send(2, 1221.9747378441094, 1.431247294)
+  assert(not client:tick() and client:state() == 'failed')
+  assert(ffi.C.TestWrites() == 1 and #buffer_pushes == 2)
+  local distance_failure = false
+  for _, line in ipairs(logs) do
+   if line:find('AUTH_CLIENT_PLAYBACK FAILURE ', 1, true) then
+    assert(line:find('stage=distance', 1, true) and line:find('phase=held', 1, true))
+    distance_failure = true
+   end
+  end
+  assert(distance_failure)
+  print('seeded enrollment retains sparse-gap expiry and the running distance bound')
+  return
+ end
 
  now = 1.2
  send(2, 1010, .2)
  assert(client:tick() and ffi.C.TestWrites() == 2)
+ -- Dense seq2 interpolates from the seeded seq1; a discarded seq1 would jump to 1010.
+ assert(math.abs(tonumber(ffi.C.GetObjectPositionInSector(41).x) - 1002.5) < .001)
  local alignment_records = 0
  for _, line in ipairs(logs) do
   if line:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true) then
@@ -144,6 +182,7 @@ assert(client:state()=='ready' and ffi.C.TestWrites()==0 and ffi.C.TestReads()>0
 assert(#logs==1 and logs[1]:find('AUTH_CLIENT_PLAYBACK INITIAL version=1 ',1,true))
 assert(logs[1]:find(' x=0 y=0 z=0',1,true) and output[#output]:find('|BOUND|',1,true))
 assert(client:tick() and ffi.C.TestWrites()==0)
+assert(#buffer_pushes == 0) -- Legacy dummy enrollment must never enter interpolation.
 if mode~='good' and mode~='control' and mode~='bounded' and mode~='uncertain' and mode~='docking' and mode~='fixture' and mode~='zone' and mode~='distance' then
  local invalid=packet(2,5,.2)
  if mode=='sector' then invalid[10]='other_sector'

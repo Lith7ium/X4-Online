@@ -146,11 +146,13 @@ class Install(unittest.TestCase):
    subprocess.run(
     ['cc', '-O2', '-shared', '-fPIC', 'tests/fixtures/saved_motion_apply_abi.c', '-o', str(library)],
     cwd=ROOT, check=True, capture_output=True)
-   result = subprocess.run(
-    ['luajit', 'tests/authority_recovered_client_playback.lua', 'alignment'],
-    cwd=ROOT, capture_output=True, text=True, timeout=5,
-    env=dict(os.environ, LD_PRELOAD=str(library)))
-   self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+   for mode in ('good', 'alignment', 'alignment_sparse'):
+    with self.subTest(mode=mode):
+     result = subprocess.run(
+      ['luajit', 'tests/authority_recovered_client_playback.lua', mode],
+      cwd=ROOT, capture_output=True, text=True, timeout=5,
+      env=dict(os.environ, LD_PRELOAD=str(library)))
+     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
  def test_saved_apply_combines_with_player_sector_after_bound(self):
   self.status=('ready',subject.RECOVERY_APPLY_EPOCH,10082,'d'*64)
   loader=self.ui/'authority_download_load_probe.lua'

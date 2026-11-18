@@ -1,5 +1,21 @@
 # X4 multiplayer: handover for Astra
 
+Latest actual-source result: the approved initial placement at `dfa12f09`
+removed a 77.406 m offset with zero native readback error in one two-Linux-X4
+run. The next held target required 221.975 m and was correctly refused by the
+unchanged 50 m running bound. The total run failed, with no ongoing paired
+movement or STOP/release proof; owned cleanup and source preservation passed.
+The wrapper omitted aligned sequence 1 from the interpolation buffer. That
+opt-in omission is now fixed and passes dense/sparse simulated regressions.
+Seeding alone cannot fix the observed 1.431 s source gap, which exceeds the existing
+0.75 s continuity limit; local freshness also expired. Delivery cadence needs
+investigation without changing the outstanding clock policy or widening bounds.
+See [the preserved evidence and limits](AUTHORITY-CLIENT-PLAYBACK-20261117.md#actual-source-initial-alignment-2026-11-18).
+The fixture currently serializes PULL, receipt and evidence checks; investigate
+the existing latest-position APIs before another native attempt. Preserve
+sequence 1 enrollment, single-owner operation and separate receipt accounting.
+Do not repeat the native attempt for the seeding change alone.
+
 Latest client evidence: the shared control path also passed in Windows X4
 under Proton using the same source checkpoint, 25 synthetic motion updates,
 20 m measured displacement, correlated STOP/release, then pause and clean
@@ -13,8 +29,9 @@ The explicit `saved_initial_alignment_fixture="recovery_enh_870"` option is now
 implemented and passes focused fake-engine, configuration and assembled-client
 checks. It requires shared preparation, preserves original sample timing and
 retains uncertainty after an unconfirmed write. Both native smoke runs above
-left this newer option off. The next evidence must come from the actual source
-pair using a real first server pose, never synthetic enrollment XYZ zero. See
+left this newer option off. The later actual-source result above establishes
+initial placement only, using a real first server pose. Never enable initial
+alignment with synthetic enrollment XYZ zero. See
 [implementation and test boundaries](AUTHORITY-CLIENT-PLAYBACK-20261117.md#approved-initial-placement-opt-in-implementation).
 Clock mapping remains an open decision. GPU-free server work stays deferred
 in favor of clients. Initial-placement questions in the historical entries

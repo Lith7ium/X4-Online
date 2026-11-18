@@ -239,9 +239,10 @@ function M.new_x4(c)
   else message=message..'unavailable' end
   pcall(DebugError,message)
  end
- -- Playback evidence is portable, fixed-schema and bounded to 67 records:
- -- one guarded initial read, at most 64 summaries at <=1 Hz, one STOPPED, one distance FAILURE.
- -- BOUND remains binding/consumption only. The first BIND is never played.
+ -- Playback evidence has a fixed schema: one guarded initial read, at most
+ -- 64 summaries at <=1 Hz, one STOPPED, one distance FAILURE, and an optional
+ -- initial-alignment record. BOUND confirms binding/consumption, not movement.
+ -- Only verified alignment permits the first BIND to seed interpolation.
  local playback_sequence,playback_source_time,playback_expected_reply=nil,nil,nil
  local playback_samples,playback_observations,playback_readbacks,playback_reports=0,0,0,0
  local playback_controller,playback_latest,playback_next_report=nil,nil,nil
@@ -330,7 +331,11 @@ function M.new_x4(c)
   return {push=function(_,snapshot,arrival)
     if first then
      assert(snapshot.sequence==playback_sequence and snapshot.frame==playback_sector)
-     first=false;return true -- Enrollment only; never buffer its arbitrary target.
+     first=false
+     -- Alignment has verified this real source pose. Keep its original clock
+     -- and arrival as the first interpolation sample; legacy enrollment is discarded.
+     if initial_alignment_fixture then return playback_controller:push(snapshot,arrival) end
+     return true
     end
     return playback_controller:push(snapshot,arrival)
    end,
