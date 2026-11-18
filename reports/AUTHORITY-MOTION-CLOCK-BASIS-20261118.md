@@ -336,6 +336,50 @@ does not measure X4 server simulation performance or establish that the proposed
 guard policy will meet cadence. No policy or playback bound was changed.
 See [the complete evidence](AUTHORITY-CLIENT-PLAYBACK-20261117.md#composed-tls-and-windows-x4-v3-playback-2026-11-18).
 
+## Allocation-only guard investigation (no game run)
+
+A bounded follow-up at `e5d88a49` compared fresh observations without retaining
+results between checks. All candidates and benchmarks remain private in the
+detached worktree `.local/agent-worktrees/steam-observation-20261118-01/`.
+The main checkout, audited native runners and their manifests were not modified.
+
+A first candidate read executable/start-time data only for Steam processes.
+Although 80 live pairs returned the same Steam identity, this changed failure
+behavior: a short `/proc/<pid>/stat` for a non-Steam process can raise an uncaught
+`IndexError` in the original collector. Skipping that read suppresses the error.
+This candidate was rejected as a behavior-preserving replacement.
+
+The retained allocation-only candidate uses string child paths for the full
+process scan and `os.stat()` directly for metadata snapshots. It preserves the
+fresh UID/command/executable/start-time reads, their order and exception handling;
+the start-time helper is unchanged. Focused fixtures invoke the actual original
+collector and candidate against the same temporary process entries. They agree
+on ordinary rows, executable permission failures, the uncaught short-stat error,
+and an earlier readlink failure preventing a subsequent start-time read.
+
+Eighty alternating live full-process comparisons returned equal snapshots.
+Median collection times were 5.923 ms for the original and 5.279 ms for the
+candidate, a 0.644 ms reduction. Eighty paired metadata passes over the 505 pinned
+paths also matched: medians were 3.167 ms with `Path(path).stat()` and 1.936 ms
+with `os.stat(path)`, a 1.231 ms reduction. Separate checks matched regular-file
+and symlink snapshots for the existing string/Path input types.
+
+The sum of these separately measured savings is approximately 1.875 ms, or 6.5%
+of the preceding native run's mean 28.9 ms environment-check duration. This is
+only an estimate: no combined guard, active-game, TLS-loop or real-source cadence
+improvement was measured. It does not establish that either client or source
+will meet the continuity bound. The candidates are retained for a future
+justified diagnostic revision, not integrated into production or existing pinned
+runners. No repeated game run or broad test-suite run followed this investigation.
+
+Private evidence (paths relative to that detached worktree):
+
+| File | SHA-256 |
+| --- | --- |
+| `.local/authority_guard_allocations_private_20261118.py` | `c7d6d9d1ea0d13b229ba628696f7b7dc7be485b65944949d2983fa7c61ab685e` |
+| `.local/bench_guard_allocations_private_20261118.py` | `99393e23f714aaf4d6b5b44f3266e85bbb5f07d83b0e404639b17c5ac84f5ed5` |
+| `.local/guard_allocation_benchmark_20261118.txt` | `9deb3eaa3f70a1e26dffa121692c506a8e49f585efa11009e8990b4e057745a3` |
+
 ## Proposed diagnostic guard policy (not implemented or approved)
 
 The remaining source path repeatedly revalidates process, socket ownership and

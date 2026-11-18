@@ -1,5 +1,15 @@
 # X4 multiplayer: handover for Astra
 
+Latest follow-up (2026-11-18, no game run): allocation-only process and metadata
+variants preserved the compared observations/error behavior in focused fixtures
+and 80 live pairs each. Separate median savings total about 1.875 ms per guard,
+roughly 6.5% of the last native guard mean; combined/native benefit is unmeasured.
+A Steam-only collector was rejected because skipping unrelated process reads
+changed error behavior. Candidates and evidence remain private and are not
+integrated into pinned runners or production. No further native/full-suite run
+was justified by these isolated timings. See [the evidence and hashes](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#allocation-only-guard-investigation-no-game-run).
+The 250-ms diagnostic policy below is still awaiting the user's decision.
+
 Current continuation (2026-11-18): **the composed TLS-to-Windows-X4 path applied
 all 26 V3 packets**, using a simulated server and one Windows game under Proton
 at `f67aa76e`. Checkpoint transfer, observed admission, resume, motion receipts
