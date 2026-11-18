@@ -880,3 +880,46 @@ alignment, source/client clock mapping, sustained ownership, physical velocity,
 exact AI-stack restoration, visual smoothness, WAN or gameplay. The existing
 50 m bound and first-sample enrollment behavior remain unchanged. No full-suite
 repeat was needed for this runtime check; earlier suite issues remain open.
+
+## Windows shared-control smoke under Proton (2026-11-18)
+
+The same shared control path subsequently passed in Windows X4 under
+GE-Proton10-29, with sources at `de68a1a6`. The isolated Windows runner reused
+the successful Windows control diagnostic's staging, mapped-process/socket
+ownership and cleanup checks. It used the same verified checkpoint as the Linux
+shared-control run, the shared Windows overlay, and the unchanged synthetic
+trajectory. A Linux supervisor supplied motion directly through the existing
+local IPC; this run did not exercise a server or TLS session.
+
+- Raw observations contain one INITIAL, nine SUMMARY records and one STOPPED.
+  All 25 updates were delivered. Initial x `-116784.6640625` became
+  `-116764.6640625`, with unchanged y/z and zero final target error. STOPPED
+  reported 1,034 observations, 769 readbacks, sequence 26, `drained=1` and
+  `uncertain=0`.
+- Resume request 1 and pause request 2 were confirmed without retries. Raw
+  clock observations show running game time and paused state after STOPPED.
+  The installed shared code gates IPC STOPPED on preparation and release;
+  intermediate MD responses and later autonomous movement were not separately
+  recorded. The cached final pose timestamp is not the release timestamp.
+- The intended trajectory spans five seconds, but INITIAL-to-final cached
+  pose time advanced **9.8218675 game seconds**. Scheduling delay was not
+  isolated. This result establishes the client effect and lifecycle, not a
+  five-second flight, smoothness, sustained delivery rate or engine capacity.
+- All 369 reviewed input hashes matched before and after the run. Installed
+  shared modules, the read-only binder and staged save matched their expected
+  sources. Overlay/save integrity, owned cleanup and Steam identity checks
+  passed. Config was retired only after owned shutdown; no owned group or
+  matching private-prefix process remained. Unreadable unrelated processes
+  remain outside this scoped cleanup claim.
+
+Evidence: `.local/windows-shared-control-proton-20261118-01/`, especially
+`result.json`, `motion-cycle.json` and the private profile's `x4authority.log`.
+The private runner is
+`.local/authority_windows_shared_control_proton_20261118_01.py`, SHA256
+`afaf1fe475a87a3314bc8391f01270d762ab549215aa1cf0455185415da25de4`.
+The final audit is
+`.local/authority-windows-shared-control-proton-reviewed-20261118-02.json`,
+SHA256 `4cb8b7914c6313d7208a48028d39a0d273470507bacb8935898184366c4db9b2`.
+The earlier audit file is preserved. No full suite or unchanged engine test
+was repeated. This is not native Windows/Windows CLI, actual source-X4 motion,
+initial-alignment, physical-velocity, exact AI-stack, WAN or gameplay proof.

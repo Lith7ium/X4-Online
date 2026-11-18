@@ -1,5 +1,17 @@
 # X4 multiplayer: handover for Astra
 
+Latest client evidence: the shared control path also passed in Windows X4
+under Proton using the same source checkpoint, 25 synthetic motion updates,
+20 m measured displacement, correlated STOP/release, then pause and clean
+owned shutdown. The planned five-second trajectory took longer; cached pose
+times span 9.8218675 game seconds, with delay cause unmeasured. No server/TLS or
+native-Windows run was involved. See the
+[Windows shared-control evidence](AUTHORITY-CLIENT-PLAYBACK-20261117.md#windows-shared-control-smoke-under-proton-2026-11-18).
+The user has now approved once-only initial placement at the server position
+with native readback on the isolated fixture, retaining the subsequent 50 m
+correction bound. That implementation is the next step; clock mapping remains
+an open decision. GPU-free server work stays deferred in favor of clients.
+
 Latest client implementation: shared Linux/Windows overlays now accept the
 explicit `saved_replica_control_fixture="recovery_enh_870"` option alongside
 the existing playback fixture. It prepares the one local NPC after read-only
@@ -14,9 +26,9 @@ single Linux X4 run of `e1cdd201` passed: 25 synthetic trajectory updates,
 scoped exit. The shared acknowledgment gate supplies the release evidence;
 intermediate MD responses and later autonomous movement were not independently
 recorded. See the [native shared-control evidence](AUTHORITY-CLIENT-PLAYBACK-20261117.md#native-shared-control-smoke-2026-11-18).
-Windows execution of this control path and actual source-X4 motion remain
-unproven. No initial alignment, clock basis, server architecture or normal
-profile changes were made.
+The later Windows-under-Proton run is recorded above; actual source-X4 motion
+remains unproven. Neither runtime check changed initial alignment, clock basis,
+server architecture or normal profiles.
 
 Latest client/server evidence: pair 02 passed with actual Linux server X4 and
 Windows X4 under Proton using existing authenticated loopback TLS/file transfer,
