@@ -285,6 +285,53 @@ actors, introducing an initial snap, or changing the motion clock has not been
 authorized by this test. The outstanding user decisions remain pending; no
 threshold or protocol change was made, and no repeat run was started.
 
+### Follow-up: the first pose comparison happens after takeover begins
+
+A read-only audit at `ca05f146` compared the current source with the staged
+files from native05. It identifies an unmeasured interval before INITIAL:
+
+1. `authority_recovered_source_probe.run` requires an already running world,
+   then verifies the context, binds and registers the source, and pulls its
+   first sample. The reported phase durations therefore do not describe a
+   client held paused throughout source setup.
+2. `motion_client_owner.lua` starts saved-actor binding on the first BIND
+   packet. In native05, only then does the private binder issue Wait. Three
+   100ms delays precede its zero-velocity request and Bound response. Neither
+   operation can prevent movement that already happened before this request.
+3. After binding, `authority_recovered_client_motion.lua` constructs playback
+   and reads INITIAL. Its first packet is enrollment only and is not buffered
+   or applied. `PairedPlaybackEvidence.received` then compares the raw source
+   and client positions and refuses the 88m separation.
+
+Thus the client may simulate the saved actor independently before takeover;
+the available positions do not measure its displacement during that interval.
+The source-game/client-real clock-rate problem is separate: buffered playback
+has not yet produced a target when this initial comparison fails. This rules
+out buffer prediction as the cause of this particular refusal, but does not
+identify the cause of the raw position difference.
+
+The distinction between tracked and private code matters for Windows. The
+tracked `authority_saved_baseline_motion_bind.xml` only resolves registry
+references and reports Bound. It does not contain native05's Wait, zero-velocity
+or release experiment. The Windows overlay installs that tracked binder; its
+optional playback flag does not establish exclusive control of the actor.
+The current Windows transport tests therefore cannot support an AI-takeover claim.
+
+The smallest additional native observation would retain validated actor and
+frame identity, sector position, own game time and local real time before Wait,
+after Wait is confirmed, and one later tick after the zero-velocity request.
+Native05's private bridge records only clocks for these early phases, and reads
+positions only after STOP; neither that later read nor log timestamps fill the
+missing early observations. A Lua event raised before a synchronous MD order is
+not by itself proof that the Lua position read happened before the order.
+
+The user has been asked to choose between a one-time, verified initial placement
+on the isolated fixture and further read-only measurements. If approved,
+initial placement must be a separate enrollment step with the existing identity,
+sector, ownership and readback checks; it must not weaken the ongoing 50m
+correction bound or silently change the wire clock. No such change has been
+made. This audit launched no game, reparsed no save and repeated no tests.
+
 A separate read-only code review tightened intermediate native readbacks:
 each SUMMARY now independently checks actual-to-target distance, and log reads
 must finish within the local/overall deadline with the guard still valid.

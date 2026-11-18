@@ -1,5 +1,18 @@
 # X4 multiplayer: handover for Astra
 
+Latest read-only follow-up: source setup occurs after the world is running;
+saved-client actor takeover starts only on the first BIND. Native05 reads
+INITIAL after its private Wait/zero-velocity steps, leaving earlier client
+displacement unmeasured. Its initial 88m refusal precedes buffered playback,
+so the separate clock-rate issue did not generate that comparison. The tracked
+saved binder used by the Windows CLI is read-only and does not include the
+private AI suppression/release experiment. Native Windows takeover is therefore
+still missing even though the receiver plumbing is connected. See the
+[sequence audit](AUTHORITY-CLIENT-PLAYBACK-20261117.md#follow-up-the-first-pose-comparison-happens-after-takeover-begins).
+The user has been asked whether to implement a separately verified initial
+placement on the isolated fixture or first gather early pose measurements.
+Neither behavior nor thresholds have been changed; no native test was repeated.
+
 Current client checkpoint: the Windows fixture CLI now accepts an optional
 private `--motion-config` for an existing server stream. It shares the Linux
 overlay and one-attempt `ParticipantMotion` lifecycle, including deferred READY

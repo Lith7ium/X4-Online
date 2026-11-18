@@ -210,6 +210,13 @@ and Internet operation remain untested. The preceding paired Linux experiment
 also failed its unchanged 50m initial alignment guard at approximately 88m;
 continuous paired motion remains unproven.
 
+The installed saved-actor binder only resolves the registry reference; it does
+not suppress the actor's existing AI. The Wait/zero-velocity/release experiment
+from the private Linux run is not installed by this command. Native takeover
+and initial placement therefore remain prerequisites for useful playback, even
+if transport and local receipts pass. See the
+[takeover sequence audit](../../reports/AUTHORITY-CLIENT-PLAYBACK-20261117.md#follow-up-the-first-pose-comparison-happens-after-takeover-begins).
+
 ## Shared registry and motion integration
 
 The registry prerequisite now has shared building blocks. The saved verifier
