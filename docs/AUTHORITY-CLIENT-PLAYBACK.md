@@ -27,6 +27,17 @@ of the isolated test processes. No scope spans the entire sampling window;
 normal checks remain outside pulls and before teardown. The new correction has
 passed the focused TCP/UDP fixture, but has not been exercised with X4.
 
+The private paired path also separates frequent liveness checks from full
+protected-context checks. Helper wait pumps and repeated peer checks retain
+process identity, worker, admission, IPC, socket and deadline checks; full guards
+remain around checkpoint operations, window open and checkpoint STOP. Initial
+bind/handoff and worker STOP retain their original guards. File, registry or
+client-log changes during the final lightweight peer check are detected at the
+next full boundary, possibly after dispatch. There is no cached validation or
+deadline increase. The ordinary path still uses full checks throughout.
+The focused real TCP/UDP fixture passes with simulated engine edges; this change
+has no native result yet.
+
 ## Data and lifetime
 
 The controller receives source-time positions and optional linear rates,

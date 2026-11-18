@@ -22,6 +22,49 @@ def context():
     return identity,types.SimpleNamespace(session=session)
 
 class RunningBind(unittest.TestCase):
+    def test_optional_peer_guard_retains_full_context_and_membership_fences(self):
+        for fault in (None, 'liveness', 'membership', 'process', 'socket'):
+            with self.subTest(fault=fault):
+                server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                source = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                server.bind(('127.0.0.1', 0)); source.bind(('127.0.0.1', 0))
+                server.connect(source.getsockname())
+                source.connect(server.getsockname())
+                self.addCleanup(server.close); self.addCleanup(source.close)
+                identity, world = context()
+                motion = types.SimpleNamespace(_delivery=types.SimpleNamespace(_host=types.SimpleNamespace(_world=world)))
+                calls = []
+                fail_peer = [False]
+                def full_guard():
+                    calls.append('full')
+                    return True
+                def peer_guard():
+                    calls.append('peer')
+                    if fail_peer[0] and fault == 'membership':
+                        world.session.ready_players = ()
+                    return not (fail_peer[0] and fault == 'liveness')
+                with patch.object(motion_bind, 'bind_running_source') as binding, \
+                     patch.object(motion_bind, 'ExperimentalSourceMotionIPC') as ipc:
+                    motion_bind.bind_running_source_motion(server, motion, process=identity, lease=L,
+                        attempt=A, epoch=E, generation=G, world=world, client_guard=full_guard,
+                        peer_client_guard=peer_guard, select_recipients=lambda *_: [], timeout=1)
+                self.assertIs(binding.call_args.kwargs['client_guard'], full_guard)
+                retained = ipc.call_args.kwargs
+                calls.clear()
+                self.assertTrue(retained['guard']())
+                self.assertEqual(calls, ['full'])
+                calls.clear(); fail_peer[0] = True
+                if fault == 'process':
+                    with patch.object(motion_bind, 'check_process', side_effect=RuntimeError('process changed')):
+                        with self.assertRaisesRegex(RuntimeError, 'process changed'):
+                            retained['validate_peer'](source.getsockname())
+                elif fault == 'socket':
+                    with patch.object(motion_bind, 'socket_owner', return_value=False):
+                        self.assertFalse(retained['validate_peer'](source.getsockname()))
+                else:
+                    self.assertEqual(retained['validate_peer'](source.getsockname()), fault is None)
+                self.assertNotIn('full', calls)
+
     def test_actual_socket_and_process(self):
         if not sys.platform.startswith('linux'):self.skipTest('Linux /proc required')
         server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0))

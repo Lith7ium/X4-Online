@@ -1485,6 +1485,7 @@ def run(args):
                             playback_options = {'saved_playback_fixture': saved_playback_fixture,
                                 'playback_begin': begin_playback,
                                 'playback_identity_scope': playback_identity_scope,
+                                'playback_liveness_check': active.participant.check_active_liveness,
                                 'playback_checkpoint_check': lambda: playback_window.check_checkpoint(guard),
                                 'playback_checkpoint_stop': lambda: playback_window.stop_checkpoint(guard),
                                 'playback_sample_observer': evidence.received}

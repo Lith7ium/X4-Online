@@ -542,6 +542,8 @@ class Probe(unittest.TestCase):
                 {'saved_playback_fixture': 'unknown'},
                 {'saved_playback_fixture': 'recovery_enh_870'},
                 {'playback_sample_observer': lambda _: True},
+                {'playback_liveness_check': lambda: True},
+                {'saved_playback_fixture': 'recovery_enh_870', 'playback_liveness_check': True},
                 {'playback_begin': lambda: True}):
             events, kwargs, _ = self.context()
             kwargs.update(options)
@@ -557,7 +559,11 @@ class Probe(unittest.TestCase):
     def test_real_playback_without_optional_identity_scope(self):
         self.exercise_twenty_six_samples(use_identity_scope=False)
 
-    def exercise_twenty_six_samples(self, *, use_identity_scope):
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process and socket ownership required')
+    def test_real_playback_with_separate_liveness_checks(self):
+        self.exercise_twenty_six_samples(use_identity_scope=True, use_liveness_check=True)
+
+    def exercise_twenty_six_samples(self, *, use_identity_scope, use_liveness_check=False):
         """Real UDP/TCP and ownership guards, with a simulated source/client."""
         from tests import test_authority_experimental_tcp_motion as fixture
         from test_authority_paired_playback_evidence import source_sample
@@ -637,17 +643,26 @@ class Probe(unittest.TestCase):
                 return True
             active = SimpleNamespace(participant=SimpleNamespace(check_active=Mock(side_effect=check_active),
                 stop_motion_worker=Mock(side_effect=stop_worker)))
+            liveness_check = Mock(return_value=True)
+            full_check = Mock()
             pump = recovered_client.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()), time.monotonic()+25)
             result = subject.run(sock=sock, settings=settings, index=1318, baseline=baseline, guard=guard,
                 pump=pump, active=active, host=case.case.host, world=world,
-                identity=(os.getpid(), linux_gate_live.start_ticks(os.getpid())), verify=lambda:None,
+                identity=(os.getpid(), linux_gate_live.start_ticks(os.getpid())), verify=full_check,
                 verify_process=lambda:None, client_motion=True, verify_stopped=lambda:None,
                 saved_playback_fixture='recovery_enh_870', playback_sample_observer=observe,
                 playback_identity_scope=identity_scope if use_identity_scope else None,
+                playback_liveness_check=liveness_check if use_liveness_check else None,
                 playback_begin=lambda: events.append(('begin', time.monotonic())) or True,
                 playback_checkpoint_check=lambda: pump() or True,
                 playback_checkpoint_stop=lambda: events.append(('checkpoint_stop_hook', time.monotonic())) or guard.stop())
             self.assertEqual(observed, expected)
+            self.assertGreater(full_check.call_count, 26)
+            if use_liveness_check:
+                self.assertGreater(liveness_check.call_count, 26)
+                active.participant.check_active.assert_not_called()
+            else:
+                liveness_check.assert_not_called()
             if use_identity_scope:
                 self.assertIn(('enter', 2), scope_calls)
             else:

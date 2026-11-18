@@ -63,14 +63,21 @@ def bind_source_motion(sock, motion, *, process, lease, attempt, epoch, generati
 def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, generation,
                                world, client_guard, timeout=30, validate_sample=None,
                                saved_baseline=None, saved_guard=None, select_recipients=None,candidate_indices=None,
-                               bind_timeout=None, private_long_diagnostic=False):
+                               bind_timeout=None, private_long_diagnostic=False, peer_client_guard=None):
     """Opt-in single diagnostic source; no assertion of cross-X4 identity.
 
     `bind_timeout`, when supplied, is a per-stage limit: the binding helper
     starts a fresh deadline for bind and again for handoff. The caller must
     separately enforce its overall diagnostic and process deadlines.
+
+    The private playback diagnostic can supply a cheaper peer_client_guard.
+    Full client_guard checks still surround checkpoint requests in the source
+    IPC. Peer checks retain process, socket and membership checks, but changes
+    to protected files during a peer check are detected at the next full guard,
+    potentially after dispatch. This is a sampled boundary, not an atomic lock.
     """
-    if not callable(client_guard) or not callable(select_recipients) or type(private_long_diagnostic) is not bool:
+    if (not callable(client_guard) or not callable(select_recipients) or type(private_long_diagnostic) is not bool or
+            (peer_client_guard is not None and not callable(peer_client_guard))):
         sock.close();raise ValueError('running client guard, interest selector and diagnostic option required')
     try:
         if motion._delivery._host._world is not world:
@@ -79,14 +86,19 @@ def bind_running_source_motion(sock, motion, *, process, lease, attempt, epoch, 
         members=tuple(initial_session.players)
     except BaseException:
         sock.close();raise
-    def running():
-        s=world.session
-        return (motion._delivery._host._world is world and s is initial_session and s.state=='running' and s.pending is None and len(members)==1 and
-                tuple(s.players)==members and tuple(s.ready_players)==members and client_guard() is True and
-                motion._delivery._host._world is world and world.session is initial_session and s.state=='running' and s.pending is None and
-                tuple(s.players)==members and tuple(s.ready_players)==members)
+    def running(check_client):
+        session = world.session
+        return (motion._delivery._host._world is world and session is initial_session
+                and session.state == 'running' and session.pending is None and len(members) == 1
+                and tuple(session.players) == members and tuple(session.ready_players) == members
+                and check_client() is True
+                and motion._delivery._host._world is world and world.session is initial_session
+                and session.state == 'running' and session.pending is None
+                and tuple(session.players) == members and tuple(session.ready_players) == members)
     try:
-        context,peer=_guards(sock,process,running)
+        context, peer = _guards(sock, process, lambda: running(client_guard))
+        if peer_client_guard is not None:
+            _, peer = _guards(sock, process, lambda: running(peer_client_guard))
         bind_running_source(sock,process=process,lease=lease,attempt=attempt,epoch=epoch,
                             generation=generation,world=world,client_guard=client_guard,
                             timeout=timeout if bind_timeout is None else bind_timeout)

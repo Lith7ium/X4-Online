@@ -158,10 +158,13 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         diagnostic_timeouts=None, private_long_diagnostic=False, sector_poll=None, sector_stop=None,
         sector_arm=None, sector_incarnation=None, saved_apply_fixture=None, record_apply_intent=None,
         saved_playback_fixture=None, playback_sample_observer=None,
-        playback_begin=None, playback_checkpoint_check=None, playback_checkpoint_stop=None, playback_identity_scope=None):
+        playback_begin=None, playback_checkpoint_check=None, playback_checkpoint_stop=None, playback_identity_scope=None,
+        playback_liveness_check=None):
     from authority_paired_playback_evidence import SAMPLE_COUNT, SAMPLE_INTERVAL, DRAIN_SECONDS
     if playback_identity_scope is not None and (saved_playback_fixture is None or not callable(playback_identity_scope)):
         raise ValueError('invalid playback identity scope')
+    if playback_liveness_check is not None and (saved_playback_fixture is None or not callable(playback_liveness_check)):
+        raise ValueError('invalid playback liveness check')
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -191,7 +194,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or type(client_motion) is not bool
             or type(private_long_diagnostic) is not bool
             or (saved_playback_fixture is None and any(callback is not None for callback in
-                (playback_sample_observer, playback_begin, playback_checkpoint_check, playback_checkpoint_stop, playback_identity_scope)))
+                (playback_sample_observer, playback_begin, playback_checkpoint_check, playback_checkpoint_stop,
+                 playback_identity_scope, playback_liveness_check)))
             or (saved_playback_fixture is not None and
                 (saved_playback_fixture != 'recovery_enh_870' or index != 1318 or
                  settings['epoch'] != '4ba7be438ebb04ec5bb85fdb95b5a488' or
@@ -301,22 +305,23 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
 
     def pump_guard():
         with nullcontext() if playback_identity_scope is None else playback_identity_scope():
-            return pump_guard_body()
+            return check_liveness(record_pump=True)
 
-    def pump_guard_body():
-        # The enclosing source IPC rechecks its full context before and after
-        # each saved-guard call. While the helper hashes, only process/log and
-        # client liveness need pumping; re-hashing source on each IPC byte or
-        # wait poll would repeat the same check without adding a boundary.
+    def check_liveness(*, record_pump=False):
+        # Source IPC checks its full context around checkpoint requests. Window
+        # open and checkpoint STOP have full guards in the enclosing probe.
+        # Do not re-hash protected files on every helper byte or wait poll.
         check_deadline()
-        if diagnostics is not None:
+        if record_pump and diagnostics is not None:
             diagnostics.pump_process_guard_calls += 1
         verify_process()
-        if diagnostics is not None:
+        if record_pump and diagnostics is not None:
             diagnostics.pump_client_guard_calls += 1
-        if active.participant.check_active(server_checked=True) is not True:
+        available = (playback_liveness_check() if playback_liveness_check is not None
+                     else active.participant.check_active(server_checked=True))
+        if available is not True:
             raise RuntimeError('retained client unavailable')
-        if diagnostics is not None:
+        if record_pump and diagnostics is not None:
             diagnostics.pump_process_guard_calls += 1
         verify_process()
         check_deadline()
@@ -407,6 +412,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     binding_options = {} if diagnostic_timeouts is None else {'bind_timeout': source_bind}
     if private_long_diagnostic:
         binding_options['private_long_diagnostic'] = True
+    if playback_liveness_check is not None:
+        binding_options['peer_client_guard'] = check_liveness
     source = checked_operation(bind_running_source_motion,
         sock, motion, process=process, lease=settings['lease'], attempt=settings['attempt'],
         epoch=settings['epoch'], generation=settings['generation'], world=world,

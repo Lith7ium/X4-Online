@@ -1,5 +1,7 @@
 -- Default-off XYZ playback. One existing UI owner supplies samples and ticks.
--- Source time is remote real time; arrival/render time share the local clock.
+-- Arrival/render times share the local real-time clock. The buffer assumes the
+-- source clock advances at the same rate; the paired X4 source currently sends
+-- game time, so unequal rates remain unresolved (see the motion clock report).
 local M = {}
 
 local function finite(value)

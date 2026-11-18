@@ -14,7 +14,7 @@
 > restoration, paired movement, Windows/Internet gameplay and the overall goal
 > remain unproven. The offline
 > [clock-basis observation](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md) records a
-> playback errors under synthetic unequal clock rates; the user's decision is pending
+> playback error under synthetic unequal clock rates; the user's decision is pending
 > and no protocol change has been made. Start with
 > [the current client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md) and
 > [the playback guide](../docs/AUTHORITY-CLIENT-PLAYBACK.md). The original handover
@@ -27,7 +27,14 @@ is assumed. The focused 26-sample fixture passes, but the changed scope has no X
 result yet. Offline tracing found 3,841 aggregate guards and 611 checkpoint checks
 for the complete flow. Its helper/file checks are simulated, so do not treat its
 timing as a native performance prediction or restart X4 without accounting for
-the remaining nested costs.
+the remaining nested costs. A further private liveness/full-context separation
+has reduced the count to 1,395 aggregate guards, still 611 checkpoint calls.
+The updated real TCP/UDP fixture passes with simulated engine edges. Full guards
+still surround checkpoint operations; file/registry/log changes during the last
+lightweight peer check can be detected only at the next full boundary, after a
+dispatch. Initial bind, worker STOP and ordinary callers retain full checks.
+No native retry has yet exercised these two changes. See the current report for
+the real-helper measurement and precise limits.
 
 ## Objective and decisions from the user
 

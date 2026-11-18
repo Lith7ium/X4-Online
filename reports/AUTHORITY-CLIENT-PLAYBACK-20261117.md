@@ -119,6 +119,48 @@ retains the unscoped path. A separate real TCP/UDP test of that path passed in
 native run has been performed; remaining helper/file costs need accounting
 before deciding whether another expensive native attempt is justified.
 
+A subsequent bounded helper measurement used the actual `WitnessGuardClient`,
+`WitnessGuardPump` and `PlaybackSamplingWindow`, tiny synthetic valid checkpoints,
+and two harmless Python process groups. Its 598 metadata calls (26 batches of
+23) took 4.524s; total open/check/STOP/close time was 4.634s. Each request invoked
+nine pump checks (5,382 during metadata requests). The batches used 104 full
+group discoveries and took 0.172–0.178s each. Full STOP, window close and reader
+release succeeded under the existing 10s window and 20s helper deadlines.
+There was no TCP flow in this fallback; protected/native context checks remained
+stubs apart from real process identities and save pins. It measures helper cost,
+not native performance. Evidence in the same measurement worktree:
+`.local/guard-counts-real_window-20261118.json` and
+`.local/guard-real-window-measurement-20261118.log`.
+
+The following private diagnostic change removes repeated full-context checks
+inside peer validation and helper wait pumps. `check_active_liveness` retains
+the same worker, admitted membership and IPC checks, bracketed by game identity
+and deadline checks. Its lifetime is the existing retained-worker callback;
+cleanup and worker STOP invalidate both entry points. The source IPC retains
+full guards before and after checkpoint calls. Window-open and checkpoint-STOP
+are enclosed by the outer full guards; worker STOP uses its original path.
+Protected file, registry and client-log changes during a final lightweight peer
+check are detected at the next full boundary, potentially after dispatch. The
+ordinary path and all diagnostic deadlines are unchanged.
+
+Focused offline tests covered worker exit, membership loss, unexpected IPC,
+identity loss, cleanup, source socket ownership and the full 26-sample TCP/UDP
+flow with ordered drain. The new adapter test initially omitted the source UDP
+connection; after correcting that fixture, its five fault variants passed.
+An independent read-only review found no unguarded helper operation or lifecycle
+leak. These tests use simulated X4 processes and do not establish native motion.
+
+A single updated count trace recorded 94 full guards at the first actual TCP
+send, 106 at the first ACK, and 1,395 for the complete flow (previously 192, 228
+and 3,841). The complete flow still made 611 checkpoint calls. It made 3,057
+lightweight checks and 6,114 source process checks, with one simulated helper
+pump per checkpoint. It passed in 6.420s, but protected context and helper costs
+are stubs in this trace. Evidence:
+`.local/paired-liveness-count-20261118/guard-counts-liveness-counts-20261118.json`;
+reproduce from the repository root with
+`X4_MEASURE_CODE_ROOT="$PWD" python .local/paired-liveness-count-20261118/measure.py counts`.
+No new native attempt has yet exercised either this change or the per-pull scope.
+
 A separate read-only code review tightened intermediate native readbacks:
 each SUMMARY now independently checks actual-to-target distance, and log reads
 must finish within the local/overall deadline with the guard still valid.
