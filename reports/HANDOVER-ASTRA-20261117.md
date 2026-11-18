@@ -1,6 +1,6 @@
 # X4 multiplayer: handover for Astra
 
-Latest result: paired native04 reached one confirmed client receipt, then failed
+Latest native result: paired native04 reached one confirmed client receipt, then failed
 the initial 50m alignment bound. No continuous paired movement was proven.
 Cleanup passed; no X4 remains. The full details and following diagnostic fix are
 in the current client report. Native03 below is retained as preceding context.
@@ -34,6 +34,22 @@ be undone. Its caller still owns X4/process/profile/log provenance and cleanup.
 This bounded diagnostic is not yet connected to a native Windows supervisor.
 See [the client barrier contract](../src/authority/CLIENT_LOAD_BARRIER.md).
 No new X4, Windows, Internet or full-suite run was made for these changes.
+
+The client-first continuation now includes an opt-in Windows fixture CLI,
+`tools/dev/authority_windows_fixture_client.py`, composing the existing TLS,
+staging, overlay, process owner and observed session. It uses only a new 45841
+profile and new private output containers, and retains artifacts instead of
+overwriting or recursively deleting prior runs. The native process is stopped
+before connection teardown; uncertain cleanup is an error. Fast idle polls
+are paced to avoid spinning on incomplete log lines. Twelve focused lifecycle
+tests and five CLI/config tests passed with simulated Windows/X4 edges. The
+workspace's nine filesystem-backed tests also passed with Windows commands
+and game setup simulated; actual NTFS junctions and ACL inheritance remain
+unverified. Initial profile settings are checked once before launch and may
+then be rewritten by X4; overlay/save identity checks remain active. The
+assembled command has not been run with Windows X4; the server must still
+provide a compatible marked identity-fixture checkpoint. See
+[the invocation and validation boundary](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md).
 
 > Client-first continuation, 18 November: server graphics work remains deferred.
 > The bounded live-input path and explicit fresh-checkpoint paired playback

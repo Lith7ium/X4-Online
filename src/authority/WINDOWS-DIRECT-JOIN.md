@@ -1,9 +1,12 @@
 # Windows direct-join preparation
 
 The target is a Windows X4 client joining the Linux host's persistent X4
-universe directly over the Internet. There is currently **no integrated Windows
-authority launcher or installer**. The pieces below are development inputs;
-they do not yet let a player join, fly, trade or fight on that server.
+universe directly over the Internet. There is currently **no validated Windows
+authority gameplay launcher or installer**. An opt-in
+[fixture client diagnostic](../../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md)
+now composes the process, profile, transfer and observed-session components.
+It has not been validated with Windows X4 and does not replicate ships or
+player actions. The pieces below remain development inputs.
 
 ## Pieces available
 
@@ -31,22 +34,20 @@ checkpoint, accept correlated load/marker/pause observations supplied by its
 caller, and hand the control connection to a participant adapter. The client
 listeners of the TLS tunnel can supply its control and file endpoints. These
 observations are caller assertions, not independently authenticated X4 events.
-The owner has no Windows game-process or launcher integration. The Windows
-fixture overlay in `experimental_windows_fixture_overlay.py` is limited to a
-specific diagnostic checkpoint and does not start X4 or provide that supervisor.
+The Windows fixture session now composes this owner with `ObservedClientSession`
+and `WindowsX4Process` under a new `WindowsFixtureWorkspace`. The overlay in
+`experimental_windows_fixture_overlay.py` remains limited to a specific
+diagnostic checkpoint. The integration still needs native Windows validation.
 See [client load observations](CLIENT_LOAD_BARRIER.md).
 
 ## Required connection work
 
-1. Build a Windows session supervisor around the existing client owner and
-   TLS client. It must start and monitor the tunnel, pass its loopback ports to
-   the owner, and handle the separate file-service credential. A tunnel alone
-   is not a game session.
-2. Adapt the LAN installation/discovery and rollback code for a fresh,
-   exclusively owned authority test profile and extension view. Verify game,
-   enabled content and the offered checkpoint before staging. Never delete or
-   overwrite an existing save to make room; retain recovery information for
-   owned changes. Do not launch the old `Start-TestGame` unchanged.
+1. Validate the assembled Windows fixture supervisor, TLS client and separate
+   file-service credential against the actual Linux server. Existing synthetic
+   component tests do not establish that this assembled process works on Windows.
+2. Validate its fresh profile and game view on Windows, including normal-profile
+   preservation. The diagnostic retains owned artifacts and refuses existing
+   profiles; a reusable player-facing installation/recovery flow remains absent.
 3. Bind real Windows X4 load, checkpoint-marker and pause observations to the
    same owned process and outstanding offer, and connect the local X4
    participant controller to the owner. Keep it alive through admission and
