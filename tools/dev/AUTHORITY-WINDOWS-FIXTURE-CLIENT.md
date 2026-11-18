@@ -17,7 +17,11 @@ Windows remain untested by it. See the [engine-load record](../../reports/AUTHOR
 [private control run](../../reports/AUTHORITY-WINDOWS-ENGINE-CONTROL-20261118.md)
 confirmed actual Windows-engine resume/pause and raw clock progress/stability
 under Proton. It used a locally generated offer and Linux-owned isolation;
-real server/TLS/admission and the assembled Windows CLI remain untested by it.
+real server/TLS/admission and the assembled Windows CLI remain untested by it. The subsequent
+[actual Linux/Windows-under-Proton pair](../../reports/AUTHORITY-WINDOWS-LINUX-TLS-ADMISSION-20261118.md)
+passed real loopback TLS transfer, admission, client resume and final server
+pause/save. Linux owned both engines; native Windows CLI/Win32 ownership,
+WAN, motion and gameplay remain untested.
 
 ## Prerequisites
 
