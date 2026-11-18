@@ -10,16 +10,18 @@
 > live-input path now preserves source samples and connects through the existing
 > admitted TCP owner. The shared supervisor now also wires an explicit bounded
 > source-to-client playback diagnostic through fresh checkpoint admission and
-> metadata guards between full digest boundaries. Latest native attempt
-> `private-paired-playback-native-20261118-01` reached isolated server checkpoint
-> publication but failed a stale exact registry-hash check before sampling or
-> native client launch. Native08 remains the latest native client success: one
-> Linux client completed bounded playback/STOP/pause with synthetic host
-> controls. The hash comparison fix passed 8 focused tests and retained
-> fresh-checkpoint preflight; attempt 01 has not been rerun. Its source pins were
-> unchanged and owned-scope/Xauthority cleanup was confirmed. No source samples,
-> paired client result, Windows test or Internet gameplay came from attempt 01.
-> Paired-path release observation and general NPC control remain unresolved. Start with
+> metadata guards between full digest boundaries. Paired native attempt 01
+> rejected a fresh registry mapping before client launch; the narrow correction
+> passed eight focused tests and retained-input preflight. Attempt 02 then loaded
+> the fresh checkpoint in the native client and observed marker/register/pause
+> receipts, but repeated diagnostic checks consumed its 60-second sampling window
+> during source registration. Zero source samples/client motion receipts were
+> recorded. Both runs confirmed source pins and owned-scope/Xauthority cleanup.
+> Native08 remains the latest successful native client playback, with synthetic
+> host controls. Guard costs are the immediate investigation; no timeout was
+> increased. Intermediate readback/deadline checks were tightened separately
+> after native02, with six focused tests passing. General NPC control,
+> Windows/Internet gameplay and the overall goal remain unresolved. Start with
 > [the current client report](AUTHORITY-CLIENT-PLAYBACK-20261117.md) and
 > [the playback guide](../docs/AUTHORITY-CLIENT-PLAYBACK.md). The original handover
 > below records the earlier checkpoint, not the current branch tip.

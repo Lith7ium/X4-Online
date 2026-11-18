@@ -7,18 +7,48 @@ The overall Windows/Linux Internet gameplay goal remains unmet.
 Current client increment, 18 November: both the independent bounded live-input
 path and an explicit paired-supervisor playback path are now wired in code.
 The paired path uses the existing retained TCP owner and fresh join checkpoint.
-The latest native attempt, paired playback 01, failed in recovery-lineage
-preflight after the isolated server published a fresh checkpoint; it stopped
-before source sampling or native client launch. The rejection was a stale exact
-registry-status hash comparison. The narrow comparison fix in `d06f62cb` now
-accepts the fresh lowercase mapping hash while retaining exact typed checks for
-the ready state, epoch and count. Its 8 focused tests passed in 0.020s, and the
-retained fresh-checkpoint preflight passed. The run's source pins were unchanged
-and owned-scope/Xauthority cleanup was confirmed. Native08 remains the latest
-native client success: one Linux client completed the bounded 20-metre
-playback/STOP/pause flow with synthetic host controls. No source samples or
-client were launched in paired attempt 01. No Windows or Internet gameplay is
-established.
+Paired attempt 02 passed the corrected fresh-checkpoint preflight and launched
+the native client, which loaded the new join save and reported its marker,
+registry and paused state. It then failed before the first source sample:
+repeated harness checks exhausted the 60-second playback window during source
+registration. Native08 remains the latest successful native client playback,
+using synthetic host controls. No paired movement, Windows or Internet gameplay
+is established.
+
+## Native paired attempts, 18 November
+
+Attempt 01 published a fresh server checkpoint but rejected its changed registry
+mapping hash before launching the client. The correction in `ba16b0e7` keeps
+exact typed ready-state, epoch and count checks and accepts the fresh mapping
+already admitted by the checkpoint/witness guard. Eight focused tests passed in
+0.020s and a read-only preflight against the retained client inputs passed.
+Evidence: `.local/private-paired-playback-native-20261118-01/` and
+`../x4-paired-playback-lineage-20261118/.local/retained-playback-lineage-preflight-20261118.json`.
+
+Attempt 02 used the same pinned private Wait/release artifacts and the corrected
+installer. The native client loaded the new `save_009` and reported the expected
+marker, 10,082-entry register and paused state. The source diagnostic then
+failed with `playback sampling deadline expired` during `register_source`:
+
+- 60.044 seconds elapsed: initial verification 6.905s, source binding 34.062s,
+  and registration 19.078s.
+- 59 aggregate guard calls accounted for 42.691s; two checkpoint metadata
+  requests accounted for 11.155s. These are diagnostic timings, not isolated
+  component benchmarks or universe simulation performance.
+- Zero source samples, pull attempts or client receipts were recorded. No
+  playback, release observation or successful departure save is established.
+
+Both failed attempts confirmed source/pin preservation, Steam identity and
+owned-process/Xauthority cleanup. Attempt 02 left no X4 executable process or
+global X4 lock. Evidence:
+`.local/private-paired-playback-native-20261118-02/{result.json,trial-result.json,paired-server/result.json}`.
+The remaining guard cost is under investigation; no timeout was increased.
+
+A separate read-only code review tightened intermediate native readbacks:
+each SUMMARY now independently checks actual-to-target distance, and log reads
+must finish within the local/overall deadline with the guard still valid.
+All six tests in `tests.test_authority_paired_playback_evidence` passed. This
+change was integrated after attempt 02; that native attempt did not exercise it.
 
 ## Paired source and client integration, 18 November
 
@@ -62,8 +92,9 @@ installed by this new switch. Native paired attempt 01 failed before the client
 was launched, so it produced no source samples, playback, release observation
 or departure pause/save. The runner did confirm unchanged source pins and
 owned-scope/Xauthority cleanup. The narrow fresh-mapping-hash fix is covered by
-8 focused tests (0.020s) and a passing retained-checkpoint preflight; attempt 01
-has not been rerun. General NPC authority and exact AI/velocity restoration
+8 focused tests (0.020s), a passing retained-checkpoint preflight and attempt
+02 progressing through native client load. The subsequent diagnostic timeout
+is detailed above. General NPC authority and exact AI/velocity restoration
 remain unresolved.
 
 Focused validation, without an expensive full-suite rerun:
