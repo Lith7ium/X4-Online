@@ -27,6 +27,15 @@ events. A pause observation by itself does not show that `LoadGame` succeeded,
 which file X4 consumed, that no simulation occurred before the pause, or that
 the loaded universe matches the checkpoint.
 
+`load_observations.validate_bound_offer_receipts` checks a complete, bounded
+log snapshot for the ordered request, inspected marker and pause against one
+`MarkerBoundOffer` and an explicitly supplied local slot. Its legacy-compatible
+`validate_client_receipts` entry accepts the equivalent expected ticket and
+marker. These helpers only compare text: the caller must establish log and
+process provenance and file continuity. Offer size and name are not logged;
+the helpers do not prove loaded bytes, authorize admission, or establish
+native Windows behavior.
+
 These primitives provide no authenticated event transport or independent
 cross-reload proof. The isolated supervisor treats its correlated observations as
 trusted assertions for experimental admission, not as proof of the loaded file.

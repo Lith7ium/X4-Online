@@ -57,6 +57,7 @@ class MarkedHarnessTest(unittest.TestCase):
             marker = 'd' * 32
             content = (live.base.client.TAG + watch.expected[0] + b'\nAUTH_MARKER load INSPECTED '
                        + marker.encode() + b'\n' + live.base.client.TAG + watch.expected[1] + b'\n')
+            self.assertIsNone(live.validate_client_receipts(content, ticket, marker))
             with patch.object(live.identity_evidence, 'observations_bytes', return_value=[{'name': 'n', 'macro': 'm'}]):
                 client.write_bytes(content)
                 live.observe_logs(server, client, ticket, marker)

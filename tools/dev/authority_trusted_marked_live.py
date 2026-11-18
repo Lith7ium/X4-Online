@@ -19,6 +19,7 @@ import authority_two_x4_resume_live as resume
 import authority_identity_live as identity_evidence
 import authority_marked_admission_evidence as file_evidence
 from authority.experimental_client_load import ExperimentalClientLoad
+from authority.load_observations import validate_client_receipts
 from authority.save_transfer import receive
 from authority.trusted_marker_load_session import TrustedMarkerLoadSession
 
@@ -57,24 +58,6 @@ def observe_logs(server_log, client_log, ticket, marker):
     if (file_evidence._read_regular(server_log, file_evidence.MAX_LOG, collect=True) != before or
             file_evidence._read_regular(client_log, file_evidence.MAX_LOG, collect=True) != after):
         raise ValueError('log changed during observation')
-
-
-def validate_client_receipts(data, ticket, marker):
-    """Require exactly request, inspected marker and observed pause, in order."""
-    if len(data) > file_evidence.MAX_LOG or (data and not data.endswith(b'\n')):
-        raise ValueError('client log incomplete or oversized')
-    watch = base.client.ReceiptWatch(None, ticket)
-    rows = []
-    for line in data.splitlines():
-        if len(line) > watch.MAX_LINE: raise ValueError('client log line too long')
-        if base.client.TAG in line:
-            rows.append(('load', line.split(base.client.TAG, 1)[1].strip()))
-        if b'AUTH_MARKER ' in line:
-            rows.append(('marker', line.split(b'AUTH_MARKER ', 1)[1].strip()))
-    expected = [('load', watch.expected[0]),
-                ('marker', b'load INSPECTED ' + marker.encode('ascii')),
-                ('load', watch.expected[1])]
-    if rows != expected: raise ValueError('load and marker observations differ or are out of order')
 
 
 
