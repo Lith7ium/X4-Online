@@ -48,6 +48,58 @@ class WindowTests(unittest.TestCase):
         return self.window.open(self.entries,self.helper,process_guard=self.process_guard,
                                 deadline=time.monotonic()+10)
 
+    def install_production_pump(self, active_check):
+        from authority_recovered_server_client import WitnessGuardPump, ServerClient
+        participant=object.__new__(ServerClient)
+        participant._active_check=active_check
+        control=SimpleNamespace(_reader_lease=None, _reader_free=lambda:None)
+        host=SimpleNamespace(_busy=False,_control=control)
+        pump=WitnessGuardPump(participant,self.helper.deadline)
+        pump.activate(host=host,guard=lambda:participant.check_active(server_checked=True))
+        self.helper.pump=pump
+        return host
+
+    def test_real_helper_pump_checks_pinned_saves_on_open_metadata_and_stop(self):
+        states=[]
+        def active_check(*, server_checked=False):
+            self.assertTrue(server_checked)
+            states.append(self.helper.state)
+            return self.window.check_save(*self.entries[1])
+        host=self.install_production_pump(active_check)
+        self.assertTrue(self.enter())
+        opening=len(states)
+        self.assertGreater(opening,0)
+        self.assertEqual(self.hash_calls,[])  # Opening helper pump already uses pins.
+        self.assertTrue(self.window.check_checkpoint(self.helper))
+        self.assertGreater(len(states),opening)
+        self.assertTrue(self.window.stop_checkpoint(self.helper))
+        self.assertIn('checking',states);self.assertIn('stopping',states)
+        self.assertTrue(self.window.close(process_guard=self.process_guard))
+        self.assertFalse(self.window.failed);self.assertFalse(host._busy)
+        self.assertIsNone(host._control._reader_lease)
+        self.assertEqual(self.hash_calls,[])
+
+    def test_real_helper_pump_cannot_reenter_checkpoint_even_if_error_is_caught(self):
+        attempts=[]
+        def active_check(*, server_checked=False):
+            if not attempts:
+                attempts.append(True)
+                try:self.window.check_checkpoint(self.helper)
+                except RuntimeError:pass
+            return True
+        self.install_production_pump(active_check)
+        with self.assertRaises(RuntimeError):self.enter()
+        self.assertEqual(attempts,[True]);self.assertTrue(self.window.failed)
+        self.window.cleanup()
+        with self.assertRaises(RuntimeError):self.window.check_save(*self.entries[0])
+
+    def test_process_callback_has_no_general_save_reentry_exception(self):
+        def recursive_process_guard():return self.window.check_save(*self.entries[0])
+        with self.assertRaises(RuntimeError):
+            self.window.open(self.entries,self.helper,process_guard=recursive_process_guard,
+                             deadline=time.monotonic()+10)
+        self.assertTrue(self.window.failed)
+
     def test_full_outside_metadata_inside_full_boundaries_and_clean_stop(self):
         self.assertTrue(self.window.check_save(*self.entries[0]))
         self.assertTrue(self.window.check_source())

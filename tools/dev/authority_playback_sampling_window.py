@@ -4,7 +4,8 @@ The caller serializes all writers and its FD table and keeps both private saves
 read-only in X4. Metadata checks are not proof of unchanged bytes or a writer
 lock. Full checks bracket this phase; no thread, socket reader or helper is
 owned here. The process guard must return True without entering this window or
-an aggregate save guard, including when it pumps the checkpoint helper.
+an aggregate save guard. The separately owned checkpoint-helper pump may
+check local save pins during this window's explicitly owned helper requests.
 """
 import math
 import time
@@ -30,6 +31,8 @@ class PlaybackSamplingWindow:
         self._process_guard = None
         self._deadline = None
         self._pidfd = None
+        self._helper_io = None
+        self._local_save_busy = False
         self.metrics = dict(source_full_checks=0, source_metadata_checks=0,
                             checkpoint_full_checks=0, checkpoint_metadata_checks=0,
                             windows=0, saves=self._saves.metrics,
@@ -59,9 +62,13 @@ class PlaybackSamplingWindow:
             if stopped or guard.state == 'stopped':
                 if guard.state != 'stopped' or self._process.poll() != 0 or self._helper.pidfd is not None:
                     raise RuntimeError('full checkpoint STOP not confirmed')
-            elif (guard.state != 'ready' or self._process.poll() is not None or
-                  self._helper.pidfd != self._pidfd):
-                raise RuntimeError('playback checkpoint helper unavailable')
+            else:
+                local_helper_check = self._helper_io is guard and self._local_save_busy
+                permitted_states = ('ready', 'checking', 'stopping') if local_helper_check else ('ready',)
+                exits = (None, 0) if local_helper_check and guard.state == 'stopping' else (None,)
+                if (guard.state not in permitted_states or self._process.poll() not in exits or
+                        self._helper.pidfd != self._pidfd):
+                    raise RuntimeError('playback checkpoint helper unavailable')
 
     def _process_check(self, *, stopped=False):
         self._context(stopped=stopped)
@@ -83,7 +90,39 @@ class PlaybackSamplingWindow:
         finally:
             self._busy = False
 
+    def _helper_request(self, guard, operation):
+        if self._helper_io is not None or not isinstance(guard, WitnessGuardClient):
+            raise RuntimeError('playback helper request reentered or invalid')
+        self._helper_io = guard
+        try:
+            return operation()
+        finally:
+            self._helper_io = None
+
+    def _nested_save_check(self, path, digest):
+        # Only the owned helper's pump may enter this local, non-IPC operation.
+        # Never release the outer busy flag or permit a second nested check.
+        if (self.failed or threading.get_ident() != self._owner or self._local_save_busy or
+                self._source is not self._original_source):
+            self.failed = True
+            raise RuntimeError('playback nested save check unavailable')
+        self._local_save_busy = True
+        try:
+            if self._checkpoint is not None: self._process_check()
+            result = self._saves.check(path, digest)
+            if self._checkpoint is not None: self._process_check()
+            if result is not True or self.failed:
+                raise RuntimeError('playback nested save check did not confirm')
+            return True
+        except BaseException:
+            self.failed = True
+            raise
+        finally:
+            self._local_save_busy = False
+
     def check_save(self, path, digest):
+        if self._busy and self._helper_io is not None:
+            return self._nested_save_check(path, digest)
         def check():
             if self.state == 'active': self._process_check()
             result = self._saves.check(path, digest)
@@ -111,11 +150,11 @@ class PlaybackSamplingWindow:
                     raise RuntimeError('playback checkpoint guard changed')
                 self._process_check()
                 self.metrics['checkpoint_metadata_checks'] += 1
-                result = guard.check_metadata()
+                result = self._helper_request(guard, guard.check_metadata)
                 self._process_check()
             else:
                 self.metrics['checkpoint_full_checks'] += 1
-                result = guard.check()
+                result = self._helper_request(guard, guard.check)
             return result
         return self._run(check)
 
@@ -137,17 +176,28 @@ class PlaybackSamplingWindow:
             if self._source.check() is not True:
                 raise RuntimeError('source full boundary failed')
             self._process_check()
-            self.metrics['checkpoint_full_checks'] += 1
-            if checkpoint_guard.check() is not True:
-                raise RuntimeError('checkpoint full boundary failed')
-            self._process_check()
             self._saves.open(entries, expected_count=2)
             self._saves.boundary(self._process_check)
+            self._process_check()
+            self.metrics['checkpoint_full_checks'] += 1
+            if self._helper_request(checkpoint_guard, checkpoint_guard.check) is not True:
+                raise RuntimeError('checkpoint full boundary failed')
             self._process_check()
             self.state = 'active'
             self.metrics['windows'] += 1
             return True
         return self._run(enter)
+
+    def stop_checkpoint(self, guard):
+        """Run the existing full STOP with local save checks allowed in its pump."""
+        def stop():
+            if self.state != 'active' or guard is not self._checkpoint:
+                raise RuntimeError('playback checkpoint guard changed or inactive')
+            self._process_check()
+            result = self._helper_request(guard, guard.stop)
+            self._process_check(stopped=True)
+            return result
+        return self._run(stop)
 
     def close(self, *, process_guard):
         """Full exit boundary; use the same pure process callback as open()."""
