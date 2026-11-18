@@ -36,6 +36,8 @@ class PairedPlaybackEvidence:
                 raise RuntimeError('playback evidence guard or deadline failed')
             try:
                 records = self.reader.read()
+                if check() is not True or time.monotonic() >= deadline:
+                    raise RuntimeError('playback evidence guard or deadline failed')
                 if records[field] is not None:
                     return records
             except PlaybackLogPending:
@@ -71,7 +73,9 @@ class PairedPlaybackEvidence:
             raise ValueError('paired playback final sample not observed')
         for row in [*summaries, stopped]:
             if (not 2 <= row['source_sequence'] <= SAMPLE_COUNT or
-                    not row['source_sequence'] <= row['samples'] <= SAMPLE_COUNT or row['error'] > 3):
+                    not row['source_sequence'] <= row['samples'] <= SAMPLE_COUNT or row['error'] > 3 or
+                    math.dist([row['actual_' + axis] for axis in ('x', 'y', 'z')],
+                              [row['target_' + axis] for axis in ('x', 'y', 'z')]) > 3):
                 raise ValueError('paired playback readback mismatch')
         predicted = [final[axis] + final['velocity'][axis] * PREDICTION_HORIZON for axis in ('x', 'y', 'z')]
         target = [stopped['target_' + axis] for axis in ('x', 'y', 'z')]

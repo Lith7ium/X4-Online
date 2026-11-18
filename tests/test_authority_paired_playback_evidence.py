@@ -3,7 +3,9 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
@@ -59,6 +61,51 @@ class PairedEvidence(unittest.TestCase):
                 evidence=self.evidence(path); self.feed(evidence)
                 with path.open('ab') as stream: stream.write(log[len(initial):])
                 with self.assertRaises(ValueError): evidence.stopped(stopped_guard=lambda: True)
+
+    def test_summary_readback_distance_is_checked_independently_of_reported_error(self):
+        for actual_x, accepted in (('1000', False), ('1018.5', True)):
+            with self.subTest(actual_x=actual_x), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)/'engine.log'
+                # Only SUMMARY is changed; STOPPED remains internally consistent.
+                path.write_bytes(native_log().replace(b'actual_x=1021.4',
+                    ('actual_x='+actual_x).encode(), 1))
+                evidence = self.evidence(path)
+                self.feed(evidence)
+                if accepted:
+                    self.assertTrue(evidence.stopped(stopped_guard=lambda: True)['native_position_changed'])
+                else:
+                    with self.assertRaisesRegex(ValueError, 'readback mismatch'):
+                        evidence.stopped(stopped_guard=lambda: True)
+
+    def test_log_read_must_finish_within_local_and_overall_deadline(self):
+        for overall_deadline, after_read in ((10, 5), (2, 2)):
+            with self.subTest(overall_deadline=overall_deadline):
+                now = [0.0]
+                guard_calls = []
+                clock = SimpleNamespace(monotonic=lambda: now[0], sleep=lambda _: None)
+                with patch.object(subject, 'time', clock):
+                    evidence = subject.PairedPlaybackEvidence('unused', guard=lambda: guard_calls.append(True) or True,
+                                                               deadline=overall_deadline)
+                    def read():
+                        now[0] = after_read
+                        return ('record', None, None)
+                    evidence.reader = SimpleNamespace(read=read)
+                    with self.assertRaisesRegex(RuntimeError, 'guard or deadline failed'):
+                        evidence._wait_for(0)
+                self.assertEqual(len(guard_calls), 2)
+
+    def test_guard_must_still_confirm_after_log_read(self):
+        now = SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _: None)
+        calls = []
+        def guard():
+            calls.append(True)
+            return len(calls) == 1
+        with patch.object(subject, 'time', now):
+            evidence = subject.PairedPlaybackEvidence('unused', guard=guard, deadline=10)
+            evidence.reader = SimpleNamespace(read=lambda: ('record', None, None))
+            with self.assertRaisesRegex(RuntimeError, 'guard or deadline failed'):
+                evidence._wait_for(0)
+        self.assertEqual(len(calls), 2)
 
     def test_source_identity_clock_and_initial_offset_are_not_relabelled(self):
         for mutation in ({'index': 42}, {'sequence': 2}, {'x':1051}, {'sector_macro':'other'}):
