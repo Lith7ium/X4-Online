@@ -2,6 +2,16 @@
 
 ## Latest: availability experiment approved; client entry clarified (2026-11-20)
 
+The default-off availability diagnostic is implemented and independently
+reviewed. It captures five raw flags for up to 16 selected registry indices,
+seals the observation tables, and can compare saved/fresh readings after reload.
+The separate saved-byte parser checks exact correlation and sparse index sets.
+Targeted MD, Lua owner and parser checks passed; no production acceptance rule
+changed. The private native runner prepares a capture/save process followed by
+a fresh reload/inspect process, with source input mounted read-only and the
+candidate left unconfirmed. Native validation is still pending. See the
+[diagnostic scope](../docs/AUTHORITY-SHIP-LIFETIME-DESIGN.md#approved-experiment-checkpoint-availability).
+
 The saved-registry verifier now reports complete missing index/component pairs
 through `RegisteredComponentsMissingError`, with counts and bounded error text.
 Strict acceptance is unchanged. Ten focused synthetic tests passed; the real

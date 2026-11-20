@@ -46,6 +46,25 @@ assume that all seven disappeared by the same mechanism or remove their ship
 class from coverage. The exact MD representation, event coverage, client
 visibility behavior and migration are not yet settled.
 
+The first implementation is a default-off diagnostic in
+`tools/dev/authority_registry_availability_probe.{lua,xml}`. It observes up to
+16 explicitly selected indices from a fixed issued-count snapshot and saves
+five separate integer-flag tables: forward entry present, object exists, ship
+class, operational, and reverse mapping matches. Seal closes capture; Inspect
+reports saved and fresh flags without overwriting the saved observations.
+The registry and game objects are read-only. The saved `faulted` field is
+reserved: false does not prove Lua-owner success, which must be established
+separately from correlated receipts.
+
+`authority_registry_availability_saved.py` validates only the checkpoint bytes,
+including digest, correlation, table separation and exact selected indices.
+It does not decide availability or destruction and is not used by admission.
+Five structural MD tests, eight saved-reader tests and the Lua owner test
+passed; private synthetic adapter checks cover capture/save and inspect wiring.
+These results do not establish native MD semantics or persistence. A private
+single-process-at-a-time capture/save/restart experiment is prepared for the
+seven missing entries plus control index 1318; no native result yet.
+
 ## Existing identity
 
 The experimental motion-v1 identity contains a registry `epoch`, a random
