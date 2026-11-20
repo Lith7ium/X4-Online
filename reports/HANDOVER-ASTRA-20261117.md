@@ -1,17 +1,42 @@
 # X4 multiplayer: handover for Astra
 
 Resumed (2026-11-20) at the user's request from pause checkpoint `10ec3f40`.
-The approved optional diagnostic guard utility is implemented; native runner
-integration is being prepared separately. Twelve focused tests passed, covering
-simulated expiry/lifecycle faults and an actual lightweight Linux child's exit
-and local socket replacement. No new X4 test has run. See
-[the implementation scope](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#diagnostic-guard-implementation-2026-11-20).
+The approved optional diagnostic guard utility is implemented. Its private
+native runner has since completed one bounded Proton run. Twelve focused tests
+passed, covering simulated expiry/lifecycle faults and an actual lightweight
+Linux child's exit and local socket replacement. A bounded NO-GAME refresh-cost measurement also
+completed: 120 modeled hot calls took 1.3227 s, with 6 full refreshes and 114
+reuses; four checks at strict block boundaries make 10 full refreshes across
+124 total calls.
+This is not an X4 performance result. See the
+[implementation and measurement](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#diagnostic-guard-implementation-2026-11-20).
 
-Next: finish the new private runner integration and representative no-game cost
-measurement, then assess one bounded native attempt. The strict default, existing
-audited runners and playback bounds remain unchanged. GitHub DNS recovered:
-`10ec3f40` is now pushed and verified on the fork; the earlier push failure is
-historical.
+One audited synthetic-TLS/Windows-X4-under-Proton run completed at HEAD
+`7df3ce43` with the opt-in 250 ms cache. All 26 V3 samples were acknowledged,
+final error was 0 m, STOP was drained with uncertainty zero, and the 24
+movement capture gaps stayed below 0.75 s (median 0.2000 s). Enrollment remains
+a visible 2.1565 s capture gap and 1.8400 s exchange. This validates one bounded
+client path only; it does not prove visual smoothness, real source-X4 motion,
+native Windows, WAN or two-machine operation. The strict default and bounds
+remain unchanged. See the
+[run evidence and scope](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#one-audited-synthetic-tlswindows-x4-under-proton-trial-2026-11-20).
+
+Next: port the optional policy to the existing real-Linux-source/client pair
+harness and audit it, then make one justified trial. Separate hosts are
+available but have not been tested together. No rerun of the Proton trial is
+planned from this result alone. HEAD `7df3ce43` includes the guard utility and
+12 focused passing tests and is pushed to the fork. GitHub DNS recovery and the
+earlier `10ec3f40` push failure remain historical facts.
+
+The user also provided a second Fedora laptop; read-only SSH access with the
+project key is verified. Its active KDE Wayland desktop and Flatpak Steam are
+running, and its Linux 9.00 executable matches exactly. No game was started
+there, and graphical SSH launch is unverified. Keep existing extra extensions,
+including `x4_lan_lab`, untouched and out of an isolated test view unless it is
+approved as a fixture. This makes a future two-host LAN trial possible; it is
+not Windows or WAN acceptance. Private connection details remain in
+`.local/fedora-laptop-access/inventory-20261120.json` and
+`.local/fedora-laptop-known-hosts`.
 
 Latest follow-up (2026-11-18, no game run): allocation-only process and metadata
 variants preserved the compared observations/error behavior in focused fixtures

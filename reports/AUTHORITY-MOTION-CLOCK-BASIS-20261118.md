@@ -454,4 +454,79 @@ The tests explicitly demonstrate the accepted stale interval, refresh duration,
 expiry after a slow immediate check, lifecycle boundaries and permanent failure.
 Log: `.local/check-diagnostic-guard-20261120-01.log`. Independent review of the
 policy core found no concrete issue; no game/native/full-suite rerun was made.
-Runner integration and active-X4 cadence benefit remain unverified.
+At this utility checkpoint, runner integration and active-X4 cadence benefit
+were unverified; the subsequent bounded native-runner result is recorded below.
+
+## Diagnostic guard refresh cost (NO-GAME, 2026-11-20)
+
+The first short measurement (`.local/guard-cost-20261120-01`) lasted only
+153 ms, never reached lease expiry and encountered an obsolete transient Xauth
+path. It is insufficient for cost or acceptance conclusions. The replacement
+measurement used `.local/guard-cost-20261120-02/measure_guard_refresh.py` and
+completed 120 hot-loop calls with 10 ms modeled work per call in 1.3227 s.
+The hot loop made 6 full refreshes and 114 reuses; four forced checks at the
+entry and exit of two strict blocks bring the total to 10 full checks and 114
+reuses across 124 guard calls. Full-refresh callback mean was 17.2315 ms and
+maximum 20.0655 ms.
+The raw hot-loop statistics include the two preceding strict calls; the
+hot-loop-only counts above exclude them.
+
+This exercised a real Python child and two local UDP peers, process/socket
+identity checks, the initial witness check, metadata on every full refresh and
+Steam identity on every full refresh. All 504 existing pinned paths matched
+their exact hashes before and after; metadata remained stable during the run.
+Exactly one obsolete transient path was excluded:
+`/run/user/1000/xauth_jsBXKr`. Owned child, process guard and receivers all
+cleaned up; the result reports no failures. This measures only refresh cost in
+a synthetic no-game setup. It does not check the X4 prefix or establish game
+performance, cadence benefit, TLS integration, Windows behavior or WAN/pair
+operation.
+
+Evidence: `.local/guard-cost-20261120-02/result.json` (SHA-256
+`ec455d3fb5940a9d93e00fc2340f8e338836529516d2e8da5a7ccecf1b035916`) and
+`.local/guard-cost-20261120-02/measure_guard_refresh.py` (SHA-256
+`35d4b1b401042c7bdd5e8614fec6dccf46227d1013564a6dbfcc3ac237b91ea5`).
+The result is a bounded cost measurement, not a broad performance pass.
+
+## One audited synthetic-TLS/Windows-X4-under-Proton trial (2026-11-20)
+
+At HEAD `7df3ce432675d7600604f0fa65d5dd22b4b781fb`, the audited private runner
+`.local/authority_windows_tls_capture_proton_20261120_01.py` completed one
+bounded run with `--guard-cache-ms 250`. The result is
+`windows_tls_capture_observed`: the actual Windows X4 executable ran under
+Proton, using synthetic motion and a simulated server over real loopback
+TLS/file/TCP. All 26 V3 samples were acknowledged, final position error was
+0 m, and STOP was drained with uncertainty `0`; 563 readbacks were recorded.
+STOP followed INITIAL by 6.9113 s of local elapsed time.
+
+The 24 movement-to-movement capture intervals (excluding enrollment) ranged
+from 0.166025221 to 0.233972651 s, with median 0.2000021405 s; none exceeded
+the 0.75 s continuity bound. The enrollment exchange took 1.8400 s and its
+capture gap was 2.156489385 s. Keep this initial delay visible: it precedes the
+24 movement intervals and is excluded from their range. The six phase summaries
+reported `held` once, `interpolated` four times and `extrapolated` once. These
+are runtime observations, not a visual smoothness assessment.
+
+The optional guard recorded 282 full checks and 926 reused checks. Its wrapper
+reported 1,196 calls in 11.275 s, excluding 12 strict-context boundary calls.
+The earlier 979-call/28.247 s whole-cycle instrumentation used a different
+scope and is not a comparable cost or speedup baseline. This one run validates
+the opt-in cache path for this bounded client scenario only; the strict default
+and motion bounds remain unchanged. It does not exercise the real source-X4
+path, a native Windows OS, WAN or two machines. The audit explicitly excluded
+Wine/X4 execution and identified the single synthetic-server scope.
+
+All owned cleanup, protected-input, Steam identity, TLS-thread and pin checks
+passed; no errors were recorded. Evidence: `.local/windows-tls-capture-proton-20261120-01/result.json`
+(SHA-256 `2f9d31c3bca15fd943fba3480d414b15034ae0f187b2ed035e8a057d4fce7541`),
+`motion-cycle.json` (SHA-256
+`51955419e55a07e7bc05d238ec98eb4e31593db2892d8932f1800b7e89be3197`), audit
+`.local/authority-windows-tls-capture-reviewed-20261120-01.json` (SHA-256
+`9aa6caddba08c7c2e42c23bd6f8ef7d165cf12e330b6bd019a143fbeca251e48`) and runner
+`.local/authority_windows_tls_capture_proton_20261120_01.py` (SHA-256
+`ca4c71bfe3240827b4cdcbf80589f791f0b02c9f5ddd4f7bccc00b2b12b85e83`).
+
+Next: port the same optional policy to the existing real-Linux-source/client
+pair harness, audit it, then make one justified trial. Separate hosts are now
+available but have not been tested together. No rerun of this Proton attempt is
+planned from this evidence alone.
