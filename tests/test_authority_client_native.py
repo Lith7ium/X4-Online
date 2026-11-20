@@ -39,7 +39,8 @@ class NativeClientTests(unittest.TestCase):
                         good.replace(b'AUTH_MARKER load INSPECTED '+b'd'*32+b'\n', b'')):
                 log.write_bytes(bad)
                 owner = SimpleNamespace(poll=lambda: None, load_requested=lambda attempt: self.fail('false load assertion'))
-                participant = SimpleNamespace(enroll=lambda *args: self.fail('false enrollment'))
+                participant = SimpleNamespace(poll_load_keepalive=Mock(),
+                    enroll=lambda *args: self.fail('false enrollment'))
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
                     native.observe_and_activate(owner, participant, native.download.ReceiptWatch(log, ticket),
                         ticket, 'd'*32, lambda **kwargs: True, lambda: None, {})
@@ -74,7 +75,7 @@ class NativeClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory)/'log'; log.write_bytes(self.log_bytes())
             owner = SimpleNamespace(poll=lambda: None, load_requested=Mock(), activate=Mock())
-            participant = SimpleNamespace(enroll=Mock())
+            participant = SimpleNamespace(enroll=Mock(), poll_load_keepalive=Mock())
             with self.assertRaisesRegex(ValueError, 'registry rejected'):
                 native.observe_and_activate(owner, participant,
                     native.download.ReceiptWatch(log, self.ticket()), self.ticket(), 'd'*32,
@@ -112,7 +113,8 @@ class NativeClientTests(unittest.TestCase):
                 loaded_marker=lambda *args: events.append('marker'),
                 paused=lambda *args: events.append('paused'),
                 activate=Mock(side_effect=lambda *args, **kwargs: events.append('activate')))
-            participant = SimpleNamespace(enroll=Mock(), request=Mock(), deadline=time.monotonic()+10)
+            participant = SimpleNamespace(enroll=Mock(), request=Mock(), poll_load_keepalive=Mock(),
+                                          deadline=time.monotonic()+10)
             consumer = Mock()
             native.observe_and_activate(owner, participant,
                 native.download.ReceiptWatch(log, self.ticket()), self.ticket(), 'd'*32,
@@ -124,6 +126,27 @@ class NativeClientTests(unittest.TestCase):
             consumer.assert_not_called()
             self.assertFalse(participant.loading)
             self.assertTrue(participant.server_control)
+
+    def test_load_polling_requires_configured_keepalive(self):
+        for interval in (None, 1.0):
+            with self.subTest(interval=interval):
+                owner = Mock()
+                if interval is None:
+                    owner.poll.side_effect = RuntimeError('keepalive not configured')
+                guard = Mock()
+                participant = native.NativeParticipant(owner, time.monotonic()+5, guard,
+                    keepalive_interval=interval)
+                self.addCleanup(participant.close)
+                watch = SimpleNamespace(poll=Mock(return_value=True), stage=2, path=None)
+                result = {}
+                with patch.object(native, 'verify_receipts'), \
+                     patch.object(participant, 'enroll', side_effect=lambda *args: participant._wait()), \
+                     patch.object(participant, 'request'):
+                    native.observe_and_activate(owner, participant, watch, self.ticket(), 'd'*32,
+                        guard, Mock(), result)
+                self.assertEqual(result['phase'], 'active')
+                participant._wait()
+                self.assertEqual(owner.poll.call_count, 0 if interval is None else 2)
 
     def test_main_forwards_argv_and_python_only_driver(self):
         from contextlib import redirect_stdout

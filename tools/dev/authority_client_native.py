@@ -37,9 +37,10 @@ import linux_snapshot_capture as snapshot
 
 class NativeParticipant(Participant):
     """Fence native calls and verify their connected UDP socket belongs to X4."""
-    def __init__(self, owner, deadline, guard):
+    def __init__(self, owner, deadline, guard, *, keepalive_interval=None):
         super().__init__()
         self.owner, self.deadline, self.guard = owner, deadline, guard
+        self.keepalive_interval = keepalive_interval
         self.loading = True
         self.process = None
         self.server_control = False
@@ -48,10 +49,13 @@ class NativeParticipant(Participant):
         self.wait_hook = self._wait
         self.sock.settimeout(.1)
 
+    def poll_load_keepalive(self):
+        if self.loading and self.keepalive_interval is not None:
+            self.owner.poll()
+
     def _wait(self):
         self.guard()
-        if self.loading:
-            self.owner.poll()
+        self.poll_load_keepalive()
         if self.process is not None:
             check_process(self.process)
 
@@ -111,7 +115,7 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
     result['phase'] = 'load_receipts'
     while True:
         guard()
-        owner.poll()
+        participant.poll_load_keepalive()
         if watch.poll() and watch.stage == 2:
             verify_loaded()
             verify_receipts(watch.path, ticket, marker)
@@ -263,7 +267,8 @@ def run(args, *, playback_driver=None):
                     return True
 
                 result['phase'] = 'prepare'
-                participant = NativeParticipant(owner, deadline, guard)
+                participant = NativeParticipant(owner, deadline, guard,
+                    keepalive_interval=args.keepalive_interval)
                 participant.server_library = library
                 config = download.install_probe(case, profile, ticket)
                 participant.install(case, include_identity=False)
