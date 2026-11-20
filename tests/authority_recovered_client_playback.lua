@@ -58,7 +58,9 @@ local configuration={enabled=true,port=2345,lease=lease,attempt=attempt,epoch=ep
 -- This mode exercises the actual wrapper/owner/playback composition with a
 -- controllable native ownership adapter. MD behavior has separate tests.
 local control_phase, control_preparations, control_releases = 'new', 0, 0
-local alignment_enabled = mode == 'alignment' or mode == 'alignment_sparse' or real_time
+local alignment_enabled = mode == 'alignment' or mode == 'alignment_sparse' or
+ mode == 'alignment_missing_rate' or mode == 'alignment_wait_stop' or
+ mode == 'alignment_timeout' or mode == 'alignment_identity' or real_time
 local controlled_fixture = mode == 'control' or alignment_enabled
 if controlled_fixture then
  configuration.saved_replica_control_fixture = 'recovery_enh_870'
@@ -97,20 +99,23 @@ for _,change in ipairs({{index=1317},{epoch=('c'):rep(32)},{saved_playback_fixtu
  assert(not pcall(runtime.new_x4,invalid))
 end
 local client=assert(runtime.new_x4(configuration))
-local function packet(sequence,x,source)
+local function packet(sequence,x,source,include_rate)
  local fields = {'M',lease,attempt,'BIND',string.format('%032x',sequence+15),epoch,generation,'1318',tostring(sequence),
   'cluster_06_sector001_macro',('1'):rep(64),tostring(source),tostring(x),'0','0','-','-','-'}
  if real_time then
   fields[4] = 'BIND3'
   table.insert(fields, 13, tostring(100 + (sequence - 1) * .2))
-  if mode == 'capture_playback' and sequence > 1 then
+  if sequence >= 3 and include_rate ~= false and (alignment_enabled or mode == 'capture_playback') then
    fields[17], fields[18], fields[19] = '50', '0', '0'
   end
  end
+ if not real_time and sequence >= 3 and include_rate ~= false and alignment_enabled then
+  fields[16], fields[17], fields[18] = '50', '0', '0'
+ end
  return fields
 end
-local function send(sequence,x,source)
- input[1]=table.concat(packet(sequence,x,source),'|')
+local function send(sequence,x,source,include_rate)
+ input[1]=table.concat(packet(sequence,x,source,include_rate),'|')
  assert(client:tick())
  local request=requests[#requests]
  assert(request.screen=='X4AuthoritySavedBaselineMotionBind')
@@ -128,30 +133,126 @@ local function send(sequence,x,source)
  end
 end
 if alignment_enabled then
- -- Exercise the complete wrapper/router/owner/native-factory composition.
- -- Only the explicitly selected first pose may exceed the ongoing 50 m bound.
+ -- The first correlated BIND prepares control and enrolls identity only.
  send(1, 1000, 0)
- assert(client:state() == 'ready' and ffi.C.TestWrites() == 1)
- assert(output[#output]:find('|BOUND|', 1, true))
- local initial_line = real_time and 3 or 2
- assert(#logs == (real_time and 4 or 2) and logs[1]:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true))
- assert(logs[initial_line]:find('AUTH_CLIENT_PLAYBACK INITIAL ', 1, true))
- assert(logs[initial_line]:find(' x=1000 y=0 z=0', 1, true))
- assert(client:tick() and ffi.C.TestWrites() == 1)
- assert(#buffer_pushes == 1 and buffer_pushes[1].sequence == 1)
- assert(buffer_pushes[1].source_time == 0 and buffer_pushes[1].arrival == 1 and buffer_pushes[1].x == 1000)
- if real_time then
-  assert(buffer_pushes[1].capture_time == 100)
-  assert(logs[2]:find('latest_source_time=0 latest_capture_time=100', 1, true))
+ assert(client:state() == 'ready' and ffi.C.TestWrites() == 0 and ffi.C.TestReads() == 0)
+ assert(#buffer_pushes == 0 and output[#output]:find('|BOUND|', 1, true))
+ for _, line in ipairs(logs) do
+  assert(not line:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true))
+  assert(not line:find('AUTH_CLIENT_PLAYBACK INITIAL ', 1, true))
  end
- if mode=='capture_playback' then
-  -- A high-frequency held phase must not fill the trace before seq2 arrives.
-  for tick=1,80 do now=1+tick*.001;assert(client:tick())end
+ if mode == 'alignment_wait_stop' then
+  input[1] = table.concat({'M',lease,attempt,'STOP',('8'):rep(32),epoch,generation},'|')
+  assert(client:tick() and client:state() == 'stopping' and control_releases == 1)
+  assert(ffi.C.TestWrites() == 0 and #buffer_pushes == 0)
+  control_phase = 'released'
+  assert(client:tick() and client:state() == 'stopped')
+  return
+ elseif mode == 'alignment_timeout' then
+  now = 2
+  send(3, 1000, .4, false)
+  assert(client:state() == 'ready' and ffi.C.TestWrites() == 0 and #buffer_pushes == 0)
+  now = 6.1
+  assert(not client:tick() and client:state() == 'failed' and ffi.C.TestWrites() == 0)
+  return
+ elseif mode == 'alignment_missing_rate' then
+  now = 1.2
+  send(3, 1000, .4, false)
+  assert(client:state() == 'ready' and ffi.C.TestWrites() == 0 and #buffer_pushes == 0)
+  now = 1.3
+  send(4, 1000, .6, true)
+  assert(client:state() == 'ready' and ffi.C.TestWrites() == 1 and #buffer_pushes == 1)
+  return
  end
 
+ -- Sequence 2 is deliberately skipped. The first rated sample at sequence 3
+ -- performs the one-time alignment and seeds playback from its fresh pose/rate.
+ now = 1.1
+ send(3, 1000, real_time and 0 or .4)
+ assert(client:state() == 'ready' and ffi.C.TestWrites() == 1)
+ assert(output[#output]:find('|BOUND|', 1, true))
+ local alignment_records = 0
+ for _, line in ipairs(logs) do
+  if line:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true) then alignment_records = alignment_records + 1 end
+ end
+ assert(alignment_records == 1 and #buffer_pushes == 1 and buffer_pushes[1].sequence == 3)
+ assert(buffer_pushes[1].source_time == (real_time and 0 or .4) and buffer_pushes[1].x == 1000)
+ if real_time then
+  assert(buffer_pushes[1].capture_time == 100.4 and buffer_pushes[1].real_rate[1] == 50)
+ end
+ assert(client:tick())
+
+ if mode == 'capture_playback' then
+  for tick=1,80 do now=1.1+tick*.001;assert(client:tick()) end
+  now = 1.2
+  send(4, 1010, real_time and 0 or .6)
+  assert(client:tick())
+  now = 1.3
+  assert(client:tick() and ffi.C.TestWrites() == 2)
+  assert(buffer_pushes[2].sequence == 4 and buffer_pushes[2].capture_time == 100.6)
+  assert(math.abs(tonumber(ffi.C.GetObjectPositionInSector(41).x) - 1003) < .001)
+  now = 1.4
+  assert(client:tick() and ffi.C.TestWrites() == 3)
+  assert(math.abs(tonumber(ffi.C.GetObjectPositionInSector(41).x) - 1008.5) < .001)
+  now = 1.6
+  assert(client:tick() and ffi.C.TestWrites() == 4)
+  assert(math.abs(tonumber(ffi.C.GetObjectPositionInSector(41).x) - 1019.5) < .001)
+  now = 2.21
+  assert(client:tick() and ffi.C.TestWrites() == 4)
+  input[1] = table.concat({'M',lease,attempt,'STOP',('8'):rep(32),epoch,generation},'|')
+  assert(client:tick() and client:state() == 'stopping')
+  control_phase = 'released'
+  assert(client:tick() and client:state() == 'stopped')
+  assert(output[#output]:find('|STOPPED|', 1, true))
+  local stopped, capture_record = false, false
+  for _, line in ipairs(logs) do
+   if line:find('AUTH_CLIENT_PLAYBACK STOPPED ', 1, true) then
+    stopped = line:find(' uncertain=0 drained=1', 1, true) ~= nil
+   elseif line:find('AUTH_CLIENT_CAPTURE_CLOCK version=1 kind=STOPPED ', 1, true) then
+    local capture = tonumber(line:match('latest_capture_time=([^ ]+)'))
+    capture_record = line:find('latest_source_time=0 ', 1, true) ~= nil and
+     capture ~= nil and math.abs(capture - 100.6) < 1e-9
+   end
+  end
+  assert(stopped and capture_record)
+  local trace_headers, unsaturated_stop, received, pushed, observed, readback = 0, false, 0, 0, 0, 0
+  local extrapolated_observation = false
+  local received_four, pushed_four = false, false
+  for _, line in ipairs(logs) do
+   if line:find('AUTH_CLIENT_MOTION_TRACE count=', 1, true) then
+    trace_headers=trace_headers+1
+    unsaturated_stop=line:find('limit=32 ', 1, true) ~= nil and
+     line:find('saturated=0 reason=stop', 1, true) ~= nil
+   elseif line:find('AUTH_CLIENT_MOTION_TRACE event=', 1, true) then
+    if line:find('kind=RECEIVED ', 1, true) then
+     received=received+1
+     if line:find('sequence=4 ',1,true)then received_four=true end
+    elseif line:find('kind=PUSH ', 1, true) then
+     pushed=pushed+1
+     if line:find('sequence=4 ',1,true)then pushed_four=true end
+    elseif line:find('kind=OBSERVATION ', 1, true) then
+     observed=observed+1
+     if line:find('phase=extrapolated', 1, true) then extrapolated_observation=true end
+    elseif line:find('kind=READBACK ', 1, true) then readback=readback+1 end
+   end
+  end
+  assert(trace_headers==1 and unsaturated_stop and received>=3 and pushed==2 and
+   received_four and pushed_four and observed>=1 and readback>=1 and extrapolated_observation)
+  print('capture-time enrollment, rated alignment, interpolation, expiry and STOP passed with fake ABI')
+  return
+ end
+
+ if mode == 'alignment_identity' then
+  local mismatched = packet(4, 1000, .6, true)
+  mismatched[10] = 'other_sector'
+  input[1] = table.concat(mismatched, '|')
+  now = 1.2
+  assert(not client:tick() and client:state() == 'failed' and ffi.C.TestWrites() == 1)
+  return
+ end
  if real_time and mode ~= 'capture_playback' and mode ~= 'capture_sparse' then
-  local invalid = packet(2, 1010, 0)
-  if mode == 'capture_duplicate' then invalid[13] = '100'
+  local invalid = packet(4, 1010, .6, true)
+  if mode == 'capture_duplicate' then invalid[13] = '100.4'
   elseif mode == 'capture_regression' then invalid[13] = '99'
   elseif mode == 'capture_game_regression' then invalid[12] = '-1'
   elseif mode == 'capture_version_switch' then invalid[4] = 'BIND'; table.remove(invalid, 13)
@@ -162,14 +263,11 @@ if alignment_enabled then
   assert(ffi.C.TestWrites() == 1 and #buffer_pushes == 1)
   return
  end
-
  if mode == 'alignment_sparse' or mode == 'capture_sparse' then
-  -- Reproduce the observed source/local gaps. Seeding does not relax expiry
-  -- or make the next distant held sample eligible for a running correction.
-  now = 2.01
-  assert(client:tick() and ffi.C.TestWrites() == 1) -- UI expires seq1 before seq2 arrives.
-  now = 2.175777276
-  send(2, 1221.9747378441094, 1.431247294)
+  now = 2.21
+  assert(client:tick() and ffi.C.TestWrites() == 1)
+  now = 2.375777276
+  send(4, 1221.9747378441094, 1.431247294)
   assert(not client:tick() and client:state() == 'failed')
   assert(ffi.C.TestWrites() == 1 and #buffer_pushes == 2)
   local distance_failure = false
@@ -180,76 +278,24 @@ if alignment_enabled then
    end
   end
   assert(distance_failure)
-  print('seeded enrollment retains sparse-gap expiry and the running distance bound')
   return
  end
-
  now = 1.2
- send(2, 1010, real_time and 0 or .2)
- assert(client:tick() and ffi.C.TestWrites() == 2)
- -- Dense seq2 interpolates from the seeded seq1; a discarded seq1 would jump to 1010.
- assert(math.abs(tonumber(ffi.C.GetObjectPositionInSector(41).x) - 1002.5) < .001)
- local alignment_records = 0
+ send(4, 1050, .6)
+ assert(client:tick() and #buffer_pushes == 2)
+ if ffi.C.TestWrites() == 1 then now = 1.3; assert(client:tick()) end
+ assert(ffi.C.TestWrites() >= 2)
+ alignment_records = 0
  for _, line in ipairs(logs) do
-  if line:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true) then
-   alignment_records = alignment_records + 1
-  end
+  if line:find('AUTH_CLIENT_INITIAL_ALIGNMENT ', 1, true) then alignment_records = alignment_records + 1 end
  end
- assert(alignment_records == 1 and control_preparations == 2)
-
- if mode == 'capture_playback' then
-  assert(buffer_pushes[2].source_time == 0 and buffer_pushes[2].capture_time == 100.2)
-  assert(buffer_pushes[2].real_rate[1] == 50)
-  now = 1.4
-  assert(client:tick() and ffi.C.TestWrites() == 3)
-  assert(math.abs(tonumber(ffi.C.GetObjectPositionInSector(41).x) - 1012.5) < .001)
-  now = 2.21 -- Original arrival was 1.2: expire and drain the last write.
-  assert(client:tick() and ffi.C.TestWrites() == 3)
-  input[1] = table.concat({'M',lease,attempt,'STOP',('8'):rep(32),epoch,generation},'|')
-  assert(client:tick() and client:state() == 'stopping' and control_releases == 1)
-  control_phase = 'released'
-  assert(client:tick() and client:state() == 'stopped')
-  assert(output[#output]:find('|STOPPED|', 1, true))
-  local stopped, capture_record = false, false
-  for _, line in ipairs(logs) do
-   if line:find('AUTH_CLIENT_PLAYBACK STOPPED ', 1, true) then
-    stopped = line:find(' uncertain=0 drained=1', 1, true) ~= nil
-   elseif line:find('AUTH_CLIENT_CAPTURE_CLOCK version=1 kind=STOPPED ', 1, true) then
-    capture_record = line:find('latest_source_time=0 ', 1, true) ~= nil and
-     line:find('latest_capture_time=100.2', 1, true) ~= nil
-   end
-  end
-  assert(stopped and capture_record)
-  local trace_headers, unsaturated_stop, received, pushed, observed, readback = 0, false, 0, 0, 0, 0
-  local received_two, pushed_two = false, false
-  for _, line in ipairs(logs) do
-   if line:find('AUTH_CLIENT_MOTION_TRACE count=', 1, true) then
-    trace_headers=trace_headers+1
-    unsaturated_stop=line:find('limit=32 ', 1, true) ~= nil and
-     line:find('saturated=0 reason=stop', 1, true) ~= nil
-   elseif line:find('AUTH_CLIENT_MOTION_TRACE event=', 1, true) then
-    if line:find('kind=RECEIVED ', 1, true) then
-     received=received+1
-     if line:find('sequence=2 ',1,true)then received_two=true end
-    elseif line:find('kind=PUSH ', 1, true) then
-     pushed=pushed+1
-     if line:find('sequence=2 ',1,true)then pushed_two=true end
-    elseif line:find('kind=OBSERVATION ', 1, true) then observed=observed+1
-    elseif line:find('kind=READBACK ', 1, true) then readback=readback+1 end
-   end
-  end
-  assert(trace_headers==1 and unsaturated_stop and received>=2 and pushed==2 and
-   received_two and pushed_two and observed>=1 and readback>=1)
-  print('capture-time binding, alignment, interpolation, prediction, expiry and STOP passed with fake ABI')
-  return
- end
-
+ assert(alignment_records == 1)
  now = 1.3
  ffi.C.TestDrift(1200)
  assert(not client:tick() and client:state() == 'failed')
- assert(ffi.C.TestWrites() == 2) -- The later excessive correction never writes.
- assert(not client:tick() and ffi.C.TestWrites() == 2)
- print('explicit initial alignment composes once and retains the ongoing distance bound')
+ local writes_at_failure = ffi.C.TestWrites()
+ assert(not client:tick() and ffi.C.TestWrites() == writes_at_failure)
+ print('later rated sample aligns once and retains the ongoing distance bound')
  return
 end
 send(1,1000000,0) -- Default first target is enrollment only and must never write.

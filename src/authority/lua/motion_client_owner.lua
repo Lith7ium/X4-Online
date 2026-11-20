@@ -67,6 +67,9 @@ function M.new(o)
  local finish_binding
  local stopping_identity
  local state,busy='new',false;local last,pending,deadline,delivered=nil,nil,nil,nil
+ -- The prepared fixture gets one bounded wait for a later velocity-bearing
+ -- sample. Consuming packets without velocity must not extend this wait.
+ local initial_sample_deadline
  local staged,bound,writer,operation_identity,apply_used,preflight_ready=nil,nil,nil,nil,false,false
  local operation_requests,operation_count,preflight_attempted={},0,false
  local observe_count,stream_index,stream_sequence,stream_time,stream_binding=0,nil,nil,nil,nil
@@ -127,7 +130,8 @@ function M.new(o)
  local function check()
   if state=='failed' then return false end
   local old=state;local ok,t=pcall(c.clock)
-  if not ok or state~=old or type(t)~='number' or t~=t or t<0 or t==math.huge or (last and t<last) or (deadline and t>=deadline) then return false end
+  if not ok or state~=old or type(t)~='number' or t~=t or t<0 or t==math.huge or (last and t<last) or
+   (deadline and t>=deadline) or (initial_sample_deadline and t>=initial_sample_deadline) then return false end
   last=t;local good,g=pcall(c.guard);if not good or g~=true or state~=old then return false end
   if saved then
    local valid,ok=pcall(saved.guard,c.epoch,saved.baseline)
@@ -136,7 +140,8 @@ function M.new(o)
    if not again or still~=true or state~=old then return false end
   end
   local yes,u=pcall(c.clock)
-  if not yes or state~=old or type(u)~='number' or u~=u or u<t or u==math.huge or (deadline and u>=deadline) then return false end
+  if not yes or state~=old or type(u)~='number' or u~=u or u<t or u==math.huge or
+   (deadline and u>=deadline) or (initial_sample_deadline and u>=initial_sample_deadline) then return false end
   last=u;return true
  end
  local function send(text)
@@ -343,7 +348,7 @@ function M.new(o)
     if p[4]=='STOP' then
      assert(c.stop and #p==7 and p[1]=='M' and p[2]==c.lease and p[3]==c.attempt and
       token(p[5],32) and p[6]==c.epoch and p[7]==c.generation and check())
-     state='stopping';deadline=last+c.timeout
+     state='stopping';deadline=last+c.timeout;initial_sample_deadline=nil
      assert(stop_playback(true))
      for _,entry in pairs(tracks)do
       assert(type(entry.binding.close)=='function' and entry.binding:close()==true and state=='stopping' and check())
@@ -354,7 +359,11 @@ function M.new(o)
      local releasing=false
      for _,entry in pairs(tracks)do
       if entry.control_started then
-       assert(entry.playback and entry.drained==true)
+       -- Preparation alone has never dispatched a position setter. There is
+       -- no playback write to drain, but its local AI control still needs release.
+       local prepared_without_playback = entry.awaiting_initial_sample == true and
+        not entry.playback and not entry.initial_alignment_attempted
+       assert(prepared_without_playback or (entry.playback and entry.drained==true))
        assert(entry.control:release()==true and state=='stopping' and check())
        local phase=entry.control:state()
        assert(phase=='releasing' or phase=='released')
@@ -409,10 +418,26 @@ function M.new(o)
     local entry=pending.entry
     local identity={actor_key=staged.actor_key,sector_key=staged.sector_key,zone_key=staged.zone_key,
      index=pending.index,epoch=c.epoch,sector_macro=pending.sector}
-    if entry.playback then
+    if entry.playback_binding then
      for key,value in pairs(identity)do assert(entry.playback_binding[key]==value)end
     else
      entry.playback_binding=identity
+    end
+    local defer_initial_sample = false
+    if playback.initial_alignment_fixture ~= nil and not entry.playback then
+     assert(entry.control and entry.control:state() == 'prepared')
+     if not entry.awaiting_initial_sample then
+      -- The first BIND only resolves the actor and prepares local control.
+      -- Its pose may already be old by the time preparation finishes.
+      entry.awaiting_initial_sample = true
+      initial_sample_deadline = last + c.timeout
+      defer_initial_sample = true
+     else
+      -- Zero velocity is valid; missing velocity is not a playback seed.
+      defer_initial_sample = rate == nil
+     end
+    end
+    if not entry.playback and not defer_initial_sample then
      local initial_sample
      if playback.initial_alignment_fixture ~= nil then
       assert(entry.control and entry.control:state() == 'prepared' and not entry.initial_alignment_attempted)
@@ -436,11 +461,16 @@ function M.new(o)
     end
     receiver=entry.playback
    end
-   local pushed,reason=receiver:push(snapshot,pending.arrival)
+   local pushed,reason=true,nil
+   if receiver then pushed,reason=receiver:push(snapshot,pending.arrival) end
    -- Opt-in playback BOUND means correlated binding and consumed packet, not
    -- applied movement. Paused/expired samples are acknowledged but not buffered.
    if playback and pushed~=true and (reason=='paused' or reason=='expired') then pushed=true end
    assert(pushed==true and state=='pending' and check() and snapshot_unchanged())
+   if playback and pending.entry.playback and pending.entry.awaiting_initial_sample then
+    pending.entry.awaiting_initial_sample = false
+    initial_sample_deadline = nil
+   end
    if c.audit then
     local good,accepted=pcall(c.audit,pending.index,pending.sequence,pending.sector,pending.source_time)
     assert(good and accepted==true and state=='pending' and check() and snapshot_unchanged())

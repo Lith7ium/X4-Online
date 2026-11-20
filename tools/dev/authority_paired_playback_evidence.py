@@ -17,17 +17,23 @@ PREDICTION_HORIZON = .35  # Existing motion_buffer.lua default; not a new policy
 
 
 class PairedPlaybackEvidence:
-    def __init__(self, path, *, guard, deadline, latest=False, sample_version=1):
-        if (type(latest) is not bool or type(sample_version) is not int or sample_version not in (1, 3) or not callable(guard) or
+    def __init__(self, path, *, guard, deadline, latest=False, sample_version=1,
+                 prepared_start=False):
+        if (type(latest) is not bool or type(prepared_start) is not bool or
+                type(sample_version) is not int or sample_version not in (1, 3) or not callable(guard) or
                 not math.isfinite(deadline) or deadline <= time.monotonic()):
             raise ValueError('bounded playback evidence context required')
-        self.reader = PlaybackLog(path, sample_version=sample_version)
+        self.reader = PlaybackLog(path, sample_version=sample_version,
+                                  prepared_start=prepared_start)
         self.guard = guard
         self.deadline = deadline
         self.latest = latest
         self.sample_version = sample_version
+        self.prepared_start = prepared_start
         self.samples = []
         self.initial = None
+        self.initial_sequence = None
+        self.start_sample = None
         self.initial_comparison = None
 
     def _wait_for(self, field, *, guard=None):
@@ -64,44 +70,77 @@ class PairedPlaybackEvidence:
         if self.samples and value['generation'] != self.samples[-1]['generation']:
             raise ValueError('paired playback source lifetime or clock differs')
         check_motion_progress(value, self.samples[-1] if self.samples else None)
-        if not self.samples:
-            self.initial, _, _ = self._wait_for(0)
-            if self.sample_version == 3:
-                self._check_capture_clock(self.initial, value)
-                alignment = self.initial.get('initial_alignment_clock')
-                if alignment is not None:
-                    self._check_capture_clock(alignment, value)
-                    target = [alignment['target_' + axis] for axis in ('x', 'y', 'z')]
-                    actual = [alignment['actual_' + axis] for axis in ('x', 'y', 'z')]
-                    initial_pose = [self.initial[axis] for axis in ('x', 'y', 'z')]
-                    readback_error = math.dist(actual, target)
-                    arrival_age = alignment['local_time'] - alignment['arrival']
-                    if (target != [value[axis] for axis in ('x', 'y', 'z')] or
-                            alignment['tolerance'] != 3 or alignment['error'] > 3 or
-                            readback_error > 3 or not math.isclose(readback_error, alignment['error'], abs_tol=1e-6) or
-                            not 0 <= arrival_age < 1 or self.initial['local_time'] < alignment['local_time'] or
-                            math.dist(actual, initial_pose) > 3):
-                        raise ValueError('initial alignment differs from source pose or readback')
-            initial_offset = math.dist([value[axis] for axis in ('x', 'y', 'z')],
-                                       [self.initial[axis] for axis in ('x', 'y', 'z')])
-            # Retain this bounded comparison even when admission fails. A
-            # receipt is not an accepted movement sample, and a failure must
-            # not lose the positions needed to investigate that distinction.
-            self.initial_comparison = {
-                **{'source_' + axis: value[axis] for axis in ('x', 'y', 'z')},
-                **{'client_' + axis: self.initial[axis] for axis in ('x', 'y', 'z')},
-                'source_game_time': value['source_time'],
-                'client_game_time': self.initial['game_time'],
-                'client_local_time': self.initial['local_time'],
-                'offset_metres': initial_offset, 'limit_metres': 50,
-                'within_bound': initial_offset <= 50,
-            }
-            if self.sample_version == 3:
-                self.initial_comparison['source_capture_time'] = value['capture_time']
-            if initial_offset > 50:
-                raise ValueError('paired playback initial offset exceeds fixture bound')
+        if self.initial is None:
+            rate = value['real_velocity'] if self.sample_version == 3 else value['velocity']
+            if self.prepared_start and (value['sequence'] == 1 or rate is None):
+                self.samples.append(value)
+                return True
+            self._initialize(value)
         self.samples.append(value)
         return True
+
+    def _initialize(self, value):
+        initial, _, _ = self._wait_for(0)
+        if initial['source_sequence'] != value['sequence']:
+            raise ValueError('paired playback initial source sequence differs')
+        if self.prepared_start:
+            if value['sequence'] <= 1:
+                raise ValueError('paired playback prepared start sequence invalid')
+            rate = value['real_velocity'] if self.sample_version == 3 else value['velocity']
+            if rate is None:
+                raise ValueError('paired playback prepared start rate missing')
+            self._check_prepared_alignment(initial, value)
+        elif self.sample_version == 3:
+            self._check_capture_clock(initial, value)
+            alignment = initial.get('initial_alignment_clock')
+            if alignment is not None:
+                self._check_capture_clock(alignment, value)
+                self._check_alignment_values(alignment, initial, value)
+        initial_offset = math.dist([value[axis] for axis in ('x', 'y', 'z')],
+                                   [initial[axis] for axis in ('x', 'y', 'z')])
+        # Retain this bounded comparison even when admission fails. A receipt
+        # is not an accepted movement sample, and a failure must not lose the
+        # positions needed to investigate that distinction.
+        self.initial_comparison = {
+            **{'source_' + axis: value[axis] for axis in ('x', 'y', 'z')},
+            **{'client_' + axis: initial[axis] for axis in ('x', 'y', 'z')},
+            'source_game_time': value['source_time'],
+            'client_game_time': initial['game_time'],
+            'client_local_time': initial['local_time'],
+            'offset_metres': initial_offset, 'limit_metres': 50,
+            'within_bound': initial_offset <= 50,
+        }
+        if self.sample_version == 3:
+            self.initial_comparison['source_capture_time'] = value['capture_time']
+        if initial_offset > 50:
+            raise ValueError('paired playback initial offset exceeds fixture bound')
+        self.initial = initial
+        self.initial_sequence = value['sequence']
+        self.start_sample = copy.deepcopy(value)
+
+    def _check_prepared_alignment(self, initial, sample):
+        alignment = initial.get('initial_alignment_clock')
+        if type(alignment) is not dict or alignment['source_sequence'] != sample['sequence']:
+            raise ValueError('paired playback initial alignment sequence differs')
+        if self.sample_version == 3:
+            self._check_capture_clock(initial, sample)
+            self._check_capture_clock(alignment, sample)
+        self._check_alignment_values(alignment, initial, sample)
+
+    @staticmethod
+    def _check_alignment_values(alignment, initial, sample):
+        target = [alignment['target_' + axis] for axis in ('x', 'y', 'z')]
+        actual = [alignment['actual_' + axis] for axis in ('x', 'y', 'z')]
+        initial_pose = [initial[axis] for axis in ('x', 'y', 'z')]
+        readback_error = math.dist(actual, target)
+        arrival_age = alignment['local_time'] - alignment['arrival']
+        if (alignment['source_time'] != sample['source_time'] or
+                target != [sample[axis] for axis in ('x', 'y', 'z')] or
+                alignment['tolerance'] != 3 or alignment['error'] > 3 or
+                readback_error > 3 or not math.isclose(readback_error, alignment['error'], abs_tol=1e-6) or
+                not 0 <= arrival_age < 1 or initial['local_time'] < alignment['local_time'] or
+                math.dist(actual, initial_pose) > 3):
+            raise ValueError('initial alignment differs from source pose or readback')
 
     @staticmethod
     def _check_capture_clock(row, sample):
@@ -112,6 +151,8 @@ class PairedPlaybackEvidence:
 
     def stopped(self, *, stopped_guard):
         """Validate native drain and the final source-derived predicted target."""
+        if self.initial is None or self.start_sample is None:
+            raise ValueError('paired playback never initialized')
         initial, summaries, stopped = self._wait_for(2, guard=stopped_guard)
         sample_count = len(self.samples)
         complete = sample_count == SAMPLE_COUNT
@@ -127,6 +168,8 @@ class PairedPlaybackEvidence:
         acknowledged_ordinals = {sample['sequence']: ordinal
                                  for ordinal, sample in enumerate(self.samples, 1)}
         for row in [*summaries, stopped]:
+            if self.prepared_start and row['source_sequence'] < self.initial_sequence:
+                raise ValueError('prepared playback readback predates aligned start')
             if self.latest or self.sample_version == 3:
                 # Interpolation may still report an earlier acknowledged source
                 # after later deliveries. Its count must include that delivery.
@@ -158,7 +201,7 @@ class PairedPlaybackEvidence:
         actual = [stopped['actual_' + axis] for axis in ('x', 'y', 'z')]
         if math.dist(predicted, target) > .05 or math.dist(actual, target) > 3:
             raise ValueError('paired playback target differs from source prediction')
-        source_movement = math.dist([self.samples[0][axis] for axis in ('x', 'y', 'z')],
+        source_movement = math.dist([self.start_sample[axis] for axis in ('x', 'y', 'z')],
                                     [final[axis] for axis in ('x', 'y', 'z')])
         client_movement = math.dist([initial[axis] for axis in ('x', 'y', 'z')], actual)
         if source_movement <= .02 or client_movement <= .02:
@@ -166,15 +209,18 @@ class PairedPlaybackEvidence:
         result = dict(initial=copy.deepcopy(initial), stopped=copy.deepcopy(stopped),
                     source_samples=sample_count, source_displacement=source_movement,
                     client_displacement=client_movement, target_prediction_error=math.dist(predicted, target),
-                    source_game_elapsed=final['source_time'] - self.samples[0]['source_time'],
+                    source_game_elapsed=final['source_time'] - self.start_sample['source_time'],
                     client_game_elapsed=stopped['game_time'] - initial['game_time'],
                     native_position_changed=True, native_velocity_proven=False,
                     cross_process_identity_proven=False)
         if self.latest:
             result.update(latest=True, acknowledged_sequences=list(acknowledged_ordinals),
                           final_source_sequence=final['sequence'])
+        if self.prepared_start:
+            result.update(prepared_start=True, initial_sequence=self.initial_sequence,
+                          aligned_start_sequence=self.start_sample['sequence'])
         if self.sample_version == 3:
             result.update(sample_version=3, clock_basis='capture_time',
-                          source_capture_elapsed=final['capture_time'] - self.samples[0]['capture_time'],
+                          source_capture_elapsed=final['capture_time'] - self.start_sample['capture_time'],
                           capture_clocks_correlated=True)
         return result

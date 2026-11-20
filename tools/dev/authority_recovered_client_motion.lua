@@ -242,7 +242,8 @@ function M.new_x4(c)
  -- Playback evidence has a fixed schema: one guarded initial read, at most
  -- 64 summaries at <=1 Hz, one STOPPED, one distance FAILURE, and an optional
  -- initial-alignment record. BOUND confirms binding/consumption, not movement.
- -- Only verified alignment permits the first BIND to seed interpolation.
+ -- Preparation consumes the first BIND without moving the actor. Only a later
+ -- velocity-bearing sample with verified alignment may seed interpolation.
  local playback_sequence,playback_source_time,playback_expected_reply=nil,nil,nil
  local playback_version,playback_capture_time=nil,nil
  local playback_samples,playback_observations,playback_readbacks,playback_reports=0,0,0,0
@@ -394,8 +395,8 @@ function M.new_x4(c)
     if first then
      assert(snapshot.sequence==playback_sequence and snapshot.frame==playback_sector)
      first=false
-     -- Alignment has verified this real source pose. Keep its original clock
-     -- and arrival as the first interpolation sample; legacy enrollment is discarded.
+     -- This is the first playback sample, after the separate preparation BIND.
+     -- Alignment verified its pose; retain its velocity, clocks and arrival.
      if initial_alignment_fixture then
       local processed_at=timing_clock()
       -- PUSH records adapter invocation, not downstream acceptance or apply.
@@ -420,9 +421,10 @@ function M.new_x4(c)
    outcome_uncertain=function()return playback_controller:outcome_uncertain()end}
  end}
  local function playback_stopped()
-  if not playback_controller or playback_stopped_reported then return end
+  if playback_stopped_reported then return end
   playback_stopped_reported=true
   motion_trace_flush('stop')
+  if not playback_controller then return end -- Stopped during preparation-only enrollment.
   playback_log('STOPPED',playback_controller:outcome_uncertain())
  end
  local checked_net={send=function(_,value)

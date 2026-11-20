@@ -10,6 +10,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
 import authority_paired_playback_evidence as subject
+import authority_native_client_playback as native
 
 
 def source_sample(sequence):
@@ -26,6 +27,23 @@ def native_log(*, target=1021.4, uncertain=0, phase='frozen'):
     summary = f'SUMMARY {common} source_sequence=26 local_time=16 game_time=13 report=1 samples=26 observations=600 readbacks=590 phase={phase} {pose}'
     stopped = f'STOPPED {common} source_sequence=26 local_time=17 game_time=14 report=1 samples=26 observations=620 readbacks=610 phase={phase} {pose} uncertain={uncertain} drained=1'
     return ''.join('[X4LAN] AUTH_CLIENT_PLAYBACK '+line+'\n' for line in (initial, summary, stopped)).encode()
+
+
+def prepared_native_log(*, aligned_sequence=3, summary_sequence=3):
+    common = f'version=1 epoch={subject.EPOCH} index=1318 sector={subject.SECTOR}'
+    alignment = (f'[X4LAN] AUTH_CLIENT_INITIAL_ALIGNMENT version=1 epoch={subject.EPOCH} '
+        f'index=1318 source_sequence={aligned_sequence} source_time=100.6 arrival=9 '
+        'local_time=9.5 before_x=1000 before_y=2 before_z=3 target_x=1001.6 target_y=2 target_z=3 '
+        'actual_x=1001.6 actual_y=2 actual_z=3 error=0 tolerance=3\n')
+    initial = f'INITIAL {common} source_sequence=3 local_time=10 game_time=7 x=1001.6 y=2 z=3'
+    summary = (f'SUMMARY {common} source_sequence={summary_sequence} local_time=16 game_time=13 report=1 samples=3 '
+        'observations=600 readbacks=590 phase=interpolated actual_x=1001.6 actual_y=2 actual_z=3 '
+        'target_x=1001.6 target_y=2 target_z=3 error=0')
+    stopped = (f'STOPPED {common} source_sequence=26 local_time=17 game_time=14 report=1 samples=4 '
+        'observations=620 readbacks=610 phase=frozen actual_x=1021.4 actual_y=2 actual_z=3 '
+        'target_x=1021.4 target_y=2 target_z=3 error=0 uncertain=0 drained=1')
+    return (alignment + ''.join('[X4LAN] AUTH_CLIENT_PLAYBACK '+line+'\n'
+                               for line in (initial, summary, stopped))).encode()
 
 
 class PairedEvidence(unittest.TestCase):
@@ -97,6 +115,73 @@ class PairedEvidence(unittest.TestCase):
                 with self.subTest(sample=sample), self.assertRaises(ValueError):
                     evidence.received(sample)
             self.assertEqual([sample['sequence'] for sample in evidence.samples], [1, 3])
+
+    def test_prepared_start_waits_for_first_later_sample_with_rate_and_counts_all_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'engine.log'
+            evidence = subject.PairedPlaybackEvidence(path, guard=lambda: True,
+                deadline=time.monotonic()+5, latest=True, prepared_start=True)
+            reads = []
+            evidence.reader = SimpleNamespace(read=lambda: reads.append(True) or
+                                               native.parse_records(path.read_bytes(), prepared_start=True))
+            self.assertTrue(evidence.received(source_sample(1)))
+            self.assertTrue(evidence.received(source_sample(2) | {'velocity': None}))
+            self.assertEqual(reads, [])
+            self.assertIsNone(evidence.initial)
+            path.write_bytes(prepared_native_log())
+            self.assertTrue(evidence.received(source_sample(3)))
+            self.assertEqual(evidence.initial_sequence, 3)
+            self.assertTrue(evidence.received(source_sample(26)))
+            result = evidence.stopped(stopped_guard=lambda: True)
+            self.assertEqual(result['source_samples'], 4)
+            self.assertEqual(result['acknowledged_sequences'], [1, 2, 3, 26])
+            self.assertEqual(result['initial_sequence'], 3)
+            self.assertEqual(result['aligned_start_sequence'], 3)
+            self.assertAlmostEqual(result['source_displacement'], 18.4)
+            self.assertAlmostEqual(result['source_game_elapsed'], 4.6)
+
+    def test_prepared_start_rejects_wrong_alignment_sequence_and_default_rejects_late_initial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'engine.log'
+            path.write_bytes(prepared_native_log(aligned_sequence=2))
+            evidence = subject.PairedPlaybackEvidence(path, guard=lambda: True,
+                deadline=time.monotonic()+5, latest=True, prepared_start=True)
+            evidence.received(source_sample(1))
+            evidence.received(source_sample(2) | {'velocity': None})
+            with self.assertRaisesRegex(ValueError, 'alignment|sequence'):
+                evidence.received(source_sample(3))
+            self.assertIsNone(evidence.initial)
+            with self.assertRaisesRegex(ValueError, 'never initialized'):
+                evidence.stopped(stopped_guard=lambda: True)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'engine.log'; path.write_bytes(prepared_native_log())
+            evidence = self.evidence(path, latest=True)
+            with self.assertRaisesRegex(ValueError, 'sequence'):
+                evidence.received(source_sample(3))
+
+    def test_prepared_start_rejects_readbacks_from_discarded_enrollment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'engine.log'
+            path.write_bytes(prepared_native_log(summary_sequence=1))
+            evidence = subject.PairedPlaybackEvidence(path, guard=lambda: True,
+                deadline=time.monotonic()+5, latest=True, prepared_start=True)
+            for sequence in (1, 2, 3, 26):
+                sample = source_sample(sequence)
+                if sequence == 2:
+                    sample['velocity'] = None
+                evidence.received(sample)
+            with self.assertRaisesRegex(ValueError, 'predates aligned start'):
+                evidence.stopped(stopped_guard=lambda: True)
+
+    def test_prepared_start_never_accepts_final_without_alignment_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'engine.log'
+            evidence = subject.PairedPlaybackEvidence(path, guard=lambda: True,
+                deadline=time.monotonic()+5, latest=True, prepared_start=True)
+            evidence.received(source_sample(1))
+            self.assertIsNone(evidence.initial)
+            with self.assertRaisesRegex(ValueError, 'never initialized'):
+                evidence.stopped(stopped_guard=lambda: True)
 
     def feed(self, evidence):
         for sequence in range(1, 27):

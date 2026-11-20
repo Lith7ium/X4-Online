@@ -1,6 +1,16 @@
 # X4 multiplayer: handover for Astra
 
-## Latest: native03 startup trace and failure (2026-11-20)
+## Latest: prepared startup implemented (2026-11-20)
+
+The approved two-stage entry is implemented and focused synthetic/fake-ABI
+checks pass. The first BIND prepares only; a later sample with velocity aligns
+once and starts playback. Waiting is bounded, identity is retained, and STOP
+before alignment releases control without a fictitious playback drain. The
+native reader now has an explicit matching diagnostic mode. Native04 is the
+next changed experiment; no new game result yet. See
+[implementation and validation](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#prepared-startup-implementation-2026-11-20-no-new-game-result-yet).
+
+## Previous: native03 startup trace and failure (2026-11-20)
 
 The audited two-Linux-X4 run at `2d478d21` aligned sequence 1 at 0 m error. Four source samples were queued, but bounded client trace recorded sequences 1 and 3; sequence 3 was queued 0.116 s after ACK 1. This supports coalescing but does not identify the exact replacement branch. Sequence 3 then requested an 85.205330 m correction and hit the unchanged 50 m limit before any running write. Run failed; startup receipt-to-push was 0.288903 s. Cleanup and Xauthority cleanup passed and the cgroup was removed; `display_released_after_runner=false` is the expected failed-run branch. No Windows, Internet or gameplay acceptance. The sidecar digest matches; the reviewed manifest records 489 file pins.
 

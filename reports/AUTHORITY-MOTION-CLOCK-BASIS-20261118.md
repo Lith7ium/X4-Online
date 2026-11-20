@@ -734,3 +734,40 @@ The sequence-3 observation requested an 85.205330 m correction. The unchanged 50
 The user approved a two-phase startup: bind/prepare first, then align once to a later fresh sample with position and velocity, verify the readback, and start playback. This is an approved direction; implementation is underway and has not been validated. No unchanged rerun is warranted. Queue coalescing remains supported by this observation, while the exact replacement mechanism is unproven.
 
 Evidence sidecar integrity checked: `trial-result.json` records 8,824 bytes and SHA-256 `8ded6a34026a9f2227d2857aac71f816336960e2a05332771f733bda33577331` for `trial-details.json`; the digest matches. The manifest contains 489 file pins and records HEAD `2d478d21f14474e8ba5a53f6900ec7883c90764a`.
+
+
+## Prepared startup implementation (2026-11-20, no new game result yet)
+
+The existing opt-in initial-alignment fixture now uses its first BIND only to
+resolve identity and prepare local AI control. It acknowledges consumption
+without constructing playback or reading/writing the native position. A later
+fresh sample with velocity aligns once, verifies the unchanged 3 m readback,
+and seeds playback with that sample's original position, rate, arrival and
+clocks. Sequence gaps remain allowed by the existing latest-delivery policy.
+The 50 m running bound, 1 s arrival freshness and 0.75 s continuity limit remain
+unchanged. Preparation identity is sealed across this transition.
+
+Missing velocity does not start playback or refresh the original configured
+startup timeout. Explicit STOP while waiting releases prepared control without
+claiming a playback drain. Timeout still fails conservatively and leaves held
+control unresolved until cleanup; automatic recovery is not implemented.
+Subsequent control preparation calls retain the existing MD Check operation.
+
+The diagnostic reader has a separate `prepared_start` opt-in: it records the
+first receipt without waiting for INITIAL, then correlates the later alignment,
+source pose, clocks and readback. Final counts include preparation receipts;
+rendered rows may not refer to discarded pre-start samples. Source displacement
+and elapsed time begin with the aligned sample. Default sequence-1 diagnostics
+retain their behavior. Private native04 helpers are prepared but not yet run.
+
+Validation was focused and used fake X4 ABI or synthetic logs: the three updated
+owner/composition unittest methods passed in 0.186 s after correcting fixture
+expectations. Later targeted Lua reruns covered extrapolation, retained STOP
+trace evidence and an actor identity change before alignment. The existing five
+playback tests, two IPC-owner cases and one default composition method passed
+(0.100 s, 0.005 s and 0.212 s respectively; log
+`.local/check-prepared-start-owner-20261120-01.log`). The three evidence/parser
+modules passed 35 tests in 1.410 s after correcting default receipt ordering;
+seven new prepared-start cases passed after the final review fixes. Agent-run
+outputs were not persisted. Syntax and diff checks passed. No full-suite rerun
+or new native success is claimed here.

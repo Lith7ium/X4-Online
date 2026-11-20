@@ -146,7 +146,7 @@ class Install(unittest.TestCase):
    subprocess.run(
     ['cc', '-O2', '-shared', '-fPIC', 'tests/fixtures/saved_motion_apply_abi.c', '-o', str(library)],
     cwd=ROOT, check=True, capture_output=True)
-   for mode in ('good', 'alignment', 'alignment_sparse'):
+   for mode in ('good', 'alignment', 'alignment_sparse', 'alignment_missing_rate', 'alignment_wait_stop', 'alignment_timeout', 'alignment_identity'):
     with self.subTest(mode=mode):
      result = subprocess.run(
       ['luajit', 'tests/authority_recovered_client_playback.lua', mode],

@@ -28,21 +28,29 @@ def clock_row(kind, sequence, local_time, *, latest=26):
             f'latest_capture_time={value["capture_time"]} local_time={local_time}\n').encode()
 
 
-def capture_log(*, alignment=False, sparse=False):
+def capture_log(*, alignment=False, sparse=False, initial_sequence=1, alignment_sequence=None):
+    if alignment_sequence is None:
+        alignment_sequence = initial_sequence
     lines = native_log().splitlines(keepends=True)
+    lines[0] = lines[0].replace(b'source_sequence=1',
+                                f'source_sequence={initial_sequence}'.encode())
+    if initial_sequence > 1:
+        lines[0] = lines[0].replace(b'x=1000', b'x=1001.6')
     if sparse:
         lines = [line.replace(b'samples=26', b'samples=3') for line in lines]
         lines[1] = lines[1].replace(b'source_sequence=26', b'source_sequence=3')
     result = b''
     if alignment:
+        target_x = 1001.6 if initial_sequence > 1 else 1000
         result += (f'[X4LAN] AUTH_CLIENT_INITIAL_ALIGNMENT version=1 epoch={paired.EPOCH} '
-                   'index=1318 source_sequence=1 source_time=77 arrival=8.5 local_time=9 '
-                   'before_x=0 before_y=2 before_z=3 target_x=1000 target_y=2 target_z=3 '
-                   'actual_x=1000 actual_y=2 actual_z=3 error=0 tolerance=3\n').encode()
-        result += clock_row('INITIAL_ALIGNMENT', 1, 9, latest=1)
+                   f'index=1318 source_sequence={alignment_sequence} source_time=77 arrival=8.5 local_time=9 '
+                   f'before_x=1000 before_y=2 before_z=3 target_x={target_x} target_y=2 target_z=3 '
+                   f'actual_x={target_x} actual_y=2 actual_z=3 error=0 tolerance=3\n').encode()
+        result += clock_row('INITIAL_ALIGNMENT', alignment_sequence, 9, latest=alignment_sequence)
     for line, kind, sequence, local_time, latest in zip(
-            lines, ('INITIAL', 'SUMMARY', 'STOPPED'), (1, 3 if sparse else 26, 26),
-            (10, 16, 17), (1, 26, 26)):
+            lines, ('INITIAL', 'SUMMARY', 'STOPPED'),
+            (initial_sequence, 3 if sparse else 26, 26), (10, 16, 17),
+            (initial_sequence, 26, 26)):
         result += line + clock_row(kind, sequence, local_time, latest=latest)
     return result
 
@@ -228,6 +236,52 @@ class CapturePlaybackEvidence(unittest.TestCase):
                 else:
                     with self.assertRaises(ValueError):
                         evidence.received(capture_sample(1))
+
+    def test_prepared_start_parser_accepts_matching_late_initial_only_when_opted_in(self):
+        data = capture_log(alignment=True, initial_sequence=3)
+        initial = native.parse_records(data, sample_version=3, prepared_start=True)[0]
+        self.assertEqual(initial['source_sequence'], 3)
+        self.assertEqual(initial['initial_alignment_clock']['source_sequence'], 3)
+        self.assertEqual(initial['initial_alignment_clock']['capture_clock']['render_sequence'], 3)
+        with self.assertRaisesRegex(ValueError, 'initial'):
+            native.parse_records(data, sample_version=3)
+        mismatched = capture_log(alignment=True, initial_sequence=3, alignment_sequence=2)
+        with self.assertRaisesRegex(ValueError, 'sequence'):
+            native.parse_records(mismatched, sample_version=3, prepared_start=True)
+
+    def test_prepared_start_alignment_waits_if_initial_has_not_arrived(self):
+        alignment_only = capture_log(alignment=True, initial_sequence=3).split(
+            b'[X4LAN] AUTH_CLIENT_PLAYBACK INITIAL', 1)[0]
+        with self.assertRaises(native.PlaybackLogPending):
+            native.parse_records(alignment_only, sample_version=3, prepared_start=True)
+
+    def test_prepared_start_v3_correlates_late_alignment_and_rejects_wrong_clock(self):
+        data = capture_log(alignment=True, sparse=True, initial_sequence=3)
+        data = data.replace(clock_row('SUMMARY', 3, 16),
+                            clock_row('SUMMARY', 3, 16, latest=3))
+        stop = data.index(b'[X4LAN] AUTH_CLIENT_PLAYBACK STOPPED')
+        data = data[:stop] + data[stop:].replace(b'samples=3', b'samples=4', 1)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'log'; path.write_bytes(data)
+            evidence = paired.PairedPlaybackEvidence(path, guard=lambda: True,
+                deadline=time.monotonic()+5, latest=True, sample_version=3, prepared_start=True)
+            evidence.received(capture_sample(1))
+            evidence.received(capture_sample(2) | {'real_velocity': None})
+            evidence.received(capture_sample(3))
+            evidence.received(capture_sample(26))
+            result = evidence.stopped(stopped_guard=lambda: True)
+            self.assertEqual(result['initial_sequence'], 3)
+            self.assertEqual(result['source_samples'], 4)
+            self.assertAlmostEqual(result['source_capture_elapsed'], 4.6)
+
+            bad = data.replace(b'latest_capture_time=200.6', b'latest_capture_time=200.8', 1)
+            path.write_bytes(bad)
+            mismatch = paired.PairedPlaybackEvidence(path, guard=lambda: True,
+                deadline=time.monotonic()+5, latest=True, sample_version=3, prepared_start=True)
+            mismatch.received(capture_sample(1))
+            mismatch.received(capture_sample(2) | {'real_velocity': None})
+            with self.assertRaisesRegex(ValueError, 'capture clock'):
+                mismatch.received(capture_sample(3))
 
 
 if __name__ == '__main__':

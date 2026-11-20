@@ -34,7 +34,7 @@ class SavedInitialAlignmentRuntimeTests(unittest.TestCase):
                     self.assertEqual(result.returncode,0,result.stderr)
 
     def test_owner_once_only_and_factory_uncertainty(self):
-        for case in ('success','uncertain_factory','reentrant_stop'):
+        for case in ('success','uncertain_factory','reentrant_stop','missing_rate','timeout','stop_before_alignment','identity_before_alignment'):
             with self.subTest(case=case):
                 result = subprocess.run(['luajit','tests/authority_saved_initial_alignment_owner.lua'],cwd=ROOT,
                     env=dict(os.environ,ALIGNMENT_OWNER_CASE=case),capture_output=True,text=True,timeout=5)

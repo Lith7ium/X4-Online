@@ -193,9 +193,10 @@ class PlaybackLogPending(ValueError):
     """Only append/incomplete snapshots may be retried within bounded waits."""
 
 
-def parse_records(data, *, sample_version=1):
+def parse_records(data, *, sample_version=1, prepared_start=False):
     """Parse bounded, fixed-field native readbacks; BOUND is not a position ACK."""
-    if type(sample_version) is not int or sample_version not in (1, 3):
+    if (type(sample_version) is not int or sample_version not in (1, 3) or
+            type(prepared_start) is not bool):
         raise ValueError('unsupported_playback_sample_version')
     if len(data) > MAX_LOG or (data and not data.endswith(b'\n')):
         raise ValueError('invalid_playback_log')
@@ -232,7 +233,9 @@ def parse_records(data, *, sample_version=1):
             raise ValueError('regressed_playback_clock')
         last_local, last_game = fields['local_time'], fields['game_time']
         if kind == 'INITIAL':
-            if initial is not None or summaries or fields['source_sequence'] != 1:
+            if (initial is not None or summaries or fields['source_sequence'] < 1 or
+                    fields['source_sequence'] > 64 or
+                    (not prepared_start and fields['source_sequence'] != 1)):
                 raise ValueError('duplicate_playback_initial')
             initial = fields
         else:
@@ -249,8 +252,11 @@ def parse_records(data, *, sample_version=1):
                 if fields['uncertain'] != '0' or fields['drained'] != '1' or fields['report'] != len(summaries):
                     raise ValueError('uncertain_native_playback_stop')
                 stopped = fields
+    alignment = None
+    if sample_version == 3 or prepared_start:
+        alignment = _attach_initial_alignment(data, initial, prepared_start=prepared_start)
     if sample_version == 3:
-        _attach_capture_records(data, initial, summaries, stopped)
+        _attach_capture_records(data, initial, summaries, stopped, alignment=alignment)
     return initial, summaries, stopped
 
 
@@ -265,20 +271,14 @@ def _capture_fields(raw):
     return fields
 
 
-def _attach_capture_records(data, initial, summaries, stopped):
-    """Pair each native position event with its separately labeled clocks."""
-    clock_tag = b'[X4LAN] AUTH_CLIENT_CAPTURE_CLOCK '
+def _attach_initial_alignment(data, initial, *, prepared_start=False):
+    """Attach the bounded alignment readback, including for legacy sample logs."""
     alignment_tag = b'[X4LAN] AUTH_CLIENT_INITIAL_ALIGNMENT '
-    rows = iter(([initial] if initial is not None else []) + summaries +
-                ([stopped] if stopped is not None else []))
-    pending = None
     alignment = None
     position_started = False
     for line in data.splitlines():
-        if b'AUTH_CLIENT_CAPTURE_CLOCK' in line and clock_tag not in line:
-            raise ValueError('invalid_capture_clock_record')
         if alignment_tag in line:
-            if pending is not None or alignment is not None or position_started:
+            if alignment is not None or position_started:
                 raise ValueError('unexpected_alignment_clock_record')
             fields = _capture_fields(line.split(alignment_tag, 1)[1])
             expected = {'version', 'epoch', 'index', 'source_sequence', 'source_time',
@@ -289,11 +289,38 @@ def _attach_capture_records(data, initial, summaries, stopped):
                 raise ValueError('foreign_alignment_clock_record')
             for key in expected - {'version', 'epoch', 'index'}:
                 fields[key] = _number(fields[key], integer=key == 'source_sequence')
-            if fields['source_sequence'] != 1 or min(fields[key] for key in
-                    ('source_time', 'arrival', 'local_time', 'error', 'tolerance')) < 0:
+            if (fields['source_sequence'] < 1 or fields['source_sequence'] > 64 or
+                    (not prepared_start and fields['source_sequence'] != 1) or
+                    min(fields[key] for key in ('source_time', 'arrival', 'local_time', 'error', 'tolerance')) < 0):
                 raise ValueError('invalid_alignment_clock_record')
             alignment = fields
-            pending = ('INITIAL_ALIGNMENT', fields)
+        elif TAG in line:
+            position_started = True
+    if alignment is not None:
+        if prepared_start and initial is None:
+            raise PlaybackLogPending('initial_alignment_without_initial')
+        if prepared_start and initial is not None and alignment['source_sequence'] != initial['source_sequence']:
+            raise ValueError('alignment_source_sequence_differs')
+        if initial is not None:
+            initial['initial_alignment_clock'] = alignment
+    return alignment
+
+
+def _attach_capture_records(data, initial, summaries, stopped, *, alignment=None):
+    """Pair each native position event with its separately labeled clocks."""
+    clock_tag = b'[X4LAN] AUTH_CLIENT_CAPTURE_CLOCK '
+    alignment_tag = b'[X4LAN] AUTH_CLIENT_INITIAL_ALIGNMENT '
+    rows = iter(([initial] if initial is not None else []) + summaries +
+                ([stopped] if stopped is not None else []))
+    pending = None
+    position_started = False
+    for line in data.splitlines():
+        if b'AUTH_CLIENT_CAPTURE_CLOCK' in line and clock_tag not in line:
+            raise ValueError('invalid_capture_clock_record')
+        if alignment_tag in line:
+            if pending is not None or alignment is None or position_started:
+                raise ValueError('unexpected_alignment_clock_record')
+            pending = ('INITIAL_ALIGNMENT', alignment)
         elif TAG in line:
             if pending is not None:
                 raise ValueError('missing_capture_clock_record')
@@ -316,14 +343,14 @@ def _attach_capture_records(data, initial, summaries, stopped):
                     raise ValueError('invalid_capture_clock_record')
             if (fields['render_sequence'] != row['source_sequence'] or
                     fields['local_time'] != row['local_time'] or
-                    (kind == 'INITIAL_ALIGNMENT' and fields['latest_source_time'] != row['source_time'])):
+                    (kind == 'INITIAL_ALIGNMENT' and
+                     (fields['latest_source_time'] != row['source_time'] or
+                      alignment is None or alignment['source_sequence'] != row['source_sequence']))):
                 raise ValueError('capture_clock_native_correlation_differs')
             row['capture_clock'] = fields
             pending = None
     if pending is not None:
         raise PlaybackLogPending('capture_clock_record_pending')
-    if alignment is not None and initial is not None:
-        initial['initial_alignment_clock'] = alignment
 
 
 def validate_plan(initial, driver):
@@ -351,11 +378,13 @@ def validate_plan(initial, driver):
 
 class PlaybackLog:
     """Read-only append history shared by independent and paired diagnostics."""
-    def __init__(self, path, *, sample_version=1):
-        if type(sample_version) is not int or sample_version not in (1, 3):
+    def __init__(self, path, *, sample_version=1, prepared_start=False):
+        if (type(sample_version) is not int or sample_version not in (1, 3) or
+                type(prepared_start) is not bool):
             raise ValueError('unsupported_playback_sample_version')
         self.log = path
         self.sample_version = sample_version
+        self.prepared_start = prepared_start
         self._log_identity = None
         self._log_bytes = b''
 
@@ -392,7 +421,8 @@ class PlaybackLog:
         self._log_identity, self._log_bytes = before[0][:2], before[2]
         if before[2] and not before[2].endswith(b'\n'):
             raise PlaybackLogPending('playback_log_line_pending')
-        result = parse_records(before[2], sample_version=self.sample_version)
+        result = parse_records(before[2], sample_version=self.sample_version,
+                               prepared_start=self.prepared_start)
         return result
 
 
