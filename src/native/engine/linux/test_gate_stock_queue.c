@@ -355,7 +355,7 @@ static void test_staging_refusals(void) {
 
 static void run_window(uint64_t first, uint64_t last, unsigned slots, unsigned delay) {
     linux_stock_queue *queue = make_queue(config_for(first, last, slots, delay));
-    linux_stock_frame frame, retained;
+    linux_stock_frame frame, retained = {0};
     int have_retained = 0;
     for (uint64_t tick = first; tick <= last + delay; ++tick) {
         assert(linux_stock_begin_tick(queue, tick) == LINUX_STOCK_OK);
