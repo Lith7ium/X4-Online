@@ -12,6 +12,8 @@ import shutil
 import stat
 import sys
 
+from .game import is_link_or_reparse
+
 PROFILES = (45850, 45851, 45853, 45854, 45855, 45856, 45857, 45858)
 CAPTURE_PROFILE = 45841  # tools/dev/native_gate_snapshot.lua only saves inside .../45841/save
 SNAPSHOT_SLOT = 'save_009.xml.gz'
@@ -76,7 +78,7 @@ def profile_dir(profile, root=None):
     if profile not in (*PROFILES, CAPTURE_PROFILE):
         raise SystemExit(f'profile {profile} is not a disposable launcher profile')
     path = (Path(root) if root else documents()) / str(profile)
-    if path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
+    if is_link_or_reparse(path):
         raise SystemExit(f'{path} is a link; refusing')
     return path
 

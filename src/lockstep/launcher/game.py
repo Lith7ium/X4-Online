@@ -11,12 +11,33 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import stat
 
 # X4 9.00 Windows (Steam build 23660954): the build the lockstep gate is pinned to.
 EXE_SIZE = 55412768
 EXE_SHA256 = '19750a6563889a970f434b5566eb396c6b2dc29ff814bd3e336f838176ad6891'
 APP_ID = '392160'
 MARKER = '.x4ls-view'
+
+
+def _is_windows():
+    return os.name == 'nt'
+
+
+def is_link_or_reparse(path):
+    """Detect links and Windows reparse points without Path.is_junction (3.12+)."""
+    try:
+        info = Path(path).lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    if _is_windows():
+        attributes = getattr(info, 'st_file_attributes', None)
+        if type(attributes) is not int:
+            raise OSError(f'cannot inspect Windows reparse attributes: {path}')
+        return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    return False
 
 
 def steam_root():
@@ -88,10 +109,8 @@ def dlc_ids(view):
 def _remove_owned(path):
     """Delete a folder the launcher created; links inside are unlinked, never entered."""
     for entry in path.iterdir():
-        if hasattr(entry, 'is_junction') and entry.is_junction():
-            os.rmdir(entry)
-        elif entry.is_symlink():
-            os.rmdir(entry) if os.name == 'nt' and entry.is_dir() else os.unlink(entry)
+        if is_link_or_reparse(entry):
+            os.rmdir(entry) if _is_windows() and entry.is_dir() else os.unlink(entry)
         elif entry.is_dir():
             _remove_owned(entry)
         else:
@@ -101,6 +120,8 @@ def _remove_owned(path):
 
 def remove_view(view):
     view = Path(view)
+    if is_link_or_reparse(view):
+        raise SystemExit(f'{view} is a link; refusing to delete')
     if not (view / MARKER).is_file():
         raise SystemExit(f'{view} is not an x4ls view; refusing to delete')
     _remove_owned(view)
