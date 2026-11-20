@@ -63,11 +63,32 @@ def verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
     The opt-in source check relates saved registry bindings to the snapshot in
     these bytes. Operational bits remain captured observations, not live permission.
     """
+    return _verify(checkpoint, expected_epoch, expected_run_id, expected_count,
+                   verify_source_registry=verify_source_registry, pump=pump)
+
+
+def verify_join_snapshot(checkpoint, *, pump=None):
+    """Verify format-3 saved bytes for admission using the checkpoint's run marker.
+
+    Epoch and issued count are discovered from the saved snapshot and checked
+    against the source registry. The MD checkpoint marker is a separate check
+    owned by the caller; this function only correlates the snapshot run ID.
+    """
+    if not isinstance(checkpoint, Checkpoint) or not isinstance(checkpoint.marker, str) or not _HEX32.fullmatch(checkpoint.marker):
+        raise RegistryAvailabilityEvidenceError('join checkpoint requires a run marker')
+    return _verify(checkpoint, None, checkpoint.marker, None,
+                   verify_source_registry=True, pump=pump, discover=True)
+
+
+def _verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
+            verify_source_registry, pump, discover=False):
     if (type(verify_source_registry) is not bool or not isinstance(checkpoint, Checkpoint)
-            or not isinstance(expected_epoch, str)
-            or not _HEX32.fullmatch(expected_epoch) or not isinstance(expected_run_id, str)
-            or not _HEX32.fullmatch(expected_run_id) or type(expected_count) is not int
-            or not 1 <= expected_count <= _MAX):
+            or (discover and verify_source_registry is not True)
+            or (not discover and (not isinstance(expected_epoch, str)
+                                 or not _HEX32.fullmatch(expected_epoch)
+                                 or type(expected_count) is not int
+                                 or not 1 <= expected_count <= _MAX))
+            or not isinstance(expected_run_id, str) or not _HEX32.fullmatch(expected_run_id)):
         raise RegistryAvailabilityEvidenceError('invalid verification request')
     try:
         scripts = cues = var_sets = 0
@@ -116,6 +137,10 @@ def verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
                 (source_scripts, source_cues, source_var_sets) != (1, 1, 1)
                 or set(source_fields) != {'$epoch', '$last', '$faulted', '$ships', '$byship'}):
             raise RegistryAvailabilityEvidenceError('missing or ambiguous source registry state')
+        if discover:
+            expected_count = _integer(fields['$issued_count'])
+            if not 1 <= expected_count <= _MAX:
+                raise RegistryAvailabilityEvidenceError('issued count outside supported range')
         if verify_source_registry:
             source_epoch = source_fields['$epoch']
             if source_epoch.get('type') != 'string' or not _REF.fullmatch(source_epoch.get('value', '')):
@@ -279,6 +304,11 @@ def verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
         _parse(checkpoint, refs, pump=pump)
         if pending is not None or seen != selected_pairs:
             raise RegistryAvailabilityEvidenceError('missing or incomplete selected references')
+        if discover:
+            if (len(resolved['$epoch']) != 1 or not isinstance(resolved['$epoch'][0], str)
+                    or not _HEX32.fullmatch(resolved['$epoch'][0])):
+                raise RegistryAvailabilityEvidenceError('invalid saved snapshot epoch')
+            expected_epoch = resolved['$epoch'][0]
         if resolved['$epoch'] != [expected_epoch] or resolved['$run_id'] != [expected_run_id]:
             raise RegistryAvailabilityEvidenceError('correlation strings mismatch')
         if verify_source_registry:

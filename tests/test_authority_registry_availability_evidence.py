@@ -4,9 +4,10 @@ from contextlib import contextmanager
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from authority.checkpoints import Checkpoint
-from authority.registry_availability_evidence import RegistryAvailabilityEvidenceError, verify
+from authority.registry_availability_evidence import RegistryAvailabilityEvidenceError, verify, verify_join_snapshot
 
 EPOCH = 'a' * 32
 RUN = 'b' * 32
@@ -70,12 +71,12 @@ def build_xml(bits=(1, 0, 1), *, operational=None, key_type='integer', available
 
 class RegistryAvailabilityEvidenceTests(unittest.TestCase):
     @contextmanager
-    def checkpoint(self, xml):
+    def checkpoint(self, xml, marker=None):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'save.gz'
             data = gzip.compress(xml)
             path.write_bytes(data)
-            yield Checkpoint('checkpoint-' + 'c'*32, path, hashlib.sha256(data).hexdigest(), len(data))
+            yield Checkpoint('checkpoint-' + 'c'*32, path, hashlib.sha256(data).hexdigest(), len(data), marker)
 
     def check(self, xml, count=None, epoch=EPOCH, run=RUN, **options):
         count = count or 3
@@ -136,6 +137,38 @@ class RegistryAvailabilityEvidenceTests(unittest.TestCase):
                                       source_ships=null_forward, source_reverse=null_reverse),
                            verify_source_registry=True)
         self.assertEqual(result['availability_bits'], '100')
+
+    def test_join_discovers_epoch_and_count_in_three_passes(self):
+        import authority.registry_availability_evidence as evidence
+        parse = evidence._parse
+        with self.checkpoint(build_xml((1, 0, 1)), RUN) as cp:
+            with patch.object(evidence, '_parse', wraps=parse) as parsed:
+                result = verify_join_snapshot(cp)
+            self.assertEqual(parsed.call_count, 3)
+        self.assertEqual((result['epoch'], result['run_id'], result['issued_count']), (EPOCH, RUN, 3))
+        self.assertTrue(result['source_registry_checked'])
+
+    def test_join_requires_marker_and_rejects_mismatched_saved_state(self):
+        with self.checkpoint(build_xml()) as cp:
+            with self.assertRaisesRegex(RegistryAvailabilityEvidenceError, 'requires a run marker'):
+                verify_join_snapshot(cp)
+        cases = [
+            (build_xml(), 'd' * 32),
+            (build_xml(source_epoch='d' * 32), RUN),
+            (build_xml(source_last=2), RUN),
+            (build_xml(source_epoch_ref='10'), RUN),
+            (build_xml().replace(EPOCH.encode(), b'bad', 1), RUN),
+        ]
+        for xml, marker in cases:
+            with self.subTest(marker=marker, xml=xml[:120]), self.checkpoint(xml, marker) as cp:
+                with self.assertRaises(RegistryAvailabilityEvidenceError):
+                    verify_join_snapshot(cp)
+
+    def test_join_keeps_explicit_verifier_behavior(self):
+        with self.checkpoint(build_xml(), RUN) as cp:
+            self.assertFalse(verify(cp, EPOCH, RUN, 3)['source_registry_checked'])
+            with self.assertRaises(RegistryAvailabilityEvidenceError):
+                verify(cp, 'd' * 32, RUN, 3, verify_source_registry=True)
 
     def test_optin_source_registry_rejects_mismatch_count_epoch_fault_and_present_unavailable(self):
         swapped = build_xml((1, 0, 1), source_ships={1: '103', 2: '1002', 3: '101'},
