@@ -1,5 +1,65 @@
 # X4 multiplayer: handover for Astra
 
+## Latest: user-requested pause after checkpoint integration (2026-11-20)
+
+The user requested stopping tests, saving a checkpoint and pausing the goal.
+Implementation commit `25783512` is committed and pushed to
+`fork/experiment/authoritative-server-20261115`. No new X4 run was launched this
+turn; a fresh process check reports no X4 instances. The preparation agent
+stopped and reported no live process or tool session. Resume only when the user
+requests it. The multiplayer goal is not achieved.
+
+Implemented, default-off:
+
+- Snapshot `BeginNext` requires the immediately preceding complete, sealed,
+  nonfaulted run and the same epoch/count. Prior maps survive capture for
+  continuity checks; existing bindings cannot change actors, missing bindings
+  cannot revive, and bound-to-missing is permitted without inferring destruction.
+  Operational bits may change. Seal removes temporary prior maps and preserves
+  the completed format-3 saved contract.
+- `src/authority/lua/registry_checkpoint_gate.lua` inspects the full loaded
+  snapshot before readiness, then captures a fresh full snapshot for each new
+  save marker. Pause/game-time guards, callback failures/reentry, operation
+  deadlines and marker reuse are checked before marker storage.
+- `tools/dev/authority_registry_checkpoint_install.py` connects this gate to a
+  disposable recovered bridge: initial inspection precedes activation, capture
+  delays marker storage, and the existing marker receipt still precedes Save.
+  The main recovered server CLI and admission path are unchanged. See
+  `tools/dev/AUTHORITY-REGISTRY-CHECKPOINT.md` for integration requirements.
+- The saved snapshot reader optionally verifies the source registry in the same
+  three streaming passes (`verify_source_registry=True`), including collapsed
+  null references, matching bound mappings, and absence of components marked
+  unavailable. This check passed on the retained native03 save offline.
+
+Validation: seven final MD structural tests and XSD validation passed; the
+extended snapshot owner test passed; 11 saved-reader tests passed; the gate and
+generated-bridge tests passed (three Python tests, including real Lua control
+owners with simulated engine/MD replies). They cover two saves separated by
+resume/pause, replayed markers, missing bindings, mismatched initial inspection,
+pause loss, callback reentry and timeout/refusal. No unchanged broad suite or
+native03 experiment was repeated. The last actual native evidence is the full
+single-capture/save/reload result described below.
+
+Unfinished private test preparation is retained in
+`.local/registry-checkpoint-repeat-owner-20261120/`: `launcher.py`, `runner.py`,
+`native_adapter.lua`, and a read-only `input-save_008.xml.gz` copy of native03's
+output (SHA256 `b8dd4f45c4cdcb75e5adbf17e977d3251e8c9340ac6cd1bfebe6e1d7fda97377`).
+It is **not ready to launch**. No syntax/fake-event checks, reviewed manifest or
+native execution were completed. The adapter still omits `guard=guard` in
+`gate.new(...)`; request IDs now start at 2 after pause ID 1, and the runner now
+checks initial Inspect rows in cycle mode, but those changes are untested.
+Review the entire private harness before use, including source pins and cleanup.
+
+The planned native experiment uses the gate plus the existing two-save cycle
+controller (not the generated UDP recovery bridge): inspect the native03 input,
+capture/save 009, capture/save 010 in the same paused process, independently
+verify both files and their markers/source registry, then inspect 010 in a fresh
+X4 process. It would prove repeated snapshot/save/reload handling, not a complete
+departure/reconnect flow or a live bound-to-missing transition. Do not publish
+these diagnostic saves or change original CURRENT/CONFIRMED pointers. After
+this evidence, integration with the real server/client checkpoint verification
+and admission paths remains necessary; issued-count growth also remains open.
+
 ## Latest: full-register binding/operational save and reload passed (2026-11-20)
 
 At `af246556`, private run
