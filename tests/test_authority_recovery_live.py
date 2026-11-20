@@ -40,6 +40,24 @@ class RecoveryLiveTests(unittest.TestCase):
                 path.write_bytes(b''.join(bad));watch=recovery.RecoveryWatch(path,marker)
                 with self.assertRaises(ValueError): watch.poll()
 
+    def test_terminal_game_errors_end_the_recovery_wait_on_a_complete_log_line(self):
+        failures = {
+            b'[X4LAN] AUTH_WORLD_BRIDGE ERROR update stopped': 'world bridge failure',
+            b'[X4LAN] AUTH_REGISTRY_CHECKPOINT ' + b'b' * 32 + b'|ERROR|inspection failed':
+                'registry checkpoint failure',
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'engine-output.log'
+            for message, expected_error in failures.items():
+                with self.subTest(message=message):
+                    watch = recovery.RecoveryWatch(path, 'a' * 32)
+                    path.write_bytes(b'[X4LAN] AUTH_RECOVERY REQUEST\n' + message[:18])
+                    self.assertFalse(watch.poll())
+                    with path.open('ab') as output:
+                        output.write(message[18:] + b'\n')
+                    with self.assertRaisesRegex(ValueError, expected_error):
+                        watch.poll()
+
     def test_log_may_be_missing_only_before_first_observation(self):
         with tempfile.TemporaryDirectory() as d:
             path=Path(d)/'log';watch=recovery.RecoveryWatch(path,'a'*32)

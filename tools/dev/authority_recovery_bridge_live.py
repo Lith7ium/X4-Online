@@ -45,7 +45,7 @@ def replace_once(text, old, new):
     return text.replace(old, new)
 
 
-def install_probe(case, profile, port, lease, epoch):
+def install_probe(case, profile, port, lease, epoch, *, early_pause=False):
     """Install modified copies only in a new disposable case."""
     bridge_install.install_probe(case, port, lease, epoch, marker_required=True)
     lab = case/'extensions/x4_lan_lab'; ui = lab/'ui'
@@ -104,9 +104,10 @@ end)
              'ui/authority_world_bridge_probe.lua']
     (lab/'ui.xml').write_text(extension.ui_xml(files))
     config = ui/'config.lua'
+    pause_setting = 'authority_recovery_early_pause=true,' if early_pause else ''
     config.write_text('X4LAN_CONFIG = {enabled=false,test_profile="45841",authority_recovery_probe=true,'
         'authority_marker_phase="load",authority_load_save_path='+load.lua_literal(str(profile/'save'))+','
-        'authority_world_bridge=true,authority_marker_required=true,'
+        f'authority_world_bridge=true,authority_marker_required=true,{pause_setting}'
         f'authority_control_port={port},authority_control_lease="{lease}",authority_world_epoch="{epoch}"'+'}\n', encoding='ascii')
     return [config, lab/'ui.xml', profile/'content.xml', profile/'config.xml', lab/'native/x4lan_net.so',
             lab/'md/authority_checkpoint_marker.xml', *[ui/name for name in
@@ -141,7 +142,9 @@ def activate(sock, watch, lease, epoch, deadline, check, verify):
         check()
         if time.monotonic() >= deadline: raise TimeoutError('activation acknowledgement timed out')
         try: data, address = sock.recvfrom(769)
-        except socket.timeout: continue
+        except socket.timeout:
+            watch.poll()
+            continue
         if address != peer: raise ValueError('activation peer changed')
         if data == ready: continue
         if data != activated: raise ValueError('unexpected activation acknowledgement')

@@ -995,7 +995,8 @@ def run(args):
         sock.bind(('127.0.0.1', 0)); sock.settimeout(.25)
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
         protected = (fixture_helpers.install_server(case, profile, fixture_scripts, sock.getsockname()[1], lease, epoch)
-                     if fixture_mode else bridge.install_probe(case, profile, sock.getsockname()[1], lease, epoch))
+                     if fixture_mode else bridge.install_probe(case, profile, sock.getsockname()[1], lease, epoch,
+                                                               early_pause=require_snapshot))
         if require_snapshot:
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence))

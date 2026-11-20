@@ -32,6 +32,8 @@ import linux_snapshot_capture as snapshot
 
 RECOVERY=b'[X4LAN] AUTH_RECOVERY '
 MARKER=b'[X4LAN] AUTH_MARKER load '
+WORLD_BRIDGE_ERROR = b'[X4LAN] AUTH_WORLD_BRIDGE ERROR '
+REGISTRY_ERROR = re.compile(rb'\[X4LAN\] AUTH_REGISTRY_CHECKPOINT [0-9a-f]{32}\|ERROR\|')
 # Optional hooks for explicitly isolated recovery experiments. The invoking
 # runner must restore them and provide only files in its own disposable case.
 extra_protected_files=None
@@ -65,6 +67,10 @@ class RecoveryWatch(base.LoadWatch):
                 if len(self.carry)>self.MAX_LINE: raise ValueError('recovery line too long')
                 for line in lines:
                     if len(line)>self.MAX_LINE: raise ValueError('recovery line too long')
+                    if WORLD_BRIDGE_ERROR in line:
+                        raise ValueError('X4 reported a world bridge failure during recovery')
+                    if REGISTRY_ERROR.search(line):
+                        raise ValueError('X4 reported a registry checkpoint failure during recovery')
                     if RECOVERY in line: row=line.split(RECOVERY,1)[1].strip()
                     elif MARKER in line: row=line.split(MARKER,1)[1].strip()
                     else: continue
