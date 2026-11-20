@@ -886,3 +886,64 @@ A separate persisted availability state is proposed in the
 The user subsequently approved this experiment; checkpoint admission remains
 unchanged until game-side and reload evidence support it. No ship class was excluded, no lifetime was inferred
 closed, and the failed candidate was not promoted.
+
+## Registry availability capture and reload (2026-11-20)
+
+The approved availability diagnostic captured eight selected indices from the
+10,082-entry candidate in one disposable Linux X4 process, saved them, and
+compared their stored flags with fresh reads in a second process. Both phases
+held the game paused. This is a narrow native observation, not the overall
+multiplayer acceptance test or a new admitted checkpoint.
+
+| Entries | Forward slot | Object exists | Ship / operational / reverse match |
+| --- | --- | --- | --- |
+| 576, 577, 578, 579, 664, 671, 672 | true | false | false / false / false |
+| Control 1318 | true | true | true / true / true |
+
+The last three checks short-circuit when the object does not exist. Their false
+values therefore do not independently prove class, lifecycle or reverse-key
+state. All eight saved rows matched the runtime capture, and all eight fresh
+reload rows matched the saved rows. The separately stored checkpoint marker
+was observed after loading; the capture/save receipt and reload receipt are
+correlated to run ID `863ab5efb0ad902891236c3bc736934e`.
+
+Capture ran at `d831414c`; the first outer result is still failed because the
+offline parser rejected native reference-ID reuse across types. Native X4
+scopes reference IDs by `refs/@type`; it also saved the Lua-provided observation
+indices as canonical integral `largefloat` keys. The reader correction at
+`d8da5c08` passed ten focused synthetic tests and successfully parsed the same
+captured save. A continuation performed only reload/inspect, without repeating
+capture. Its outer result is successful, including private display validation,
+display release, source pins, Steam identity and owned-process cleanup. No X4
+process remains; neither original checkpoint pointer changed.
+
+The diagnostic save has SHA-256
+`e9f26c24d4fd18e89785b33b4fdbb80100f55db72cd6d4770f807d072f1604df`
+and 26,903,558 compressed bytes. It was not published or confirmed as a world
+checkpoint. Private evidence:
+
+- `.local/registry-availability-native-20261120-01/`: capture, native save and
+  the preserved failed first outer result.
+- `.local/registry-availability-native-20261120-02/`: successful continuation,
+  saved/fresh observations and owned cleanup.
+- `.local/registry-availability-reviewed-20261120-02.json` and `-03.json`:
+  pre/post source manifests for capture and continuation. The first manifest
+  attempt stopped before launch because the archived helper's relative root
+  differed; the private launcher explicitly sets the repository root.
+- `.local/registry-availability-owner-20261120/registry-shape.json`: read-only
+  comparison of the original candidate and the diagnostic save.
+
+That comparison identifies a separate limitation of the old registry. Before
+load, the seven missing entries retained distinct nonzero serialized component
+references. After resave, all seven forward values are `[0x0]`; all 10,082
+forward indices remain. The reverse map has 10,076 rows and a single null key
+mapping to 672, rather than seven distinct reverse keys. Control 1318 retains
+`[0x7a18a]`. The existing strict verifier rejects the new save as `incomplete
+table`. Merely allowing missing XML components would not fix this representation.
+
+Persistent observation flags survived this case, but unavailable object
+references did not retain their former value. The next proposed format must
+retain multiplayer IDs independently of usable X4 bindings and verify complete
+availability coverage before admission changes. The cause of disappearance,
+historical object identity, automatic rebinding, full-registry performance,
+Windows/WAN play and the user's gameplay goal remain unproven.

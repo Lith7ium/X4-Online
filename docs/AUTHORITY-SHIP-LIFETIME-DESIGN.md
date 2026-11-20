@@ -75,7 +75,43 @@ matching those observed encodings, all ten saved-reader tests passed and the
 same retained save parsed successfully. No capture was repeated. The existing
 strict registry verifier separately reports `incomplete table` on that save;
 its registry shape and the pending reload must be examined before admission can
-change. Private evidence: `.local/registry-availability-native-20261120-01`.
+change. Private capture evidence: `.local/registry-availability-native-20261120-01`.
+
+The continuation at `d8da5c08` loaded that same retained save in a fresh private
+process. Saved and fresh flags matched for all eight indices. The outer run,
+display release and owned-process cleanup passed; original checkpoints and
+the diagnostic save were unchanged. No admission change followed this result.
+Private reload evidence: `.local/registry-availability-native-20261120-02`.
+
+Offline registry comparison explains the remaining strict rejection. The
+resaved forward table still has all 10,082 integer indices, but the seven
+unavailable component values are now `[0x0]`. They share one reverse key, pointing
+to index 672, leaving 10,076 reverse rows. The control retains `[0x7a18a]` and its
+matching reverse row. The previous candidate contained seven distinct nonzero
+references even though their component definitions were missing. This is
+evidence of saved reference loss and null-key collapse; it does not explain why
+the objects became unavailable or establish their destruction.
+
+### Next format proposal after native observation
+
+Pending discussion with the user; not implemented in admission:
+
+- Keep an issued multiplayer identity even when X4 no longer supplies a usable
+  object reference. Store its explicit availability independently of that
+  reference and of the reverse lookup table.
+- Require a complete, unique forward/reverse binding for entries declared
+  available. The reverse lookup contains only validated usable objects;
+  unavailable entries cannot contribute a shared null key or receive commands
+  or motion updates.
+- Do not reassign or revive an unavailable identity automatically. Its former
+  X4 reference is not a recovery key after resave. Any future rebinding needs
+  separate identity/lifetime evidence and an explicit transition.
+- Use a distinct save format and reject incomplete availability coverage.
+  Validate all issued entries in a full-register save/reload experiment before
+  changing checkpoint admission. Old-format acceptance remains unchanged.
+
+The eight-row experiment supports the storage mechanism, not complete ship
+coverage, full-register performance, lifecycle transitions or client recovery.
 
 ## Existing identity
 

@@ -1,6 +1,27 @@
 # X4 multiplayer: handover for Astra
 
-## Latest: availability experiment approved; client entry clarified (2026-11-20)
+## Latest: availability capture/save/reload observed; null references collapse (2026-11-20)
+
+At `d831414c`, one private X4 process captured the seven missing entries plus
+control 1318 and saved. At `d8da5c08`, a fresh private process loaded that retained
+save and inspected the saved and current flags: all eight rows matched. The
+second outer run passed including display, owned-process cleanup and source
+preservation. No X4 remains. The first outer run remains failed because its
+offline parser initially assumed globally unique reference IDs and integer-only
+table keys; the corrected reader was checked against the retained save, without
+repeating capture. This is a bounded diagnostic, not checkpoint admission or
+multiplayer acceptance.
+
+Crucial finding: on resave, all seven unavailable X4 references became `[0x0]`.
+Forward indices remain, but the reverse table has one null key instead of seven
+distinct object keys (10,076 rows versus 10,082 issued IDs). Current strict
+registry verification still rejects it. A separate persistent availability
+table survives, but a forward slot alone does not prove a usable object or its
+historical identity. Do not reuse those IDs or infer destruction. See
+[evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#registry-availability-capture-and-reload-2026-11-20)
+and [proposed next format](../docs/AUTHORITY-SHIP-LIFETIME-DESIGN.md#next-format-proposal-after-native-observation).
+
+## Previous: availability experiment approved; client entry clarified (2026-11-20)
 
 The default-off availability diagnostic is implemented and independently
 reviewed. It captures five raw flags for up to 16 selected registry indices,
