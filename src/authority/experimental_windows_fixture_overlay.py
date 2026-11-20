@@ -34,6 +34,11 @@ _HEX64 = re.compile(r'[0-9a-f]{64}\Z')
 _MAX_DLL = 8 * 1024 * 1024
 _FIELDS = ('world_epoch', 'connection_handle', 'baseline_id', 'load_generation',
            'checkpoint_id', 'sha256', 'attempt_id', 'slot')
+_FACTION_ASSETS = (
+    'libraries/factions.xml',
+    'libraries/icons.xml',
+    *(f'assets/textures/ui/x4lan/x4lan_player{index}.dds' for index in range(1, 17)),
+)
 
 
 def _ordinary(path, *, directory):
@@ -136,6 +141,10 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         'md/authority_identity_fixture.xml': ROOT / 'tools/dev/authority_identity_fixture.xml',
         'md/authority_checkpoint_marker.xml': ROOT / 'src/authority/md/checkpoint_marker.xml',
     }
+    # Fixture saves were made with the tracked faction pool. Preserve those
+    # definitions and icon paths when loading the same world on a client.
+    # The offered session still assigns players to the shared player faction.
+    sources.update({name: ROOT / 'src/lockstep/base' / name for name in _FACTION_ASSETS})
     files = {name: _source(path, 1024 * 1024) for name, path in sources.items()}
     load_probe = files['ui/authority_download_load_probe.lua']
     hook = b" elseif state=='observing' then\n"
@@ -231,8 +240,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                   'native/x4lan_net_64.dll': dll})
     target = extensions / extension.EXTENSION_ID
     target.mkdir()  # exclusive: an existing extension is never changed
-    for name in ('ui', 'md', 'native'):
-        (target / name).mkdir()
+    for name in ('ui', 'md', 'native', 'libraries', 'assets/textures/ui/x4lan'):
+        (target / name).mkdir(parents=True)
     for name, data in files.items():
         with (target / name).open('xb') as output:
             output.write(data)

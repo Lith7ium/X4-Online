@@ -141,6 +141,20 @@ class WindowsFixtureWorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'tree differs'):
             workspace.guard()
 
+    def test_manifested_nested_faction_asset_is_pinned_by_guard(self):
+        self.workspace.prepare()
+        (self.workspace.save_dir / 'save_009.xml.gz').write_bytes(b'staged fixture save')
+        hashes = self._install_overlay_files()
+        asset = self.workspace.view / 'extensions/x4_lan_lab/assets/textures/ui/x4lan/x4lan_player1.dds'
+        asset.parent.mkdir(parents=True)
+        asset.write_bytes(b'fixture texture')
+        hashes[asset.relative_to(self.workspace.view / 'extensions/x4_lan_lab').as_posix()] = hashlib.sha256(asset.read_bytes()).hexdigest()
+        self.workspace.register_overlay(hashes)
+        self.assertTrue(self.workspace.guard())
+        asset.write_bytes(b'changed texture')
+        with self.assertRaisesRegex(RuntimeError, 'identity changed'):
+            self.workspace.guard()
+
     def test_register_does_not_bless_changed_existing_view_entries(self):
         self.workspace.prepare()
         marker = self.workspace.view / '.x4ls-view'

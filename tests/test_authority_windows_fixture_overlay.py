@@ -56,6 +56,20 @@ class FixtureOverlayTest(unittest.TestCase):
         self.assertNotIn('e' * 32, config)  # observed from the saved world, not the expected marker
         self.assertIn('authority_participant_port=20123', config)
 
+    def test_fixture_world_faction_dependencies_match_tracked_base(self):
+        manifest = self.install()
+        target = self.view / 'extensions/x4_lan_lab'
+        base = Path(__file__).resolve().parents[1] / 'src/lockstep/base'
+        expected = {'libraries/factions.xml', 'libraries/icons.xml'} | {
+            f'assets/textures/ui/x4lan/x4lan_player{index}.dds' for index in range(1, 17)}
+        self.assertEqual({name for name in manifest if name.startswith(('libraries/', 'assets/'))}, expected)
+        for name in expected:
+            with self.subTest(name=name):
+                data = (base / name).read_bytes()
+                self.assertEqual((target / name).read_bytes(), data)
+                self.assertEqual(manifest[name], hashlib.sha256(data).hexdigest())
+        self.assertNotIn('native_gate_player_identity_plan', (target / 'ui/config.lua').read_text())
+
     def test_existing_extension_is_never_modified(self):
         target = self.view / 'extensions/x4_lan_lab'
         target.mkdir()
