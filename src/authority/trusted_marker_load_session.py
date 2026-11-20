@@ -56,6 +56,7 @@ class TrustedMarkerLoadSession:
         self._next_peer = 1
         self._failed = False
         self._marker_script = marker_script
+        self._verified_marker_checkpoint = None
 
     def _live(self):
         if self._failed or self._inner._failed:
@@ -107,9 +108,13 @@ class TrustedMarkerLoadSession:
                 checkpoint = self._world._store.latest_marked_confirmed()
                 if baseline is None or baseline[1] != checkpoint:
                     raise ValueError('baseline is not the confirmed marked checkpoint')
-                if verify_saved_marker(checkpoint, checkpoint.marker,
-                        script_name=self._marker_script, cue_name='MarkerState') is not True:
-                    raise ValueError('checkpoint marker not verified')
+                # latest_marked_confirmed() has just re-hashed the saved bytes.
+                # Reuse the XML marker proof only for that exact generation.
+                if checkpoint != self._verified_marker_checkpoint:
+                    if verify_saved_marker(checkpoint, checkpoint.marker,
+                            script_name=self._marker_script, cue_name='MarkerState') is not True:
+                        raise ValueError('checkpoint marker not verified')
+                    self._verified_marker_checkpoint = checkpoint
                 self._markers.pop(peer, None)
                 offer = self._inner.begin(peer)
                 if (self._world._baseline != baseline or offer.checkpoint_id != checkpoint.checkpoint_id

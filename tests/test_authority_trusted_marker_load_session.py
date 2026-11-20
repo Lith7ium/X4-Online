@@ -124,6 +124,18 @@ class TrustedMarkerSessionTest(unittest.TestCase):
         with self.assertRaises(ValueError): self.adapter.begin(self.a)
         with self.assertRaises(RuntimeError): self.adapter.begin(self.b)
 
+    def test_offers_share_marker_proof_only_for_revalidated_generation(self):
+        from authority import trusted_marker_load_session as session
+        with patch.object(session, 'verify_saved_marker', wraps=session.verify_saved_marker) as verify:
+            self.adapter.begin(self.a)
+            self.adapter.begin(self.b)
+            verify.assert_called_once()
+            checkpoint = self.world._baseline[1]
+            checkpoint.path.write_bytes(b'x' * checkpoint.size)
+            with self.assertRaises(ValueError):
+                self.adapter.begin(self.a)
+            verify.assert_called_once()
+
     def test_partial_admission_failure_faults_entire_adapter(self):
         offer = self.adapter.begin(self.a).offer
         original = self.world.mark_loaded_trusting_marker

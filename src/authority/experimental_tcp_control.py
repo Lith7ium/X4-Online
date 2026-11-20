@@ -303,7 +303,9 @@ class ExperimentalTCPControl:
             if peer.get('motion_active'):
                 self._latest_motion.receive(conn, peer, chunk)
                 continue
-            if peer['out']:
+            # Admitted peers only reply to a pending host exchange. The motion
+            # reader above or the synchronous exchange owner consumes that reply.
+            if peer['out'] or peer['stage'] == 'admitted':
                 self._drop(conn); continue
             peer['in'] += chunk
             # Process at most one message per peer per poll; avoid unbounded
