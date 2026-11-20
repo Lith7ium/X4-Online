@@ -58,6 +58,8 @@ class SourceProbeDiagnostics:
         self.prevalidated_samples = 0
         self.confirmed_client_receipts = 0
         self.latest_collection = None
+        self.diagnostic_guard_cache_ms = 0
+        self.diagnostic_guard_cache = None
 
     def guard_call_site(self):
         """Capture only code locations, never frame locals or callback values."""
@@ -114,6 +116,9 @@ class SourceProbeDiagnostics:
                 'last_pull_seconds': self.last_pull_seconds,
                 'prevalidated_samples': self.prevalidated_samples,
                 'confirmed_client_receipts': self.confirmed_client_receipts}
+        result['diagnostic_guard_cache_ms'] = self.diagnostic_guard_cache_ms
+        if self.diagnostic_guard_cache is not None:
+            result['diagnostic_guard_cache'] = copy.deepcopy(self.diagnostic_guard_cache)
         if self.latest_collection is not None:
             latest = copy.deepcopy(self.latest_collection)
             result['latest_collection'] = latest
@@ -178,7 +183,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         sector_arm=None, sector_incarnation=None, saved_apply_fixture=None, record_apply_intent=None,
         saved_playback_fixture=None, playback_sample_observer=None,
         playback_begin=None, playback_checkpoint_check=None, playback_checkpoint_stop=None, playback_identity_scope=None,
-        playback_liveness_check=None, latest_playback=False, playback_checkpoint_lifetime=None):
+        playback_liveness_check=None, latest_playback=False, playback_checkpoint_lifetime=None,
+        diagnostic_guard_cache_ms=0):
     from authority_paired_playback_evidence import SAMPLE_COUNT, SAMPLE_INTERVAL, DRAIN_SECONDS
     real_time_motion = settings.get('real_time_motion', False)
     if (type(real_time_motion) is not bool or
@@ -196,6 +202,10 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                                   not callable(playback_checkpoint_lifetime))) or
             (not latest_playback and playback_checkpoint_lifetime is not None)):
         raise ValueError('latest playback requires bounded saved playback and its lifetime guard')
+    if (type(diagnostic_guard_cache_ms) is not int or diagnostic_guard_cache_ms not in (0, 250) or
+            (diagnostic_guard_cache_ms and not (latest_playback and real_time_motion and
+             saved_playback_fixture == 'recovery_enh_870' and not private_long_diagnostic))):
+        raise ValueError('diagnostic guard cache requires bounded latest real-time saved playback')
     def valid_index(value):
         return type(value) is int and 1 <= value <= settings['baseline']
 
@@ -256,6 +266,13 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             or world.session.state != 'running' or world.session.pending is not None or
             world.session.baseline_id is not None):
         raise RuntimeError('running source does not retain the admitted checkpoint')
+    pinned_session = world.session
+    pinned_guard_status = guard.status[:3]
+    pinned_participant = active.participant
+    pinned_ready_players = (tuple(getattr(pinned_session, 'ready_players', ()))
+                            if diagnostic_guard_cache_ms else None)
+    pinned_players = (tuple(getattr(pinned_session, 'players', ()))
+                      if diagnostic_guard_cache_ms else None)
     if private_long_diagnostic and diagnostic_timeouts is None:
         raise ValueError('private long diagnostic requires explicit budgets')
     source_timeout = timeout
@@ -317,7 +334,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         check_deadline()
         return result
 
-    def active_guard():
+    def measured_full_guard():
         check_deadline()
         if diagnostics is None:
             verify()
@@ -333,6 +350,34 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                 diagnostics.record_guard_call('full', site, elapsed)
         check_deadline()
         return True
+
+    active_cache_enabled = False
+    active_environment_guard = None
+
+    def check_active_collection_context():
+        if (world.session is not pinned_session or world._baseline is not pinned_baseline or
+                pinned_session.state != 'running' or pinned_session.pending is not None or
+                pinned_session.baseline_id is not None or active.participant is not pinned_participant or
+                guard.status[:3] != pinned_guard_status or
+                pinned_guard_status != ('ready', settings['epoch'], settings['baseline']) or
+                (pinned_ready_players is not None and
+                 (tuple(pinned_session.ready_players) != pinned_ready_players or
+                  tuple(pinned_session.players) != pinned_players or
+                  not any(entry[0] == pinned_participant.handle for entry in pinned_ready_players)))):
+            raise RuntimeError('active source context changed')
+        check_deadline()
+
+    def active_immediate_guard():
+        check_deadline()
+        check_active_collection_context()
+        check_liveness()
+        check_active_collection_context()
+        return True
+
+    def active_guard():
+        if active_cache_enabled:
+            return active_environment_guard()
+        return measured_full_guard()
 
     def pump_guard():
         with nullcontext() if playback_identity_scope is None else playback_identity_scope():
@@ -357,7 +402,9 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         verify_process()
         check_deadline()
         return True
+
     if diagnostics is not None:
+        diagnostics.diagnostic_guard_cache_ms = diagnostic_guard_cache_ms
         diagnostics.enter('initial_verification')
     pump.activate(host=host, guard=pump_guard)
     if saved_playback_fixture and checked_operation(playback_begin) is not True:
@@ -367,13 +414,7 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     process = {'pid': identity[0], 'start_ticks': identity[1],
                'exe_dev': executable_stat.st_dev, 'exe_ino': executable_stat.st_ino}
 
-    def saved_baseline_guard(epoch, count):
-        if ((epoch, count) != (settings['epoch'], settings['baseline'])
-                or guard.status[:3] != ('ready', epoch, count)):
-            return False
-        if (world._baseline != pinned_baseline or world.session.state != 'running'
-                or world.session.pending is not None or world.session.baseline_id is not None):
-            return False
+    def measured_checkpoint_guard():
         checkpoint_check = guard.check if playback_checkpoint_check is None else playback_checkpoint_check
         if diagnostics is None:
             return checkpoint_check() is True
@@ -387,6 +428,34 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             diagnostics.saved_checkpoint_guard_seconds += elapsed
             diagnostics.record_guard_call('saved_checkpoint', site, elapsed)
 
+    checkpoint_cache_enabled = False
+    checkpoint_environment_guard = None
+
+    def checkpoint_immediate_guard():
+        def check_context():
+            if (world.session is not pinned_session or guard.status[:3] != pinned_guard_status or
+                    pinned_guard_status != ('ready', settings['epoch'], settings['baseline']) or
+                    world._baseline is not pinned_baseline or pinned_session.state != 'running' or
+                    pinned_session.pending is not None or pinned_session.baseline_id is not None):
+                raise RuntimeError('saved playback checkpoint context changed')
+            check_deadline()
+        check_context()
+        if playback_checkpoint_lifetime() is not True:
+            raise RuntimeError('saved playback checkpoint context changed')
+        check_context()
+        return True
+
+    def saved_baseline_guard(epoch, count):
+        if ((epoch, count) != (settings['epoch'], settings['baseline'])
+                or guard.status[:3] != ('ready', epoch, count)):
+            return False
+        if (world._baseline != pinned_baseline or world.session.state != 'running'
+                or world.session.pending is not None or world.session.baseline_id is not None):
+            return False
+        if checkpoint_cache_enabled:
+            return checkpoint_environment_guard() is True
+        return measured_checkpoint_guard()
+
     def saved_lifetime_guard(epoch, count):
         # Called under the TCP owner's reader lease: no helper request or pump.
         # Full checkpoint validation still surrounds source sampling and STOP.
@@ -396,6 +465,25 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
                 world.session.pending is not None or world.session.baseline_id is not None):
             return False
         return playback_checkpoint_lifetime() is True
+
+    if diagnostic_guard_cache_ms:
+        from authority_diagnostic_guard import DiagnosticEnvironmentGuard
+        cache_seconds = diagnostic_guard_cache_ms / 1000
+        active_environment_guard = DiagnosticEnvironmentGuard(
+            full_check=measured_full_guard, immediate_check=active_immediate_guard,
+            cache_seconds=cache_seconds)
+        checkpoint_environment_guard = DiagnosticEnvironmentGuard(
+            full_check=measured_checkpoint_guard, immediate_check=checkpoint_immediate_guard,
+            cache_seconds=cache_seconds)
+
+        def capture_cache_statistics():
+            if diagnostics is not None:
+                diagnostics.diagnostic_guard_cache = {
+                    'active': active_environment_guard.statistics,
+                    'saved_checkpoint': checkpoint_environment_guard.statistics,
+                }
+    else:
+        capture_cache_statistics = lambda: None
 
     staged_samples = []
     sample_received_at = []
@@ -488,11 +576,44 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
         progress = {}
         if diagnostics is not None:
             diagnostics.latest_collection = progress
-        latest_collection = checked_operation(collect_latest_playback,
-            source=source, motion=motion, host=host, recipient=selected_recipient,
+        collection_options = dict(source=source, motion=motion, host=host, recipient=selected_recipient,
             deadline=sampling_deadline, check=active_guard, scope=playback_identity_scope,
             sample_count=required_samples, interval=SAMPLE_INTERVAL, progress=progress,
             sample_version=sample_version)
+        if diagnostic_guard_cache_ms:
+            try:
+                active_environment_guard(force=True)
+                checkpoint_environment_guard(force=True)
+            except BaseException:
+                capture_cache_statistics()
+                raise
+            active_cache_enabled = checkpoint_cache_enabled = True
+            operation_error = None
+            try:
+                latest_collection = checked_operation(collect_latest_playback, **collection_options)
+            except BaseException as error:
+                operation_error = error
+            finally:
+                active_cache_enabled = checkpoint_cache_enabled = False
+            boundary_errors = []
+            for strict_guard in (active_environment_guard, checkpoint_environment_guard):
+                try:
+                    strict_guard(force=True)
+                except BaseException as error:
+                    boundary_errors.append(error)
+            capture_cache_statistics()
+            boundary_error = (BaseExceptionGroup('strict guard boundary failed', boundary_errors)
+                              if len(boundary_errors) > 1 else
+                              (boundary_errors[0] if boundary_errors else None))
+            if operation_error is not None and boundary_error is not None:
+                raise BaseExceptionGroup('latest playback and strict guard boundary failed',
+                                         [operation_error, boundary_error])
+            if operation_error is not None:
+                raise operation_error
+            if boundary_error is not None:
+                raise boundary_error
+        else:
+            latest_collection = checked_operation(collect_latest_playback, **collection_options)
         if latest_collection['queued_samples'] != staged_samples:
             raise RuntimeError('queued playback samples differ from validated source captures')
         samples = latest_collection['acknowledged_samples']

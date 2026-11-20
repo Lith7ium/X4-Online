@@ -1,6 +1,6 @@
 """Source probe lifecycle and explicit evidence scope; no X4 or sockets."""
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import os
 import socket
 import sys
@@ -194,6 +194,8 @@ class Probe(unittest.TestCase):
         self.assertEqual(diagnostics.snapshot()['phase'],'complete')
         self.assertEqual(diagnostics.snapshot()['samples_received'],2)
         self.assertEqual(diagnostics.snapshot()['saved_checkpoint_guard_calls'],1)
+        self.assertEqual(diagnostics.snapshot()['diagnostic_guard_cache_ms'], 0)
+        self.assertNotIn('diagnostic_guard_cache', diagnostics.snapshot())
         self.assertEqual(diagnostics.snapshot()['pull_attempts'],2)
         self.assertEqual(diagnostics.snapshot()['prevalidated_samples'],2)
         self.assertEqual(diagnostics.snapshot()['confirmed_client_receipts'],0)
@@ -631,6 +633,74 @@ class Probe(unittest.TestCase):
         self.exercise_twenty_six_samples(use_identity_scope=True, use_liveness_check=True,
                                         latest=True, real_time_motion=True)
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process and socket ownership required')
+    def test_latest_real_time_saved_playback_opt_in_reuses_only_during_collection(self):
+        result, diagnostics = self.exercise_twenty_six_samples(use_identity_scope=True,
+            use_liveness_check=True, latest=True, real_time_motion=True, guard_cache_ms=250)
+        progress = diagnostics.snapshot()
+        stats = progress['diagnostic_guard_cache']
+        self.assertEqual(progress['diagnostic_guard_cache_ms'], 250)
+        self.assertGreater(stats['active']['full_checks'], 1)
+        self.assertGreater(stats['active']['reused_checks'], 0)
+        self.assertGreaterEqual(stats['saved_checkpoint']['full_checks'], 2)
+        self.assertGreater(stats['saved_checkpoint']['reused_checks'], 0)
+        self.assertGreater(progress['full_guard_calls'], 0)
+        self.assertGreater(progress['saved_checkpoint_guard_calls'], 0)
+        self.assertEqual(result['latest_playback']['acknowledged_sequences'][-1], 26)
+
+    def test_diagnostic_guard_cache_cli_policy_is_exact_and_opt_in(self):
+        args = SimpleNamespace(diagnostic_guard_cache_ms=0)
+        kwargs = dict(source_index=1318, source_candidates=None, client_motion=True, local_pair=False,
+            saved_apply=None, client_sector=False, saved_playback='recovery_enh_870',
+            latest_playback=True, real_time_motion=True, long_motion=False)
+        self.assertEqual(supervisor.diagnostic_guard_cache(args, **kwargs), 0)
+        args.diagnostic_guard_cache_ms = 250
+        self.assertEqual(supervisor.diagnostic_guard_cache(args, **kwargs), 250)
+        for change in ({'latest_playback': False}, {'real_time_motion': False},
+                       {'long_motion': True}, {'client_sector': True},
+                       {'source_candidates': (1318,)}, {'saved_apply': 'recovery_enh_870'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                supervisor.diagnostic_guard_cache(args, **(kwargs | change))
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process and socket ownership required')
+    def test_cached_immediate_rejects_session_loss_before_pull_and_forces_exit_checks(self):
+        diagnostics = subject.SourceProbeDiagnostics()
+        with self.assertRaises(BaseExceptionGroup) as caught:
+            self.exercise_twenty_six_samples(use_identity_scope=True, use_liveness_check=True,
+                latest=True, real_time_motion=True, guard_cache_ms=250,
+                collection_fault='session_loss', stop_expected_samples=0, diagnostics=diagnostics)
+        progress = diagnostics.snapshot()
+        self.assertEqual(progress['pull_attempts'], 0)
+        self.assertEqual(progress['prevalidated_samples'], 0)
+        stats = progress['diagnostic_guard_cache']
+        # Calls include forced entry, cached collection attempt, and forced exit.
+        self.assertGreaterEqual(stats['active']['calls'], 3)
+        self.assertGreaterEqual(stats['saved_checkpoint']['calls'], 2)
+        pending_errors = []
+        def collect_errors(error):
+            if isinstance(error, BaseExceptionGroup):
+                for nested in error.exceptions:
+                    collect_errors(nested)
+            else:
+                pending_errors.append(error)
+        collect_errors(caught.exception)
+        self.assertTrue(any(isinstance(error, RuntimeError) and
+                            'active source context changed' in str(error)
+                            for error in pending_errors), [str(error) for error in pending_errors])
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process and socket ownership required')
+    def test_collector_error_retains_error_and_forces_full_exit_refresh(self):
+        diagnostics = subject.SourceProbeDiagnostics()
+        with self.assertRaisesRegex(RuntimeError, 'synthetic collection failure'):
+            self.exercise_twenty_six_samples(use_identity_scope=True, use_liveness_check=True,
+                latest=True, real_time_motion=True, guard_cache_ms=250,
+                collection_fault='error', stop_expected_samples=0, diagnostics=diagnostics)
+        progress = diagnostics.snapshot()
+        self.assertEqual(progress['pull_attempts'], 0)
+        stats = progress['diagnostic_guard_cache']
+        self.assertGreaterEqual(stats['active']['full_checks'], 2)
+        self.assertGreaterEqual(stats['saved_checkpoint']['full_checks'], 2)
+
     def test_capture_clock_mode_is_explicit_and_validated_before_binding(self):
         for options in ({'real_time_motion': 1}, {'real_time_motion': None},
                         {'real_time_motion': True, 'local_pair': {}},
@@ -657,7 +727,9 @@ class Probe(unittest.TestCase):
                 self.assertNotIn('source_stop', events)
 
     def exercise_twenty_six_samples(self, *, use_identity_scope, use_liveness_check=False,
-                                   latest=False, real_time_motion=False):
+                                   latest=False, real_time_motion=False, guard_cache_ms=0,
+                                   collection_fault=None, stop_expected_samples=26,
+                                   diagnostics=None):
         """Real UDP/TCP and ownership guards, with a simulated source/client."""
         from tests import test_authority_experimental_tcp_motion as fixture
         from test_authority_paired_playback_evidence import source_sample
@@ -706,7 +778,7 @@ class Probe(unittest.TestCase):
                             reply = prefix+[marker]+identity+[request, '1318', str(count), sample['sector_macro']]+times+[
                                 str(sample['x']), str(sample['y']), str(sample['z'])]+rate
                         elif packet[3] == 'STOP':
-                            self.assertEqual(count, 26)
+                            self.assertEqual(count, stop_expected_samples)
                             events.append(('source_stop', time.monotonic()))
                             source.send('|'.join(prefix+['STOPPED']+identity+[request]).encode())
                             break
@@ -754,22 +826,47 @@ class Probe(unittest.TestCase):
                 events.append(('client_stop', time.monotonic()))
                 return True
             active = SimpleNamespace(participant=SimpleNamespace(check_active=Mock(side_effect=check_active),
-                stop_motion_worker=Mock(side_effect=stop_worker)))
+                handle=world.session.ready_players[0][0], stop_motion_worker=Mock(side_effect=stop_worker)))
             liveness_check = Mock(return_value=True)
             full_check = Mock()
             pump = recovered_client.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()), time.monotonic()+25)
             latest_options = dict(latest_playback=True, playback_checkpoint_lifetime=lambda: True) if latest else {}
-            result = subject.run(sock=sock, settings=settings, index=1318, baseline=baseline, guard=guard,
-                pump=pump, active=active, host=case.case.host, world=world,
-                identity=(os.getpid(), linux_gate_live.start_ticks(os.getpid())), verify=full_check,
-                verify_process=lambda:None, client_motion=True, verify_stopped=lambda:None,
-                saved_playback_fixture='recovery_enh_870', playback_sample_observer=observe,
-                playback_identity_scope=identity_scope if use_identity_scope else None,
-                playback_liveness_check=liveness_check if use_liveness_check else None,
-                playback_begin=lambda: events.append(('begin', time.monotonic())) or True,
-                playback_checkpoint_check=lambda: pump() or True,
-                playback_checkpoint_stop=lambda: events.append(('checkpoint_stop_hook', time.monotonic())) or guard.stop(),
-                **latest_options)
+            diagnostics = diagnostics or subject.SourceProbeDiagnostics()
+            bound_protocols = []
+            original_bind = subject.bind_running_source_motion
+            def track_protocol(*args, **options):
+                protocol = original_bind(*args, **options)
+                bound_protocols.append(protocol)
+                return protocol
+            def fail_collection(source, *, check, **_options):
+                check()
+                if collection_fault == 'session_loss':
+                    world.session._pending = object()
+                    check()
+                raise RuntimeError('synthetic collection failure')
+            try:
+                patch_collection = (patch('authority_latest_playback_collection.collect_latest_playback',
+                    side_effect=fail_collection) if collection_fault else nullcontext())
+                with patch.object(subject, 'bind_running_source_motion', side_effect=track_protocol), \
+                     patch_collection:
+                    result = subject.run(sock=sock, settings=settings, index=1318, baseline=baseline, guard=guard,
+                        pump=pump, active=active, host=case.case.host, world=world,
+                        identity=(os.getpid(), linux_gate_live.start_ticks(os.getpid())), verify=full_check,
+                        verify_process=lambda:None, client_motion=True, verify_stopped=lambda:None,
+                        diagnostics=diagnostics, diagnostic_guard_cache_ms=guard_cache_ms,
+                        saved_playback_fixture='recovery_enh_870', playback_sample_observer=observe,
+                        playback_identity_scope=identity_scope if use_identity_scope else None,
+                        playback_liveness_check=liveness_check if use_liveness_check else None,
+                        playback_begin=lambda: events.append(('begin', time.monotonic())) or True,
+                        playback_checkpoint_check=lambda: pump() or True,
+                        playback_checkpoint_stop=lambda: events.append(('checkpoint_stop_hook', time.monotonic())) or guard.stop(),
+                        **latest_options)
+            except BaseException:
+                if collection_fault is not None and bound_protocols:
+                    world.session._pending = None
+                    self.assertTrue(bound_protocols[0].stop_remote())
+                    bound_protocols[0].close()
+                raise
             if latest:
                 sequences = [sample['sequence'] for sample in observed]
                 self.assertEqual(sequences[0], 1)
@@ -824,6 +921,7 @@ class Probe(unittest.TestCase):
             cleanup_motion_fixture(case)
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
+        return result, diagnostics
 
     def test_receipt_digest_and_client_stop_fences_fail_closed(self):
         for mode in ('ok','wrong_sample','wrong_digest','no_receipt','worker_failure','bad_socket',

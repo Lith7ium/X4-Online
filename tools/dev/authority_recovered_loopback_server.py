@@ -350,6 +350,21 @@ def diagnostic_guard_timing(args, source_enabled):
     return enabled
 
 
+def diagnostic_guard_cache(args, *, source_index, source_candidates, client_motion, local_pair,
+                           saved_apply, client_sector, saved_playback, latest_playback,
+                           real_time_motion, long_motion):
+    """Limit bounded diagnostic reuse to the exact latest ENH-870 motion path."""
+    age_ms = getattr(args, 'diagnostic_guard_cache_ms', 0)
+    if type(age_ms) is not int or age_ms not in (0, 250):
+        raise ValueError('diagnostic guard cache age must be 0 or 250 ms')
+    if age_ms and not (source_index == 1318 and source_candidates is None and client_motion is True and
+            local_pair is False and saved_apply is None and client_sector is False and
+            saved_playback == 'recovery_enh_870' and latest_playback is True and
+            real_time_motion is True and long_motion is False):
+        raise ValueError('diagnostic guard cache requires bounded latest real-time ENH-870 playback')
+    return age_ms
+
+
 def finish_source_diagnostic(active, active_clients, guard_context, *, verify, probe,
                              verify_after=None, require_client_receipts=False, pair_delivery=False,
                              sector_intermediate_result=None, saved_playback=False, latest_playback=False):
@@ -888,6 +903,11 @@ def run(args):
         long_motion=diagnostic_long_motion(args,witness_join,source_enabled,client_motion)
         latest_playback=diagnostic_latest_playback(args,saved_playback_fixture,long_motion)
         real_time_motion=diagnostic_real_time_motion(args,saved_playback_fixture,latest_playback)
+        diagnostic_guard_cache_ms = diagnostic_guard_cache(args, source_index=source_index,
+            source_candidates=source_candidates, client_motion=client_motion, local_pair=local_pair,
+            saved_apply=saved_apply_fixture, client_sector=client_sector,
+            saved_playback=saved_playback_fixture, latest_playback=latest_playback,
+            real_time_motion=real_time_motion, long_motion=long_motion)
         owner_diagnostic = getattr(args, 'diagnostic_single_owner', False)
         if (type(owner_diagnostic) is not bool or
                 (owner_diagnostic and (not getattr(args, 'diagnostic_client', False) or source_enabled or
@@ -1570,6 +1590,7 @@ def run(args):
                             verify_process=check,candidate_indices=source_candidates,client_motion=client_motion,
                             verify_stopped=verify if client_motion else None, diagnostic_timeouts=budgets,
                             private_long_diagnostic=long_motion,
+                            diagnostic_guard_cache_ms=diagnostic_guard_cache_ms,
                             **playback_options,
                             **({'saved_apply_fixture':saved_apply_fixture,
                                 'record_apply_intent':lambda sample: record_saved_apply_intent(out, sample)}
@@ -1764,6 +1785,8 @@ def main():
     parser.add_argument('--diagnostic-saved-playback',action='store_true',help='private bounded ENH-870 source playback and native readback; not gameplay')
     parser.add_argument('--diagnostic-latest-playback',action='store_true',help='use replaceable position delivery for bounded saved playback')
     parser.add_argument('--diagnostic-real-time-motion',action='store_true',help='use v3 real-time capture in bounded latest saved playback')
+    parser.add_argument('--diagnostic-guard-cache-ms',type=int,choices=(0,250),default=0,
+                        help='opt in to a 250 ms cache for full source/checkpoint validation in latest real-time saved playback')
     parser.add_argument('--diagnostic-long-motion',action='store_true',help='long bounded private witness-join motion diagnostic')
     parser.add_argument('--diagnostic-guard-timing',action='store_true',help='record local guard pump, send and response wait times')
     parser.add_argument('--diagnostic-process-measure-seconds', type=float, metavar='SECONDS',
