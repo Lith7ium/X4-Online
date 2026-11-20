@@ -1,4 +1,4 @@
-"""Structural contract checks for the default-off full-register MD snapshot."""
+"""Structural contract checks for the default-off format-3 MD snapshot."""
 from pathlib import Path
 import unittest
 import xml.etree.ElementTree as ET
@@ -25,12 +25,13 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
                   for node in state_actions.iter('set_value')
                   if node.get('name', '').startswith('State.')}
         self.assertEqual(writes, {
-            'State.$format': '2', 'State.$epoch': '$request.$epoch',
+            'State.$format': '3', 'State.$epoch': '$request.$epoch',
             'State.$run_id': '$request.$run_id',
             'State.$issued_count': '(md.X4AuthorityShipRegistry.State.$last)i',
             'State.$cursor': '0', 'State.$available_count': '0',
             'State.$unavailable_count': '0', 'State.$sealed': 'false',
-            'State.$faulted': 'false', 'State.$available': 'table[]',
+            'State.$operational_count': '0', 'State.$faulted': 'false',
+            'State.$available': 'table[]', 'State.$operational': 'table[]',
             'State.$ships': 'table[]', 'State.$byship': 'table[]',
         })
         guard = next(n.get('value', '') for n in state_actions.iter('do_if'))
@@ -56,6 +57,9 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
         stores = [(n.get('name'), n.get('exact')) for n in actions.iter('set_value')]
         self.assertIn(('State.$available.{$index}', '0'), stores)
         self.assertIn(('State.$available.{$index}', '1'), stores)
+        self.assertIn(('State.$operational.{$index}', '0'), stores)
+        self.assertTrue(any(name == 'State.$operational.{$index}' and 'if $ship.isoperational' in expr
+                            for name, expr in stores))
         self.assertIn(('State.$ships.{$index}', '$ship'), stores)
         self.assertIn(('State.$byship.{$ship}', '$index'), stores)
         registry_writes = [n.get('name', '') for n in self.root.iter('set_value')
@@ -75,16 +79,21 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
         for flag in ('$existing_flag', '$ship_flag', '$operational_flag',
                      '$reverse_matches_flag', '$snapshot_duplicate_flag'):
             self.assertIn(f'name="{flag}"', capture)
-        self.assertEqual(len(self.event_format(self.cues['Capture'], '|Capture|%s|%s|Captured|').split('|')), 9)
+        capture_guard = next(n.get('value', '') for n in actions.iter('do_if')
+                             if '$ship.isclass.ship and' in n.get('value', ''))
+        self.assertNotIn('$ship.isoperational', capture_guard)
+        self.assertIn('or State.$operational.{$index}?', ET.tostring(self.cues['Capture'], encoding='unicode'))
+        self.assertEqual(len(self.event_format(self.cues['Capture'], '|Capture|%s|%s|Captured|').split('|')), 11)
 
     def test_seal_requires_full_coverage_and_counts(self):
         actions = self.cues['Seal'].find('actions')
         guard = next(n.get('value', '') for n in actions.iter('do_if'))
         for required in ('State.$cursor == State.$issued_count',
                          'State.$available_count + State.$unavailable_count == State.$issued_count',
+                         'State.$operational_count le State.$available_count',
                          'not State.$faulted', 'not State.$sealed'):
             self.assertIn(required, guard)
-        self.assertEqual(len(self.event_format(self.cues['Seal'], '|Seal|Sealed|').split('|')), 7)
+        self.assertEqual(len(self.event_format(self.cues['Seal'], '|Seal|Sealed|').split('|')), 8)
 
     def test_inspect_is_sealed_and_does_not_write_persisted_state(self):
         actions = self.cues['Inspect'].find('actions')
@@ -99,6 +108,8 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
         body = ET.tostring(self.cues['Inspect'], encoding='unicode')
         self.assertIn('State.$available.{$index} == 1', body)
         self.assertIn('State.$available.{$index} == 0', body)
+        self.assertIn('State.$operational.{$index} == 0 or State.$operational.{$index} == 1', body)
+        self.assertIn('State.$operational.{$index} == 0 and not @$ship.exists', body)
         self.assertIn('State.$byship.{$ship}?', body)
         self.assertIn('State.$byship.{$saved_ship} == $index', body)
         self.assertIn("'saved_available_binding_missing'", body)
@@ -106,11 +117,18 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
         self.assertIn('State.$available.{$index}', body)
         self.assertIn('State.$ships.{$index} == $ship', body)
         self.assertIn('State.$byship.{$ship} == $index', body)
-        self.assertIn("$saved_bits + '1'", body)
-        self.assertIn("$fresh_bits + '0'", body)
-        self.assertIn("$fresh_bits + '1'", body)
+        self.assertIn("$saved_binding_bits + '1'", body)
+        self.assertIn("$fresh_binding_bits + '0'", body)
+        self.assertIn("$fresh_binding_bits + '1'", body)
+        self.assertIn("$saved_operational_bits", body)
+        self.assertIn("$fresh_operational_bits", body)
         self.assertIn('Availability snapshot inspect fault at index %s: %s', body)
-        self.assertEqual(len(self.event_format(self.cues['Inspect'], '|Inspect|%s|%s|Inspected|').split('|')), 8)
+        self.assertEqual(len(self.event_format(self.cues['Inspect'], '|Inspect|%s|%s|Inspected|').split('|')), 10)
+        inspect_response = next(n.get('param', '') for n in self.cues['Inspect'].iter('raise_lua_event')
+                                if '|Inspect|%s|%s|Inspected|' in n.get('param', ''))
+        for name in ('$saved_binding_bits', '$fresh_binding_bits',
+                     '$saved_operational_bits', '$fresh_operational_bits'):
+            self.assertIn(name, inspect_response)
 
     def test_all_actions_are_explicit_default_off_read_only_registry_triggers(self):
         self.assertEqual(set(self.cues), {'State', 'Capture', 'Seal', 'Inspect'})
@@ -123,7 +141,7 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
             self.assertEqual(trigger.get('screen'), "'X4AuthorityRegistryAvailabilitySnapshot'")
         for action in ('Capture', 'Seal', 'Inspect'):
             guards = [n.get('value', '') for n in self.cues[action].iter('do_if')]
-            self.assertTrue(any('State.$format == 2' in value for value in guards))
+            self.assertTrue(any('State.$format == 3' in value for value in guards))
 
 
 if __name__ == '__main__':

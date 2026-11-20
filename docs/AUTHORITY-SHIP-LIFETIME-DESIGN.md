@@ -118,16 +118,22 @@ coverage, full-register performance, lifecycle transitions or client recovery.
 ### Full-register snapshot implementation
 
 `tools/dev/authority_registry_availability_snapshot.{xml,lua}` implements a
-separate, default-off format-2 snapshot. The caller pins the source epoch and
+separate, default-off format-3 snapshot. The caller pins the source epoch and
 issued count. Capture visits every issued index in contiguous batches of at
-most 64 and seals only after complete coverage. The availability table retains
-every index; forward and reverse object tables contain available entries only.
-An absent X4 object can be recorded as unavailable. An existing non-operational
-object, wrong class, conflicting reverse binding or duplicate object faults the
-capture instead. The source registry is never rewritten.
+most 64 and seals only after complete coverage. Here **availability means a
+valid object binding**, independently of operational eligibility. Every index
+has an availability bit and a separate captured operational bit. Forward and
+reverse object tables contain bound entries, including non-operational ships
+such as wrecks. An absent X4 object has neither a binding nor operational
+eligibility. A wrong class, conflicting reverse binding or duplicate object
+still faults capture. The source registry is never rewritten. The user approved
+this separation after the format-2 native attempt encountered an existing wreck.
 
 Inspect compares saved flags and current X4 bindings without updating the
-snapshot. A saved unavailable entry cannot become available implicitly. The
+snapshot. A saved missing binding cannot reappear implicitly. Operational status
+may change while a binding stays valid; a saved operational bit is an observation,
+not permission for future commands. Command and motion paths must recheck live
+operational eligibility. The
 separate `authority.registry_availability_evidence` reader checks saved flags,
 counts, exact forward/reverse bindings and component definitions, using typed
 reference IDs and X4's observed integral numeric-key encoding. Its result
@@ -135,7 +141,7 @@ describes saved bytes only; it is not a runtime or historical identity proof.
 
 This snapshot has no command or motion consumer and is not wired into
 checkpoint admission. Targeted synthetic checks cover the owner, saved-byte
-reader and private adapter. The first full-register native attempt refused
+reader and private adapter. The first full-register native attempt (format 2) refused
 the first batch: index 59 referenced an existing object but failed the combined
 operational/class/reverse/duplicate check. No snapshot was sealed or saved;
 the failing predicate is not yet established. Full-register save/reload

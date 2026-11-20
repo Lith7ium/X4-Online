@@ -987,4 +987,15 @@ the same identity fields without that wreck state or kill event. These saved
 bytes suggest non-operational status as the failed predicate; they do not
 establish its live value or the timing of that state change. The user was asked
 whether valid object bindings should be retained separately from operational
-eligibility. Dependent acceptance changes await that decision.
+eligibility and approved that follow-up. This approval does not retroactively
+change the failed native result or authorize commands on non-operational ships.
+
+The complete offline candidate inventory found exact inverse mappings for all
+10,082 indices, 10,075 distinct present ship definitions, seven missing
+definitions at the known indices, and 56 present definitions with explicit
+`state="wreck"`. No selected definition was duplicated. The only explicit state
+value observed among these definitions was `wreck`; absence of a state attribute
+is not a runtime operational result. Counts by saved class: 10 XS, 6,139 S,
+2,880 M, 783 L and 263 XL. Private evidence is
+`.local/registry-availability-full-owner-20261120/candidate-states.json`, bound
+to the pinned candidate SHA. No additional X4 process was started for this pass.

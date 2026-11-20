@@ -21,12 +21,21 @@ counts, cursor and reverse indices are explicitly converted to MD integers
 after validating incoming UI numbers; UI-origin numeric keys were observed as
 largefloat in the previous experiment.
 
-**Question pending:** the user was asked whether to separate valid object
-binding from operational eligibility: retain a wreck's identity and valid
-binding while refusing motion/commands; reserve missing bindings for absent
-X4 objects. Do not change these acceptance rules before that answer. The
-original approval for separate availability remains valid. A read-only offline
-inventory of saved component states can proceed meanwhile.
+**Follow-up approved:** the user approved separating valid object binding from
+operational eligibility: retain a wreck's identity and valid binding while
+refusing motion/commands; reserve missing bindings for absent X4 objects. The
+format-3 follow-up adds an independent saved operational observation for every
+index. Commands must still check eligibility live; saved observations grant no
+write permission. No question is pending. Implementation and native validation
+of this follow-up are in progress.
+
+The read-only full inventory of the pinned candidate found 10,075 unique saved
+ship definitions, seven missing definitions at the previously known indices,
+and 56 present definitions explicitly marked `state="wreck"`. All 10,082 source
+forward/reverse entries are exact inverses and no selected component definition
+is duplicated. Private report:
+`.local/registry-availability-full-owner-20261120/candidate-states.json`.
+This saved-byte inventory does not establish runtime operational flags.
 
 Next integration pointers: `authority.saved_registry.saved_status()` calls the
 old strict saved-map verifier; `checkpoint_status()` requires unchanged recovered

@@ -37,31 +37,37 @@ local function test_full_capture_and_chunked_remainder()
     assert(requests[1].action == 'Initialize')
     assert(requests[1].payload.issued_count == 10082)
     deliver(owner, requests[1], 'Initialized|10082')
-    local ones = string.rep('1', 64)
-    local zeros = string.rep('0', 64)
-    local total_available, total_unavailable, cursor = 0, 0, 1
+    local total_available, total_unavailable, total_operational, cursor = 0, 0, 0, 1
     while cursor <= 10082 do
         local req = requests[#requests]
         assert(req.action == 'Capture' and req.payload.first == cursor)
         local count = math.min(64, 10082 - cursor + 1)
         assert(req.payload.count == count)
-        local chunk
-        if cursor == 10049 then chunk = string.rep('1', 27) .. string.rep('0', 7)
-        else chunk = ones end
-        local available = select(2, chunk:gsub('1', ''))
-        local unavailable = #chunk - available
-        total_available, total_unavailable = total_available + available, total_unavailable + unavailable
+        local binding, operational = {}, {}
+        for index = cursor, cursor + count - 1 do
+            binding[#binding + 1] = index <= 10075 and '1' or '0'
+            operational[#operational + 1] = index <= 10019 and '1' or '0'
+        end
+        local binding_chunk, operational_chunk = table.concat(binding), table.concat(operational)
+        local available = select(2, binding_chunk:gsub('1', ''))
+        local unavailable = #binding_chunk - available
+        local operating = select(2, operational_chunk:gsub('1', ''))
+        total_available, total_unavailable, total_operational = total_available + available,
+            total_unavailable + unavailable, total_operational + operating
         deliver(owner, req, table.concat({ cursor, count, 'Captured',
-            total_available, total_unavailable, chunk }, '|'))
+            total_available, total_unavailable, total_operational,
+            binding_chunk, operational_chunk }, '|'))
         cursor = cursor + count
     end
     local seal = requests[#requests]
     assert(seal.action == 'Seal')
-    deliver(owner, seal, table.concat({ 'Sealed', 10082, 10075, 7 }, '|'))
+    deliver(owner, seal, table.concat({ 'Sealed', 10082, 10075, 7, 10019 }, '|'))
     assert(completed() and fault() == nil)
-    assert(#completed().availability_bits == 10082)
+    assert(completed().format == 3 and #completed().availability_bits == 10082)
     assert(completed().available_count == 10075 and completed().unavailable_count == 7)
     assert(completed().availability_bits == string.rep('1', 10075) .. string.rep('0', 7))
+    assert(completed().operational_count == 10019)
+    assert(completed().operational_bits == string.rep('1', 10019) .. string.rep('0', 63))
     assert(requests[#requests - 1].payload.first == 10049)
 end
 
@@ -71,16 +77,23 @@ local function test_inspect_divergence_is_observation()
     assert(requests[1].action == 'Inspect' and requests[1].payload.first == 1
         and requests[1].payload.count == 64 and requests[1].payload.epoch == string.rep('a', 32))
     local saved, fresh = string.rep('1', 64), '0' .. string.rep('1', 63)
-    deliver(owner, requests[1], table.concat({ 1, 64, 'Inspected', saved, fresh }, '|'))
+    local saved_operational, fresh_operational = string.rep('0', 64), '0' .. string.rep('1', 63)
+    deliver(owner, requests[1], table.concat({ 1, 64, 'Inspected', saved, fresh,
+        saved_operational, fresh_operational }, '|'))
     assert(owner:state().covered == 64)
     assert(owner:state().available_count == 63 and owner:state().unavailable_count == 1)
+    assert(owner:state().operational_count == 63)
     local tail = requests[2]
     assert(tail.action == 'Inspect' and tail.payload.first == 65 and tail.payload.count == 6)
-    deliver(owner, tail, '65|6|Inspected|000000|111111')
+    deliver(owner, tail, '65|6|Inspected|000000|000000|000000|000000')
     assert(completed() and fault() == nil)
     assert(completed().saved_bits == saved .. '000000')
-    assert(completed().fresh_bits == fresh .. '111111')
-    assert(completed().available_count == 69 and completed().unavailable_count == 1)
+    assert(completed().fresh_bits == fresh .. '000000')
+    assert(completed().available_count == 63 and completed().unavailable_count == 7)
+    assert(completed().format == 3)
+    assert(completed().saved_operational_bits == saved_operational .. '000000')
+    assert(completed().fresh_operational_bits == fresh_operational .. '000000')
+    assert(completed().operational_count == 63)
 end
 
 local function test_sync_event_and_protocol_failures()
@@ -90,7 +103,7 @@ local function test_sync_event_and_protocol_failures()
         timeout = 2, clock = function() return 0 end, guard = function() return true end,
         issue = function(action, payload)
             assert(owner:event(table.concat({ payload.request_id, payload.run_id,
-                action, '1|1|Inspected|1|0' }, '|')))
+                action, '1|1|Inspected|1|1|0|1' }, '|')))
             return true
         end,
         complete = function(value) synchronous_result = value end,
@@ -107,21 +120,33 @@ local function test_sync_event_and_protocol_failures()
         local ok = bad_owner:tick()
         assert(not ok and bad_fault() ~= nil)
     end
-    malformed('2|2|Captured|1|1|10') -- Capture must cover the contiguous prefix.
-    malformed('1|2|Captured|1|1|1x')
-    malformed('1|2|Captured|1|1|11') -- totals must reconcile
+    malformed('2|2|Captured|1|1|1|10|10') -- Capture must cover the contiguous prefix.
+    malformed('1|2|Captured|1|1|1|1x|10')
+    malformed('1|2|Captured|1|1|1|11|11') -- totals must reconcile
+    malformed('1|2|Captured|1|1|1|10|01') -- operational cannot exceed binding.
+
+    local inspect_bad, inspect_requests, _, _, inspect_fault = fixture('inspect', 1, 1)
+    assert(inspect_bad:tick())
+    assert(inspect_bad:event(response(inspect_requests[1], '1|1|Inspected|0|1|0|1')))
+    assert(not inspect_bad:tick() and inspect_fault() ~= nil) -- Binding cannot revive.
+
+    local inspect_good, good_requests, _, good_complete, good_fault = fixture('inspect', 1, 1)
+    assert(inspect_good:tick())
+    assert(inspect_good:event(response(good_requests[1], '1|1|Inspected|1|1|0|1')))
+    assert(inspect_good:tick() and good_complete() and good_fault() == nil)
+    assert(good_complete().fresh_operational_bits == '1') -- Operational may change while bound.
 end
 
 local function test_duplicate_late_and_deadline()
     local owner, requests, set_time, _, fault = fixture('inspect', 1, 1)
     assert(owner:tick())
-    local answer = response(requests[1], '1|1|Inspected|1|1')
+    local answer = response(requests[1], '1|1|Inspected|1|1|0|0')
     assert(owner:event(answer) and not owner:event(answer) and fault() ~= nil)
 
     owner, requests, set_time = fixture('inspect', 1, 1)
     assert(owner:tick())
     local req = requests[1]
-    assert(owner:event(response(req, '1|1|Inspected|1|1')))
+    assert(owner:event(response(req, '1|1|Inspected|1|1|0|0')))
     set_time(2)
     assert(not owner:tick())
     assert(owner:state().phase == 'refused')
@@ -129,7 +154,7 @@ local function test_duplicate_late_and_deadline()
     owner, requests = fixture('inspect', 1, 1)
     assert(owner:tick())
     req = requests[1]
-    local stale = response(req, '1|1|Inspected|1|1')
+    local stale = response(req, '1|1|Inspected|1|1|0|0')
     assert(owner:event(stale) and owner:tick())
     assert(not owner:event(stale))
 end
@@ -177,7 +202,7 @@ local function test_non_issue_callbacks_cannot_enqueue_events()
             guard = function() return callback_name == 'guard' and inject() or true end,
             issue = function(action, payload)
                 response_text = table.concat({ payload.request_id, payload.run_id,
-                    action, '1|1|Inspected|1|1' }, '|')
+                    action, '1|1|Inspected|1|1|0|0' }, '|')
                 return true
             end,
             complete = function() end,
