@@ -653,8 +653,12 @@ boundary failed`; reported leaf types were `ValueError`, `RuntimeError` and
 unresolved, and another strict-boundary failure is not excluded. The sequence-1
 receipt is not a successful playback result.
 
-The outer observation is invalid and display release was false. The overall
-trial failed despite confirmed empty owned-process cleanup, cgroup removal and
+The outer observation is invalid and display release was false. Read-only
+follow-up found that the coordinator attempts explicit display release only
+after a successful runner; this failed trial skipped that branch. The flag
+does not establish a separate cleanup defect, and the successful-run display
+release path remains untested in this trial. The overall trial failed despite
+confirmed empty owned-process cleanup, cgroup removal and
 Xauthority cleanup. Steam identity, pinned dependencies and the source were
 unchanged. No rerun is justified yet; next is read-only analysis of the
 initial-alignment-to-sequence-3 transition.
@@ -688,3 +692,35 @@ a queue or playback-policy change, add bounded receive/tick evidence and
 discuss the resulting proposal with the user. No native rerun or production
 policy change followed this comparison. Private artifacts:
 `.local/playback-replay-native02-20261120/replay.py` and `result.json`.
+
+## Bounded client startup trace (2026-11-20)
+
+The already opt-in saved-playback fixture now retains at most 32 startup events
+and emits them once at fault or STOP, under `AUTH_CLIENT_MOTION_TRACE`.
+`RECEIVED` is validated Lua-adapter receipt, not TCP arrival; `PUSH` is the
+playback call, not acceptance. `OBSERVATION` precedes the write; `READBACK`
+records the existing later read callback, not independent application proof.
+Observation/readback duplicates with the same sequence and phase are omitted.
+The header reports count, limit, saturation and flush reason. No raw packets,
+credentials or additional native pose reads are recorded. Motion policy,
+queueing, the 50 m correction limit and clock/freshness rules are unchanged.
+
+Three existing focused composition test methods passed in 0.358 s, covering
+v1/v3 playback, alignment, rejection, fault and STOP modes. Subsequent new
+assertions passed for 80 held frames before sample 2, a saturated 32-event
+trace, and the fault trace. The distance assertion initially expected no
+readback, overlooking the fixture's earlier successful sample-2 write; it was
+corrected to require exactly that one readback. Only that failing mode was
+rerun. The latter evidence is in
+`.local/check-motion-startup-trace-20261120-01.log`; all checks used fake native
+callbacks, with no X4 or full-suite run.
+
+Private native runner 03 also separates full `trial-details.json` from a small
+`trial-result.json` containing outcome, source check and sidecar SHA-256/size.
+The preserved coordinator accepts at most 16 KiB. Expanding the previous
+trial's sample list to 26 modeled records already produced 21,291 bytes; this
+is an output-size estimate, not a native measurement. A 40 KB no-game roundtrip
+preserved the full object and matching digest with a 205-byte summary. Review
+confirmed that the coordinator reads only the summary's success flag, together
+with the runner's exit code; the sidecar hash is for later verification. This
+does not weaken the coordinator's outcome check or change simulation.

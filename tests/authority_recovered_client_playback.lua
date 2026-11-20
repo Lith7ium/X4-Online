@@ -144,6 +144,10 @@ if alignment_enabled then
   assert(buffer_pushes[1].capture_time == 100)
   assert(logs[2]:find('latest_source_time=0 latest_capture_time=100', 1, true))
  end
+ if mode=='capture_playback' then
+  -- A high-frequency held phase must not fill the trace before seq2 arrives.
+  for tick=1,80 do now=1+tick*.001;assert(client:tick())end
+ end
 
  if real_time and mode ~= 'capture_playback' and mode ~= 'capture_sparse' then
   local invalid = packet(2, 1010, 0)
@@ -216,6 +220,26 @@ if alignment_enabled then
    end
   end
   assert(stopped and capture_record)
+  local trace_headers, unsaturated_stop, received, pushed, observed, readback = 0, false, 0, 0, 0, 0
+  local received_two, pushed_two = false, false
+  for _, line in ipairs(logs) do
+   if line:find('AUTH_CLIENT_MOTION_TRACE count=', 1, true) then
+    trace_headers=trace_headers+1
+    unsaturated_stop=line:find('limit=32 ', 1, true) ~= nil and
+     line:find('saturated=0 reason=stop', 1, true) ~= nil
+   elseif line:find('AUTH_CLIENT_MOTION_TRACE event=', 1, true) then
+    if line:find('kind=RECEIVED ', 1, true) then
+     received=received+1
+     if line:find('sequence=2 ',1,true)then received_two=true end
+    elseif line:find('kind=PUSH ', 1, true) then
+     pushed=pushed+1
+     if line:find('sequence=2 ',1,true)then pushed_two=true end
+    elseif line:find('kind=OBSERVATION ', 1, true) then observed=observed+1
+    elseif line:find('kind=READBACK ', 1, true) then readback=readback+1 end
+   end
+  end
+  assert(trace_headers==1 and unsaturated_stop and received>=2 and pushed==2 and
+   received_two and pushed_two and observed>=1 and readback>=1)
   print('capture-time binding, alignment, interpolation, prediction, expiry and STOP passed with fake ABI')
   return
  end
@@ -283,6 +307,23 @@ if mode=='distance' then
   end
  end
  assert(failures==1)
+ local headers,received_two,pushed_two,observed_two,readbacks,readback_two=0,false,false,false,0,false
+ for _,line in ipairs(logs)do
+  if line:find('AUTH_CLIENT_MOTION_TRACE count=',1,true)then
+   headers=headers+1
+   assert(line:find('saturated=0 reason=fault',1,true))
+  elseif line:find('AUTH_CLIENT_MOTION_TRACE event=',1,true)then
+   if line:find('kind=RECEIVED sequence=2 ',1,true)then received_two=true
+   elseif line:find('kind=PUSH sequence=2 ',1,true)then pushed_two=true
+   elseif line:find('kind=OBSERVATION sequence=2 ',1,true)then observed_two=true
+   elseif line:find('kind=READBACK ',1,true)then
+    readbacks=readbacks+1
+    if line:find('sequence=2 ',1,true)then readback_two=true end
+   end
+  end
+ end
+ -- The prior successful seq2 write has exactly one corresponding readback.
+ assert(headers==1 and received_two and pushed_two and observed_two and readbacks==1 and readback_two)
  return
 end
 if mode=='docking' or mode=='fixture' or mode=='zone' then
@@ -324,14 +365,25 @@ local final=logs[#logs]
 assert(final:find('AUTH_CLIENT_PLAYBACK STOPPED version=1 ',1,true))
 if mode=='good' then assert(final:find(' uncertain=0 drained=1',1,true)) end
 if mode=='uncertain' then assert(final:find(' uncertain=1 drained=0',1,true)) end
-local summaries=0
+local summaries, trace_lines, trace_headers, saturated_header=0,0,0,false
 for _,line in ipairs(logs)do
  assert(#line<=1024)
  if line:find(' SUMMARY ',1,true)then summaries=summaries+1 end
+ if line:find('AUTH_CLIENT_MOTION_TRACE ',1,true)then
+  trace_lines=trace_lines+1
+  if line:find('AUTH_CLIENT_MOTION_TRACE count=',1,true)then
+   trace_headers=trace_headers+1
+   if mode=='bounded' then
+    saturated_header=line:find('count=32 limit=32 saturated=1 reason=stop',1,true)~=nil
+   end
+  end
+ end
  for _,secret in ipairs({lease,attempt,generation,nonce,router_generation})do assert(not line:find(secret,1,true))end
  assert(not line:find('actor_key',1,true) and not line:find('sector_key',1,true) and not line:find('zone_key',1,true))
 end
-assert(summaries<=64 and #logs<=66)
-if mode=='bounded' then assert(summaries==64) end
+assert(summaries<=64 and trace_lines<=33 and #logs-trace_lines<=66)
+if mode=='bounded' then
+ assert(summaries==64 and trace_headers==1 and saturated_header and trace_lines==33)
+end
 local count=#logs;ffi.C.TestPause(true);assert(client:tick() and #logs==count)
 print('recovered playback initial read, streaming, bounded evidence and STOP passed')

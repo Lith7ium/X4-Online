@@ -249,10 +249,51 @@ function M.new_x4(c)
  local playback_controller,playback_latest,playback_next_report=nil,nil,nil
  local playback_stopped_reported,playback_failure_reported=false,false
  local playback_drained=false
+ -- Startup trace is deliberately local to the explicit saved-playback fixture.
+ -- It retains only validated identifiers/times/phases and is emitted at a
+ -- lifecycle boundary, never from the per-tick hot path. OBSERVATION and
+ -- READBACK retain only the first event per sequence/phase transition.
+ local motion_trace, motion_trace_saturated, motion_trace_emitted = {}, false, false
+ local motion_trace_limit = 32
+ local last_observation_sequence,last_observation_phase,last_readback_sequence,last_readback_phase
  local playback_sector='cluster_06_sector001_macro'
  local playback_phases={waiting=true,held=true,interpolated=true,extrapolated=true,frozen=true,['held-no-rate']=true}
  local function finite(value)
   return type(value)=='number' and value==value and math.abs(value)<math.huge
+ end
+ local function motion_trace_add(event)
+  if not saved_playback_fixture or motion_trace_emitted or motion_trace_saturated then return end
+  assert(type(event)=='table' and
+   (event.kind=='RECEIVED' or event.kind=='PUSH' or event.kind=='OBSERVATION' or event.kind=='READBACK'))
+  local kind,sequence,phase=event.kind,event.sequence,event.phase
+  if kind=='OBSERVATION' and sequence==last_observation_sequence and phase==last_observation_phase then return end
+  if kind=='READBACK' and sequence==last_readback_sequence and phase==last_readback_phase then return end
+  assert(integer(sequence) and sequence>=1 and sequence<=9007199254740991)
+  for _,value in pairs({event.source_time,event.capture_time,event.received_at,event.arrival,
+   event.processed_at,event.local_time,event.game_time}) do
+   assert(value==nil or finite(value))
+  end
+  assert(phase==nil or playback_phases[phase])
+  if #motion_trace>=motion_trace_limit then motion_trace_saturated=true;return end
+  if kind=='OBSERVATION' then last_observation_sequence,last_observation_phase=sequence,phase end
+  if kind=='READBACK' then last_readback_sequence,last_readback_phase=sequence,phase end
+  motion_trace[#motion_trace+1]=event
+ end
+ local function motion_trace_flush(reason)
+  if not saved_playback_fixture or motion_trace_emitted then return end
+  assert(reason=='fault' or reason=='stop')
+  motion_trace_emitted=true
+  pcall(DebugError,('[X4LAN] AUTH_CLIENT_MOTION_TRACE count=%d limit=%d saturated=%d reason=%s'):format(
+   #motion_trace,motion_trace_limit,motion_trace_saturated and 1 or 0,reason))
+  local function number(value)
+   return value==nil and '-' or ('%.17g'):format(value)
+  end
+  for index,event in ipairs(motion_trace) do
+   local phase=event.phase or '-'
+   pcall(DebugError,('[X4LAN] AUTH_CLIENT_MOTION_TRACE event=%d/%d kind=%s sequence=%.0f source_time=%s capture_time=%s received_at=%s arrival=%s processed_at=%s local_time=%s game_time=%s phase=%s'):format(
+    index,motion_trace_limit,event.kind,event.sequence,number(event.source_time),number(event.capture_time),
+    number(event.received_at),number(event.arrival),number(event.processed_at),number(event.local_time),number(event.game_time),phase))
+  end
  end
  -- Keep the existing position-evidence schema stable. This separate bounded
  -- record preserves the two clock domains without relabeling game seconds.
@@ -295,6 +336,11 @@ function M.new_x4(c)
   if event.kind=='observation' then
    assert(playback_phases[event.phase]);phase=event.phase;playback_observations=playback_observations+1
   else playback_readbacks=playback_readbacks+1 end
+  -- OBSERVATION is the validated pre-Write record; READBACK is the existing
+  -- post-write read callback record, not proof that the engine applied it.
+  motion_trace_add({kind=event.kind=='observation' and 'OBSERVATION' or 'READBACK',
+   sequence=event.source_sequence,source_time=event.latest_source_time,capture_time=event.latest_capture_time,
+   local_time=event.local_time,game_time=event.game_time,phase=phase})
   local dx,dy,dz=event.actual.x-event.target.x,event.actual.y-event.target.y,event.actual.z-event.target.z
   playback_latest={actual={x=event.actual.x,y=event.actual.y,z=event.actual.z},
    target={x=event.target.x,y=event.target.y,z=event.target.z},sequence=event.source_sequence,phase=phase,
@@ -350,9 +396,19 @@ function M.new_x4(c)
      first=false
      -- Alignment has verified this real source pose. Keep its original clock
      -- and arrival as the first interpolation sample; legacy enrollment is discarded.
-     if initial_alignment_fixture then return playback_controller:push(snapshot,arrival) end
+     if initial_alignment_fixture then
+      local processed_at=timing_clock()
+      -- PUSH records adapter invocation, not downstream acceptance or apply.
+      motion_trace_add({kind='PUSH',sequence=snapshot.sequence,source_time=snapshot.source_time,
+       capture_time=snapshot.capture_time,arrival=arrival,processed_at=processed_at})
+      return playback_controller:push(snapshot,arrival)
+     end
      return true
     end
+    local processed_at=timing_clock()
+    -- PUSH records adapter invocation, not downstream acceptance or apply.
+    motion_trace_add({kind='PUSH',sequence=snapshot.sequence,source_time=snapshot.source_time,
+     capture_time=snapshot.capture_time,arrival=arrival,processed_at=processed_at})
     return playback_controller:push(snapshot,arrival)
    end,
    tick=function()return playback_controller:tick()end,
@@ -366,6 +422,7 @@ function M.new_x4(c)
  local function playback_stopped()
   if not playback_controller or playback_stopped_reported then return end
   playback_stopped_reported=true
+  motion_trace_flush('stop')
   playback_log('STOPPED',playback_controller:outcome_uncertain())
  end
  local checked_net={send=function(_,value)
@@ -433,6 +490,9 @@ function M.new_x4(c)
     playback_version = sample_version
     playback_sequence,playback_source_time=sequence,source_time;playback_samples=playback_samples+1
     playback_expected_reply=table.concat({'R',c.lease,c.attempt,'BOUND',unpack(fields,5,11)},'|')
+    -- RECEIVED means this Lua adapter validated a datagram, not TCP arrival.
+    motion_trace_add({kind='RECEIVED',sequence=sequence,source_time=source_time,
+     capture_time=playback_capture_time,received_at=timing_clock()})
    end
    if saved_apply_fixture then
     assert(apply_phase=='waiting_bind' and fields[10]=='cluster_06_sector001_macro')
@@ -536,6 +596,7 @@ function M.new_x4(c)
     known=safe_fault('router',reason:sub(8))==reason
    end
    if playback_controller then playback_controller:stop() end
+   motion_trace_flush('fault')
    local detail=''
    if reason=='owner_playback' then
     retained=retained or playback_diagnostic(nil,nil)
