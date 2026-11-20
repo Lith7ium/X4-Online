@@ -14,8 +14,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def validate_mode(args):
     required = getattr(args, 'require_registry_snapshot', False)
+    bootstrap = getattr(args, 'bootstrap_registry_snapshot', False)
     if type(required) is not bool:
         raise ValueError('invalid registry snapshot option')
+    if type(bootstrap) is not bool or (required and bootstrap):
+        raise ValueError('registry snapshot bootstrap and recovery modes conflict')
+    if bootstrap and any(value for name, value in vars(args).items()
+                         if name not in ('bootstrap_registry_snapshot', 'require_registry_snapshot')
+                         and name.startswith(('diagnostic_', 'fixture_', 'registry_'))):
+        raise ValueError('registry snapshot bootstrap requires one normal recovered server owner')
     if required and any(value for name, value in vars(args).items()
                         if name != 'require_registry_snapshot'
                         and name.startswith(('diagnostic_', 'fixture_', 'registry_'))):
@@ -42,10 +49,24 @@ def receipt(checkpoint, evidence):
 def verify_previous_receipt(previous_result, checkpoint, evidence):
     expected = receipt(checkpoint, evidence)
     record = previous_result.get('registry_snapshot') if type(previous_result) is dict else None
-    if (type(record) is not dict or record.get('initial_inspect_verified') is not True
+    if (type(record) is not dict or not (
+            (record.get('required') is True and record.get('initial_inspect_verified') is True)
+            or (record.get('bootstrap') is True and record.get('first_capture_verified') is True))
             or record.get('final_receipt') != expected):
         raise ValueError('previous supervisor has no matching verified final registry receipt')
     return expected
+
+
+def verify_bootstrap_status(previous_result, checkpoint, saved_status):
+    """Require a confirmed prior supervisor's ready registry, without snapshot."""
+    prior = previous_result.get('registry_status') if type(previous_result) is dict else None
+    if (type(saved_status) is not tuple or len(saved_status) != 4 or saved_status[0] != 'ready'
+            or type(prior) is not dict or prior.get('state') != 'ready'
+            or prior.get('epoch') != saved_status[1] or prior.get('count') != saved_status[2]
+            or prior.get('mapping_sha256') != saved_status[3]
+            or prior.get('checkpoint_id') != checkpoint.checkpoint_id):
+        raise ValueError('confirmed source ready registry differs from prior supervisor receipt')
+    return saved_status
 
 
 def verify_transition(previous, current):
@@ -104,3 +125,57 @@ class RegistrySnapshotState:
                 'verified_save_count': self.save_count,
                 'final_receipt': dict(self.latest_receipt) if self.save_count else None,
                 'native_load_bytes_proven': False}
+
+
+class FirstCaptureState:
+    """One save from a confirmed ready registry, without claiming an inspect."""
+
+    def __init__(self, source_checkpoint, saved_status):
+        if type(saved_status) is not tuple or len(saved_status) != 4 or saved_status[0] != 'ready':
+            raise ValueError('ready saved registry required for first capture')
+        self.source_checkpoint = source_checkpoint
+        self.status = saved_status
+        self.nonce = None
+        self.final_receipt = None
+
+    def install(self, case, *, reserved_tokens):
+        if self.nonce is not None:
+            raise ValueError('first capture already installed')
+        reserved = set(reserved_tokens) | {
+            self.source_checkpoint.marker, self.status[1]}
+        nonce = secrets.token_hex(16)
+        while nonce in reserved:
+            nonce = secrets.token_hex(16)
+        protected = bridge_gate.install_first_capture(case, nonce,
+            source_marker=self.source_checkpoint.marker, epoch=self.status[1],
+            issued_count=self.status[2])
+        self.nonce = nonce
+        return protected
+
+    def verify_save(self, checkpoint, log_path):
+        if self.final_receipt is not None:
+            raise ValueError('first registry capture already verified')
+        record = self.recheck(checkpoint, log_path)
+        self.final_receipt = record
+        return dict(record)
+
+    def recheck(self, checkpoint, log_path):
+        evidence = verify_join_snapshot(checkpoint)
+        if evidence['epoch'] != self.status[1] or evidence['issued_count'] != self.status[2]:
+            raise ValueError('first snapshot epoch or issued count differs from source registry')
+        bridge_gate.verify_bridge_observation(log_path, self.nonce, evidence,
+            first_capture_source_marker=self.source_checkpoint.marker)
+        record = receipt(checkpoint, evidence)
+        if self.final_receipt is not None and record != self.final_receipt:
+            raise ValueError('first capture receipt changed before confirmation')
+        return record
+
+    def metadata(self):
+        return {'bootstrap': True, 'source_checkpoint_id': self.source_checkpoint.checkpoint_id,
+                'source_sha256': self.source_checkpoint.sha256,
+                'source_marker': self.source_checkpoint.marker,
+                'epoch': self.status[1], 'issued_count': self.status[2],
+                'first_capture_verified': self.final_receipt is not None,
+                'initial_inspect_verified': False,
+                'final_receipt': None if self.final_receipt is None else dict(self.final_receipt),
+                'no_client_admission': True, 'native_load_bytes_proven': False}

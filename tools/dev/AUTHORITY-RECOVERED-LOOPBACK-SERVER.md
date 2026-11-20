@@ -289,10 +289,33 @@ controlled and unchanged during the check.
 `--require-registry-snapshot` is a recovery-only switch for a **previously
 confirmed output of this supervisor** that already contains a format-3 registry
 availability snapshot. It cannot bootstrap an older save or use a standalone
-registry diagnostic save. A first confirmed supervisor seed with a verified
-format-3 snapshot and final registry receipt is still required before this
-command can be exercised. This path has only offline tests so far; no native
+registry diagnostic save. This path has only offline tests so far; no native
 recovered-server run has been made with the switch.
+
+The separate one-shot `--bootstrap-registry-snapshot` switch accepts only a
+confirmed output of this supervisor with a verified **ready** fixed registry,
+its exact legacy marker/identity/registry MD scripts and a matching prior
+registry-status receipt. It rejects raw diagnostic saves. The process recovers
+the old checkpoint, pauses, captures all issued registry IDs under a fresh
+marker, saves through the existing control bridge, checks the saved format-3
+snapshot and first-capture receipts, then stops and confirms the checkpoint
+after cleanup. It publishes no client endpoint and makes no initial-Inspect
+claim. The retained `authority-registry-enroll-once-01/server/checkpoints`
+passed a read-only source-provenance and ready-registry check on 20 November
+2026; no bootstrap game run has been made.
+
+```sh
+python tools/dev/authority_recovered_loopback_server.py \
+  --game /path/to/X4 --display :DISPLAY --out .local/first-format3-server \
+  --store .local/authority-registry-enroll-once-01/server/checkpoints \
+  --bootstrap-registry-snapshot
+```
+
+Only a clean, successful bootstrap result with a confirmed final checkpoint
+and matching `first_capture_verified` final receipt may serve as the next
+`--require-registry-snapshot` source. That next, fresh X4 process performs the
+full saved/fresh Inspect before bridge activation and before any offer can be
+served. The bootstrap alone never establishes fresh-process reload acceptance.
 
 ```sh
 python tools/dev/authority_recovered_loopback_server.py \

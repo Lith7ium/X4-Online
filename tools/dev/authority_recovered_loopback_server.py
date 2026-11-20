@@ -91,7 +91,8 @@ def read_evidence(path, limit=65536):
 
 
 def verify_previous_source(store, checkpoint, profile, *, registry_status=False, witness_source=False,
-                           require_registry_snapshot=False):
+                           require_registry_snapshot=False, return_supervisor_result=False,
+                           require_ready_registry_script=False):
     """Accept only a compatible, cleanly ended local supervisor generation.
 
     This is local provenance, not authentication or a concurrent-writer fence.
@@ -121,6 +122,8 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
     names={p.name for p in md.iterdir()}
     base_names={'authority_checkpoint_marker.xml','authority_identity_fixture.xml'}
     valid_names = (base_names,base_names|{'authority_ship_registry.xml'}) if registry_status else (base_names,)
+    if require_ready_registry_script:
+        valid_names = (base_names|{'authority_ship_registry.xml'},)
     if require_registry_snapshot:
         valid_names = (base_names|{'authority_ship_registry.xml',
                                   'authority_registry_availability_snapshot.xml'},)
@@ -150,6 +153,8 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
         saved_evidence = verify_join_snapshot(checkpoint)
         registry_snapshots.verify_previous_receipt(result, checkpoint, saved_evidence)
         return fixture, saved_evidence
+    if return_supervisor_result:
+        return fixture, result
     return fixture
 
 
@@ -530,6 +535,16 @@ def confirm_witness_after_cleanup(store, checkpoint, result, remaining, errors):
     store.confirm(checkpoint)
 
 
+def capture_first_registry_snapshot(adapter, store, verify):
+    """Use the ordinary save controller once; caller confirms after cleanup."""
+    adapter.pause()
+    source = adapter.save()
+    saved = store.publish(source, marker=adapter.pending_marker)
+    adapter.checkpoint_published(saved)
+    verify()
+    return saved
+
+
 def settle_shutdown(control, world, store, check):
     """Disconnect clients and settle their last-disconnect pause/save once."""
     control.close()
@@ -823,6 +838,7 @@ def diagnostic_process_measure_seconds(args):
 
 def run(args):
     require_snapshot = registry_snapshots.validate_mode(args)
+    bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('unprivileged Linux user required')
     out = snapshot.output_path(args.out)
@@ -951,11 +967,21 @@ def run(args):
                 source_store, checkpoint, profile)
             fixture = None
         elif source_store.directory == source.DEFAULT_STORE.resolve():
-            if require_snapshot: raise ValueError('registry snapshot requires a confirmed previous supervisor source')
+            if require_snapshot or bootstrap_snapshot:
+                raise ValueError('registry snapshot requires a confirmed previous supervisor source')
             if witness_join: raise ValueError('witness join requires an own verified source')
             fixture = source.verify(source_store.directory, checkpoint, profile)
         else:
-            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=(getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or bool(witness_phase)), witness_source=(witness_phase=='verify'), require_registry_snapshot=require_snapshot)
+            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=(bootstrap_snapshot or getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or bool(witness_phase)), witness_source=(witness_phase=='verify'), require_registry_snapshot=require_snapshot, return_supervisor_result=bootstrap_snapshot, require_ready_registry_script=bootstrap_snapshot)
+        bootstrap_status = None
+        first_capture_state = None
+        if bootstrap_snapshot:
+            fixture, prior_result = fixture
+            import authority_recovery_registry_status as registry_status_reader
+            bootstrap_status = registry_snapshots.verify_bootstrap_status(
+                prior_result, checkpoint, registry_status_reader.saved_status(checkpoint))
+            first_capture_state = registry_snapshots.FirstCaptureState(checkpoint, bootstrap_status)
+            result['registry_snapshot'] = first_capture_state.metadata()
         registry_snapshot_state = None
         if require_snapshot:
             fixture, saved_evidence = fixture
@@ -973,6 +999,8 @@ def run(args):
         if require_snapshot:
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence))
+        if bootstrap_snapshot:
+            protected.extend(first_capture_state.install(case, reserved_tokens=(lease, epoch)))
         sample_writer = None
         if sample_write_slot is not None:
             import authority_fixture_player_sample_install as sample_install
@@ -1146,6 +1174,10 @@ def run(args):
             evidence=read_cycle_evidence(store_arg,checkpoint_id,save_name)
             if fixture_mode:
                 fixture_helpers.verify_checkpoint_mapping(store_arg.get(checkpoint_id))
+            if bootstrap_snapshot:
+                saved = store_arg.get(checkpoint_id)
+                first_capture_state.verify_save(saved, profile/'engine-output.log')
+                result['registry_snapshot'] = first_capture_state.metadata()
             if require_snapshot:
                 saved = store_arg.get(checkpoint_id)
                 registry_snapshot_state.verify_save(saved, profile/'engine-output.log')
@@ -1188,6 +1220,16 @@ def run(args):
                 witness_diagnostic={'phase':witness_phase,'epoch':registry_expected[1],
                     'count':registry_expected[2],'no_client_admission':True,
                     'historical_identity_proven':False,'exact_loaded_file_proven':False})
+            raise _WitnessFinished()
+        if bootstrap_snapshot:
+            # The ordinary control bridge owns pause, marker receipt, native save,
+            # title, publication and VERIFY ordering. No client endpoint exists.
+            check()
+            saved = capture_first_registry_snapshot(adapter, store, verify)
+            witness_pending = saved
+            result.update(success=True, final_world_state='paused',
+                          final_checkpoint_id=saved.checkpoint_id,
+                          final_checkpoint_sha256=saved.sha256)
             raise _WitnessFinished()
         service = owned.start_owned_file_service(secrets.token_hex(16), services)
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
@@ -1768,6 +1810,11 @@ def run(args):
                 if require_snapshot:
                     verify_previous_source(source_store, checkpoint, profile,
                                            require_registry_snapshot=True)
+                if bootstrap_snapshot:
+                    verify_previous_source(source_store, checkpoint, profile,
+                                           registry_status=True, return_supervisor_result=True,
+                                           require_ready_registry_script=True)
+                    first_capture_state.recheck(witness_pending, profile/'engine-output.log')
             except BaseException as error:
                 result.update(success=False, error='final recovery evidence invalid: '+str(error))
         if local_pair:
@@ -1808,6 +1855,8 @@ def main():
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
     parser.add_argument('--require-registry-snapshot',action='store_true',
                         help='require confirmed format-3 source and full live registry observations for every save')
+    parser.add_argument('--bootstrap-registry-snapshot',action='store_true',
+                        help='one-shot first format-3 capture from a confirmed ready-registry supervisor source; no endpoint')
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')
     parser.add_argument('--registry-witness',choices=('create','verify'),help='isolated paused diagnostic; never admit clients')
     parser.add_argument('--registry-witness-join',action='store_true',help='private one-client witness join experiment; not identity proof')

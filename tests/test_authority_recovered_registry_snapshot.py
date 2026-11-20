@@ -6,7 +6,7 @@ import shutil
 from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('registry_snapshot_server',
@@ -53,7 +53,7 @@ class ConfirmedSnapshotSourceTests(unittest.TestCase):
         self.result = {'supervisor_version': 1, 'success': True, 'final_world_state': 'paused',
                        'owned_processes_remaining': [], 'final_checkpoint_id': 'checkpoint-id',
                        'final_checkpoint_sha256': 'f' * 64,
-                       'registry_snapshot': {'initial_inspect_verified': True,
+                       'registry_snapshot': {'required': True, 'initial_inspect_verified': True,
                            'final_receipt': snapshots.receipt(self.checkpoint, self.evidence)}}
         self.result_path = origin / 'result.json'
         self.write_result()
@@ -92,8 +92,63 @@ class ConfirmedSnapshotSourceTests(unittest.TestCase):
                 with self.assertRaises((ValueError, OSError)):
                     self.verify()
 
+    def test_first_capture_source_requires_legacy_scripts_and_clean_supervisor(self):
+        (self.md / 'authority_registry_availability_snapshot.xml').unlink()
+        ready = ('ready', self.evidence['epoch'], self.evidence['issued_count'], '6' * 64)
+        self.result['registry_status'] = {
+            'state': 'ready', 'epoch': ready[1], 'count': ready[2],
+            'mapping_sha256': ready[3], 'checkpoint_id': self.checkpoint.checkpoint_id}
+        self.write_result()
+        fixture, prior = server.verify_previous_source(
+            self.store, self.checkpoint, self.profile, registry_status=True,
+            return_supervisor_result=True, require_ready_registry_script=True)
+        self.assertTrue(fixture)
+        self.assertEqual(snapshots.verify_bootstrap_status(prior, self.checkpoint, ready), ready)
+        for change in ('missing_registry', 'extra_script', 'stale_receipt', 'unconfirmed'):
+            with self.subTest(change=change):
+                if change == 'missing_registry':
+                    registry = self.md / 'authority_ship_registry.xml'
+                    registry.unlink()
+                    with self.assertRaises(ValueError):
+                        server.verify_previous_source(self.store, self.checkpoint, self.profile,
+                            registry_status=True, return_supervisor_result=True,
+                            require_ready_registry_script=True)
+                    shutil.copyfile(ROOT / 'tools/dev/authority_ship_registry.xml', registry)
+                elif change == 'extra_script':
+                    (self.md / 'unrelated.xml').write_text('<mdscript/>')
+                    with self.assertRaises(ValueError):
+                        server.verify_previous_source(self.store, self.checkpoint, self.profile,
+                            registry_status=True, return_supervisor_result=True,
+                            require_ready_registry_script=True)
+                    (self.md / 'unrelated.xml').unlink()
+                elif change == 'stale_receipt':
+                    with self.assertRaises(ValueError):
+                        snapshots.verify_bootstrap_status(prior, self.checkpoint,
+                                                          ('ready', ready[1], ready[2], '0' * 64))
+                else:
+                    self.result['success'] = False
+                    self.write_result()
+                    with self.assertRaises(ValueError):
+                        server.verify_previous_source(self.store, self.checkpoint, self.profile,
+                            registry_status=True, return_supervisor_result=True,
+                            require_ready_registry_script=True)
+
 
 class SnapshotModeTests(unittest.TestCase):
+    def test_one_shot_uses_existing_save_control_and_defers_confirmation(self):
+        calls = Mock()
+        adapter = SimpleNamespace(pause=calls.pause, save=calls.save,
+                                  pending_marker='b' * 32,
+                                  checkpoint_published=calls.checkpoint_published)
+        saved = SimpleNamespace(checkpoint_id='saved')
+        store = SimpleNamespace(publish=calls.publish, confirm=calls.confirm)
+        calls.save.return_value = 'private-save-source'
+        calls.publish.return_value = saved
+        self.assertIs(server.capture_first_registry_snapshot(adapter, store, calls.verify), saved)
+        self.assertEqual(calls.mock_calls, [call.pause(), call.save(),
+            call.publish('private-save-source', marker='b' * 32),
+            call.checkpoint_published(saved), call.verify()])
+
     def test_opt_in_rejects_other_diagnostic_owners(self):
         self.assertFalse(snapshots.validate_mode(SimpleNamespace()))
         self.assertTrue(snapshots.validate_mode(SimpleNamespace(
@@ -104,6 +159,13 @@ class SnapshotModeTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 snapshots.validate_mode(SimpleNamespace(require_registry_snapshot=True,
                                                         **{name: value}))
+        self.assertFalse(snapshots.validate_mode(SimpleNamespace(
+            bootstrap_registry_snapshot=True)))
+        for name, value in (('require_registry_snapshot', True), ('registry_status', True),
+                            ('diagnostic_client', True)):
+            with self.subTest(bootstrap_conflict=name), self.assertRaises(ValueError):
+                snapshots.validate_mode(SimpleNamespace(bootstrap_registry_snapshot=True,
+                                                      **{name: value}))
 
     def test_epoch_count_and_missing_lifetime_are_stable(self):
         baseline = {'epoch': 'a' * 32, 'issued_count': 4,
@@ -139,6 +201,45 @@ class SnapshotModeTests(unittest.TestCase):
         self.assertEqual(state.metadata()['verified_save_count'], 1)
         self.assertEqual(state.metadata()['final_receipt']['mapping_sha256'], '6' * 64)
         self.assertEqual(state.metadata()['source_receipt']['mapping_sha256'], '5' * 64)
+
+    def test_first_capture_has_distinct_receipt_and_no_inspect_claim(self):
+        source = SimpleNamespace(checkpoint_id='source', sha256='1' * 64, marker='a' * 32)
+        saved = SimpleNamespace(checkpoint_id='first', sha256='2' * 64, marker='b' * 32)
+        status = ('ready', 'c' * 32, 3, 'd' * 64)
+        prior = {'registry_status': {'state': 'ready', 'epoch': status[1],
+                                   'count': status[2], 'mapping_sha256': status[3],
+                                   'checkpoint_id': source.checkpoint_id}}
+        self.assertEqual(snapshots.verify_bootstrap_status(prior, source, status), status)
+        for changed in ({'state': 'uninitialized'}, {'count': 4},
+                        {'mapping_sha256': '0' * 64}, {'checkpoint_id': 'old'}):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                snapshots.verify_bootstrap_status(
+                    {'registry_status': {**prior['registry_status'], **changed}}, source, status)
+        first = snapshots.FirstCaptureState(source, status)
+        with patch.object(snapshots.bridge_gate, 'install_first_capture', create=True,
+                          return_value=[Path('installed')]) as install:
+            self.assertEqual(first.install(Path('case'), reserved_tokens=('e' * 32,)),
+                             [Path('installed')])
+        self.assertEqual(install.call_args.kwargs['source_marker'], source.marker)
+        self.assertEqual(install.call_args.kwargs['epoch'], status[1])
+        self.assertEqual(install.call_args.kwargs['issued_count'], 3)
+        saved_evidence = {'format': 3, 'source_registry_checked': True, 'run_id': saved.marker,
+                          'epoch': status[1], 'issued_count': 3,
+                          'availability_sha256': '3' * 64, 'operational_sha256': '4' * 64,
+                          'mapping_sha256': '5' * 64}
+        with patch.object(snapshots, 'verify_join_snapshot', return_value=saved_evidence), \
+             patch.object(snapshots.bridge_gate, 'verify_bridge_observation') as observe:
+            first.verify_save(saved, Path('engine-output.log'))
+            first.recheck(saved, Path('engine-output.log'))
+        self.assertEqual(observe.call_args.kwargs['first_capture_source_marker'], source.marker)
+        self.assertTrue(first.metadata()['first_capture_verified'])
+        self.assertFalse(first.metadata()['initial_inspect_verified'])
+        self.assertEqual(first.metadata()['final_receipt'], snapshots.receipt(saved, saved_evidence))
+        self.assertEqual(snapshots.verify_previous_receipt(
+            {'registry_snapshot': first.metadata()}, saved, saved_evidence),
+            snapshots.receipt(saved, saved_evidence))
+        with self.assertRaises(ValueError):
+            first.verify_save(saved, Path('engine-output.log'))
 
 
 if __name__ == '__main__':
