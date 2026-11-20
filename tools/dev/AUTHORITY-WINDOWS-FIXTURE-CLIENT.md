@@ -49,6 +49,16 @@ WAN, motion and gameplay remain untested.
   or structurally consistent; ambiguous state is refused before X4 starts.
   An arbitrary personal save is not suitable.
 
+For a server offering format-3 registry checkpoints, pass
+`--require-registry-snapshot`. The client checks the downloaded save against
+the offered digest and marker, reads all issued ship bindings and operational
+flags, and checks them against the source registry in the same save. After
+X4 loads the world, the client inspects all entries while paused and requires
+their saved and current flags to agree before sending the admission claim.
+Keepalive continues while the client reads the save. A requested motion
+stream must refer to ships eligible for movement. Ordinary runtime eligibility
+checks still apply after admission.
+
 Expose the server's existing loopback control and file services through the
 [existing TLS server bridge](../../src/authority/EXPERIMENTAL-TLS-TUNNEL.md#example-setup).
 The recovered Linux supervisor publishes their addresses and file-service

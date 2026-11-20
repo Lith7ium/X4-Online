@@ -99,6 +99,8 @@ def parser():
                         help='independently verified SHA-256 of the Windows network DLL')
     result.add_argument('--motion-config', type=Path,
                         help='optional private JSON for an existing server motion stream; one attempt only')
+    result.add_argument('--require-registry-snapshot', action='store_true',
+                        help='require a marked format-3 registry and check all ship entries before joining')
     result.add_argument('--timeout', type=float, default=600, help='overall deadline in seconds (max 3600)')
     result.add_argument('--observe-seconds', type=float, default=30,
                         help='time to poll after admission; does not request a server resume')
@@ -138,7 +140,7 @@ def run(args):
         deadline=time.monotonic() + args.timeout,
         keepalive_interval=args.keepalive_seconds,
         stop_requested=ObservationWindow(args.observe_seconds),
-        motion_request=motion_request,
+        motion_request=motion_request, require_registry_snapshot=args.require_registry_snapshot,
     )
 
 

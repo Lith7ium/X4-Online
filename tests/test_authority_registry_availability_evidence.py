@@ -155,6 +155,7 @@ class RegistryAvailabilityEvidenceTests(unittest.TestCase):
         cases = [
             (build_xml(), 'd' * 32),
             (build_xml(source_epoch='d' * 32), RUN),
+            (build_xml().replace(RUN.encode(), EPOCH.encode()), EPOCH),
             (build_xml(source_last=2), RUN),
             (build_xml(source_epoch_ref='10'), RUN),
             (build_xml().replace(EPOCH.encode(), b'bad', 1), RUN),

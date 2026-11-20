@@ -17,6 +17,7 @@ from .load_observations import BoundReceiptStream
 from .local_participant_control import LocalParticipantControl
 from .observed_client_session import ObservedClientSession
 from .participant_motion import ParticipantMotion
+from .registry_availability_evidence import verify_join_snapshot
 from .saved_registry import saved_status
 from .windows_x4_process import WindowsX4Process
 from .windows_motion_peer import WindowsMotionPeer
@@ -99,7 +100,8 @@ def _motion_settings(request, registry_status, bound, controller, registry_nonce
 def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         server_fingerprint, shared_key, file_token, file_slot,
                         windows_dll, dll_sha256, deadline, keepalive_interval,
-                        stop_requested, io_timeout=30, participant_timeout=30, motion_request=None):
+                        stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
+                        require_registry_snapshot=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -115,7 +117,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
     The saved registry header is then required in both the live and final log;
     this does not independently prove runtime actor identity.
     """
-    if (enabled is not True or not callable(stop_requested) or
+    if (enabled is not True or type(require_registry_snapshot) is not bool or not callable(stop_requested) or
             type(deadline) not in (int, float) or not math.isfinite(deadline) or
             not 0 < deadline - time.monotonic() <= 3600 or
             type(keepalive_interval) not in (int, float) or not math.isfinite(keepalive_interval) or
@@ -156,7 +158,18 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     raise RuntimeError('fixture workspace unavailable before registry inspection')
                 checkpoint = Checkpoint(bound.offer.checkpoint_id, staged_path, bound.offer.sha256,
                                         bound.offer.size, bound.marker)
-                registry_status = saved_status(checkpoint, pump=owner.poll)
+                registry_snapshot = None
+                if require_registry_snapshot:
+                    registry_snapshot = verify_join_snapshot(checkpoint, pump=owner.poll)
+                    registry_status = ('ready', registry_snapshot['epoch'], registry_snapshot['issued_count'],
+                                       registry_snapshot['mapping_sha256'])
+                    if motion_request is not None:
+                        operational_bits = registry_snapshot['operational_bits']
+                        if any(index > len(operational_bits) or operational_bits[index - 1] != '1'
+                               for index in motion_request['indices']):
+                            raise ValueError('requested ship is unavailable for motion in the checkpoint')
+                else:
+                    registry_status = saved_status(checkpoint, pump=owner.poll)
                 if time.monotonic() >= deadline or workspace.guard() is not True:
                     raise RuntimeError('fixture workspace unavailable after registry inspection')
                 registry_nonce = secrets.token_hex(16)
@@ -170,7 +183,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
                     participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256,
-                    registry_status=registry_status, registry_nonce=registry_nonce,
+                    registry_status=registry_status, registry_nonce=registry_nonce, registry_snapshot=registry_snapshot,
                     motion_settings=motion_settings)
                 workspace.register_overlay(hashes)
                 overlay_registered = True

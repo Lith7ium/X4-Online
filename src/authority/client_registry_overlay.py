@@ -31,6 +31,75 @@ def registry_receipt(nonce, status):
     return (nonce + '|startup|' + registry_status_text(status)).encode('ascii')
 
 
+def validate_full_snapshot(snapshot, status, nonce, marker):
+    """Pin a source-checked format-3 snapshot to the offered checkpoint."""
+    registry_status_text(status)
+    registry_receipt(nonce, status)
+    if status[0] != 'ready':
+        raise ValueError('full registry inspection requires a ready header')
+    if (type(snapshot) is not dict or type(snapshot.get('format')) is not int or
+            snapshot['format'] != 3 or snapshot.get('source_registry_checked') is not True):
+        raise ValueError('source-checked format-3 registry snapshot required')
+    if (snapshot.get('evidence_scope') != 'saved checkpoint bytes only' or
+            snapshot.get('run_id') != marker or
+            snapshot.get('epoch') != status[1] or
+            type(snapshot.get('issued_count')) is not int or
+            snapshot['issued_count'] != status[2] or
+            snapshot.get('mapping_sha256') != status[3]):
+        raise ValueError('registry snapshot differs from offered checkpoint')
+    if marker in (status[1], nonce) or nonce == status[1]:
+        raise ValueError('registry correlation tokens overlap')
+    binding = snapshot.get('availability_bits')
+    operational = snapshot.get('operational_bits')
+    count = status[2]
+    if (type(binding) is not str or type(operational) is not str or
+            len(binding) != count or len(operational) != count or
+            re.fullmatch(r'[01]+', binding) is None or
+            re.fullmatch(r'[01]+', operational) is None or
+            any(op == '1' and bit != '1' for bit, op in zip(binding, operational))):
+        raise ValueError('invalid registry snapshot bits')
+    if (any(type(snapshot.get(name)) is not int for name in
+            ('available_count', 'unavailable_count', 'operational_count')) or
+            snapshot['available_count'] != binding.count('1') or
+            snapshot['unavailable_count'] != binding.count('0') or
+            snapshot['operational_count'] != operational.count('1')):
+        raise ValueError('registry snapshot totals differ from bits')
+    return {'epoch': status[1], 'run_id': marker, 'nonce': nonce,
+            'issued_count': count, 'binding_bits': binding,
+            'operational_bits': operational}
+
+
+def extend_full_inspect(text):
+    """Run the read-only full owner before the legacy header receipt."""
+    declaration = 'local registry_status=nil;local registry_pause_requested=false;local registry_pause_confirmed=false\n'
+    if text.count(declaration) != 1:
+        raise ValueError('full inspect requires the registry load gate')
+    text = text.replace(declaration, declaration + 'local full_registry_inspect=nil\n')
+    hook = '  registry_pause_confirmed=true\n  if not registry_status then\n'
+    if text.count(hook) != 1:
+        raise ValueError('full inspect hook unavailable')
+    code = '''  if not full_registry_inspect then
+   full_registry_inspect=assert(X4LAN_AUTHORITY_CLIENT_REGISTRY_INSPECT.new_x4(
+    cfg.authority_registry_snapshot,engine,function()
+     failed=true;DebugError('[X4LAN] AUTH_DOWNLOAD_LOAD ERROR')
+    end))
+  end
+  assert(full_registry_inspect:tick())
+  if not full_registry_inspect:ready() then return end
+'''
+    text = text.replace(hook, '  registry_pause_confirmed=true\n' + code + '  if not registry_status then\n')
+    header_log = "log=function(marker,status)DebugError('[X4LAN] AUTH_RECOVERY_REGISTRY '.."
+    if text.count(header_log) != 1:
+        raise ValueError('legacy registry header log unavailable')
+    text = text.replace(header_log,
+                        "log=function(marker,status)assert(full_registry_inspect:guard());DebugError('[X4LAN] AUTH_RECOVERY_REGISTRY '..")
+    ready_hook = '  if not registry_status:ready() then return end\n'
+    if text.count(ready_hook) != 1:
+        raise ValueError('legacy registry readiness hook unavailable')
+    return text.replace(ready_hook, ready_hook +
+                        "  assert(full_registry_inspect:guard(),'full registry guard lost before admission')\n")
+
+
 def extend_load_probe(text, nonce, status, *, load_gate='identity'):
     """Add the existing paused registry check before the load pause receipt."""
     _check_load_gate(load_gate)

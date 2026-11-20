@@ -74,7 +74,8 @@ def verify_join_snapshot(checkpoint, *, pump=None):
     against the source registry. The MD checkpoint marker is a separate check
     owned by the caller; this function only correlates the snapshot run ID.
     """
-    if not isinstance(checkpoint, Checkpoint) or not isinstance(checkpoint.marker, str) or not _HEX32.fullmatch(checkpoint.marker):
+    if (not isinstance(checkpoint, Checkpoint) or not isinstance(checkpoint.marker, str)
+            or not _HEX32.fullmatch(checkpoint.marker)):
         raise RegistryAvailabilityEvidenceError('join checkpoint requires a run marker')
     return _verify(checkpoint, None, checkpoint.marker, None,
                    verify_source_registry=True, pump=pump, discover=True)
@@ -309,7 +310,8 @@ def _verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
                     or not _HEX32.fullmatch(resolved['$epoch'][0])):
                 raise RegistryAvailabilityEvidenceError('invalid saved snapshot epoch')
             expected_epoch = resolved['$epoch'][0]
-        if resolved['$epoch'] != [expected_epoch] or resolved['$run_id'] != [expected_run_id]:
+        if (expected_epoch == expected_run_id or resolved['$epoch'] != [expected_epoch]
+                or resolved['$run_id'] != [expected_run_id]):
             raise RegistryAvailabilityEvidenceError('correlation strings mismatch')
         if verify_source_registry:
             if resolved['$source_epoch'] != [expected_epoch]:

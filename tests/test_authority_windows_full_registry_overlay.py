@@ -1,0 +1,74 @@
+"""Synthetic install and actual Lua-owner checks; no native X4 run."""
+import hashlib
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+from authority.experimental_windows_fixture_overlay import install_fixture_overlay
+from authority.load_messages import Offer
+from authority.trusted_marker_load_session import MarkerBoundOffer
+
+
+class FullRegistryOverlayTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.view = root / 'view'
+        (self.view / 'extensions').mkdir(parents=True)
+        (self.view / '.x4ls-view').write_text('synthetic view')
+        self.dll = root / 'synthetic.dll'
+        self.dll.write_bytes(b'MZ synthetic test library')
+        offer = Offer(world_epoch='a' * 32, connection_handle=1, baseline_id=2,
+                      load_generation=3, checkpoint_id='checkpoint-' + 'b' * 32,
+                      sha256='c' * 64, attempt_id='d' * 32, size=100, name='j1.xml.gz')
+        self.status = ('ready', '1' * 32, 3, '2' * 64)
+        self.snapshot = dict(format=3, source_registry_checked=True,
+                             evidence_scope='saved checkpoint bytes only',
+                             run_id='e' * 32, epoch='1' * 32, issued_count=3,
+                             mapping_sha256='2' * 64, availability_bits='110',
+                             operational_bits='100', available_count=2,
+                             unavailable_count=1, operational_count=1)
+        self.options = dict(new_test_view=True, bound_offer=MarkerBoundOffer(offer, 'e' * 32),
+                            save_path=r'C:\private\45841\save', participant_port=20123,
+                            participant_lease='f' * 32, windows_dll=self.dll,
+                            dll_sha256=hashlib.sha256(self.dll.read_bytes()).hexdigest(),
+                            registry_status=self.status, registry_nonce='3' * 32,
+                            registry_snapshot=self.snapshot)
+
+    def test_install_runs_full_inspect_before_header_and_pause(self):
+        manifest = install_fixture_overlay(self.view, **self.options)
+        target = self.view / 'extensions/x4_lan_lab'
+        self.assertIn('md/authority_registry_availability_snapshot.xml', manifest)
+        self.assertIn('ui/registry_checkpoint_gate.lua', manifest)
+        self.assertIn('ui/client_registry_inspect.lua', manifest)
+        engine = (target / 'ui/x4_client_load_engine.lua').read_text()
+        self.assertIn('double GetCurrentGameTime(void)', engine)
+        self.assertIn('game_time=function() return tonumber(C.GetCurrentGameTime()) end', engine)
+        probe = (target / 'ui/authority_download_load_probe.lua').read_text()
+        self.assertLess(probe.index('full_registry_inspect:tick()'),
+                        probe.index('X4LAN_RECOVERY_REGISTRY_STATUS.new'))
+        self.assertLess(probe.index('X4LAN_RECOVERY_REGISTRY_STATUS.new'),
+                        probe.index('barrier.update()'))
+        root = Path(__file__).resolve().parents[1]
+        for mode in ('ready', 'wrong_bits', 'time_changed', 'time_changed_header'):
+            with self.subTest(mode=mode):
+                result = subprocess.run(
+                    ['luajit', str(root / 'tests/authority_windows_full_registry_overlay.lua'),
+                     str(target / 'ui'), mode], capture_output=True, text=True, cwd=root)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_invalid_snapshot_rejected_before_install(self):
+        for change in ({'format': 2}, {'source_registry_checked': False},
+                       {'run_id': 'f' * 32}, {'mapping_sha256': '9' * 64},
+                       {'operational_bits': '101'}, {'availability_bits': '11'},
+                       {'available_count': 1}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                install_fixture_overlay(self.view, **(self.options | {
+                    'registry_snapshot': self.snapshot | change}))
+            self.assertFalse((self.view / 'extensions/x4_lan_lab').exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

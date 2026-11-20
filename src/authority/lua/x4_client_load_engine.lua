@@ -4,7 +4,8 @@ function M.new(cfg)
  if type(cfg)~='table' or cfg.enabled~=true then return nil,'disabled' end
  local ffi=require('ffi')
  ffi.cdef[[bool IsStartmenu(void);bool IsPlayerValid(void);bool IsGamePaused(void);
- bool IsSaveListLoadingComplete(void);void ReloadSaveList(void);]]
+ bool IsSaveListLoadingComplete(void);void ReloadSaveList(void);
+ double GetCurrentGameTime(void);]]
  local C=ffi.C
  for _,name in ipairs({'GetSaveList','LoadGame','Pause'}) do assert(type(_G[name])=='function','missing '..name) end
  local get,load,pause=GetSaveList,LoadGame,Pause
@@ -21,6 +22,7 @@ function M.new(cfg)
   load=function(slot) load(slot) end,
   player_valid=function() return C.IsPlayerValid() end,
   is_paused=function() return C.IsGamePaused() end,
+  game_time=function() return tonumber(C.GetCurrentGameTime()) end,
   pause=function() pause() end,
  }
 end

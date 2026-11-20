@@ -133,6 +133,7 @@ class FixtureSessionTests(unittest.TestCase):
         def install(view, **options):
             test.assertEqual(options['registry_status'], test.registry_status)
             test.assertEqual(options['registry_nonce'], test.registry_nonce)
+            test.installed_registry_snapshot = options.get('registry_snapshot')
             test.calls.append(('install', view, options['bound_offer'] == test.bound,
                                options['participant_port'], options['participant_lease']))
             return {'ui/config.lua':'0'*64}
@@ -153,6 +154,33 @@ class FixtureSessionTests(unittest.TestCase):
              patch.object(subject.secrets, 'token_hex', return_value=self.registry_nonce), \
              patch.object(subject, 'install_fixture_overlay', self.install):
             return subject.run_fixture_session(**options)
+
+    def test_snapshot_join_passes_verified_staged_observations_to_load_gate(self):
+        snapshot = {'epoch': self.registry_status[1], 'issued_count': 2,
+                    'mapping_sha256': self.registry_status[3], 'operational_bits': '10'}
+        def inspect(checkpoint, *, pump):
+            self.assertEqual(checkpoint.path, self.workspace.save_dir / 'save_009.xml.gz')
+            self.assertEqual(checkpoint.marker, self.bound.marker)
+            pump()
+            return snapshot
+        with patch.object(subject, 'verify_join_snapshot', side_effect=inspect) as reader:
+            result = self.run_session(require_registry_snapshot=True)
+        self.assertTrue(result['client_admitted'])
+        reader.assert_called_once()
+        self.assertIs(self.installed_registry_snapshot, snapshot)
+
+    def test_snapshot_refusal_or_ineligible_motion_prevents_launch(self):
+        snapshot = {'epoch': self.registry_status[1], 'issued_count': 2,
+                    'mapping_sha256': self.registry_status[3], 'operational_bits': '10'}
+        for error, index in ((ValueError('corrupt snapshot'), 1), (None, 2), (None, 3)):
+            with self.subTest(error=error, index=index), patch.object(
+                    subject, 'verify_join_snapshot', side_effect=error, return_value=snapshot):
+                self.calls.clear()
+                motion = {'generation': '1' * 32, 'indices': [index], 'timeout': 1}
+                with self.assertRaisesRegex(ValueError, 'corrupt snapshot|unavailable for motion'):
+                    self.run_session(require_registry_snapshot=True, motion_request=motion)
+                self.assertFalse(any(isinstance(call, tuple) and call[0] == 'install' for call in self.calls))
+                self.assertIn('workspace_close', self.calls)
 
     def test_stages_starts_polls_then_stops_before_tls_and_redaction(self):
         result = self.run_session()

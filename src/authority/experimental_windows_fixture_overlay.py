@@ -21,7 +21,7 @@ import re
 import stat
 
 from .trusted_load_messages import encode_bound_offer
-from .client_registry_overlay import extend_load_probe
+from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_motion_overlay import (
     SECRET_FIELDS, append_load_ready_hook, render_motion_config,
     select_motion_sources, transform_motion_control, validate_motion_settings,
@@ -77,7 +77,8 @@ def _windows_save_path(value):
 
 def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                             participant_port, participant_lease, windows_dll, dll_sha256,
-                            registry_status=None, registry_nonce=None, motion_settings=None):
+                            registry_status=None, registry_nonce=None, motion_settings=None,
+                            registry_snapshot=None):
     """Create one absent x4_lan_lab in an exclusively owned new test view.
 
     A failure after creation leaves an owned partial extension for inspection;
@@ -100,6 +101,10 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         raise ValueError('exclusive new test view required')
     encode_bound_offer(bound_offer)  # validates the immutable offer and marker
     offer = bound_offer.offer
+    full_registry = None
+    if registry_snapshot is not None:
+        full_registry = validate_full_snapshot(registry_snapshot, registry_status,
+                                               registry_nonce, bound_offer.marker)
     if (not _HEX32.fullmatch(offer.world_epoch) or
             type(participant_port) is not int or not 1 <= participant_port <= 65535 or
             type(participant_lease) is not str or not _HEX32.fullmatch(participant_lease) or
@@ -147,6 +152,19 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                 ('ui/recovery_registry_status.lua', 'src/authority/lua/recovery_registry_status.lua'),
                 ('md/authority_ship_registry.xml', 'tools/dev/authority_ship_registry.xml')):
             files[target] = _source(ROOT / source, 1024 * 1024)
+    if full_registry is not None:
+        for target, source in (
+                ('ui/authority_registry_availability_snapshot.lua',
+                 'tools/dev/authority_registry_availability_snapshot.lua'),
+                ('ui/registry_checkpoint_gate.lua',
+                 'src/authority/lua/registry_checkpoint_gate.lua'),
+                ('ui/client_registry_inspect.lua',
+                 'src/authority/lua/client_registry_inspect.lua'),
+                ('md/authority_registry_availability_snapshot.xml',
+                 'tools/dev/authority_registry_availability_snapshot.xml')):
+            files[target] = _source(ROOT / source, 1024 * 1024)
+        files['ui/authority_download_load_probe.lua'] = extend_full_inspect(
+            files['ui/authority_download_load_probe.lua'].decode('utf-8')).encode('utf-8')
     udp = files['ui/local_udp_module.lua']
     if udp.count(b'return M\n') != 1:
         raise ValueError('unexpected UDP module export')
@@ -165,6 +183,15 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     if registry_status is not None:
         ui_files.insert(ui_files.index('ui/authority_download_load_probe.lua'),
                         'ui/recovery_registry_status.lua')
+    if full_registry is not None:
+        insertion = ui_files.index('ui/recovery_registry_status.lua')
+        ui_files[insertion:insertion] = [
+            'ui/authority_registry_availability_snapshot.lua',
+            'ui/registry_checkpoint_gate.lua',
+            'ui/client_registry_inspect.lua']
+        config = config[:-2] + ',authority_registry_snapshot={' + ','.join(
+            key + '=' + (str(value) if type(value) is int else lua_string(value))
+            for key, value in full_registry.items()) + '}}\n'
     if motion_settings is not None:
         selection = validate_motion_settings(registry_status, motion_settings)
         motion_settings = selection.settings
