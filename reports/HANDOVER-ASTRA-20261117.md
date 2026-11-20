@@ -1,6 +1,6 @@
 # X4 multiplayer: handover for Astra
 
-## Latest: missing-component diagnostics; availability decision pending (2026-11-20)
+## Latest: availability experiment approved; client entry clarified (2026-11-20)
 
 The saved-registry verifier now reports complete missing index/component pairs
 through `RegisteredComponentsMissingError`, with counts and bounded error text.
@@ -8,12 +8,22 @@ Strict acceptance is unchanged. Ten focused synthetic tests passed; the real
 native04 candidate was checked offline and rejected with the expected seven
 pairs. Checkpoint pointers stayed unchanged. No new X4 run occurred.
 
-The user has been asked whether to experiment with a saved "unavailable" state
-distinct from destruction, retaining identities and blocking commands/motion
-for unresolved entries. This changes checkpoint admission; do not implement
-it or weaken the current verifier until the answer arrives. See the
-[proposal](../docs/AUTHORITY-SHIP-LIFETIME-DESIGN.md#pending-decision-checkpoint-availability)
+The user approved experimenting with a saved "unavailable" state distinct from
+destruction, retaining identities and blocking commands/motion for unresolved
+entries. Keep current checkpoint admission strict until game-side observations
+and a save/reload experiment validate the new state. See the
+[proposal](../docs/AUTHORITY-SHIP-LIFETIME-DESIGN.md#approved-experiment-checkpoint-availability)
 and [additional evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#missing-component-diagnostics-and-lifecycle-evidence-2026-11-20).
+
+The client entry now uses clearer local names and expanded copy/integrity checks;
+callback order and state transitions are unchanged. The focused startup-owner
+test and capture-clock composition/refusal test passed (synthetic/fake ABI).
+No further X4 run was needed for this readability change. The older native
+playback worker waits for `INITIAL` before starting its source driver, so simply
+enabling prepared-start parsing there would stall. It is an unsupported runner
+combination, not a proven regression; prior Windows V3 evidence had alignment
+disabled. A Windows prepared-start run still needs an actual-source path that
+delivers the later velocity-bearing sample before awaiting `INITIAL`.
 
 ## Previous: native04 motion completed; overall test failed (2026-11-20)
 

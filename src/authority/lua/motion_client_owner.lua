@@ -386,32 +386,69 @@ function M.new(o)
   busy=false;if not ok then return fail('apply_event')end;return true
  end
  finish_binding=function()
-   local pose={};for i=1,#pending.position do pose[i]=pending.position[i] end
-   local rate
-   if pending.rate then rate={};for i=1,#pending.rate do rate[i]=pending.rate[i] end end
-   local snapshot={frame=pending.sector,sequence=pending.sequence,source_time=pending.source_time,pose=pose}
+   local pose_copy = {}
+   for index = 1, #pending.position do
+    pose_copy[index] = pending.position[index]
+   end
+
+   local rate_copy
+   if pending.rate then
+    rate_copy = {}
+    for index = 1, #pending.rate do
+     rate_copy[index] = pending.rate[index]
+    end
+   end
+
+   local snapshot = {
+    frame = pending.sector,
+    sequence = pending.sequence,
+    source_time = pending.source_time,
+    pose = pose_copy,
+   }
    if pending.sample_version==3 then
-    snapshot.version=3;snapshot.capture_time=pending.capture_time;snapshot.real_rate=rate
-   else snapshot.rate=rate end
-   local function vector_unchanged(v,expected)
-    if type(v)~='table' or getmetatable(v)~=nil or #v~=#expected then return false end
-    for k in pairs(v)do if type(k)~='number' or k%1~=0 or k<1 or k>#expected then return false end end
-    for i=1,#expected do if v[i]~=expected[i] then return false end end
+    snapshot.version = 3
+    snapshot.capture_time = pending.capture_time
+    snapshot.real_rate = rate_copy
+   else
+    snapshot.rate = rate_copy
+   end
+
+   local function vector_unchanged(vector, expected_values)
+    if type(vector) ~= 'table' or getmetatable(vector) ~= nil or #vector ~= #expected_values then
+     return false
+    end
+    for key in pairs(vector) do
+     if type(key) ~= 'number' or key % 1 ~= 0 or key < 1 or key > #expected_values then
+      return false
+     end
+    end
+    for index = 1, #expected_values do
+     if vector[index] ~= expected_values[index] then return false end
+    end
     return true
    end
+
    local function snapshot_unchanged()
-    if getmetatable(snapshot)~=nil or snapshot.frame~=pending.sector or snapshot.sequence~=pending.sequence or
-       snapshot.source_time~=pending.source_time or snapshot.pose~=pose or
-       (pending.sample_version==3 and (snapshot.version~=3 or snapshot.capture_time~=pending.capture_time or snapshot.real_rate~=rate)) or
-       (pending.sample_version~=3 and snapshot.rate~=rate) or
-       not vector_unchanged(pose,pending.position) then return false end
-    for k in pairs(snapshot)do
-     if k~='frame' and k~='sequence' and k~='source_time' and k~='pose' and
-       not (pending.sample_version==3 and (k=='version' or k=='capture_time' or k=='real_rate')) and
-       not (pending.sample_version~=3 and k=='rate') then return false end
+    if getmetatable(snapshot) ~= nil or snapshot.frame ~= pending.sector or
+       snapshot.sequence ~= pending.sequence or snapshot.source_time ~= pending.source_time or
+       snapshot.pose ~= pose_copy or
+       (pending.sample_version == 3 and
+        (snapshot.version ~= 3 or snapshot.capture_time ~= pending.capture_time or snapshot.real_rate ~= rate_copy)) or
+       (pending.sample_version ~= 3 and snapshot.rate ~= rate_copy) or
+       not vector_unchanged(pose_copy, pending.position) then
+     return false
     end
-    return not rate or vector_unchanged(rate,pending.rate)
+    for key in pairs(snapshot) do
+     if key ~= 'frame' and key ~= 'sequence' and key ~= 'source_time' and key ~= 'pose' and
+       not (pending.sample_version == 3 and
+        (key == 'version' or key == 'capture_time' or key == 'real_rate')) and
+       not (pending.sample_version ~= 3 and key == 'rate') then
+      return false
+     end
+    end
+    return not rate_copy or vector_unchanged(rate_copy, pending.rate)
    end
+
    local receiver=pending.buffer
    if playback then
     assert(staged and staged.index==pending.index and staged.sequence==pending.sequence)
@@ -434,7 +471,7 @@ function M.new(o)
       defer_initial_sample = true
      else
       -- Zero velocity is valid; missing velocity is not a playback seed.
-      defer_initial_sample = rate == nil
+      defer_initial_sample = rate_copy == nil
      end
     end
     if not entry.playback and not defer_initial_sample then
@@ -461,11 +498,11 @@ function M.new(o)
     end
     receiver=entry.playback
    end
-   local pushed,reason=true,nil
-   if receiver then pushed,reason=receiver:push(snapshot,pending.arrival) end
+   local pushed, push_reason = true, nil
+   if receiver then pushed, push_reason = receiver:push(snapshot, pending.arrival) end
    -- Opt-in playback BOUND means correlated binding and consumed packet, not
    -- applied movement. Paused/expired samples are acknowledged but not buffered.
-   if playback and pushed~=true and (reason=='paused' or reason=='expired') then pushed=true end
+   if playback and pushed~=true and (push_reason=='paused' or push_reason=='expired') then pushed=true end
    assert(pushed==true and state=='pending' and check() and snapshot_unchanged())
    if playback and pending.entry.playback and pending.entry.awaiting_initial_sample then
     pending.entry.awaiting_initial_sample = false

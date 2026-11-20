@@ -5,7 +5,7 @@ lifetime number per ship identity. The proposed protocol, save representation,
 migration and recovery rules below still need implementation and validation.
 This decision does not establish complete ship coverage or playable multiplayer.
 
-## Pending decision: checkpoint availability
+## Approved experiment: checkpoint availability
 
 Native04 completed its one-ship motion experiment, then failed the post-motion
 checkpoint check: seven of 10,082 issued registry entries had no component
@@ -36,8 +36,9 @@ The proposed next experiment is to separate **availability** from **destruction*
   approved increasing lifetime number remains the protection against stale
   messages when an identity is subsequently rebound.
 
-This proposal changes checkpoint admission and therefore awaits the user's
-decision before implementation. First native validation would examine how the
+The user approved this availability experiment on 2026-11-20. Admission remains
+unchanged until game-side observation and save/reload validation support a new
+format; approval is not evidence that it works. First native validation examines how the
 retained missing references resolve after load, whether a saved availability
 record survives reload without table-key collapse, and whether available,
 unavailable and explicitly closed entries remain distinguishable. It must not

@@ -882,7 +882,7 @@ Additional read-only evidence:
   Runtime identity and destruction causality remain unproven in that result.
 
 A separate persisted availability state is proposed in the
-[lifetime design](../docs/AUTHORITY-SHIP-LIFETIME-DESIGN.md#pending-decision-checkpoint-availability).
-It would change checkpoint admission, so implementation awaits the user's
-architecture decision. No ship class was excluded, no lifetime was inferred
+[lifetime design](../docs/AUTHORITY-SHIP-LIFETIME-DESIGN.md#approved-experiment-checkpoint-availability).
+The user subsequently approved this experiment; checkpoint admission remains
+unchanged until game-side and reload evidence support it. No ship class was excluded, no lifetime was inferred
 closed, and the failed candidate was not promoted.
