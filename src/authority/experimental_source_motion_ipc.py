@@ -461,6 +461,7 @@ class ExperimentalSourceMotionIPC:
             selected = None
         else:
             selected = self._select(sample, deadline)
+        unselected = selected == []
         if selected != []:
             if latest:
                 if self._motion_call(self._motion.enqueue_latest, sample, recipients=selected,
@@ -469,6 +470,8 @@ class ExperimentalSourceMotionIPC:
             elif self._motion_call(self._motion.send, sample, guard=lambda: self._check(deadline, 'pulling') or True,
                                    recipients=selected) is not True:
                 raise RuntimeError('motion TCP not confirmed')
+        if unselected:
+            self._motion_call(self._motion.observe_unselected, sample)
         # Keep a detached sample so later callbacks cannot change the clock or
         # frame baseline used to validate the next source observation.
         self._observed[sample['index']] = copy.deepcopy(sample)

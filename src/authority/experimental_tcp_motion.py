@@ -154,6 +154,35 @@ class ExperimentalTCPMotion:
                            'version':None,'capture_time':None,'peer_frames':{},'peer_samples':{}}
         self._current[(epoch,index)]=key
 
+    def observe_unselected(self, raw, *, _source=None):
+        """Advance a validated source track when interest selects no peer.
+
+        This sends no motion and leaves every peer's frame and receipt history
+        untouched. A peer that saw an older sector still needs an explicit
+        resync before receiving motion in the new sector.
+        """
+        self._reserved(_source)
+        if self._source_owner is None or _source is None or _source is not self._source_lease:
+            raise RuntimeError('unselected observation requires the source owner')
+        d=self._delivery;host=d._host;host._check()
+        if self._failed or d._failed:raise RuntimeError('motion owner unavailable')
+        try:
+            value=motion_value(raw)
+            key=(value['epoch'],value['generation'],value['index'])
+            state=self._tracks.get(key)
+            if not state or state['closed'] or value['sequence']<=state['sequence']:
+                raise ValueError('unknown, closed or stale motion track')
+            _check_snapshot_progress(value,state)
+            host._control._reader_free(motion=True)
+            state['sequence']=value['sequence']
+            state['time']=value['source_time']
+            state['capture_time']=value.get('capture_time')
+            state['version']=value['version']
+            state['frame']=value['sector_macro']
+        except BaseException:
+            self._failed=True;d._failed=True;host._failed=True
+            raise
+
     def send(self, raw, *, despawn=False, guard=None, recipients=None, _source=None):
         self._preflight=None
         self._reserved(_source)

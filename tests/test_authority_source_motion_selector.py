@@ -17,10 +17,14 @@ class SourceSelector(unittest.TestCase):
   local.connect(remote.getsockname());remote.connect(local.getsockname())
   def source():
    remote.settimeout(2)
-   for seq,t,sector,velocity in samples:
+   for row in samples:
+    seq,t,sector,velocity=row[:4]
     try:packet=remote.recv(769).decode().split('|')
     except (OSError,TimeoutError):return
-    response=['S','1'*32,'2'*32,'SAMPLE','b'*32,'c'*32,packet[-1],'10055',str(seq),sector,str(t),'1','2','3',*velocity]
+    kind='SAMPLE3' if len(row)==5 else 'SAMPLE'
+    response=['S','1'*32,'2'*32,kind,'b'*32,'c'*32,packet[-1],'10055',str(seq),sector,str(t)]
+    if len(row)==5:response.append(str(row[4]))
+    response+=['1','2','3',*velocity]
     try:remote.send('|'.join(response).encode())
     except OSError:return
   thread=threading.Thread(target=source);thread.start();self.addCleanup(thread.join,3)
@@ -34,6 +38,43 @@ class SourceSelector(unittest.TestCase):
   self.assertIsNone(bridge.pull());self.assertEqual(case.received,[])
   self.assertEqual(bridge.pull()['sequence'],2);self.assertEqual(bridge.pull()['sequence'],3)
   self.assertEqual([(v[0],v[1]['sequence']) for v in case.received],[(1,2),(2,3)])
+  bridge.close()
+ def test_unselected_sector_transition_preserves_source_and_peer_frames(self):
+  def choose(sample,members):
+   return [members[0]] if sample['sequence']==1 else ([] if sample['sequence']==2 else [members[1]])
+  case,_,bridge=self.setup_bridge(choose,[(1,1,'sector_a',['-']*3),
+   (2,2,'sector_b',['-']*3),(3,3,'sector_b',['1','0','0'])])
+  self.assertEqual(bridge.pull()['sequence'],1)
+  self.assertIsNone(bridge.pull())
+  track=bridge._motion._tracks[('b'*32,'c'*32,10055)]
+  self.assertEqual((track['sequence'],track['time'],track['frame']),(2,2,'sector_b'))
+  self.assertEqual(len(track['peer_frames']),1)
+  self.assertEqual(list(track['peer_frames'].values()),['sector_a'])
+  self.assertEqual(bridge.pull()['sequence'],3)
+  self.assertEqual([(peer,sample['sequence'],sample['sector_macro']) for peer,sample,_ in case.received],
+                   [(1,1,'sector_a'),(2,3,'sector_b')])
+  bridge.close()
+ def test_returning_peer_with_old_frame_still_requires_resync(self):
+  def choose(sample,members):return [members[0]] if sample['sequence']!=2 else []
+  case,_,bridge=self.setup_bridge(choose,[(1,1,'sector_a',['-']*3),
+   (2,2,'sector_b',['-']*3),(3,3,'sector_b',['1','0','0'])])
+  self.assertEqual(bridge.pull()['sequence'],1)
+  self.assertIsNone(bridge.pull())
+  with self.assertRaisesRegex(ValueError,'recipient motion frame changed without resync'):
+   bridge.pull()
+  self.assertEqual([(peer,sample['sequence']) for peer,sample,_ in case.received],[(1,1)])
+  self.assertTrue(case.case.host._failed)
+ def test_unselected_v3_transition_advances_capture_baseline(self):
+  def choose(sample,members):return [] if sample['sequence']<3 else [members[0]]
+  case,_,bridge=self.setup_bridge(choose,[(1,1,'sector_a',['-']*3,10),
+   (2,1,'sector_b',['-']*3,11),(3,1,'sector_b',['1','0','0'],12)])
+  self.assertIsNone(bridge.pull())
+  self.assertIsNone(bridge.pull())
+  track=bridge._motion._tracks[('b'*32,'c'*32,10055)]
+  self.assertEqual((track['sequence'],track['version'],track['time'],track['capture_time'],track['frame']),
+                   (2,3,1,11,'sector_b'))
+  self.assertEqual(bridge.pull()['sequence'],3)
+  self.assertEqual([(peer,sample['sequence']) for peer,sample,_ in case.received],[(1,3)])
   bridge.close()
  def reject_skipped_regression(self,second):
   case,_,bridge=self.setup_bridge(lambda *_:[],[(2,2,'sector_a',['-']*3),second])
