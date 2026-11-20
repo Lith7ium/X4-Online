@@ -382,6 +382,9 @@ Private evidence (paths relative to that detached worktree):
 
 ## Diagnostic guard policy (approved for bounded experiment, not implemented)
 
+This heading preserves the approval checkpoint; implementation subsequently
+started on 2026-11-20 as recorded below.
+
 On 2026-11-18 the user explicitly approved this bounded experiment. A subsequent
 request paused the work before implementation or testing began. The following
 scope is authorized for the isolated pair upon resumption; general gameplay
@@ -418,3 +421,37 @@ safe for general gameplay or claiming native success. First validate the age,
 expiry and lifecycle behavior with simulated changes and representative local
 guard costs. Only then consider another bounded X4 attempt. The user has accepted
 the changed validation guarantee for this isolated experiment.
+
+## Diagnostic guard implementation (2026-11-20)
+
+The user resumed work from `10ec3f40`. `tools/dev/authority_diagnostic_guard.py`
+adds `DiagnosticEnvironmentGuard`: zero cache duration is the default; optional
+reuse is capped at 250 ms and measured from the beginning of a successful full
+check, including the subsequent immediate check. At expiry, the next guarded
+operation must refresh synchronously. A refresh consuming its entire lease is
+rejected. Immediate process/local-descriptor checks run on every call and after
+each full refresh. Failures and reentry permanently disable the guard.
+
+The `strict()` context requires full checks at both boundaries and at every
+existing check inside the block, then invalidates reuse. Callers must use it for
+admission, control/STOP and lifecycle changes. It does not alter session,
+sequence, clock, protocol or motion validation. There is no background monitor:
+an idle or descheduled caller need not detect a change within 250 wall-clock ms,
+but cannot reuse an expired observation on its next call. The accepted stale
+window remains real; neither immediate liveness nor later full validation proves
+unchanged remote ownership or file contents during that window.
+
+`LinuxDiagnosticProcess` retains a pidfd between two existing process-identity
+checks. Its hot check detects process exit and compares the caller's retained
+socket descriptors, inode identities and local endpoints. Executable/prefix,
+remote socket ownership and checkpoint checks remain the full callback's job.
+The caller owns game shutdown; closing this helper only closes its pidfd.
+
+Twelve focused tests passed in 0.075 seconds with no skips. Nine use deterministic
+clocks/callbacks; three use disposable Python children and local UDP sockets to
+check actual exit detection, descriptor replacement and lifetime rejection.
+The tests explicitly demonstrate the accepted stale interval, refresh duration,
+expiry after a slow immediate check, lifecycle boundaries and permanent failure.
+Log: `.local/check-diagnostic-guard-20261120-01.log`. Independent review of the
+policy core found no concrete issue; no game/native/full-suite rerun was made.
+Runner integration and active-X4 cadence benefit remain unverified.

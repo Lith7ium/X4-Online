@@ -1,18 +1,17 @@
 # X4 multiplayer: handover for Astra
 
-Pause checkpoint (2026-11-18): the user approved the bounded diagnostic guard
-experiment, then requested a checkpoint and pause to use the PC. The policy is
-**approved for isolated development, not implemented**. Only read-only integration
-inspection had started; no new X4 instance, benchmark or test was launched.
-The review agent was interrupted. Resume only when the user requests it.
+Resumed (2026-11-20) at the user's request from pause checkpoint `10ec3f40`.
+The approved optional diagnostic guard utility is implemented; native runner
+integration is being prepared separately. Twelve focused tests passed, covering
+simulated expiry/lifecycle faults and an actual lightweight Linux child's exit
+and local socket replacement. No new X4 test has run. See
+[the implementation scope](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#diagnostic-guard-implementation-2026-11-20).
 
-Next after resumption: implement the optional maximum-250-ms validation policy
-with full admission/pause/STOP/lifecycle checks and unchanged immediate protocol
-and motion checks. First test expiry, refresh duration and lifecycle invalidation
-without X4; then assess whether one bounded native attempt is justified. Preserve
-the existing audited runners and evidence; any new runner gets its own revision.
-The preceding local checkpoint is `c4d891b3`; its push failed because GitHub DNS
-resolution was unavailable. Do not assume the fork contains the local checkpoints.
+Next: finish the new private runner integration and representative no-game cost
+measurement, then assess one bounded native attempt. The strict default, existing
+audited runners and playback bounds remain unchanged. GitHub DNS recovered:
+`10ec3f40` is now pushed and verified on the fork; the earlier push failure is
+historical.
 
 Latest follow-up (2026-11-18, no game run): allocation-only process and metadata
 variants preserved the compared observations/error behavior in focused fixtures
@@ -77,7 +76,7 @@ The user approved a separate diagnostic guard experiment: expensive
 ownership/checkpoint results could be retained for at most 250 milliseconds,
 with admission/lifecycle checks and immediate protocol/motion fences preserved.
 External changes could then be detected late and permit a stale sample. This is
-**approved for isolated development but not implemented**; the approval does not
+**approved for isolated development, with the utility implemented**; the approval does not
 establish native performance or authorize changing the playback bounds. See
 [the approved scope](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#diagnostic-guard-policy-approved-for-bounded-experiment-not-implemented).
 
@@ -97,7 +96,7 @@ test library after native cleanup (no skips). The other 26 still need
 Windows execution or missing reference inputs. **No complete suite pass** is
 claimed. See [the check evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#full-check-and-fixture-corrections).
 
-The user requested a pause at this checkpoint. Client work remains the priority; GPU-free server work
+The goal is active after the user's 2026-11-20 resumption. Client work remains the priority; GPU-free server work
 stays deferred. Shared-world Linux/Windows Internet gameplay is not achieved.
 
 The following entries preserve prior checkpoints and their then-current next steps.
