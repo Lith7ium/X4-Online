@@ -29,41 +29,95 @@ cleanup, original checkpoint, dependency pins and Steam identity checks passed;
 the overall run and its outer observation remain failed. See the
 [implementation and native failure](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#real-source-diagnostic-guard-integration-2026-11-20).
 
-Next: inspect the checkpoint callback's repeated work before another native
-trial. Do not widen the 250 ms ceiling or motion limits, or repeat either native
-attempt unchanged. Separate hosts are available but have not been tested
-together. The source-probe module passed 31 focused tests, followed by three
-cache integration cases and one default lifecycle check after the final
-player-list invariant change. No full-suite rerun was made.
+Commit `a5ddb5d9` limits checkpoint full callbacks to the synchronous request
+inside `playback_identity_scope`; nested pumps retain fresh targeted checks,
+and full discovery remains at scope boundaries. The 250 ms setting still
+defaults to zero and includes scope entry/exit. Three corrected focused tests passed in
+7.613 s, and one default-lifecycle test passed in 0.003 s. A separate no-game
+IPC probe exercised only synthetic pump delays. Native attempt 02 exited 1:
+initial alignment passed, then playback failed at sequence 3 with a 79.2 m
+target correction against the unchanged 50 m limit. Four source samples were
+queued, but only sequence 1 received confirmation; the overall observation was
+invalid and the cause remains unresolved. No unchanged rerun is planned. The
+first laptop menu-only startup failed before the menu, world or save; menu-only
+attempt 02 later reached the menu on the same laptop and account, without
+loading a world or save. The one-account constraint was explained using the
+[Steam account FAQ](https://help.steampowered.com/de/faqs/view/71EA-CDCE-FB5C-82B3).
+No offline-DRM or policy changes were made. Do not widen the ceiling
+or motion limits. Separate hosts are available but have
+not been tested together; no full-suite rerun was made. See the
+[IPC evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#checkpoint-full-callback-scope-follow-up-no-game-2026-11-20)
+and [native trial result](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#second-real-source-linux-pair-trial-playback-failed-at-sequence-3-2026-11-20).
 
-The second Fedora laptop's X4 9.00 executable matches the tested build and its
-host dependencies resolve. Minimal `bwrap` confinement and `xdpyinfo` access to
-the active desktop both passed, but no X4 process was launched there; Steam
-API/IPC behavior from a host-side X4 remains untested. Flatpak Steam's PID
-marker was namespace PID 96, mapping to host PID 3627 at observation; its
-shared memory is in a separate per-app mount. `linux_gate_live.py` supports binding that shared-memory
-directory with `--shm`. A later read-only check identified the host-visible
-Flatpak runtime `dev-shm` symlink; its resolved directory has the same device
-and inode as Steam's mount. The starter still needs the namespace PID mapped
-to a verified host process and the persisted Steam-home links wired in.
+Earlier read-only feasibility probes found that the second Fedora laptop's X4
+9.00 executable matches the tested build, host dependencies resolve, minimal
+`bwrap` confinement passes, and `xdpyinfo` can access its active desktop. At
+that stage no X4 process had been launched and Steam API/IPC from a host-side
+X4 remained untested. Flatpak Steam's PID marker was namespace PID 96, mapping
+to host PID 3627; its shared memory is in a separate per-app mount.
+`linux_gate_live.py` supports binding that shared-memory directory with `--shm`.
+A later read-only check identified the host-visible Flatpak runtime `dev-shm`
+symlink; its resolved directory has the same device and inode as Steam's mount.
 Keep existing extra extensions, including `x4_lan_lab`, untouched and outside
-an isolated test view unless approved as a fixture. This prepares for a future
-two-host LAN trial but establishes neither Windows nor WAN acceptance. SSH
-access is verified. See the private feasibility evidence in
+an isolated test view unless approved as a fixture. These observations alone
+established neither Windows nor WAN acceptance. SSH access is verified. See
+the private feasibility evidence in
 `.local/fedora-laptop-access/launch-feasibility-20261120.json` and
 `.local/fedora-laptop-access/flatpak-boundary-20261120.json`.
 
-Two short private NO-X4 SteamAPI probes did not establish IPC connectivity.
+Two earlier private NO-X4 SteamAPI probes did not establish IPC connectivity.
 The first failed because bwrap could not dereference Steam's `/proc/PID/root`
 shared-memory path. After using the verified host backing path, the second
 reached the library but failed symbol lookup: this installed library exports
 neither `SteamAPI_Init` nor `SteamAPI_InitFlat`. No initialization call ran;
-Steam process and shared-memory identities were unchanged. Preserve these
-results instead of repeating them. Continue with the isolated X4 starter,
-whose own matching Steam binding avoids inventing another SDK adapter.
+Steam process and shared-memory identities were unchanged. Keep these historical
+probe results separate from the later game-start attempt.
+
+The first private menu-only attempt observed both the launcher and X4 process,
+but not the start-menu marker; no world or save started. Exit code 6 arrived
+before the marker and was not a timeout. Its captured X4 dialog said “Steam
+client is required.” SELinux was Enforcing; `sealert` recorded a `dbus-launch`
+denial for `nnp_transition` and `nosuid_transition` during startup, but its
+connection to that error was unproven. No policy or normal-profile changes were
+made. Cleanup emptied owned PGID 7714 and left no X4 process; Steam PID
+3627/start time 10042 and shared-memory device 27/inode 5 were unchanged.
+Evidence: `.local/fedora-laptop-access/x4-menu-result-20261120-01.json`,
+`.local/fedora-laptop-access/x4-startup-error-20261120-01.png` and
+`.local/fedora-laptop-access/selinux-menu-detail-20261120-01.log`. Launcher
+SHA-256: `75e43f3610e80985220204e629bc601c28642226d1c529157b2e012e6b66079a`.
+
+Menu-only attempt 02 then reached `Entering startmenu` in X4 9.00 with transport
+exit 0. It observed the actual X4 process (PID 9057, start ticks 507264, device
+52/inode 2091738). No save or world was loaded. This used only the same laptop
+and existing Steam account: it is not a two-host game or save-transfer test.
+For this attempt, the private Steam PID marker was set to the verified host PID
+3627; original namespace marker 96 remained untouched. The bound Flatpak
+DBus proxy was verified at device 76/inode 225. These changes reached the menu
+jointly, so the result does not isolate which one was needed. SELinux remained
+Enforcing, and the post-start AVC/SELinux journal query exited 1 with
+`-- No entries --`. No policy change was made. Cleanup emptied owned PGID 9056;
+Steam, shared-memory and DBus proxy identities were unchanged. Shared-memory
+file count changed from 12 to 7, so byte-for-byte preservation is not claimed.
+Evidence: `.local/fedora-laptop-access/x4-menu-result-20261120-02.json`
+(SHA-256 `8e31e38ecb24d3113f8631b54edf6ee436d5109a88fa3f5f2338472f04a6fb19`),
+`x4-menu-engine-20261120-02.log`, `x4-menu-launcher-20261120-02.log` and
+`selinux-menu-20261120-02.json`. Helper
+`x4_menu_probe_20261120_02.py` SHA-256:
+`eccdb3399e8e3128318bb4723282a9dfea7456f86d1d93471c6402f5cd40a464`.
+
+Next: add bounded client receive/tick evidence to distinguish a skipped sample
+from delayed playback. One no-game replay with recorded positions demonstrated
+both a failing 79.225 m modeled jump and a successful earlier intermediate
+application, but did not establish the native event order. See the
+[mechanism comparison](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#recorded-sample-mechanism-comparison-no-game).
+Discuss any resulting queue or playback-policy change with the user; do not
+repeat the native trial unchanged. The proven laptop menu starter can
+then be adapted to the worker and disposable-world path. A later two-host test still
+requires account/license clarification; do not purchase another license
+without the user's authorization. No such multi-host test has run.
 Private evidence: `steam-api-result-20261120-02.json`,
 `steam-shm-path-20261120.json` and `steam-api-abi-20261120-02.json` under
-`.local/fedora-laptop-access/`. No laptop X4 launch or two-host run is proven.
+`.local/fedora-laptop-access/`. No two-host run is proven.
 
 Latest follow-up (2026-11-18, no game run): allocation-only process and metadata
 variants preserved the compared observations/error behavior in focused fixtures

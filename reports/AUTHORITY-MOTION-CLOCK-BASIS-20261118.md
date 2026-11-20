@@ -592,3 +592,99 @@ Evidence SHA-256: `trial-result.json`
 `05f563e3836dbfa8f0098f9ed5866bf1e6ce523eba1bd49a8afeb9f695edaddd`;
 the reviewed manifest
 `fd4edb43afb652a24326a8e1ed0241ed64cbb6b2852a441930d81ba8f93e5693`.
+
+## Checkpoint full-callback scope follow-up (NO-GAME, 2026-11-20)
+
+Commit `a5ddb5d97f7ebbd7b9b34e31894e2b28266d544b` adds an opt-in checkpoint
+full callback within the existing `playback_identity_scope`, limited to its
+synchronous IPC request. Nested pump iterations keep their fresh targeted checks; full discovery remains at scope
+boundaries. Strict default remains zero. The optional 250 ms lifetime includes
+scope entry and exit. Independent guard review found no expansion of the
+reader-lease or reentry boundary. The initial checks below used no game; the
+subsequent native trial is recorded in the next section.
+
+The private IPC probe made three metadata requests per case, with nine helper
+pumps per request, across no-delay, modeled 10 ms/pump and modeled 40 ms/pump
+cases. Observed request elapsed ranges were 0.000397318-0.000440828 s with no
+delay, 0.09067295-0.09072000 s with the 10 ms synthetic delay, and
+0.36071266-0.36085656 s with the 40 ms synthetic delay. The delays are modeled,
+not native helper costs. Send timings include nested pump time; nested timing
+scopes are non-additive. All three cases cleaned up. Evidence is
+`.local/checkpoint-ipc-cost-20261120-01/result.json`.
+
+The corrected focused source-cache tests passed: 3 tests in 7.613 s, recorded in
+`.local/check-checkpoint-scope-20261120-02.log`. The default lifecycle test
+`test_two_samples_stop_then_guard_shutdown` also passed in 0.003 s; log:
+`.local/check-checkpoint-scope-default-20261120-01.log`. The first fixture
+attempt expected maximum nesting depth 2, although the legal updated path
+reaches 3, and asserted scope presence on a strict-cleanup callback. The fixture
+was corrected; this failure does not establish a production defect. These results
+are synthetic/no-game scope and IPC evidence, not crossplay, native timing or
+performance proof. At this checkpoint, versioned native attempt 02 and a
+separate laptop menu-only attempt were prepared but not started; subsequent
+native attempt 02 results are recorded below.
+
+## Second real-source Linux pair trial: playback failed at sequence 3 (2026-11-20)
+
+The next audited local two-process Linux X4 attempt ran the checkpoint cache
+changes at commit `a5ddb5d97f7ebbd7b9b34e31894e2b28266d544b`, with a 489-pin
+manifest. The permitted delta was limited to the source-probe change and
+versioned private paths. The runner exited 1. The first checkpoint entry
+passed and subsequent checkpoint checks reused observations. Four source
+samples were captured, prevalidated and queued after five pull attempts; the
+client confirmed only receipt sequence 1. Cache statistics were 179 active
+guard calls (7 full, 172 reused) and 20 saved-checkpoint calls (7 full, 13
+reused).
+
+Client initial alignment succeeded at 0 m error against a 3 m tolerance at
+local time 30.092051664. Playback then failed at source sequence 3, local time
+30.483157812: the client remained at its initial pose while the target was
+79.200777 m away. The existing 50 m distance limit was unchanged. Capture gaps
+between the four queued source samples were about 0.311742, 0.231504 and
+0.250431 s. These few intervals do not establish full cadence, visual
+smoothness, Windows behavior, WAN operation or gameplay.
+
+The source diagnostic ran 10.9733 s including 1.6970 s in collection. It
+recorded 67 full callbacks taking 3.6037 s and 14 checkpoint callbacks taking
+2.9769 s. These aggregate callback times are nested and non-additive. The
+supervisor grouped two sub-exceptions under `latest playback and strict guard
+boundary failed`; reported leaf types were `ValueError`, `RuntimeError` and
+`RuntimeError`, without more specific messages. The precise cause is
+unresolved, and another strict-boundary failure is not excluded. The sequence-1
+receipt is not a successful playback result.
+
+The outer observation is invalid and display release was false. The overall
+trial failed despite confirmed empty owned-process cleanup, cgroup removal and
+Xauthority cleanup. Steam identity, pinned dependencies and the source were
+unchanged. No rerun is justified yet; next is read-only analysis of the
+initial-alignment-to-sequence-3 transition.
+
+Evidence SHA-256: `trial-result.json`
+`1ce260370946416f690045dbeee375716ecfe85c8cec9ba87e036929ee29bd36`;
+outer `result.json`
+`d6195d2b3319def24bb4334716862b0eec24a0d06ac279309be8d616f7f930e3`;
+`paired-server/result.json`
+`0c0e7254b0689783cbdc7e43a76cf09825321bd21a7ad754541dbc0d1dc2a5c2`;
+client `engine-output.log`
+`1e808b31333dcfcc1aaf2b18b397961889ede7384290e19edc00786ba8c43fc0`.
+
+### Recorded-sample mechanism comparison (NO-GAME)
+
+A single private replay used the unchanged production Lua playback and buffer
+modules with native samples 1–3. Client arrival times for samples 2 and 3 were
+modeled from the observed first arrival plus host queue-time differences;
+their actual arrival and playback tick times were not recorded. Omitting
+sample 2 produced a 79.225 m correction and a distance failure before any
+write. Applying sample 2 at a modeled earlier tick produced two successful
+Lua write callbacks, with steps of 46.218 m and 34.987 m. The 50 m step limit,
+1 s freshness limit and 0.15 s buffer delay were unchanged.
+
+This demonstrates a possible mechanism, not the actual native event order.
+The fake write callback updates an in-memory pose; it provides no X4 write or
+readback evidence. A transport rule that retains sample 2 would still need to
+establish that playback applies it in time. Native logs do not distinguish
+an omitted intermediate sample from delayed client playback. Before selecting
+a queue or playback-policy change, add bounded receive/tick evidence and
+discuss the resulting proposal with the user. No native rerun or production
+policy change followed this comparison. Private artifacts:
+`.local/playback-replay-native02-20261120/replay.py` and `result.json`.
