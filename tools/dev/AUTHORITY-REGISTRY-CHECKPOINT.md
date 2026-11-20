@@ -76,3 +76,25 @@ Private evidence lives in `.local/registry-checkpoint-repeat-native-20261120-01/
 The outer `result.json` confirms success, source pins, process/display cleanup
 and Steam identity. The detailed evidence SHA-256 is
 `8a2edd9a29d0201266b0bbcc1d1fa0ad6d1a9202c404691e1781115e9cc22fc6`.
+
+### First snapshot from an existing server checkpoint
+
+At `76ac037c`, the Linux recovery supervisor loaded an older confirmed
+checkpoint with an enrolled registry and no format-3 snapshot. The first
+attempt had stopped at registry initialization because the disposable overlay
+lacked the original registry script. With the script present, the supervisor
+observed the source marker and pause, captured and sealed all 10,082 entries,
+saved while paused, checked the saved bytes against the capture receipts, and
+confirmed the new checkpoint after the game exited. All 10,082 entries had
+an object binding. X4 classified 10,080 of them as operational.
+
+The source was `checkpoint-6c9b4ce5f0454fe4b3887bc36c213d9f`. The output is
+`checkpoint-1c06fd3836f54c7c890955a0d6322c60`, with compressed SHA-256
+`eb4cf959cbe6473ca61879082cb76b8e617d4a6d83a6a2052412110add3ab721`.
+The runner verified the source pins and cleanup of its private display and
+processes. The supervisor exposed no endpoint during this conversion. This
+output can now be used for an ordinary server recovery and client join.
+
+Private evidence lives in `.local/registry-first-capture-native-20261120-02/`.
+The independently checked `trial-result.json` SHA-256 is
+`562790887a243a4786aea0acd28d12ddb57ae09725e576cb1459dca3e477c565`.
