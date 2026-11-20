@@ -16,7 +16,10 @@ ssh must reach the machine without a question (a key, an agent). Nothing of this
 address and the key are the kit's."""
 import argparse
 import io
+import ipaddress
 import json
+import re
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -40,33 +43,91 @@ WantedBy=multi-user.target
 """
 
 REMOTE = """set -e
-chmod 600 {dir}/kits/{name}/server.json
-ln -sfn kits/{name} {dir}/current
-mkdir -p {dir}/runs
-chown -R {user}: {dir}
-cat > /etc/systemd/system/{service}.service <<'UNIT'
+chmod 600 -- {server_file}
+ln -sfn -- {kit_link} {current}
+mkdir -p -- {runs}
+chown -R -- {owner} {dir}
+cat > {unit_file} <<'UNIT'
 {unit}UNIT
 systemctl daemon-reload
 systemctl enable {service} >/dev/null 2>&1
 systemctl restart {service}
 if command -v ufw >/dev/null 2>&1; then
-  ufw allow {port}/udp comment 'x4 lockstep relay' >/dev/null
-  ufw allow {tcp}/tcp comment 'x4 lockstep lobby' >/dev/null
-  ufw allow {port}/tcp comment 'x4 lockstep join files' >/dev/null
+  ufw allow {udp} comment 'x4 lockstep relay' >/dev/null
+  ufw allow {lobby} comment 'x4 lockstep lobby' >/dev/null
+  ufw allow {join} comment 'x4 lockstep join files' >/dev/null
 fi
 sleep 2
 systemctl is-active {service}
 journalctl -u {service} -n 5 --no-pager -o cat
 """
 
+_ACCOUNT = re.compile(r'[a-z_][a-z0-9_-]{0,31}\Z')
+_SERVICE = re.compile(r'[a-z][a-z0-9_-]{0,62}\Z')
+_COMMIT = re.compile(r'[0-9a-f]{40}\Z')
+_HOST = re.compile(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}\Z')
+_FOLDER_PART = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]*\Z')
+
+
+def deployment_plan(*, ssh_target, user, folder, service, server, manifest, name_time):
+    """Validate every remote input before constructing shell or unit text."""
+    if not isinstance(user, str) or not _ACCOUNT.fullmatch(user):
+        raise ValueError('invalid server account')
+    if not isinstance(service, str) or not _SERVICE.fullmatch(service):
+        raise ValueError('invalid systemd service name')
+    if (not isinstance(ssh_target, str) or ssh_target.startswith('-') or
+            not ssh_target.startswith('root@') or not _HOST.fullmatch(ssh_target[5:])):
+        raise ValueError('SSH destination must be root@hostname or root@IPv4')
+    if (not isinstance(folder, str) or not folder.startswith('/') or folder == '/' or
+            not all(_FOLDER_PART.fullmatch(part) and part not in ('.', '..')
+                    for part in folder[1:].split('/'))):
+        raise ValueError('invalid absolute deployment directory')
+    if (not isinstance(manifest, dict) or not isinstance(manifest.get('commit'), str)
+            or not _COMMIT.fullmatch(manifest['commit'])):
+        raise ValueError('invalid kit commit')
+    if (not isinstance(server, dict) or type(server.get('port')) is not int or
+            not 1 <= server['port'] <= 65534 or not isinstance(server.get('host'), str)):
+        raise ValueError('invalid kit server port or host')
+    try:
+        ipaddress.IPv4Address(server['host'])
+    except ipaddress.AddressValueError as error:
+        raise ValueError('kit server host must be IPv4') from error
+    if not re.fullmatch(r'[0-9]{8}-[0-9]{6}', name_time):
+        raise ValueError('invalid deployment timestamp')
+    name = f'{name_time}-{manifest["commit"][:12]}'
+    target = f'{folder}/kits/{name}'
+    q = shlex.quote
+    unit = UNIT.format(user=user, dir=folder)
+    if '\r' in unit or '\nUNIT\n' in unit:
+        raise ValueError('invalid systemd unit content')
+    remote = REMOTE.format(server_file=q(f'{target}/server.json'),
+        kit_link=q(f'kits/{name}'), current=q(f'{folder}/current'),
+        runs=q(f'{folder}/runs'), owner=q(f'{user}:'), dir=q(folder),
+        unit_file=q(f'/etc/systemd/system/{service}.service'), unit=unit,
+        service=q(service), udp=q(f'{server["port"]}/udp'),
+        lobby=q(f'{server["port"] + 1}/tcp'), join=q(f'{server["port"]}/tcp'))
+    extract = (f'umask 077; mkdir -p -- {q(target)} && '
+               f'tar xzf - --no-same-owner --no-same-permissions -C {q(target)}')
+    return {'name': name, 'target': target,
+            'ssh': ['ssh', '-o', 'BatchMode=yes', '--', ssh_target],
+            'extract': extract, 'remote': remote}
+
 
 def pack(kit):
     """repo/, overlay/ and server.json of a kit as a tar.gz in memory (run folders and caches left out)."""
+    def archive_item(item):
+        if '/.local' in item.name or '__pycache__' in item.name:
+            return None
+        if not (item.isfile() or item.isdir()):
+            raise ValueError('kit archive contains a link or special file')
+        if item.name == 'server.json':
+            item.mode = 0o600
+        return item
+
     data = io.BytesIO()
     with tarfile.open(fileobj=data, mode='w:gz') as tar:
         for name in ('repo', 'overlay', 'server.json'):
-            tar.add(kit / name, arcname=name,
-                    filter=lambda item: None if '/.local' in item.name or '__pycache__' in item.name else item)
+            tar.add(kit / name, arcname=name, filter=archive_item)
     return data.getvalue()
 
 
@@ -83,16 +144,16 @@ def main(argv=None):
     server = json.loads((args.kit / 'server.json').read_text())
     manifest = json.loads((args.kit / 'kit-manifest.json').read_text())
     folder = args.dir or f'/home/{args.user}/lockstep-lobby'
-    name = f'{time.strftime("%Y%m%d-%H%M%S")}-{manifest["commit"][:12]}'
-    ssh = ['ssh', '-o', 'BatchMode=yes', args.ssh]
+    try:
+        plan = deployment_plan(ssh_target=args.ssh, user=args.user, folder=folder,
+            service=args.service, server=server, manifest=manifest,
+            name_time=time.strftime('%Y%m%d-%H%M%S'))
+    except ValueError as error:
+        p.error(str(error))
     data = pack(args.kit)
-    print(f'copying {len(data) // 1024} KiB to {args.ssh}:{folder}/kits/{name}')
-    target = f'{folder}/kits/{name}'
-    subprocess.run([*ssh, f'mkdir -p {target} && tar xzf - -C {target}'], input=data, check=True)
-    unit = UNIT.format(user=args.user, dir=folder)
-    script = REMOTE.format(dir=folder, name=name, user=args.user, service=args.service, unit=unit, port=server['port'],
-                           tcp=server['port'] + 1)
-    done = subprocess.run([*ssh, 'bash -s'], input=script.encode(), capture_output=True)
+    print(f'copying {len(data) // 1024} KiB to {args.ssh}:{plan["target"]}')
+    subprocess.run([*plan['ssh'], plan['extract']], input=data, check=True)
+    done = subprocess.run([*plan['ssh'], 'bash -s'], input=plan['remote'].encode(), capture_output=True)
     print(done.stdout.decode(errors='replace').strip())
     if done.returncode:
         print(done.stderr.decode(errors='replace').strip(), file=sys.stderr)
