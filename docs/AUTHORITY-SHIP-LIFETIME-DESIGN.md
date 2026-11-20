@@ -115,6 +115,29 @@ this proposal and would need a separate decision:
 The eight-row experiment supports the storage mechanism, not complete ship
 coverage, full-register performance, lifecycle transitions or client recovery.
 
+### Full-register snapshot implementation
+
+`tools/dev/authority_registry_availability_snapshot.{xml,lua}` implements a
+separate, default-off format-2 snapshot. The caller pins the source epoch and
+issued count. Capture visits every issued index in contiguous batches of at
+most 64 and seals only after complete coverage. The availability table retains
+every index; forward and reverse object tables contain available entries only.
+An absent X4 object can be recorded as unavailable. An existing non-operational
+object, wrong class, conflicting reverse binding or duplicate object faults the
+capture instead. The source registry is never rewritten.
+
+Inspect compares saved flags and current X4 bindings without updating the
+snapshot. A saved unavailable entry cannot become available implicitly. The
+separate `authority.registry_availability_evidence` reader checks saved flags,
+counts, exact forward/reverse bindings and component definitions, using typed
+reference IDs and X4's observed integral numeric-key encoding. Its result
+describes saved bytes only; it is not a runtime or historical identity proof.
+
+This snapshot has no command or motion consumer and is not wired into
+checkpoint admission. Targeted synthetic checks cover the owner, saved-byte
+reader and private adapter; full-register native save/reload validation is the
+next step. All registered entries is a narrower claim than all universe ships.
+
 ## Existing identity
 
 The experimental motion-v1 identity contains a registry `epoch`, a random
