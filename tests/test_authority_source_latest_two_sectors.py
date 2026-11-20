@@ -11,6 +11,7 @@ import unittest
 
 from tests import test_authority_experimental_tcp_motion as fixture
 from tests import test_authority_experimental_tcp_participants as participant_fixture
+from tests.test_authority_tcp_client_motion_reentry import MotionReentryController
 from authority.experimental_source_motion_ipc import ExperimentalSourceMotionIPC
 from authority.experimental_tcp_job_delivery import ExperimentalTCPJobDelivery
 from authority.experimental_tcp_motion import ExperimentalTCPMotion, motion_digest
@@ -365,6 +366,62 @@ class SourceLatestReentry(unittest.TestCase):
         self.assertEqual(self.track['peer_frames'][self.identity], 'sector_b')
         self.control.release_motion_barrier()
         self.assertEqual(len(self.delivery.membership()), 2)
+
+
+class SourceLatestReentryLoopback(unittest.TestCase):
+    allow_sector_reentry = True
+    setUp = SourceLatestTwoSectors.setUp
+    wait_for = SourceLatestTwoSectors.wait_for
+    begin_v3 = SourceLatestReentry.begin_v3
+    finish_v3 = SourceLatestReentry.finish_v3
+    request_v3 = SourceLatestReentry.request_v3
+
+    def start_slow_participant(self, connection):
+        # Only the local game callback is synthetic. Both transport endpoints
+        # validate and generate their own wire frames and receipts.
+        self.game_callback = MotionReentryController()
+        fixture.MotionTCP.client(self, connection, 2, motion_reentry_controller=self.game_callback)
+
+    def test_cancel_then_fresh_alignment_with_real_participant(self):
+        member = self.recipients['sector_b']
+        identity = (member['id'], member['incarnation'])
+        track = self.motion._tracks[(EPOCH, GENERATION, SECTOR_B_TRACK)]
+
+        original = self.request_v3(1, 'sector_b')
+        self.wait_for(lambda: track['peer_samples'].get(identity) == (1, motion_digest(original)))
+        self.assertIsNone(self.request_v3(2, 'sector_c'))
+        self.recipients['sector_c'] = member
+        self.request_v3(3, 'sector_c', ('12', '0', '0'))
+        self.wait_for(lambda: track['reentries'][identity]['phase'] == 'prepared')
+        self.assertEqual(track['peer_frames'][identity], 'sector_b')
+        phase, previous_sector, prepared = self.game_callback.calls[0]
+        self.assertEqual((phase, previous_sector, prepared['sequence'], prepared['sector_macro']),
+                         ('prepare', 'sector_b', 3, 'sector_c'))
+        self.assertIsNone(prepared['real_velocity'])
+
+        del self.recipients['sector_c']
+        self.assertIsNone(self.request_v3(4, 'sector_c'))
+        self.wait_for(self.control._motion_idle)
+        self.assertEqual(self.game_callback.calls[1:], [('cancel', 'sector_b', prepared)])
+        self.assertEqual(track['peer_frames'][identity], 'sector_b')
+        self.assertEqual(track['peer_samples'][identity], (1, motion_digest(original)))
+
+        self.recipients['sector_c'] = member
+        self.request_v3(5, 'sector_c')
+        self.wait_for(lambda: track['reentries'][identity]['phase'] == 'prepared')
+        _, _, prepared_again = self.game_callback.calls[2]
+        self.assertEqual(prepared_again['sequence'], 5)
+        fresh = self.request_v3(6, 'sector_c', ('32', '0', '0'))
+        self.wait_for(lambda: track['peer_samples'].get(identity) == (6, motion_digest(fresh)))
+        self.assertEqual(self.game_callback.calls[3:], [('align', 'sector_b', prepared_again, fresh)])
+        self.assertEqual(fresh['real_velocity'], {'x': 32.0, 'y': 0.0, 'z': 0.0})
+        self.assertEqual(track['peer_frames'][identity], 'sector_c')
+        self.assertEqual([sample for handle, sample, _ in self.received if handle == 2], [original])
+
+        next_sample = self.request_v3(7, 'sector_c', ('33', '0', '0'))
+        self.wait_for(lambda: track['peer_samples'].get(identity) == (7, motion_digest(next_sample)))
+        self.assertEqual([sample for handle, sample, _ in self.received if handle == 2],
+                         [original, next_sample])
 
 
 if __name__ == '__main__':
