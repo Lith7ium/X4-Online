@@ -530,3 +530,65 @@ Next: port the same optional policy to the existing real-Linux-source/client
 pair harness, audit it, then make one justified trial. Separate hosts are now
 available but have not been tested together. No rerun of this Proton attempt is
 planned from this evidence alone.
+
+## Real-source diagnostic guard integration (2026-11-20)
+
+Commit `0fa6b9d9` adds the opt-in `--diagnostic-guard-cache-ms 250` to the
+bounded ENH-870 real-time/latest saved-playback path. Zero remains the default.
+Reuse applies only to the full source environment and saved-checkpoint checks
+while collecting motion. Both checks refresh before and after collection;
+the reuse flags reset even when collection fails. Binding, STOP, drain and
+checkpoint/worker lifecycle operations retain their existing full checks.
+
+Every cached source check still checks the deadline, pinned session, baseline,
+participant, player lists and readiness, bracketing fresh process/client
+liveness checks. The cached checkpoint path brackets its non-IPC lifetime
+check with session/baseline/status checks. Lower-level process/socket/protocol,
+sequence and motion validation remains unchanged. This is deliberately narrower
+than caching all validation in the test harness: parent and client-worker checks
+may still dominate elapsed time.
+
+The focused source-probe module passed 31 tests in 42.088 s. After the final
+player-list invariant change, the three cache integration cases passed in
+7.615 s and the default lifecycle case passed in 0.004 s. These exercise local
+UDP/TCP and simulated source/client behavior, including session loss before a
+pull and strict exit checks after a collector error. Syntax and diff checks
+passed. Test output was captured in the agent tool session, not a separate log;
+the unchanged tests were not repeated merely to create one. This is not native
+X4 evidence.
+
+### First real-source trial with bounded guards: rejected before sampling
+
+One audited local Linux source/client run at `0fa6b9d9` used private runner
+`.local/authority_paired_capture_trial_20261120_01.py` and manifest
+`.local/authority-paired-capture-reviewed-20261120-01.json` (489 pinned files).
+Output is `.local/private-paired-capture-native-20261120-01/`.
+The overall run failed: `diagnostic refresh exceeded its cache lifetime`.
+The active guard's forced entry refresh completed, but the checkpoint guard's
+first refresh exceeded the 250 ms budget. Neither guard reused a result;
+there were zero pulls, zero captured samples and zero motion receipts.
+This provides no new cadence, displacement, interpolation or gameplay evidence.
+
+The source diagnostic reached collection after 10.4847 s in total. Across its
+setup and failed collection entry it recorded 61 full environment callbacks
+in 3.6249 s and eight saved-checkpoint callbacks in 3.4761 s. These are aggregate
+wall times; callbacks may contain each other, so the totals are not additive
+and do not isolate CPU cost. The 250 ms ceiling and all motion bounds remain
+unchanged. Inspect the checkpoint callback's repeated work before deciding on
+another native trial; do not rerun this unchanged attempt.
+
+The server reported the expected marker and register count (10,082), completed
+pause/save/checkpoint publication and resumed for the admitted test client.
+That register observation does not prove complete universe coverage. The outer
+scope explicitly reports `success=false`, `observation_valid=false` and
+`display_released_after_runner=false`. Owned-cgroup cleanup and Xauthority
+cleanup were confirmed; no owned game processes remained. Steam identity,
+pinned dependencies and the original checkpoint were unchanged at their final
+checks. The run remains an overall failure despite those cleanup results.
+
+Evidence SHA-256: `trial-result.json`
+`6ee0ba103d8e506ae2a8f31042efae2332496fdc16d3114256b416da0ac43924`;
+`paired-server/result.json`
+`05f563e3836dbfa8f0098f9ed5866bf1e6ce523eba1bd49a8afeb9f695edaddd`;
+the reviewed manifest
+`fd4edb43afb652a24326a8e1ed0241ed64cbb6b2852a441930d81ba8f93e5693`.

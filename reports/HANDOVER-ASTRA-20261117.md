@@ -21,22 +21,49 @@ native Windows, WAN or two-machine operation. The strict default and bounds
 remain unchanged. See the
 [run evidence and scope](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#one-audited-synthetic-tlswindows-x4-under-proton-trial-2026-11-20).
 
-Next: port the optional policy to the existing real-Linux-source/client pair
-harness and audit it, then make one justified trial. Separate hosts are
-available but have not been tested together. No rerun of the Proton trial is
-planned from this result alone. HEAD `7df3ce43` includes the guard utility and
-12 focused passing tests and is pushed to the fork. GitHub DNS recovery and the
-earlier `10ec3f40` push failure remain historical facts.
+The real-source opt-in is implemented at `0fa6b9d9`. One audited local Linux
+source/client trial then failed before its first motion pull: the checkpoint
+guard's first full refresh exceeded the unchanged 250 ms cache lifetime. No
+cached result was reused and no movement sample was captured. Owned-process
+cleanup, original checkpoint, dependency pins and Steam identity checks passed;
+the overall run and its outer observation remain failed. See the
+[implementation and native failure](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#real-source-diagnostic-guard-integration-2026-11-20).
 
-The user also provided a second Fedora laptop; read-only SSH access with the
-project key is verified. Its active KDE Wayland desktop and Flatpak Steam are
-running, and its Linux 9.00 executable matches exactly. No game was started
-there, and graphical SSH launch is unverified. Keep existing extra extensions,
-including `x4_lan_lab`, untouched and out of an isolated test view unless it is
-approved as a fixture. This makes a future two-host LAN trial possible; it is
-not Windows or WAN acceptance. Private connection details remain in
-`.local/fedora-laptop-access/inventory-20261120.json` and
-`.local/fedora-laptop-known-hosts`.
+Next: inspect the checkpoint callback's repeated work before another native
+trial. Do not widen the 250 ms ceiling or motion limits, or repeat either native
+attempt unchanged. Separate hosts are available but have not been tested
+together. The source-probe module passed 31 focused tests, followed by three
+cache integration cases and one default lifecycle check after the final
+player-list invariant change. No full-suite rerun was made.
+
+The second Fedora laptop's X4 9.00 executable matches the tested build and its
+host dependencies resolve. Minimal `bwrap` confinement and `xdpyinfo` access to
+the active desktop both passed, but no X4 process was launched there; Steam
+API/IPC behavior from a host-side X4 remains untested. Flatpak Steam's PID
+marker was namespace PID 96, mapping to host PID 3627 at observation; its
+shared memory is in a separate per-app mount. `linux_gate_live.py` supports binding that shared-memory
+directory with `--shm`. A later read-only check identified the host-visible
+Flatpak runtime `dev-shm` symlink; its resolved directory has the same device
+and inode as Steam's mount. The starter still needs the namespace PID mapped
+to a verified host process and the persisted Steam-home links wired in.
+Keep existing extra extensions, including `x4_lan_lab`, untouched and outside
+an isolated test view unless approved as a fixture. This prepares for a future
+two-host LAN trial but establishes neither Windows nor WAN acceptance. SSH
+access is verified. See the private feasibility evidence in
+`.local/fedora-laptop-access/launch-feasibility-20261120.json` and
+`.local/fedora-laptop-access/flatpak-boundary-20261120.json`.
+
+Two short private NO-X4 SteamAPI probes did not establish IPC connectivity.
+The first failed because bwrap could not dereference Steam's `/proc/PID/root`
+shared-memory path. After using the verified host backing path, the second
+reached the library but failed symbol lookup: this installed library exports
+neither `SteamAPI_Init` nor `SteamAPI_InitFlat`. No initialization call ran;
+Steam process and shared-memory identities were unchanged. Preserve these
+results instead of repeating them. Continue with the isolated X4 starter,
+whose own matching Steam binding avoids inventing another SDK adapter.
+Private evidence: `steam-api-result-20261120-02.json`,
+`steam-shm-path-20261120.json` and `steam-api-abi-20261120-02.json` under
+`.local/fedora-laptop-access/`. No laptop X4 launch or two-host run is proven.
 
 Latest follow-up (2026-11-18, no game run): allocation-only process and metadata
 variants preserved the compared observations/error behavior in focused fixtures
