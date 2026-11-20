@@ -414,15 +414,22 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
     process = {'pid': identity[0], 'start_ticks': identity[1],
                'exe_dev': executable_stat.st_dev, 'exe_ino': executable_stat.st_ino}
 
-    def measured_checkpoint_guard():
+    def measured_checkpoint_guard(*, use_identity_scope=False):
         checkpoint_check = guard.check if playback_checkpoint_check is None else playback_checkpoint_check
+        # One checkpoint request may pump repeatedly. Bracket the whole request
+        # with discovery so nested pumps still reread the two declared processes
+        # without scanning their groups again at every IPC step.
+        checkpoint_scope = (playback_identity_scope() if use_identity_scope and
+                            playback_identity_scope is not None else nullcontext())
         if diagnostics is None:
-            return checkpoint_check() is True
+            with checkpoint_scope:
+                return checkpoint_check() is True
         diagnostics.saved_checkpoint_guard_calls += 1
         site = diagnostics.guard_call_site()
         started_at = time.monotonic()
         try:
-            return checkpoint_check() is True
+            with checkpoint_scope:
+                return checkpoint_check() is True
         finally:
             elapsed = time.monotonic() - started_at
             diagnostics.saved_checkpoint_guard_seconds += elapsed
@@ -473,7 +480,8 @@ def run(*, sock, settings, index, baseline, guard, pump, active, host, world,
             full_check=measured_full_guard, immediate_check=active_immediate_guard,
             cache_seconds=cache_seconds)
         checkpoint_environment_guard = DiagnosticEnvironmentGuard(
-            full_check=measured_checkpoint_guard, immediate_check=checkpoint_immediate_guard,
+            full_check=lambda: measured_checkpoint_guard(use_identity_scope=True),
+            immediate_check=checkpoint_immediate_guard,
             cache_seconds=cache_seconds)
 
         def capture_cache_statistics():

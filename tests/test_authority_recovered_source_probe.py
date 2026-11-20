@@ -797,7 +797,8 @@ class Probe(unittest.TestCase):
             @contextmanager
             def identity_scope():
                 scope_depth[0] += 1
-                self.assertLessEqual(scope_depth[0], 2)
+                # Collection, checkpoint request, and its pump may each nest.
+                self.assertLessEqual(scope_depth[0], 3 if guard_cache_ms else 2)
                 scope_calls.append(('enter', scope_depth[0]))
                 try:
                     yield
@@ -832,6 +833,18 @@ class Probe(unittest.TestCase):
             pump = recovered_client.WitnessGuardPump(SimpleNamespace(pump_loading=Mock()), time.monotonic()+25)
             latest_options = dict(latest_playback=True, playback_checkpoint_lifetime=lambda: True) if latest else {}
             diagnostics = diagnostics or subject.SourceProbeDiagnostics()
+            collection_checkpoint_started = False
+            def check_checkpoint():
+                nonlocal collection_checkpoint_started
+                if (guard_cache_ms and use_identity_scope and
+                        diagnostics.phase == 'collect_samples' and not collection_checkpoint_started):
+                    # The forced entry refresh runs before the collector opens
+                    # a sample scope. It must still bracket the whole helper
+                    # request, keeping that request's pump scopes nested.
+                    self.assertEqual(scope_depth[0], 1)
+                    collection_checkpoint_started = True
+                pump()
+                return True
             bound_protocols = []
             original_bind = subject.bind_running_source_motion
             def track_protocol(*args, **options):
@@ -858,7 +871,7 @@ class Probe(unittest.TestCase):
                         playback_identity_scope=identity_scope if use_identity_scope else None,
                         playback_liveness_check=liveness_check if use_liveness_check else None,
                         playback_begin=lambda: events.append(('begin', time.monotonic())) or True,
-                        playback_checkpoint_check=lambda: pump() or True,
+                        playback_checkpoint_check=check_checkpoint,
                         playback_checkpoint_stop=lambda: events.append(('checkpoint_stop_hook', time.monotonic())) or guard.stop(),
                         **latest_options)
             except BaseException:
