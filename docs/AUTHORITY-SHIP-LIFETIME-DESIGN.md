@@ -94,7 +94,9 @@ the objects became unavailable or establish their destruction.
 
 ### Next format proposal after native observation
 
-Pending discussion with the user; not implemented in admission:
+Implementation proposal within the approved availability experiment; not
+implemented in admission. Automatic rebinding or identity reuse is outside
+this proposal and would need a separate decision:
 
 - Keep an issued multiplayer identity even when X4 no longer supplies a usable
   object reference. Store its explicit availability independently of that

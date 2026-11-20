@@ -20,6 +20,10 @@ table survives, but a forward slot alone does not prove a usable object or its
 historical identity. Do not reuse those IDs or infer destruction. See
 [evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#registry-availability-capture-and-reload-2026-11-20)
 and [proposed next format](../docs/AUTHORITY-SHIP-LIFETIME-DESIGN.md#next-format-proposal-after-native-observation).
+The user has already approved retaining unavailable identities separately;
+continue that experiment without asking for the same approval again. No new
+question is pending. Admission requires complete register coverage and further
+native validation; automatic rebinding remains outside this approved step.
 
 ## Previous: availability experiment approved; client entry clarified (2026-11-20)
 
