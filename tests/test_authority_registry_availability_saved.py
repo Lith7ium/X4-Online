@@ -24,18 +24,21 @@ DATA = {
 }
 
 
-def build_xml(fields=None, data=None, extras='', epoch=EPOCH, run=RUN):
+def build_xml(fields=None, data=None, extras='', epoch=EPOCH, run=RUN, first_table_id=200, key_type='integer'):
     fields = list(FIELDS if fields is None else fields)
     data = {key: dict(value) for key, value in (DATA if data is None else data).items()}
     vals = ''.join(f'<value name="{n}" type="{t}"' + (f' value="{v}"' if v is not None else '') + '/>' for n, t, v in fields)
-    vals += ''.join(f'<value name="{n}" type="table" value="{200+i}"/>' for i, n in enumerate(TABLE_NAMES))
+    vals += ''.join(
+        f'<value name="{name}" type="table" value="{first_table_id if i == 0 else 200+i}"/>'
+        for i, name in enumerate(TABLE_NAMES))
     refs = f'<refs type="string"><ref id="101" string="{epoch}"/><ref id="102" string="{run}"/></refs>'
     for i, name in enumerate(TABLE_NAMES):
         entries = ''.join(
-            f'<key type="integer" value="{index}"/><value type="integer"'
+            f'<key type="{key_type}" value="{index}"/><value type="integer"'
             + (f' value="{value}"' if value else '') + '/>'
             for index, value in data[name].items())
-        refs += f'<refs type="table"><ref id="{200+i}">{entries}</ref></refs>'
+        reference_id = first_table_id if i == 0 else 200 + i
+        refs += f'<refs type="table"><ref id="{reference_id}">{entries}</ref></refs>'
     return ('<savegame><md><script name="X4AuthorityRegistryAvailabilityProbe"><cue name="State"><vars>'
             + vals + extras + '</vars></cue></script></md><script>' + refs + '</script></savegame>').encode()
 
@@ -72,6 +75,13 @@ class SavedAvailabilityTests(unittest.TestCase):
         with self.assertRaises(AvailabilitySavedError):
             self.check(duplicate_ref)
 
+    def test_same_numeric_reference_id_in_different_types_is_valid(self):
+        self.assertEqual(self.check(build_xml(first_table_id=101))['count'], 2)
+
+    def test_native_largefloat_index_encoding(self):
+        result = self.check(build_xml(key_type='largefloat'))
+        self.assertEqual([row['index'] for row in result['rows']], [2, 9])
+
     def test_aliased_tables_and_mismatched_tables_rejected(self):
         aliased = build_xml().replace(b'value="201"', b'value="200"', 1)
         with self.assertRaises(AvailabilitySavedError):
@@ -97,10 +107,12 @@ class SavedAvailabilityTests(unittest.TestCase):
         with self.assertRaises(AvailabilitySavedError):
             self.check(xml)
 
-    def test_nested_or_wrong_group_selected_reference_rejected(self):
+    def test_nested_entry_and_missing_selected_reference_rejected(self):
         nested = build_xml().replace(b'<ref id="200">', b'<ref id="200"><nested/>', 1)
-        wrong_group = build_xml().replace(b'<refs type="table">', b'<refs type="other">', 1)
-        for xml in (nested, wrong_group):
+        missing_selected = build_xml().replace(
+            b'<refs type="table"><ref id="200">',
+            b'<refs type="table"><ref id="999">', 1)
+        for xml in (nested, missing_selected):
             with self.subTest(xml=xml):
                 with self.assertRaises(AvailabilitySavedError):
                     self.check(xml)

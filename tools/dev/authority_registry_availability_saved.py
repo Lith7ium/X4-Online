@@ -96,16 +96,20 @@ def verify(checkpoint, expected_epoch, expected_run_id, expected_issued_count, e
             if field.get('type') != 'table' or not _DECIMAL.fullmatch(field.get('value', '')):
                 raise AvailabilitySavedError('invalid observation table reference')
             table_refs[name] = field['value']
-        refs = list(table_refs.values()) + [fields['$epoch']['value'], fields['$run_id']['value']]
-        if len(set(table_refs.values())) != len(table_refs) or len(set(refs)) != len(refs):
-            raise AvailabilitySavedError('aliased diagnostic references')
+        string_refs = [fields['$epoch']['value'], fields['$run_id']['value']]
+        if len(set(table_refs.values())) != len(table_refs):
+            raise AvailabilitySavedError('aliased diagnostic tables')
+        if len(set(string_refs)) != len(string_refs):
+            raise AvailabilitySavedError('aliased correlation strings')
 
         values = {name: {} for name in _TABLE_FIELDS}
         resolved = {'$epoch': [], '$run_id': []}
         active_group = active_ref = None
-        selected_refs = {ref: ('table', name) for name, ref in table_refs.items()}
-        selected_refs[fields['$epoch']['value']] = ('string', '$epoch')
-        selected_refs[fields['$run_id']['value']] = ('string', '$run_id')
+        # Native X4 reuses numeric IDs across reference types (including lists
+        # and groups). Only the (type, id) pair identifies a reference.
+        selected_refs = {('table', ref): name for name, ref in table_refs.items()}
+        selected_refs[('string', fields['$epoch']['value'])] = '$epoch'
+        selected_refs[('string', fields['$run_id']['value'])] = '$run_id'
         seen_selected = set()
         pending = None
 
@@ -122,22 +126,23 @@ def verify(checkpoint, expected_epoch, expected_run_id, expected_issued_count, e
                     raise AvailabilitySavedError('unpaired selected table key')
                 active_ref = None
                 ref_id = attrs.get('id')
-                if ref_id not in selected_refs:
+                typed_ref = (active_group, ref_id)
+                if typed_ref not in selected_refs:
                     return
-                if ref_id in seen_selected:
-                    raise AvailabilitySavedError('duplicate selected reference id')
-                seen_selected.add(ref_id)
-                expected_type, name = selected_refs[ref_id]
-                if active_group != expected_type:
-                    raise AvailabilitySavedError('selected reference in wrong group')
-                if expected_type == 'table':
+                if typed_ref in seen_selected:
+                    raise AvailabilitySavedError('duplicate selected reference id within type')
+                seen_selected.add(typed_ref)
+                name = selected_refs[typed_ref]
+                if active_group == 'table':
                     active_ref = name
                 else:
                     resolved[name].append(attrs.get('string'))
             elif len(path) == 5 and path[:4] == ['savegame', 'script', 'refs', 'ref'] and active_ref:
                 tag, kind, raw = path[-1], attrs.get('type'), attrs.get('value', '')
                 if tag == 'key':
-                    if pending is not None or kind != 'integer' or not _DECIMAL.fullmatch(raw):
+                    # Lua-supplied indices were saved as canonical integral
+                    # largefloat values. Fractional/exponent forms are refused.
+                    if pending is not None or kind not in ('integer', 'largefloat') or not _DECIMAL.fullmatch(raw):
                         raise AvailabilitySavedError('invalid or duplicate table key')
                     pending = int(raw)
                 elif tag == 'value':

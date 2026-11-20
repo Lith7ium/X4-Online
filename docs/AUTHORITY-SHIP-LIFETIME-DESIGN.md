@@ -63,7 +63,19 @@ Five structural MD tests, eight saved-reader tests and the Lua owner test
 passed; private synthetic adapter checks cover capture/save and inspect wiring.
 These results do not establish native MD semantics or persistence. A private
 single-process-at-a-time capture/save/restart experiment is prepared for the
-seven missing entries plus control index 1318; no native result yet.
+seven missing entries plus control index 1318.
+
+The first native capture/save completed. All seven missing entries returned
+forward-present=true and object-exists=false; control 1318 returned all five
+flags true. Class, operational and reverse checks are conditional on existence,
+so their false values for missing objects are not independent lifecycle proof.
+The initial offline read failed because native reference IDs are scoped by type
+and Lua-supplied table indices were saved as integral `largefloat` keys. After
+matching those observed encodings, all ten saved-reader tests passed and the
+same retained save parsed successfully. No capture was repeated. The existing
+strict registry verifier separately reports `incomplete table` on that save;
+its registry shape and the pending reload must be examined before admission can
+change. Private evidence: `.local/registry-availability-native-20261120-01`.
 
 ## Existing identity
 
