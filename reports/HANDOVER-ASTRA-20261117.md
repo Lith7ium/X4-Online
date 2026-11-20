@@ -1,5 +1,12 @@
 # X4 multiplayer: handover for Astra
 
+## Latest: native03 startup trace and failure (2026-11-20)
+
+The audited two-Linux-X4 run at `2d478d21` aligned sequence 1 at 0 m error. Four source samples were queued, but bounded client trace recorded sequences 1 and 3; sequence 3 was queued 0.116 s after ACK 1. This supports coalescing but does not identify the exact replacement branch. Sequence 3 then requested an 85.205330 m correction and hit the unchanged 50 m limit before any running write. Run failed; startup receipt-to-push was 0.288903 s. Cleanup and Xauthority cleanup passed and the cgroup was removed; `display_released_after_runner=false` is the expected failed-run branch. No Windows, Internet or gameplay acceptance. The sidecar digest matches; the reviewed manifest records 489 file pins.
+
+The user approved a two-phase startup: bind/prepare first, then align once to a later fresh sample with position and velocity, verify the readback, and start playback. Implementation is underway, not validated. No unchanged rerun. Details: [native03 evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#native03-real-source-pair-startup-alignment-then-bounded-write-failure-2026-11-20).
+
+
 Resumed (2026-11-20) at the user's request from pause checkpoint `10ec3f40`.
 The approved optional diagnostic guard utility is implemented. Its private
 native runner has since completed one bounded Proton run. Twelve focused tests

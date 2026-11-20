@@ -724,3 +724,13 @@ preserved the full object and matching digest with a 205-byte summary. Review
 confirmed that the coordinator reads only the summary's success flag, together
 with the runner's exit code; the sidecar hash is for later verification. This
 does not weaken the coordinator's outcome check or change simulation.
+
+## Native03 real-source pair: startup alignment then bounded-write failure (2026-11-20)
+
+The audited two-Linux-X4 run at code `2d478d21` used reviewed manifest `.local/authority-paired-capture-reviewed-20261120-03.json` (489 pins) and the private artifacts in `.local/private-paired-capture-native-20261120-03/`. The native client aligned sequence 1 with 0 m readback error (3 m tolerance). Four source samples were queued; the client trace recorded validated receipt and playback push for sequences 1 and 3 only. Sequence 3 was queued 0.116 s after the sequence-1 ACK. This supports intermediate-sample loss/coalescing on the observed path, but does not prove a specific replacement branch. The trace ended at six events and did not saturate.
+
+The sequence-3 observation requested an 85.205330 m correction. The unchanged 50 m running limit rejected it before a running write; there is no running readback or completed playback. Startup receipt-to-push delay was 0.288903 s. The run failed. `display_released_after_runner=false` reflects the failed-run branch; cleanup and Xauthority cleanup were confirmed, the owned cgroup was removed, and a separate process check found no X4 process. Do not interpret this as a cleanup failure. Windows, Internet and gameplay acceptance remain untested.
+
+The user approved a two-phase startup: bind/prepare first, then align once to a later fresh sample with position and velocity, verify the readback, and start playback. This is an approved direction; implementation is underway and has not been validated. No unchanged rerun is warranted. Queue coalescing remains supported by this observation, while the exact replacement mechanism is unproven.
+
+Evidence sidecar integrity checked: `trial-result.json` records 8,824 bytes and SHA-256 `8ded6a34026a9f2227d2857aac71f816336960e2a05332771f733bda33577331` for `trial-details.json`; the digest matches. The manifest contains 489 file pins and records HEAD `2d478d21f14474e8ba5a53f6900ec7883c90764a`.
