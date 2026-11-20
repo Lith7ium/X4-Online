@@ -79,6 +79,13 @@ def verify_transition(previous, current):
         raise ValueError('saved registry epoch/count or missing-binding lifetime changed')
 
 
+def _install_source_registry(case, read_source):
+    path = Path(case) / 'extensions/x4_lan_lab/md/authority_ship_registry.xml'
+    with path.open('xb') as output:
+        output.write(read_source(ROOT / 'tools/dev/authority_ship_registry.xml'))
+    return path
+
+
 class RegistrySnapshotState:
     """Track one recovered source and the latest fully verified saved run."""
 
@@ -93,8 +100,7 @@ class RegistrySnapshotState:
     def install(self, case, *, reserved_tokens, read_source):
         if self.nonce is not None:
             raise ValueError('registry gate already installed')
-        registry_md = Path(case) / 'extensions/x4_lan_lab/md/authority_ship_registry.xml'
-        registry_md.write_bytes(read_source(ROOT / 'tools/dev/authority_ship_registry.xml'))
+        registry_md = _install_source_registry(case, read_source)
         reserved = set(reserved_tokens) | {self.latest_evidence['epoch'], self.latest_evidence['run_id']}
         nonce = secrets.token_hex(16)
         while nonce in reserved:
@@ -138,9 +144,10 @@ class FirstCaptureState:
         self.nonce = None
         self.final_receipt = None
 
-    def install(self, case, *, reserved_tokens):
+    def install(self, case, *, reserved_tokens, read_source):
         if self.nonce is not None:
             raise ValueError('first capture already installed')
+        registry_md = _install_source_registry(case, read_source)
         reserved = set(reserved_tokens) | {
             self.source_checkpoint.marker, self.status[1]}
         nonce = secrets.token_hex(16)
@@ -150,7 +157,7 @@ class FirstCaptureState:
             source_marker=self.source_checkpoint.marker, epoch=self.status[1],
             issued_count=self.status[2])
         self.nonce = nonce
-        return protected
+        return [registry_md, *protected]
 
     def verify_save(self, checkpoint, log_path):
         if self.final_receipt is not None:

@@ -1000,7 +1000,8 @@ def run(args):
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence))
         if bootstrap_snapshot:
-            protected.extend(first_capture_state.install(case, reserved_tokens=(lease, epoch)))
+            protected.extend(first_capture_state.install(case, reserved_tokens=(lease, epoch),
+                                                         read_source=read_evidence))
         sample_writer = None
         if sample_write_slot is not None:
             import authority_fixture_player_sample_install as sample_install

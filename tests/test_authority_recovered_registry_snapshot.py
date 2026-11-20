@@ -216,10 +216,14 @@ class SnapshotModeTests(unittest.TestCase):
                 snapshots.verify_bootstrap_status(
                     {'registry_status': {**prior['registry_status'], **changed}}, source, status)
         first = snapshots.FirstCaptureState(source, status)
-        with patch.object(snapshots.bridge_gate, 'install_first_capture', create=True,
-                          return_value=[Path('installed')]) as install:
-            self.assertEqual(first.install(Path('case'), reserved_tokens=('e' * 32,)),
-                             [Path('installed')])
+        with tempfile.TemporaryDirectory() as temp, patch.object(
+                snapshots.bridge_gate, 'install_first_capture', return_value=[Path('installed')]) as install:
+            case = Path(temp)
+            registry = case / 'extensions/x4_lan_lab/md/authority_ship_registry.xml'
+            registry.parent.mkdir(parents=True)
+            self.assertEqual(first.install(case, reserved_tokens=('e' * 32,), read_source=server.read_evidence),
+                             [registry, Path('installed')])
+            self.assertEqual(registry.read_bytes(), (ROOT / 'tools/dev/authority_ship_registry.xml').read_bytes())
         self.assertEqual(install.call_args.kwargs['source_marker'], source.marker)
         self.assertEqual(install.call_args.kwargs['epoch'], status[1])
         self.assertEqual(install.call_args.kwargs['issued_count'], 3)
