@@ -36,11 +36,13 @@ verified checkpoint. The gate rejects marker reuse within its lifetime and
 limits each full operation to the configured timeout (110 seconds in this
 installer). It never initiates saving, loading or resuming itself.
 
-The supervisor must verify the new snapshot against the requested marker and
-the complete capture receipts before confirming a checkpoint. Saved operational
-bits grant no runtime write permission. The current integration keeps issued
-count fixed; registration growth, recovery admission, client installation and
-the complete disconnect/rejoin flow still need integration and native evidence.
+The [recovered supervisor](AUTHORITY-RECOVERED-LOOPBACK-SERVER.md) can now
+verify the saved snapshot against the requested marker and the complete
+capture receipts before confirming a checkpoint. The [Windows fixture
+client](AUTHORITY-WINDOWS-FIXTURE-CLIENT.md) can require a matching full
+inspection before claiming admission. Commands still require a fresh runtime
+eligibility check. Issued count stays fixed during a capture. Registration
+growth and a complete Windows/Linux disconnect and rejoin still need evidence.
 
 Targeted tests cover the full 10,082-entry owner protocol, repeated captures,
 correlation failures, timeouts and callback failures. The generated bridge test

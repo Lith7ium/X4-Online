@@ -1,7 +1,14 @@
 # X4 authoritative multiplayer: handover for Astra 6.2
 
-Prepared on 20 November 2026 at the user's request. **The goal is paused and
-unmet. Preparing or reading this handover does not authorize resuming tests.**
+This brief records the paused handover on 20 November 2026. Development resumed
+afterward. The [checkpoint guide](../tools/dev/AUTHORITY-REGISTRY-CHECKPOINT.md)
+records the subsequent Linux two-save and reload result. The
+[Windows load report](AUTHORITY-WINDOWS-ENGINE-LOAD-20261118.md) covers the
+full-register client experiment. The [server guide](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md)
+describes how the supervisor creates its first format-3 checkpoint and recovers one.
+The shared Windows/Linux Internet gameplay goal remains open.
+
+At the time of the handover the goal was paused.
 No model switch is performed by this document. Read this brief first; the older
 [handover](HANDOVER-ASTRA-20261117.md) is a chronological archive with superseded
 next steps and historical statements that the goal was active.

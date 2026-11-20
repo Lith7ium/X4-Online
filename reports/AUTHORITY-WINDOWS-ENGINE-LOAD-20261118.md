@@ -74,3 +74,43 @@ The first result remains failed.
 
 The checkpoint is native05's `checkpoint-24446e8b364c49289b953ff0aca58470`.
 All game files and checkpoints remain private and are not distributed.
+
+## Full-registry checkpoint load, 20 November 2026
+
+The Windows executable ran under Proton on an isolated X11 display, using a
+new prefix and disposable profile for each attempt. The input was slot 010
+from the [Linux two-save test](../tools/dev/AUTHORITY-REGISTRY-CHECKPOINT.md),
+with 10,082 issued entries, a verified MD marker and a matching source registry.
+The load controller staged it in client slot 009.
+
+The first attempt recognized the marker and both fixture ships, then refused
+readiness because an inspection vector differed. X4 also logged 32 failed
+imports of saved faction values. The Windows fixture lacked the faction and
+icon libraries and 16 textures that the Linux producer had loaded. Including
+the identical tracked assets removed those import errors. Company membership
+and ship ownership require no reassignment.
+
+The second attempt at `2a04cdbc` still refused readiness. The saved and
+live binding flags agreed at every index, as did the saved operational flags.
+Only the live operational flag of index 4015 differed, from 1 to 0.
+In the input save this index refers to `MWQ-670`, a Xenon M corvette in
+`cluster_405_sector001_macro`, with a temporary attack order and a recorded
+attack at game time 53.148. The cause of the operational change was not recorded.
+Linux had saved at game time 54.073. The Windows process logged the refusal
+at 54.63. The client previously requested its pause after marker and fixture
+checks. At `df220f90` it requests pause on the first playable frame and
+holds it while those checks run.
+
+The third attempt at `df220f90` passed on the same input. X4 reported the
+marker, both named ships, the full inspection of 10,082 entries, the registry
+header and the pause at logged game time 54.07. All four vectors agreed,
+including the live operational flag of ship 4015. The runner confirmed
+cleanup and unchanged inputs and Steam identity. Its log SHA-256 is
+`4b218d53f2a42cc6f3d21789ea5a0dc1cd0c82b29cd50a9b2078fdf2267248da`.
+This was a local engine load under Proton. No participant connected to a
+server in this test.
+
+Private evidence is under `.local/windows-snapshot-load-proton-20261120-01/`
+and sibling runs `-02/` and `-03/`. The first two attempts ended with verified owned-process cleanup,
+unchanged input digests and unchanged Steam process identity. Neither attempt
+issued an admission claim.
