@@ -208,6 +208,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 session = ObservedClientSession(owner, bound, controller, slot='save_009',
                     read_log=workspace.read_log, guard=running_guard, deadline=deadline,
                     registry_status=registry_status, registry_nonce=registry_nonce,
+                    require_full_inspection=require_registry_snapshot,
                     apply_motion=motion, motion_control=motion)
                 if session.start() is not True:
                     raise RuntimeError('fixture admission unconfirmed')
@@ -277,7 +278,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         if (type(final_log) is not bytes or len(final_log) > 8 << 20 or
                                 not BoundReceiptStream(bound, slot='save_009',
                                     registry_status=registry_status,
-                                    registry_nonce=registry_nonce).feed(final_log) or
+                                    registry_nonce=registry_nonce,
+                                    require_full_inspection=require_registry_snapshot).feed(final_log) or
                                 workspace.guard() is not True):
                             raise RuntimeError('final fixture observations incomplete')
                     except BaseException:

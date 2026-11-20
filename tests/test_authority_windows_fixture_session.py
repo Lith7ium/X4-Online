@@ -115,7 +115,8 @@ class FixtureSessionTests(unittest.TestCase):
 
         class Session:
             def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
-                         registry_status, registry_nonce, apply_motion, motion_control):
+                         registry_status, registry_nonce, require_full_inspection, apply_motion, motion_control):
+                test.assertEqual(require_full_inspection, test.installed_registry_snapshot is not None)
                 test.assertIsNone(apply_motion)
                 test.assertIsNone(motion_control)
                 test.assertEqual(registry_status, test.registry_status)
@@ -156,6 +157,8 @@ class FixtureSessionTests(unittest.TestCase):
             return subject.run_fixture_session(**options)
 
     def test_snapshot_join_passes_verified_staged_observations_to_load_gate(self):
+        inspection = f'[X4LAN] AUTH_REGISTRY_FULL_INSPECT {self.bound.marker} 2\n'.encode('ascii')
+        self.log = self.log.replace(self.registry_log, inspection + self.registry_log)
         snapshot = {'epoch': self.registry_status[1], 'issued_count': 2,
                     'mapping_sha256': self.registry_status[3], 'operational_bits': '10'}
         def inspect(checkpoint, *, pump):

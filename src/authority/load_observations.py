@@ -12,6 +12,7 @@ MAX_LINE = 65536
 LOAD_TAG = b'[X4LAN] AUTH_DOWNLOAD_LOAD '
 MARKER_TAG = b'AUTH_MARKER '
 REGISTRY_TAG = b'[X4LAN] AUTH_RECOVERY_REGISTRY '
+FULL_INSPECT_TAG = b'[X4LAN] AUTH_REGISTRY_FULL_INSPECT '
 TICKET_FIELDS = ('world_epoch', 'connection_handle', 'baseline_id', 'load_generation',
                  'checkpoint_id', 'sha256', 'attempt_id', 'slot')
 STREAM_FAULTS = (b'auth_participant error', b'auth_identity load error',
@@ -73,7 +74,8 @@ class BoundReceiptStream:
     completed sequence is not admission or proof of X4/process provenance.
     """
 
-    def __init__(self, bound, *, slot, registry_status=None, registry_nonce=None):
+    def __init__(self, bound, *, slot, registry_status=None, registry_nonce=None,
+                 require_full_inspection=False):
         encode_bound_offer(bound)
         offer = Offer(**{name: getattr(bound.offer, name) for name in Offer.__dataclass_fields__})
         if (type(slot) is not str or len(slot) != 8 or not slot.startswith('save_') or
@@ -82,15 +84,25 @@ class BoundReceiptStream:
         ticket = {name: getattr(offer, name) for name in TICKET_FIELDS if name != 'slot'}
         ticket['slot'] = slot
         fields = '|'.join(str(ticket[key]) for key in TICKET_FIELDS)
-        self._expected = (
+        self._expected = [
             ('load', ('load_requested|' + fields).encode('ascii')),
             ('marker', b'load INSPECTED ' + bound.marker.encode('ascii')),
-            ('load', ('pause_observed|' + fields).encode('ascii')),
-        )
+        ]
         self._registry = registry_status is not None or registry_nonce is not None
+        if type(require_full_inspection) is not bool:
+            raise ValueError('invalid full inspection option')
+        self._full_inspection = require_full_inspection
         if self._registry:
-            record = ('registry', registry_receipt(registry_nonce, registry_status))
-            self._expected = self._expected[:-1] + (record, self._expected[-1])
+            header = registry_receipt(registry_nonce, registry_status)
+            if require_full_inspection:
+                if registry_status[0] != 'ready':
+                    raise ValueError('full inspection requires an initialized registry')
+                inspected = f'{bound.marker} {registry_status[2]}'.encode('ascii')
+                self._expected.append(('full_inspect', inspected))
+            self._expected.append(('registry', header))
+        elif require_full_inspection:
+            raise ValueError('full inspection requires a registry header')
+        self._expected.append(('load', ('pause_observed|' + fields).encode('ascii')))
         self._stage = 0
         self._carry = b''
         self._size = 0
@@ -117,11 +129,15 @@ class BoundReceiptStream:
                 if self._registry and (b'auth_recovery_registry_error' in lowered or
                         b'event: x4authorityshipregistry.correlated' in lowered):
                     raise ValueError('client registry reported an error')
+                if self._full_inspection and b'auth_registry_full_inspect_error' in lowered:
+                    raise ValueError('client reported a full registry inspection error')
                 rows = []
                 if LOAD_TAG in line:
                     rows.append(('load', line.split(LOAD_TAG, 1)[1].strip()))
                 if MARKER_TAG in line:
                     rows.append(('marker', line.split(MARKER_TAG, 1)[1].strip()))
+                if self._full_inspection and FULL_INSPECT_TAG in line:
+                    rows.append(('full_inspect', line.split(FULL_INSPECT_TAG, 1)[1].strip()))
                 if self._registry and REGISTRY_TAG in line:
                     rows.append(('registry', line.split(REGISTRY_TAG, 1)[1].strip()))
                 for row in rows:

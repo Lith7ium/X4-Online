@@ -126,9 +126,31 @@ class ClientLoadObservations(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'registry reported'):
                 checked.feed(error[10:] + b'\n')
 
+    def test_full_inspection_matches_checkpoint_and_count_before_header(self):
+        nonce = '1' * 32
+        status = ('ready', '2' * 32, 3, '3' * 64)
+        header = observations.REGISTRY_TAG + (nonce + '|startup|' + status[1] + '|3\n').encode()
+        inspection = observations.FULL_INSPECT_TAG + (self.bound.marker + ' 3\n').encode()
+        def stream():
+            return observations.BoundReceiptStream(self.bound, slot='save_009', registry_status=status,
+                registry_nonce=nonce, require_full_inspection=True)
+        for rows in (header, header + inspection, inspection * 2 + header,
+                     inspection.replace(b' 3\n', b' 4\n') + header,
+                     inspection.replace(self.bound.marker.encode(), nonce.encode()) + header):
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                stream().feed(self.request + self.marker + rows + self.pause)
+        checked = stream()
+        self.assertFalse(checked.feed(self.request + self.marker + inspection[:-1]))
+        self.assertTrue(checked.feed(b'\n' + header + self.pause))
+        with self.assertRaisesRegex(ValueError, 'inspection error'):
+            checked.feed(b'[X4LAN] AUTH_REGISTRY_FULL_INSPECT_ERROR unexpected response\n')
+
     def test_partial_registry_configuration_is_refused(self):
         for options in ({'registry_nonce': '1' * 32},
-                        {'registry_status': ('uninitialized',)}):
+                        {'registry_status': ('uninitialized',)},
+                        {'require_full_inspection': True},
+                        {'registry_status': ('uninitialized',), 'registry_nonce': '1' * 32,
+                         'require_full_inspection': True}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 observations.BoundReceiptStream(self.bound, slot='save_009', **options)
 
