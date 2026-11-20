@@ -18,6 +18,26 @@ from lockstep.launcher import game, profile  # noqa: E402
 
 
 class NativeWindowsPaths(unittest.TestCase):
+    def test_reset_and_unstage_only_owned_profiles(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old_id, owned_id = profile.PROFILES[:2]
+            original = root / str(old_id) / 'save' / profile.SNAPSHOT_SLOT
+            original.parent.mkdir(parents=True)
+            original.write_bytes(b'existing save')
+            with self.assertRaisesRegex(SystemExit, 'not a launcher-owned profile'):
+                profile.prepare(old_id, [], root=root)
+            self.assertFalse(profile.unstage(old_id, root=root))
+            self.assertEqual(original.read_bytes(), b'existing save')
+
+            owned = profile.prepare(owned_id, [], snapshot=original, root=root)
+            self.assertTrue(profile.unstage(owned_id, root=root))
+            self.assertFalse((owned / 'save' / profile.SNAPSHOT_SLOT).exists())
+            stale = owned / 'keep-until-reset.txt'
+            stale.write_text('launcher output')
+            self.assertEqual(profile.prepare(owned_id, [], root=root), owned)
+            self.assertFalse(stale.exists())
+
     def test_view_cleanup_unlinks_real_junctions_and_preserves_fake_install(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

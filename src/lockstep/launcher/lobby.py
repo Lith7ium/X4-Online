@@ -775,6 +775,7 @@ def lobby_run(o: LobbyOptions, log=print):
     record = {'run': str(run_dir), 'views': [str(view)], 'pids': [], 'relay_pid': None, 'launcher': os.getpid()}
     state_file.write_text(json.dumps(record, indent=2) + '\n')
     proc = relay = relay_log = host = peer = None
+    profile_prepared = False
     result = {'outcome': 'failed'}
     game_id, slot = '', 0   # a server's game: the salt of its token (the server files this launcher's logs under it)
     drop_in = False         # ... and whether it takes more players while it runs
@@ -792,6 +793,7 @@ def lobby_run(o: LobbyOptions, log=print):
 
         show('starting', 'Starting...')
         profile.prepare(profile_id, [*game.dlc_ids(view), extension.EXTENSION_ID], o.width, o.height, o.snapshot)
+        profile_prepared = True
         if o.steam_fix:
             steam.fix(o.state / 'steam-fix.json')
         proc = subprocess.Popen(session.client_command(view, profile_id, o.lane, session.snapshot_seed(o.snapshot)), cwd=view,
@@ -966,11 +968,13 @@ def lobby_run(o: LobbyOptions, log=print):
         if relay_log:
             relay_log.close()
         time.sleep(2)
-        profile.collect(profile_id, f'x4ls-c{o.lane}.log', run_dir / f'client{o.lane}')
-        profile.unstage(profile_id)
-        if drop_in:   # the join saves this game's X4 wrote for joiners (about 200 MB each) are the server's now
-            from . import hotjoin
-            hotjoin.remove_join_files({o.lane: profile.profile_dir(profile_id) / 'save'})
+        save_dir = profile.owned_save_dir(profile_id) if profile_prepared else None
+        if save_dir is not None:
+            profile.collect(profile_id, f'x4ls-c{o.lane}.log', run_dir / f'client{o.lane}')
+            profile.unstage(profile_id)
+            if drop_in:   # the server already has the join saves X4 wrote for joiners
+                from . import hotjoin
+                hotjoin.remove_join_files({o.lane: save_dir})
         game.remove_view(view)
         state_file.unlink(missing_ok=True)
         if o.steam_fix and (o.state / 'steam-fix.json').exists():

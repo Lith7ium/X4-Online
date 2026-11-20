@@ -441,12 +441,17 @@ def run(o: Options, log=print):
         if files:
             files.close()
         time.sleep(2)
+        owned_save_dirs = {}
         for k, profile_id, _ in clients:
+            save_dir = profile.owned_save_dir(profile_id)
+            if save_dir is None:
+                continue
             profile.collect(profile_id, f'x4ls-c{k}.log', run_dir / f'client{k}')
             profile.unstage(profile_id)  # every client's: the lane tool shares these profiles (not only hot joins')
-        if save_dirs:
+            owned_save_dirs[k] = save_dir
+        if save_dirs and owned_save_dirs:
             from . import hotjoin
-            hotjoin.remove_join_files(save_dirs)
+            hotjoin.remove_join_files(owned_save_dirs)
         if not o.keep_views:
             for view in state['views']:
                 game.remove_view(view)
@@ -498,6 +503,7 @@ def join(o: JoinOptions, log=print):
     state = {'run': str(run_dir), 'views': [], 'pids': [], 'relay_pid': None}
     save_state(o, state)
     view, profile_id, proc, result = lanes / f'c{o.slot}', profile.PROFILES[o.slot - 1], None, {'outcome': 'failed'}
+    profile_prepared = False
     play = Options(clients=o.clients, overlay=o.overlay, snapshot=o.snapshot, tick_hz=o.tick_hz, width=o.width,
                    height=o.height, timeout=o.timeout, play=True, close_when_over=o.close_when_over)
     try:
@@ -510,6 +516,7 @@ def join(o: JoinOptions, log=print):
         installed.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(target / 'ui/config.lua', installed / 'x4_lan_lab-config.lua')
         profile.prepare(profile_id, [*game.dlc_ids(view), extension.EXTENSION_ID], o.width, o.height, o.snapshot)
+        profile_prepared = True
         if o.steam_fix:
             steam.fix(o.state / 'steam-fix.json')
         proc = subprocess.Popen(client_command(view, profile_id, o.slot, snapshot_seed(o.snapshot)), cwd=view,
@@ -523,8 +530,9 @@ def join(o: JoinOptions, log=print):
         if proc and proc.poll() is None:
             kill(proc.pid)
         time.sleep(2)
-        profile.collect(profile_id, f'x4ls-c{o.slot}.log', run_dir / f'client{o.slot}')
-        profile.unstage(profile_id)
+        if profile_prepared and profile.owned_save_dir(profile_id) is not None:
+            profile.collect(profile_id, f'x4ls-c{o.slot}.log', run_dir / f'client{o.slot}')
+            profile.unstage(profile_id)
         for v in state['views']:
             game.remove_view(v)
         (o.state / 'session.json').unlink(missing_ok=True)
@@ -566,6 +574,7 @@ def capture_snapshot(out, gamestart='custom_creative', game_dir=None, lanes=None
     run_dir.mkdir(parents=True, exist_ok=True)
     o = Options(clients=1, overlay=overlay, state=Path(state_dir))
     view, proc, log_name = lanes / 'capture', None, 'x4ls-capture.log'
+    profile_prepared = False
     state = {'run': str(run_dir), 'views': [], 'pids': [], 'relay_pid': None}
     save_state(o, state)
     try:
@@ -576,6 +585,7 @@ def capture_snapshot(out, gamestart='custom_creative', game_dir=None, lanes=None
                           extra={'ui/x4ls_autostart.lua': Path(__file__).with_name('autostart.lua')},
                           config_tail=f'X4LAN_CONFIG.x4ls_autostart = "{gamestart}"\n')
         profile.prepare(profile.CAPTURE_PROFILE, [*game.dlc_ids(view), extension.EXTENSION_ID], o.width, o.height)
+        profile_prepared = True
         if steam_fix:
             steam.fix(Path(state_dir) / 'steam-fix.json')
         args = client_command(view, profile.CAPTURE_PROFILE, 1, seed)[:-1] + [log_name]
@@ -602,7 +612,8 @@ def capture_snapshot(out, gamestart='custom_creative', game_dir=None, lanes=None
         if proc and proc.poll() is None:
             kill(proc.pid)
         time.sleep(2)
-        profile.collect(profile.CAPTURE_PROFILE, log_name, run_dir / 'client1')
+        if profile_prepared and profile.owned_save_dir(profile.CAPTURE_PROFILE) is not None:
+            profile.collect(profile.CAPTURE_PROFILE, log_name, run_dir / 'client1')
         for v in state['views']:
             game.remove_view(v)
         (Path(state_dir) / 'session.json').unlink(missing_ok=True)

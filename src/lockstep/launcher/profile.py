@@ -1,10 +1,10 @@
 """Disposable X4 profiles (-personalfolderid) for launcher clients.
 
-Only the ids in PROFILES and CAPTURE_PROFILE are accepted; the player's own
-Steam-id profile is refused. The existing prepare() resets a client profile;
-prepare_fresh() instead creates an absent profile without deleting old files.
+prepare() creates a marked profile in a reserved slot or resets one it owns.
+prepare_fresh() exclusively creates a separate profile for its caller.
 """
 import ctypes
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -12,11 +12,16 @@ import shutil
 import stat
 import sys
 
+from authority.file_fingerprints import fingerprint, same_path_and_descriptor
+
 from .game import is_link_or_reparse
 
 PROFILES = (45850, 45851, 45853, 45854, 45855, 45856, 45857, 45858)
 CAPTURE_PROFILE = 45841  # tools/dev/native_gate_snapshot.lua only saves inside .../45841/save
 SNAPSHOT_SLOT = 'save_009.xml.gz'
+_OWNER_MARKER = '.x4ls-profile'
+_OWNER_FORMAT = re.compile(r'x4ls-profile-v1 ([0-9]+:[1-9][0-9]*) ([0-9]+:[1-9][0-9]*)\n'
+                           r'(none|[0-9]+:[1-9][0-9]*:[0-9]+:-?[0-9]+:-?[0-9]+:[a-f0-9]{64})\n')
 
 
 class _KnownFolderId(ctypes.Structure):
@@ -105,15 +110,32 @@ def content_xml(extension_ids):
 
 
 def prepare(profile, extension_ids, width=1280, height=720, snapshot=None, root=None, fast=False, borderless=False):
-    """Fresh profile: windowed config, autosave and protected UI off, optional snapshot."""
+    """Create a disposable profile, resetting only one previously created here."""
     path = profile_dir(profile, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if _directory_id(path.parent) is None:
+        raise SystemExit(f'{path.parent} is not an ordinary profile root; refusing')
     if path.exists():
+        if _owned_staging(path) is None:
+            raise SystemExit(f'{path} is not a launcher-owned profile; move it to a backup location before reusing this lane')
         shutil.rmtree(path)
-    (path / 'save').mkdir(parents=True)
+    # Exclusive creation is the ownership boundary. Never mark a folder that already existed.
+    path.mkdir()
+    (path / 'save').mkdir()
     (path / 'config.xml').write_text(config_xml(width, height, fast, borderless))
     (path / 'content.xml').write_text(content_xml(extension_ids))
+    snapshot_identity = 'none'
     if snapshot:
-        shutil.copyfile(snapshot, path / 'save' / SNAPSHOT_SLOT)
+        staged = path / 'save' / SNAPSHOT_SLOT
+        with Path(snapshot).open('rb') as source, staged.open('xb') as destination:
+            shutil.copyfileobj(source, destination)
+        snapshot_identity = _snapshot_id(staged)
+    profile_identity = _directory_id(path)
+    save_identity = _directory_id(path / 'save')
+    if None in (profile_identity, save_identity, snapshot_identity):
+        raise OSError('cannot identify the newly prepared launcher profile')
+    with (path / _OWNER_MARKER).open('x', encoding='ascii', newline='\n') as marker:
+        marker.write(f'x4ls-profile-v1 {profile_identity} {save_identity}\n{snapshot_identity}\n')
     return path
 
 
@@ -130,6 +152,82 @@ def _valid_profile_root(info, *, windows):
         if attributes & reparse_point:
             return False
     return True
+
+
+def _directory_id(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not _valid_profile_root(info, windows=os.name == 'nt') or not info.st_ino:
+        return None
+    return f'{info.st_dev}:{info.st_ino}'
+
+
+def _ordinary_file(info):
+    return (stat.S_ISREG(info.st_mode) and info.st_ino and info.st_nlink == 1
+            and not (getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT))
+
+
+def _file_id(info):
+    return ':'.join(str(value) for value in fingerprint(info))
+
+
+def _snapshot_id(path):
+    info = path.lstat()
+    if not _ordinary_file(info):
+        return None
+    identity = _file_id(info)
+    digest = hashlib.sha256()
+    with path.open('rb') as source:
+        opened = os.fstat(source.fileno())
+        if not same_path_and_descriptor(info, opened):
+            return None
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(chunk)
+        if fingerprint(os.fstat(source.fileno())) != fingerprint(opened):
+            return None
+    if _file_id(path.lstat()) != identity:
+        return None
+    return f'{identity}:{digest.hexdigest()}'
+
+
+def _owned_staging(path):
+    """Return the recorded snapshot identity, or None if ownership is unproven."""
+    marker = path / _OWNER_MARKER
+    try:
+        if _directory_id(path.parent) is None:
+            return None
+        profile_identity = _directory_id(path)
+        save_identity = _directory_id(path / 'save') if profile_identity else None
+        if not save_identity:
+            return None
+        info = marker.lstat()
+        if not _ordinary_file(info) or info.st_size > 512:
+            return None
+        with marker.open('rb') as source:
+            opened = os.fstat(source.fileno())
+            if not same_path_and_descriptor(info, opened):
+                return None
+            contents = source.read(513).decode('ascii')
+            if fingerprint(os.fstat(source.fileno())) != fingerprint(opened):
+                return None
+        if fingerprint(marker.lstat()) != fingerprint(info):
+            return None
+    except (OSError, UnicodeError):
+        return None
+    match = _OWNER_FORMAT.fullmatch(contents)
+    if match and match.group(1, 2) == (profile_identity, save_identity):
+        return match.group(3)
+    return None
+
+
+def owned_save_dir(profile, root=None):
+    """Return the save directory only if its launcher ownership is intact."""
+    path = profile_dir(profile, root)
+    if _owned_staging(path) is not None:
+        return path / 'save'
+    return None
 
 
 def prepare_fresh(profile, extension_ids, *, root, width=1280, height=720,
@@ -171,12 +269,21 @@ def prepare_fresh(profile, extension_ids, *, root, width=1280, height=720,
 
 
 def unstage(profile, root=None):
-    """Remove the snapshot prepare() staged: the lane tool shares these profiles and refuses to overwrite a staged save."""
-    staged = profile_dir(profile, root) / 'save' / SNAPSHOT_SLOT
-    if staged.is_file():
+    """Remove only the same snapshot prepare() staged in an owned profile."""
+    path = profile_dir(profile, root)
+    expected = _owned_staging(path)
+    if expected in (None, 'none'):
+        return False
+    staged = path / 'save' / SNAPSHOT_SLOT
+    try:
+        if _snapshot_id(staged) != expected or _owned_staging(path) != expected:
+            return False
+        if _file_id(staged.lstat()) != expected.rsplit(':', 1)[0]:
+            return False
         staged.unlink()
-        return True
-    return False
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def collect(profile, logfile, out, root=None):

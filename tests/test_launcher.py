@@ -6,10 +6,11 @@ import re
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-from lockstep.launcher import extension, game, profile, session  # noqa: E402
+from lockstep.launcher import extension, game, hotjoin, lobby, profile, session  # noqa: E402
 
 
 def symlink_junction(target, link):
@@ -106,11 +107,11 @@ class Profiles(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(SystemExit, 'not a disposable'):
                 profile.prepare(63389028, [], root=tmp)
-            stale = Path(tmp) / '45850/save/autosave_01.xml.gz'
-            stale.parent.mkdir(parents=True)
-            stale.write_text('old world')
             snap = Path(tmp) / 'snap.xml.gz'
             snap.write_bytes(b'snapshot')
+            old = profile.prepare(45850, [], root=tmp)
+            stale = old / 'save/autosave_01.xml.gz'
+            stale.write_text('old launcher world')
             path = profile.prepare(45850, ['ego_dlc_split', 'x4_lan_lab'], 800, 600, snap, root=tmp)
             self.assertFalse(stale.exists())
             config = (path / 'config.xml').read_text()
@@ -125,19 +126,101 @@ class Profiles(unittest.TestCase):
             for key in ('<fullscreen>false', '<borderless>true', '<res_width>2560', '<res_height>1440'):
                 self.assertIn(key, config)
 
+    def test_existing_unowned_profile_and_its_snapshot_are_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile_id = profile.PROFILES[0]
+            path = Path(tmp) / str(profile_id)
+            staged = path / 'save' / profile.SNAPSHOT_SLOT
+            staged.parent.mkdir(parents=True)
+            staged.write_bytes(b'player save')
+            (path / 'config.xml').write_text('player settings')
+            for marker in (None, b'x4ls-profile-v1 0:1 0:2\nnone\n', b'invalid\n'):
+                if marker is not None:
+                    (path / profile._OWNER_MARKER).write_bytes(marker)
+                with self.subTest(marker=marker):
+                    with self.assertRaisesRegex(SystemExit, 'not a launcher-owned profile'):
+                        profile.prepare(profile_id, [], root=tmp)
+                    self.assertFalse(profile.unstage(profile_id, root=tmp))
+                    self.assertIsNone(profile.owned_save_dir(profile_id, root=tmp))
+                    self.assertEqual(staged.read_bytes(), b'player save')
+                    self.assertEqual((path / 'config.xml').read_text(), 'player settings')
+
+    def test_fresh_profile_is_never_claimed_by_legacy_launcher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = profile.prepare_fresh(profile.CAPTURE_PROFILE, [], root=tmp)
+            self.assertFalse((path / profile._OWNER_MARKER).exists())
+            with self.assertRaisesRegex(SystemExit, 'not a launcher-owned profile'):
+                profile.prepare(profile.CAPTURE_PROFILE, [], root=tmp)
+
 
 class Unstage(unittest.TestCase):
     def test_the_staged_snapshot_is_removed_after_a_session_and_saves_stay(self):
         with tempfile.TemporaryDirectory() as tmp:
             snapshot = Path(tmp) / 'snap.xml.gz'
             snapshot.write_bytes(b'snapshot')
-            pid = profile.PROFILES[0]
-            path = profile.prepare(pid, ['ego_dlc_boron'], snapshot=snapshot, root=tmp)
+            profile_id = profile.PROFILES[0]
+            path = profile.prepare(profile_id, ['ego_dlc_boron'], snapshot=snapshot, root=tmp)
             (path / 'save' / 'save_001.xml.gz').write_bytes(b'checkpoint')
-            self.assertTrue(profile.unstage(pid, root=tmp))
+            self.assertTrue(profile.unstage(profile_id, root=tmp))
             self.assertFalse((path / 'save' / profile.SNAPSHOT_SLOT).exists())
             self.assertTrue((path / 'save' / 'save_001.xml.gz').exists())
-            self.assertFalse(profile.unstage(pid, root=tmp))
+            self.assertFalse(profile.unstage(profile_id, root=tmp))
+
+    def test_slot_replacements_are_preserved_even_with_matching_contents(self):
+        for replacement in ('same_contents', 'changed_contents', 'save_directory'):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as tmp:
+                snapshot = Path(tmp) / 'snap.xml.gz'
+                snapshot.write_bytes(b'snapshot')
+                profile_id = profile.PROFILES[0]
+                path = profile.prepare(profile_id, [], snapshot=snapshot, root=tmp)
+                staged = path / 'save' / profile.SNAPSHOT_SLOT
+                if replacement == 'same_contents':
+                    staged.rename(staged.with_suffix('.original'))
+                    staged.write_bytes(b'snapshot')
+                elif replacement == 'changed_contents':
+                    staged.write_bytes(b'new save')
+                else:
+                    staged.parent.rename(path / 'original-save')
+                    staged.parent.mkdir()
+                    staged.write_bytes(b'snapshot')
+                self.assertFalse(profile.unstage(profile_id, root=tmp))
+                self.assertTrue(staged.is_file())
+
+    def test_stale_lobby_record_preserves_an_unowned_slot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / 'state'
+            state.mkdir()
+            record = state / 'lobby-1.json'
+            record.write_text('{}')
+            staged = root / str(profile.PROFILES[0]) / 'save' / profile.SNAPSHOT_SLOT
+            staged.parent.mkdir(parents=True)
+            staged.write_bytes(b'pre-existing save')
+            with patch.object(profile, 'documents', return_value=root):
+                self.assertFalse(lobby.lane_in_use(state, 1, log=lambda message: None))
+            self.assertFalse(record.exists())
+            self.assertEqual(staged.read_bytes(), b'pre-existing save')
+
+    def test_join_cleanup_does_not_follow_linked_mpjoin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile_id = profile.PROFILES[0]
+            profile.prepare(profile_id, [], root=root)
+            save_dir = profile.owned_save_dir(profile_id, root=root)
+            foreign_dir = root / 'foreign'
+            foreign_dir.mkdir()
+            foreign_join = foreign_dir / 'j1.xml.gz'
+            foreign_join.write_bytes(b'foreign save')
+            link = save_dir / 'mpjoin'
+            symlink_junction(foreign_dir, link)
+            try:
+                hotjoin.remove_join_files({1: save_dir})
+                self.assertEqual(foreign_join.read_bytes(), b'foreign save')
+            finally:
+                if os.name == 'nt':
+                    os.rmdir(link)
+                else:
+                    link.unlink()
 
 
 class UnstageEveryClient(unittest.TestCase):
@@ -146,14 +229,14 @@ class UnstageEveryClient(unittest.TestCase):
         import inspect
         src = inspect.getsource(session.run)
         lines = src.splitlines()
-        start = next(i for i, l in enumerate(lines) if l.strip() == 'for k, profile_id, _ in clients:'
-                     and 'profile.collect(' in lines[i + 1])
+        start = next(i for i, l in enumerate(lines) if l.strip() == 'for k, profile_id, _ in clients:')
         indent = len(lines[start]) - len(lines[start].lstrip())
         body = []
         for l in lines[start + 1:]:
             if l.strip() and len(l) - len(l.lstrip()) <= indent:
                 break
             body.append(l)
+        self.assertTrue(any('profile.collect(profile_id,' in l for l in body), body)
         self.assertTrue(any('profile.unstage(profile_id)' in l for l in body), body)
 
 

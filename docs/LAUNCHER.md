@@ -57,9 +57,12 @@ is chosen in X4's main menu.
   linked. The probe finds the gate DLL relative to the working directory, so it
   has to run from the view. Removing a view unlinks; it never enters a junction.
 - **Profile:** `-personalfolderid` uses 45850, 45851, 45853 to 45858 for clients,
-  and 45841 for snapshot capture only. The profile is wiped before each run,
-  then gets a windowed `config.xml` (autosave off, protected UI off) and the
-  snapshot in `save_009`. Any other profile id, including your own, is refused.
+  and 45841 for snapshot capture only. The launcher resets profiles it created
+  and marked as its own, then writes a windowed `config.xml` (autosave and
+  protected UI off) and stages any snapshot in `save_009`. Existing unmarked
+  profiles, including those from older launcher versions, are preserved. To
+  reuse their numeric slot, move the whole folder to a backup location before
+  launching again. Other profile IDs are refused.
 - **Extension:** `src/lockstep/base` plus the overlay, with
   `@X4LANE_PORT@ / TOKEN / SLOT / CLIENTS@` filled in per client. The overlay's
   manifest is checked first.
