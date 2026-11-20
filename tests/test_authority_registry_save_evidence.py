@@ -9,6 +9,7 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 SPEC=importlib.util.spec_from_file_location('authority_registry_save_evidence', ROOT/'tools/dev/authority_registry_save_evidence.py')
 M=importlib.util.module_from_spec(SPEC);SPEC.loader.exec_module(M)
+from authority import registry_evidence
 EPOCH='a'*32
 
 def xml():
@@ -42,8 +43,34 @@ class RegistryEvidenceTests(unittest.TestCase):
         with self.assertRaises(M.RegistryEvidenceError):
             self.check(xml().replace('<key type="component" value="[0x2]"/><value type="integer" value="2"/>','<key type="component" value="[0x2]"/><value type="integer" value="1"/>'))
     def test_missing_or_wrong_class(self):
-        with self.assertRaises(M.RegistryEvidenceError): self.check(xml().replace('class="ship_l"','class="station"'))
-        with self.assertRaises(M.RegistryEvidenceError): self.check(xml().replace('id="[0x2]" macro="ship_b"','id="[0x3]" macro="ship_b"'))
+        with self.assertRaises(M.RegistryEvidenceError) as caught:
+            self.check(xml().replace('class="ship_l"','class="station"'))
+        self.assertNotIsInstance(caught.exception, registry_evidence.RegisteredComponentsMissingError)
+        with self.assertRaises(registry_evidence.RegisteredComponentsMissingError) as caught:
+            self.check(xml().replace('id="[0x2]" macro="ship_b"','id="[0x3]" macro="ship_b"'))
+        self.assertEqual(caught.exception.missing_components, ((2, '2'),))
+        self.assertIn('registered components missing', str(caught.exception))
+        self.assertIn('expected 2, found 1', str(caught.exception))
+        self.assertIn('2:[0x2]', str(caught.exception))
+
+    def test_malformed_mapping_fails_before_missing_component_diagnostic(self):
+        malformed = xml().replace(
+            '<key type="integer" value="2"/><value type="component" value="[0x2]"/>',
+            '<key type="integer" value="2"/><value type="string" value="missing"/>')
+        with self.assertRaises(M.RegistryEvidenceError) as caught:
+            self.check(malformed)
+        self.assertNotIsInstance(caught.exception, registry_evidence.RegisteredComponentsMissingError)
+
+    def test_missing_component_message_is_bounded(self):
+        error = registry_evidence.RegisteredComponentsMissingError(
+            20, 0, ((index, format(index, 'x')) for index in range(1, 21)))
+        message = str(error)
+        self.assertEqual(len(error.missing_components), 20)
+        self.assertIn('registered components missing', message)
+        self.assertIn('20 missing', message)
+        self.assertIn('1:[0x1]', message)
+        self.assertIn('8:[0x8]', message)
+        self.assertNotIn('9:[0x9]', message)
     def test_ambiguous_duplicate_table_reference(self):
         with self.assertRaises(M.RegistryEvidenceError): self.check(xml().replace('</refs></script>', '<ref id="2"/></refs></script>'))
 

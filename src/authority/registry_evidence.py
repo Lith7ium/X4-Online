@@ -22,6 +22,24 @@ class RegistryEvidenceError(ValueError):
     """The checkpoint registry is missing, ambiguous, or inconsistent."""
 
 
+class RegisteredComponentsMissingError(RegistryEvidenceError):
+    """Registered component IDs were not observed in the saved universe."""
+
+    MESSAGE_PAIR_LIMIT = 8
+
+    def __init__(self, expected_count, found_count, missing_components):
+        self.expected_count = expected_count
+        self.found_count = found_count
+        self.missing_components = tuple(missing_components)
+        visible_pairs = self.missing_components[:self.MESSAGE_PAIR_LIMIT]
+        details = ', '.join(f'{index}:[0x{component}]' for index, component in visible_pairs)
+        if len(self.missing_components) > len(visible_pairs):
+            details += f', ... (+{len(self.missing_components) - len(visible_pairs)} more)'
+        super().__init__(
+            f'registered components missing: expected {expected_count}, found {found_count}; '
+            f'{len(self.missing_components)} missing ({details})')
+
+
 def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None,
            include_sector_parents=False, include_mapping_fingerprint=False,
            expected_components=None, pump=None):
@@ -214,7 +232,10 @@ def verify(checkpoint, expected_epoch, expected_count, *, expected_rows=None,
 
         _parse(checkpoint, components, pump=pump)
         if len(found) != expected_count:
-            raise RegistryEvidenceError('registered components missing')
+            missing_components = tuple(
+                (index, component) for index, component in sorted(forward.items())
+                if component not in found)
+            raise RegisteredComponentsMissingError(expected_count, len(found), missing_components)
         if expected_rows is not None and any(found[forward[index]] != macro for index, macro in expected_rows):
             raise RegistryEvidenceError('saved component macro differs from observed index')
         result = {'macro_rows_checked': expected_rows is not None, 'count': expected_count,

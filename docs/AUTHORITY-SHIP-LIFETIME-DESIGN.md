@@ -5,6 +5,46 @@ lifetime number per ship identity. The proposed protocol, save representation,
 migration and recovery rules below still need implementation and validation.
 This decision does not establish complete ship coverage or playable multiplayer.
 
+## Pending decision: checkpoint availability
+
+Native04 completed its one-ship motion experiment, then failed the post-motion
+checkpoint check: seven of 10,082 issued registry entries had no component
+definition in the save. The previous confirmed save contains all seven as
+`ship_xs` police ships. The candidate retains their forward and reverse
+component references; reference persistence does not establish a live object.
+The strict verifier still rejects this candidate, and the previous confirmed
+checkpoint remains available. See the
+[native04 evidence](../reports/AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#native04-prepared-playback-completed-overall-registry-check-failed-2026-11-20).
+
+The registry contract counts issued indices, including unresolved entries,
+while the checkpoint verifier requires a saved ship component for every index.
+The proposed next experiment is to separate **availability** from **destruction**:
+
+- Retain issued identities and their lifetime metadata. Record an explicit
+  unavailable state when a validated authoritative game-side observation cannot
+  resolve an entry. A missing XML component alone must not produce this state.
+- Allow an unavailable entry in a new checkpoint format only if the saved
+  availability state and registry structure agree. Continue requiring component
+  definitions for entries declared available. An unexplained missing component,
+  contradictory observation, aliased reference or ambiguous saved state rejects
+  the checkpoint. Existing checkpoints keep their current verification rules.
+- An unavailable entry cannot supply a movement or command target. It is not
+  an instruction to destroy a client's ship, close a lifetime or reuse an index.
+  Returning availability needs a validated binding to the same lifetime; do not
+  infer one from a reused engine handle, macro or name.
+- Only a separately validated lifecycle operation may close a lifetime. The
+  approved increasing lifetime number remains the protection against stale
+  messages when an identity is subsequently rebound.
+
+This proposal changes checkpoint admission and therefore awaits the user's
+decision before implementation. First native validation would examine how the
+retained missing references resolve after load, whether a saved availability
+record survives reload without table-key collapse, and whether available,
+unavailable and explicitly closed entries remain distinguishable. It must not
+assume that all seven disappeared by the same mechanism or remove their ship
+class from coverage. The exact MD representation, event coverage, client
+visibility behavior and migration are not yet settled.
+
 ## Existing identity
 
 The experimental motion-v1 identity contains a registry `epoch`, a random

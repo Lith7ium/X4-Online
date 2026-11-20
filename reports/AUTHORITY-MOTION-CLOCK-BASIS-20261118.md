@@ -840,3 +840,49 @@ Client engine log SHA-256:
 `ff6957146319e78e865fe126b7eacc59db43ac1c20478c6bad98fde950daf439`.
 The private prepared-start correlator also passed a synthetic V3 integration
 check before launch; see `.local/check-prepared-start-private-20261120-04.json`.
+
+## Missing-component diagnostics and lifecycle evidence (2026-11-20)
+
+No further game run followed native04. `registry_evidence.verify()` now raises
+`RegisteredComponentsMissingError`, a `RegistryEvidenceError` subclass, with
+expected/found counts and the complete ordered tuple of missing index/component
+pairs. Its message includes at most eight pairs. The same invalid checkpoints
+remain rejected; the change adds diagnostics, not admission of missing ships.
+The focused synthetic XML test module passed all 10 tests. After replacing a
+new abbreviated import with a readable module name, the affected missing/wrong
+class test also passed. No broad test suite was repeated.
+
+The real retained native04 candidate was checked offline through `saved_status`:
+the new exception reported exactly the seven pairs above, with 10,082 expected
+and 10,075 found. `CURRENT` and `CONFIRMED` were unchanged. The private result is
+`.local/registry-missing-diagnostics-20261120.json`; this is an offline check of
+a real artifact, not a new runtime or recovery test.
+
+Additional read-only evidence:
+
+- A streamed scan of the candidate found the seven IDs still encoded as
+  component references in saved script tables. Retained references do not prove
+  that the referenced object exists or resolves after reload.
+- The installed `01.cat` entry
+  `assets/units/size_xs/macros/ship_arg_xs_police_01_a_macro.xml` has 1,374 bytes;
+  its declared MD5 matches the bytes read from `01.dat`:
+  `434dcefdfc27ddb2ad852f453671b979`. The macro declares class `ship_xs`, ship
+  type `police` and primary purpose `fight`. A mass-traffic/job/AI association
+  was not established.
+- Local `preparation/game-schemas/libraries/common.xsd:13910-13920` defines
+  `event_object_destroyed` for a specified object. At `12966-12976`,
+  `event_masstraffic_ship_removed` means removal from a zone, not destruction.
+  These declarations do not establish complete runtime event coverage or the
+  cause of the seven absences.
+- The retained private `.local/single-ship-destruction-native-03/result.json`
+  already records a post-action save with an absent target component and a
+  present control component. Both target references use the component encoding
+  and agree between the fixture and registry; `no_recognized_definition` refers
+  to the absent component definition, not an unknown reference encoding.
+  Runtime identity and destruction causality remain unproven in that result.
+
+A separate persisted availability state is proposed in the
+[lifetime design](../docs/AUTHORITY-SHIP-LIFETIME-DESIGN.md#pending-decision-checkpoint-availability).
+It would change checkpoint admission, so implementation awaits the user's
+architecture decision. No ship class was excluded, no lifetime was inferred
+closed, and the failed candidate was not promoted.

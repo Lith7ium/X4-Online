@@ -1,6 +1,21 @@
 # X4 multiplayer: handover for Astra
 
-## Latest: native04 motion completed; overall test failed (2026-11-20)
+## Latest: missing-component diagnostics; availability decision pending (2026-11-20)
+
+The saved-registry verifier now reports complete missing index/component pairs
+through `RegisteredComponentsMissingError`, with counts and bounded error text.
+Strict acceptance is unchanged. Ten focused synthetic tests passed; the real
+native04 candidate was checked offline and rejected with the expected seven
+pairs. Checkpoint pointers stayed unchanged. No new X4 run occurred.
+
+The user has been asked whether to experiment with a saved "unavailable" state
+distinct from destruction, retaining identities and blocking commands/motion
+for unresolved entries. This changes checkpoint admission; do not implement
+it or weaken the current verifier until the answer arrives. See the
+[proposal](../docs/AUTHORITY-SHIP-LIFETIME-DESIGN.md#pending-decision-checkpoint-availability)
+and [additional evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#missing-component-diagnostics-and-lifecycle-evidence-2026-11-20).
+
+## Previous: native04 motion completed; overall test failed (2026-11-20)
 
 At code `5221187a`, the prepared entry aligned sequence 3 at 0 m error and
 completed the real-source one-ship playback through sequence 26. Of 26 captured
