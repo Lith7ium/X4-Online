@@ -16,7 +16,12 @@ LoadGame=function(slot)assert(slot=='save_009');menu=false;player=true end
 Pause=function()paused=true end
 SetScript=function(name,callback)assert(name=='onUpdate');frame=callback end
 RegisterEvent=function(name,callback)callbacks[name]=callback;return true end
-X4LAN_AUTHORITY_MARKER_READY=function()return true end
+local marker_checks=0
+X4LAN_AUTHORITY_MARKER_READY=function()
+ assert(paused, 'registry load must pause before checking the marker')
+ marker_checks=marker_checks+1
+ return marker_checks>=3
+end
 X4LAN_IDENTITY_READY=function()return true end
 function AddUITriggeredEvent(screen,operation,payload)
  requests[#requests+1]=operation
@@ -46,6 +51,8 @@ frame();frame()
 assert(logs[1] and logs[1]:find('load_requested|',1,true))
 -- X4 reloads UI scripts after loading. Keep the underlying saved world state.
 dofile(folder..'/authority_download_load_probe.lua')
+frame()
+assert(paused and marker_checks==0, 'first playable frame must request pause without claiming readiness')
 local header_time_changed=false
 local event_failed=false
 for _=1,20 do

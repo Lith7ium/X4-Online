@@ -26,11 +26,15 @@ local barrier=X4LAN_AUTHORITY_CLIENT_LOAD_BARRIER.new({enabled=true,ticket=t},en
 local state='initial';local failed=false
 local function frame()
  if state=='done' then return end
+ if state=='observing' and cfg.authority_registry_snapshot and not barrier.hold_paused() then
+  return
+ end
  if state=='initial' then
   if engine.in_startmenu() then
    profile();engine.refresh();state='waiting'
   elseif engine.player_valid() then
    profile();barrier.observe_pause();state='observing'
+   if cfg.authority_registry_snapshot then barrier.hold_paused() end
   end
  elseif state=='waiting' then
   assert(engine.in_startmenu())

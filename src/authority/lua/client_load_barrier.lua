@@ -32,6 +32,7 @@ function M.new(cfg,engine,emit)
  end
  assert(valid_ticket(cfg.ticket),'invalid configured load attempt')
  local state='idle';local ticket=copy(cfg.ticket);local pause_requested=false
+ local pause_confirmed=false
  local obj={}
  function obj.begin()
   assert(state=='idle','already active')
@@ -49,15 +50,23 @@ function M.new(cfg,engine,emit)
   assert(state=='idle','already active')
   state='waiting_for_pause'
  end
- function obj.update()
+ -- Keep the loaded world still while the caller inspects its marker and ships.
+ -- Only update() emits the receipt that the admission owner consumes.
+ function obj.hold_paused()
   if state~='waiting_for_pause' then return false end
   if engine.in_startmenu()~=false or engine.player_valid()~=true then return false end
   if engine.is_paused()~=true then
+   assert(not pause_confirmed,'client load pause lost')
    if not pause_requested then pause_requested=true;engine.pause() end
    return false
   end
   -- Recheck the player after observing pause; never resume the client here.
   if engine.in_startmenu()~=false or engine.player_valid()~=true then return false end
+  pause_confirmed=true
+  return true
+ end
+ function obj.update()
+  if not obj.hold_paused() then return false end
   state='observed';emit('pause_observed',copy(ticket));return true
  end
  return obj
