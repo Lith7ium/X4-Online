@@ -95,8 +95,11 @@ def evaluate(rows, shots=None):
             'shot_seq': seq_of.get(name),
             'image': image,
         }
-        if 'pan_failed' in phases:
-            entry['pan_failed_first'] = {key: float(phases['pan_failed'][f'camera_{key}']) for key in ('x', 'y', 'z', 'distance')}
+        entry['failed_controls'] = [
+            {'phase': phase, 'control': phases[phase]['control'], 'focus': phases[phase]['focus'],
+             'npc_listed': _flag(phases[phase]['npc_listed']), 'raw_count': int(phases[phase]['raw_count']),
+             'camera': {key: float(phases[phase][f'camera_{key}']) for key in ('x', 'y', 'z', 'distance')}}
+            for phase in ('pan_failed', 'focus_failed') if phase in phases]
         table.append(entry)
     if len(npc_ids) > 1:
         problems.append('NPC identity changed between views')

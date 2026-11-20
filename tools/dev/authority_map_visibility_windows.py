@@ -64,6 +64,9 @@ def config_lua(options):
             f'  max_m = {float(options["max_m"])!r},\n'
             f'  warmup_s = {float(options["warmup_s"])!r},\n'
             f'  map_settle_s = {float(options["map_settle_s"])!r},\n'
+            f'  hint_wait_s = {float(options["hint_wait_s"])!r},\n'
+            f'  pick_retry_s = {float(options.get("pick_retry_s", 5.0))!r},\n'
+            f'  pick_timeout_s = {float(options.get("pick_timeout_s", 300.0))!r},\n'
             '}\n')
 
 
@@ -183,6 +186,26 @@ def capture_window(hwnd, path):
 
 # --- Run ---------------------------------------------------------------------------------------
 
+def remove_view_patiently(game_mod, view, attempts=20, delay=1.5):
+    """remove_view; when Windows still holds the emptied root for a moment, retry rmdir of that empty folder."""
+    if not view.exists():
+        return
+    try:
+        game_mod.remove_view(view)
+        return
+    except PermissionError:
+        pass
+    for _ in range(attempts):
+        time.sleep(delay)
+        if game_mod.is_link_or_reparse(view) or any(view.iterdir()):
+            raise OSError(f'{view} is not an empty view root; left in place')
+        try:
+            os.rmdir(view)
+            return
+        except PermissionError:
+            continue
+    raise OSError(f'{view} stayed in use; the empty folder was left in place')
+
 def run(args):
     from lockstep.launcher import game as game_mod, profile as profile_mod, steam
     import authority_map_visibility_evidence as evidence_mod
@@ -197,7 +220,7 @@ def run(args):
         raise SystemExit(message)
     game = Path(args.game) if args.game else game_mod.find_install()
     game_mod.verify_exe(game)
-    view = Path(os.path.splitdrive(str(game.resolve()))[0] + '\\') / 'x4ls-lanes' / 'cobalt-mapvis'
+    view = Path(os.path.splitdrive(str(game.resolve()))[0] + '\\') / 'x4ls-lanes' / f'cobalt-mapvis-{out.name}'
     if view.exists():
         raise SystemExit(f'{view} exists; remove it first (it must be an x4ls view)')
     documents = profile_mod.documents()
@@ -210,7 +233,7 @@ def run(args):
     (out / 'protected-before.json').write_text(json.dumps(protected, indent=1, sort_keys=True))
     options = {'profile': args.profile, 'gamestart': args.gamestart, 'distance': args.distance,
                'pan_factor': args.pan_factor, 'min_m': args.min_m, 'max_m': args.max_m,
-               'warmup_s': args.warmup, 'map_settle_s': args.map_settle}
+               'warmup_s': args.warmup, 'map_settle_s': args.map_settle, 'hint_wait_s': args.hint_wait}
     result = {'options': options, 'game': str(game), 'view': str(view), 'shots': {}, 'outcome': 'started'}
     process = None
     ctypes.windll.user32.SetProcessDPIAware()
@@ -251,7 +274,9 @@ def run(args):
                         time.sleep(args.shot_delay)
                         method = capture_window(hwnd, shot)
                         result['shots'][seq] = {'view': name, 'file': shot.name, 'method': method}
-                        (extension / f'ack_{seq}.lua').write_text(f'return {{seq = {seq}}}\n', encoding='ascii')
+                        partial = extension / f'ack_{seq}.partial'
+                        partial.write_text(f'return {{seq = {seq}}}\n', encoding='ascii')
+                        os.replace(partial, extension / f'ack_{seq}.lua')  # X4 polls the file every frame
                     elif kind in ('DONE', 'ERROR'):
                         finished = kind
                 if finished:
@@ -270,13 +295,13 @@ def run(args):
         if process is not None:
             result['exit_code'] = process.returncode
         time.sleep(2.0)
+        log = profile_mod.profile_dir(args.profile) / LOGFILE
+        if log.is_file():
+            shutil.copyfile(log, out / LOGFILE)
         try:
-            log = profile_mod.profile_dir(args.profile) / LOGFILE
-            if log.is_file():
-                shutil.copyfile(log, out / LOGFILE)
-        finally:
-            if view.exists():
-                game_mod.remove_view(view)
+            remove_view_patiently(game_mod, view)
+        except OSError as error:
+            result['cleanup_error'] = f'{type(error).__name__}: {error}'
         after = {
             'other_profiles': {entry.name: tree_metadata(entry) for entry in sorted(documents.iterdir())
                                if entry.is_dir() and entry.name != str(args.profile)},
@@ -304,9 +329,10 @@ def main(argv=None):
     parser.add_argument('--gamestart', default='custom_creative')
     parser.add_argument('--distance', type=float, default=20000.0, help='map camera distance of the views')
     parser.add_argument('--pan-factor', type=float, default=4.0, help='offscreen pan in camera distances along X')
-    parser.add_argument('--min-m', type=float, default=1000.0)
-    parser.add_argument('--max-m', type=float, default=8000.0)
+    parser.add_argument('--min-m', type=float, default=500.0)
+    parser.add_argument('--max-m', type=float, default=1e7, help='NPC distance limit; the onscreen view centres on the NPC')
     parser.add_argument('--warmup', type=float, default=20.0, help='seconds of play before picking the NPC')
+    parser.add_argument('--hint-wait', type=float, default=10.0, help='extra seconds of play for start hints to expire')
     parser.add_argument('--map-settle', type=float, default=3.0)
     parser.add_argument('--shot-delay', type=float, default=0.5)
     parser.add_argument('--width', type=int, default=1280)

@@ -6,11 +6,13 @@
 -- Order, all in one X4 process started by authority_map_visibility_windows.py:
 --   start menu -> NewGame(cfg.gamestart) -> player valid -> pick one NPC ship in the player's
 --   sector (known, radar-visible, not player-owned, cfg.min_m..cfg.max_m from the player) ->
---   Pause() -> open the map without a focus parameter (no selection) -> three views:
---     onscreen   camera centred on the player at cfg.distance
---     offscreen  same distance, camera offset moved by cfg.pan_factor * cfg.distance along X
---                (fallback when that is not reached: focus a far station in the same sector)
---     back       the onscreen state again
+--   Pause() -> open the map without a focus parameter (no selection) -> focus the NPC (camera only,
+--   SetFocusMapComponent, no selection) -> three views:
+--     onscreen   camera centred on the NPC at cfg.distance
+--     offscreen  same distance, camera offset moved by cfg.pan_factor * cfg.distance along X; when not
+--                reached: focus a far station in the same sector; when the map then reports no focus:
+--                the same pan again from that unfocused state (every failed control is logged)
+--     back       focus the NPC again, then the onscreen camera state
 --   For every view: settle, read camera/focus/selection, sample the raw renderer list, ask the
 --   runner for a screenshot (log row SHOT), wait for its ack file, sample the list again.
 -- Writes nothing but log rows and map UI state. No save, order, position or subscription change.
@@ -39,7 +41,25 @@ for _, text in ipairs({
 	'UniverseID GetMapFocusComponent(UniverseID holomapid);',
 	'void SetFocusMapComponent(UniverseID holomapid, UniverseID componentid, bool resetplayerpan);',
 	'uint32_t GetNumMapSelectedComponents(UniverseID holomapid);',
+	'bool HasConfigSetting(const char* setting);', 'void SetOrderQueueOption(const char* setting);',
 }) do declare(text) end
+
+-- Hints queued by the stock help text addon (__CORE_HELPTEXT_QUEUE is its shared queue).
+local function hint_count()
+	local queue = __CORE_HELPTEXT_QUEUE
+	return type(queue) == 'table' and #queue or 0
+end
+
+-- A start hint that stays until closed would cover the map. Do what the addon's "clearhelptext all"
+-- event does: empty the shared queue (in place) and hide its "helptext" view. Returns how many were cleared.
+local function clear_hints()
+	local queue = __CORE_HELPTEXT_QUEUE
+	if type(queue) ~= 'table' or not queue[1] then return 0 end
+	local cleared = #queue
+	for index = cleared, 1, -1 do table.remove(queue, index) end
+	if type(View) == 'table' and type(View.unregisterMenu) == 'function' then pcall(View.unregisterMenu, 'helptext') end
+	return cleared
+end
 
 local EXT_DIR = './extensions/' .. tostring(cfg.extension_id or 'x4_cobalt_mapvis') .. '/'
 local SETTLE_STEP, SETTLE_SAMPLES, SETTLE_TIMEOUT, ACK_TIMEOUT = 0.25, 3, 10.0, 60.0
@@ -78,29 +98,42 @@ local function factions()
 end
 
 -- The nearest known, radar-visible, operational NPC ship in the player's sector, cfg.min_m..cfg.max_m away.
+-- Objects come from each faction's universe-wide list, filtered to the player's sector; counts per filter
+-- stage are returned so an empty pick says which condition removed the ships.
 local function pick_npc(sector, player)
 	local origin = C.GetObjectPositionInSector(player)
 	local sector_text, player_text = id_text(sector), id_text(player)
-	local sector_lua = ConvertStringToLuaID(sector_text)
-	local best, best_m, candidates = nil, nil, 0
+	local counts = {objects = 0, ships = 0, in_sector = 0, known = 0, radar = 0, operational = 0, in_range = 0}
+	local best, best_m, nearest_m
 	for _, faction in ipairs(factions()) do
 		if faction ~= 'player' then
-			for _, object in ipairs(GetContainedObjectsByOwner(faction, sector_lua) or {}) do
+			for _, object in ipairs(GetContainedObjectsByOwner(faction) or {}) do
+				counts.objects = counts.objects + 1
 				local ship = id64(object)
-				if ship and id_text(ship) ~= '0' and id_text(ship) ~= player_text and C.IsComponentClass(ship, 'ship') and
-					id_text(C.GetContextByClass(ship, 'sector', false)) == sector_text then
-					local known, radar = GetComponentData(object, 'isknown', 'isradarvisible')
-					local metres = distance(origin, C.GetObjectPositionInSector(ship))
-					if known and radar and C.IsComponentOperational(ship) and metres >= cfg.min_m and
-						metres <= cfg.max_m then
-						candidates = candidates + 1
-						if not best_m or metres < best_m then best, best_m = ship, metres end
+				local text = ship and id_text(ship)
+				if text and text ~= '0' and text ~= player_text and C.IsComponentClass(ship, 'ship') then
+					counts.ships = counts.ships + 1
+					if id_text(C.GetContextByClass(ship, 'sector', false)) == sector_text then
+						counts.in_sector = counts.in_sector + 1
+						local metres = distance(origin, C.GetObjectPositionInSector(ship))
+						if not nearest_m or metres < nearest_m then nearest_m = metres end
+						local known, radar = GetComponentData(object, 'isknown', 'isradarvisible')
+						if known then counts.known = counts.known + 1 end
+						if known and radar then counts.radar = counts.radar + 1 end
+						if known and radar and C.IsComponentOperational(ship) then
+							counts.operational = counts.operational + 1
+							if metres >= cfg.min_m and metres <= cfg.max_m then
+								counts.in_range = counts.in_range + 1
+								if not best_m or metres < best_m then best, best_m = ship, metres end
+							end
+						end
 					end
 				end
 			end
 		end
 	end
-	return best, best_m, candidates
+	counts.nearest_any_m = nearest_m
+	return best, best_m, counts
 end
 
 local function find_map()
@@ -173,12 +206,12 @@ local function record_view(view, phase)
 	local player_pos = C.GetObjectPositionInSector(probe.player)
 	local known, radar = GetComponentData(ConvertStringToLuaID(probe.npc_id), 'isknown', 'isradarvisible')
 	log(('VIEW view=%s phase=%s npc=%s npc_listed=%s player=%s player_listed=%s raw_count=%d focus=%s selected=%d ' ..
-		'paused=%s game_time=%s npc_known=%s npc_radar=%s npc_player_m=%s reached=%s control=%s %s%s'):format(
+		'paused=%s game_time=%s npc_known=%s npc_radar=%s npc_player_m=%s reached=%s control=%s hints=%d %s%s'):format(
 		view.name, phase, probe.npc_id, tostring(set[probe.npc_id] == true), probe.player_id,
 		tostring(set[probe.player_id] == true), observation.raw_count, id_text(C.GetMapFocusComponent(probe.map)),
 		C.GetNumMapSelectedComponents(probe.map), tostring(C.IsGamePaused()), num(C.GetCurrentGameTime()),
 		tostring(known == true), tostring(radar == true), num(distance(npc_pos, player_pos)),
-		tostring(view.reached), view.control, state_fields('camera', s),
+		tostring(view.reached), view.control, hint_count(), state_fields('camera', s),
 		view.target and (' ' .. state_fields('target', view.target)) or ''))
 	log(('LIST view=%s phase=%s ids=%s'):format(view.name, phase, table.concat(observation.component_ids, ',')))
 end
@@ -216,13 +249,33 @@ local function frame()
 		if not C.IsPlayerValid() or ffi.string(C.GetGameStartName()) ~= cfg.gamestart then return end
 		probe.loaded_at = probe.loaded_at or now()
 		if now() - probe.loaded_at < cfg.warmup_s then return end
+		-- Start hints expire only while the game runs, and they would cover the map: wait for an empty
+		-- hint queue before pausing, at most cfg.hint_wait_s.
+		if not probe.hints_logged then
+			local pending = hint_count()
+			if pending > 0 and now() - probe.loaded_at < cfg.warmup_s + cfg.hint_wait_s then return end
+			log(('HINTS pending=%d waited_s=%s cleared=%d'):format(pending, num(now() - probe.loaded_at), clear_hints()))
+			probe.hints_logged, probe.pick_started = true, now()
+		end
+		-- Which ships are known depends on where the start put the player; while the game runs, traffic
+		-- comes into radar range. Retry every cfg.pick_retry_s, at most cfg.pick_timeout_s.
+		if now() - (probe.pick_at or 0) < cfg.pick_retry_s then return end
+		probe.pick_at = now()
+		clear_hints()
 		probe.player = player_ship()
 		probe.player_id = id_text(probe.player)
 		probe.sector = C.GetContextByClass(probe.player, 'sector', false)
-		local npc, metres, candidates = pick_npc(probe.sector, probe.player)
-		log(('PICK player=%s sector=%s npc=%s npc_player_m=%s candidates=%d'):format(
+		local npc, metres, c = pick_npc(probe.sector, probe.player)
+		local waited = now() - probe.pick_started
+		if not npc and waited < cfg.pick_timeout_s then
+			probe.pick_tries = (probe.pick_tries or 0) + 1
+			return
+		end
+		log(('PICK player=%s sector=%s npc=%s npc_player_m=%s candidates=%d objects=%d ships=%d in_sector=%d ' ..
+			'known=%d radar=%d operational=%d nearest_any_m=%s retries=%d waited_s=%s'):format(
 			probe.player_id, id_text(probe.sector), npc and id_text(npc) or 'none', metres and num(metres) or 'none',
-			candidates))
+			c.in_range, c.objects, c.ships, c.in_sector, c.known, c.radar, c.operational,
+			c.nearest_any_m and num(c.nearest_any_m) or 'none', probe.pick_tries or 0, num(waited)))
 		if not npc then error('no known radar-visible NPC ship in range') end
 		probe.npc, probe.npc_id = npc, id_text(npc)
 		Pause()
@@ -233,6 +286,12 @@ local function frame()
 	if stage == 'pausing' then
 		if not C.IsGamePaused() then return end
 		sampler = assert(X4LAN_MAP_RENDER_OBSERVATION.new_x4({enabled = true}))
+		-- The map asks once per profile for the order queue behaviour in a modal popup over the map.
+		-- Answer it as its "No" button does (keep), in this disposable profile only.
+		if not C.HasConfigSetting('orderqueue') then
+			C.SetOrderQueueOption('keep')
+			log('ORDERQUEUE set=keep')
+		end
 		OpenMenu('MapMenu', {0, 0, true}, nil)
 		probe.opened_at = now()
 		probe.stage = 'opening'
@@ -246,13 +305,30 @@ local function frame()
 		end
 		if now() - probe.opened_at < cfg.map_settle_s then return end
 		probe.map = map
-		local initial = read_state(map)
-		log('MAP_OPEN ' .. state_fields('camera', initial))
-		probe.home = {x = initial.x, y = initial.y, z = initial.z, yaw = initial.yaw, pitch = initial.pitch,
-			roll = initial.roll, distance = cfg.distance}
+		log(('MAP_OPEN focus=%s selected=%d %s'):format(id_text(C.GetMapFocusComponent(map)),
+			C.GetNumMapSelectedComponents(map), state_fields('camera', read_state(map))))
+		-- Centre the camera on the NPC (focus only, no selection), then set the view distance.
+		C.SetFocusMapComponent(map, probe.npc, true)
+		probe.focus_started, probe.focus_samples = now(), {}
+		probe.stage = 'focusing'
+		return
+	end
+	if stage == 'focusing' then
+		if now() - (probe.focus_step or 0) < SETTLE_STEP then return end
+		probe.focus_step = now()
+		local s = read_state(probe.map)
+		local last = probe.focus_samples[#probe.focus_samples]
+		probe.focus_samples = (last and same_state(last, s, 0.01)) and probe.focus_samples or {}
+		probe.focus_samples[#probe.focus_samples + 1] = s
+		if #probe.focus_samples < SETTLE_SAMPLES and now() - probe.focus_started < SETTLE_TIMEOUT then return end
+		local focus = id_text(C.GetMapFocusComponent(probe.map))
+		log(('FOCUS npc=%s focus=%s stable=%s selected=%d %s'):format(probe.npc_id, focus,
+			tostring(#probe.focus_samples >= SETTLE_SAMPLES), C.GetNumMapSelectedComponents(probe.map),
+			state_fields('camera', s)))
+		probe.home = {x = s.x, y = s.y, z = s.z, yaw = s.yaw, pitch = s.pitch, roll = s.roll, distance = cfg.distance}
 		probe.plan = {'onscreen', 'offscreen', 'back'}
 		begin_view('onscreen', probe.home)
-		probe.view.control = 'set_map_state'
+		probe.view.control = 'focus_npc_then_set_map_state'
 		return
 	end
 	if stage == 'view' then
@@ -260,15 +336,28 @@ local function frame()
 		probe.view.last_step = now()
 		if not settle() then return end
 		local view = probe.view
-		if view.name == 'offscreen' and not view.reached and not view.fallback_tried and cfg.far_station then
-			-- SetMapState did not reach the pan target: record it, then try the focus fallback once.
-			record_view(view, 'pan_failed')
-			view.fallback_tried = true
-			local far = cfg.far_station(probe)
-			if far then
-				view.focus, view.target, view.control = far, nil, 'focus_far_station'
+		-- Offscreen controls, in order, each failure recorded: (1) SetMapState pan while the NPC is the map
+		-- focus; (2) focus a far station in the sector; (3) when the map then reports no focus, the same
+		-- SetMapState pan again from that unfocused state.
+		if view.name == 'offscreen' and not view.reached then
+			view.attempt = view.attempt or 1
+			if view.attempt == 1 then
+				record_view(view, 'pan_failed')
+				view.attempt = 2
+				local far = cfg.far_station and cfg.far_station(probe)
+				if far then
+					view.focus, view.target, view.control = far, nil, 'focus_far_station'
+					view.samples, view.started = {}, now()
+					C.SetFocusMapComponent(probe.map, far, true)
+					return
+				end
+			end
+			if view.attempt == 2 and id_text(C.GetMapFocusComponent(probe.map)) == '0' then
+				record_view(view, 'focus_failed')
+				view.attempt = 3
+				view.focus, view.target, view.control = nil, probe.offscreen_target, 'unfocused_set_map_state'
 				view.samples, view.started = {}, now()
-				C.SetFocusMapComponent(probe.map, far, true)
+				write_state(probe.map, view.target)
 				return
 			end
 		end
@@ -286,20 +375,26 @@ local function frame()
 			if now() - view.shot_at > ACK_TIMEOUT then error('no screenshot ack for ' .. view.name) end
 			return
 		end
-		local ack = chunk()
-		assert(type(ack) == 'table' and ack.seq == view.seq, 'wrong screenshot ack')
+		local run_ok, ack = pcall(chunk)
+		if not (run_ok and type(ack) == 'table' and ack.seq == view.seq) then
+			-- Not complete yet (the runner replaces the file atomically; an older X4 read may still race).
+			if now() - view.shot_at > ACK_TIMEOUT then error('wrong screenshot ack for ' .. view.name) end
+			return
+		end
 		record_view(view, 'after_shot')
 		probe.views[#probe.views + 1] = view
 		table.remove(probe.plan, 1)
 		local next_name = probe.plan[1]
 		if next_name == 'offscreen' then
 			local home = probe.home
-			begin_view('offscreen', {x = home.x + cfg.pan_factor * cfg.distance, y = home.y, z = home.z, yaw = home.yaw,
-				pitch = home.pitch, roll = home.roll, distance = home.distance})
+			probe.offscreen_target = {x = home.x + cfg.pan_factor * cfg.distance, y = home.y, z = home.z, yaw = home.yaw,
+				pitch = home.pitch, roll = home.roll, distance = home.distance}
+			begin_view('offscreen', probe.offscreen_target)
 			probe.view.control = 'set_map_state'
 		elseif next_name == 'back' then
-			begin_view('back', probe.home, probe.views[2].focus and probe.player or nil)
-			probe.view.control = probe.views[2].focus and 'focus_player_then_set_map_state' or 'set_map_state'
+			-- Same control as the onscreen view: focus the NPC, then the onscreen camera state.
+			begin_view('back', probe.home, probe.npc)
+			probe.view.control = 'focus_npc_then_set_map_state'
 		else
 			probe.stage = 'done'
 			log('DONE views=' .. #probe.views)
@@ -311,13 +406,15 @@ end
 -- Fallback pan: the station in the player's sector farthest from the NPC, at least 3 view distances away.
 cfg.far_station = cfg.far_station or function(p)
 	local origin = C.GetObjectPositionInSector(p.npc)
-	local sector_lua = ConvertStringToLuaID(id_text(p.sector))
+	local sector_text = id_text(p.sector)
 	local best, best_m
 	for _, faction in ipairs(factions()) do
-		for _, object in ipairs(GetContainedStationsByOwner(faction, sector_lua) or {}) do
+		for _, object in ipairs(GetContainedStationsByOwner(faction) or {}) do
 			local station = id64(object)
-			local metres = distance(origin, C.GetObjectPositionInSector(station))
-			if metres >= 3 * cfg.distance and (not best_m or metres > best_m) then best, best_m = station, metres end
+			if id_text(C.GetContextByClass(station, 'sector', false)) == sector_text then
+				local metres = distance(origin, C.GetObjectPositionInSector(station))
+				if metres >= 3 * cfg.distance and (not best_m or metres > best_m) then best, best_m = station, metres end
+			end
 		end
 	end
 	if best then log(('FALLBACK station=%s npc_station_m=%s'):format(id_text(best), num(best_m))) end

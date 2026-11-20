@@ -108,7 +108,7 @@ class Evidence(unittest.TestCase):
 
 class Runner(unittest.TestCase):
     OPTIONS = {'profile': 45850, 'gamestart': 'custom_creative', 'distance': 20000.0, 'pan_factor': 4.0,
-               'min_m': 1000.0, 'max_m': 8000.0, 'warmup_s': 20.0, 'map_settle_s': 3.0}
+               'min_m': 1000.0, 'max_m': 8000.0, 'warmup_s': 20.0, 'map_settle_s': 3.0, 'hint_wait_s': 120.0}
 
     def test_compose_extension(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -156,8 +156,11 @@ class ProbeSource(unittest.TestCase):
         self.assertIn('not the disposable profile', self.SOURCE)
 
     def test_no_writes_beyond_map_state(self):
-        for name in ('SaveGame', 'LoadGame', 'SetObjectPosition', 'SetOrder', 'CreateOrder', 'io.', 'os.'):
+        for name in ('SaveGame', 'LoadGame', 'SetObjectPosition', 'CreateOrder', 'io.', 'os.'):
             self.assertNotIn(name, self.SOURCE)
+        # The only non-map write: the map's own one-time popup answer, guarded by HasConfigSetting.
+        self.assertEqual(re.findall(r'SetOrder\w*', self.SOURCE), ['SetOrderQueueOption', 'SetOrderQueueOption'])
+        self.assertIn("if not C.HasConfigSetting('orderqueue') then", self.SOURCE)
 
     def test_rows_match_evidence_parser(self):
         for kind in ('PICK', 'MAP_OPEN', 'VIEW', 'LIST', 'SHOT', 'DONE', 'ERROR', 'FALLBACK'):
