@@ -284,6 +284,39 @@ simulation before pause, any real client X4 load, gameplay, WAN, Windows or
 universe-wide state consistency. Its source archives must remain exclusively
 controlled and unchanged during the check.
 
+## Format-3 registry checkpoint recovery (internal, opt-in)
+
+`--require-registry-snapshot` is a recovery-only switch for a **previously
+confirmed output of this supervisor** that already contains a format-3 registry
+availability snapshot. It cannot bootstrap an older save or use a standalone
+registry diagnostic save. A first confirmed supervisor seed with a verified
+format-3 snapshot and final registry receipt is still required before this
+command can be exercised. This path has only offline tests so far; no native
+recovered-server run has been made with the switch.
+
+```sh
+python tools/dev/authority_recovered_loopback_server.py \
+  --game /path/to/X4 --display :DISPLAY --out .local/next-format3-server \
+  --store .local/confirmed-format3-server/checkpoints \
+  --require-registry-snapshot
+```
+
+The source must have a clean prior `result.json`, matching `CURRENT` and
+`CONFIRMED` pointers, matching checkpoint ID and SHA-256, matching private
+profile content, and exactly the marker, identity, ship registry and snapshot
+MD scripts with pinned bytes. The prior result's `registry_snapshot.final_receipt`
+must match the independently verified saved run ID, epoch, issued count and
+availability, operational and mapping digests. The new instance inspects every
+issued ID before activating the bridge. Each save requires full ordered capture
+receipts and a new saved snapshot with the same epoch and issued count; a
+missing binding cannot reappear. The existing save-title, marker and store
+acknowledgement checks remain in force. Mapping digests are recorded for each
+save but are not compared across reloads because native component references
+may change. The result retains a compact source receipt, final receipt and
+verified-save count for the next recovery. This switch rejects the diagnostic
+and alternative registry owners. It does not establish byte-exact native load,
+client admission or gameplay.
+
 ## Optional read-only registry status
 
 `--registry-status` installs the current experimental registry script and a

@@ -29,6 +29,7 @@ import authority_recovery_join_source as source
 import authority_recovery_live as recovery
 import authority_two_x4_live as owned
 import authority_load_live as load
+import authority_recovered_registry_snapshot as registry_snapshots
 import linux_gate_live as live
 import linux_snapshot_capture as snapshot
 from authority.checkpoints import CheckpointStore
@@ -89,7 +90,8 @@ def read_evidence(path, limit=65536):
         if fd >= 0: os.close(fd)
 
 
-def verify_previous_source(store, checkpoint, profile, *, registry_status=False, witness_source=False):
+def verify_previous_source(store, checkpoint, profile, *, registry_status=False, witness_source=False,
+                           require_registry_snapshot=False):
     """Accept only a compatible, cleanly ended local supervisor generation.
 
     This is local provenance, not authentication or a concurrent-writer fence.
@@ -100,7 +102,8 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
     if store.directory.name != 'checkpoints': raise ValueError('unsupported source store')
     path = origin/'result.json'
     try:
-        result = json.loads(read_evidence(path).decode('utf-8'), object_pairs_hook=_pairs,
+        result = json.loads(read_evidence(path, (1 << 20) if require_registry_snapshot else 65536).decode('utf-8'),
+                            object_pairs_hook=_pairs,
                             parse_constant=_reject_constant)
     except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
         raise ValueError('invalid source supervisor result') from error
@@ -118,6 +121,9 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
     names={p.name for p in md.iterdir()}
     base_names={'authority_checkpoint_marker.xml','authority_identity_fixture.xml'}
     valid_names = (base_names,base_names|{'authority_ship_registry.xml'}) if registry_status else (base_names,)
+    if require_registry_snapshot:
+        valid_names = (base_names|{'authority_ship_registry.xml',
+                                  'authority_registry_availability_snapshot.xml'},)
     if witness_source:
         valid_names = (base_names|{'authority_ship_registry.xml','authority_registry_witness.xml'},)
         if (result.get('witness_diagnostic',{}).get('phase') != 'create' or
@@ -127,6 +133,9 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
         raise ValueError('source saved-state scripts differ')
     if 'authority_ship_registry.xml' in names and read_evidence(md/'authority_ship_registry.xml') != read_evidence(ROOT/'tools/dev/authority_ship_registry.xml'):
         raise ValueError('source registry script differs')
+    if require_registry_snapshot and (read_evidence(md/'authority_registry_availability_snapshot.xml') !=
+                                      read_evidence(ROOT/'tools/dev/authority_registry_availability_snapshot.xml')):
+        raise ValueError('source snapshot script differs')
     if read_evidence(case/'home/.config/EgoSoft/X4/45841/content.xml') != read_evidence(Path(profile)/'content.xml'):
         raise ValueError('source and recovery content differ')
     if read_evidence(md/'authority_checkpoint_marker.xml') != read_evidence(ROOT/'src/authority/md/checkpoint_marker.xml'):
@@ -136,6 +145,11 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
         raise ValueError('source identity fixture differs')
     if store.latest_marked_confirmed() != checkpoint:
         raise ValueError('source checkpoint changed during verification')
+    if require_registry_snapshot:
+        from authority.registry_availability_evidence import verify_join_snapshot
+        saved_evidence = verify_join_snapshot(checkpoint)
+        registry_snapshots.verify_previous_receipt(result, checkpoint, saved_evidence)
+        return fixture, saved_evidence
     return fixture
 
 
@@ -808,6 +822,7 @@ def diagnostic_process_measure_seconds(args):
 
 
 def run(args):
+    require_snapshot = registry_snapshots.validate_mode(args)
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('unprivileged Linux user required')
     out = snapshot.output_path(args.out)
@@ -936,10 +951,16 @@ def run(args):
                 source_store, checkpoint, profile)
             fixture = None
         elif source_store.directory == source.DEFAULT_STORE.resolve():
+            if require_snapshot: raise ValueError('registry snapshot requires a confirmed previous supervisor source')
             if witness_join: raise ValueError('witness join requires an own verified source')
             fixture = source.verify(source_store.directory, checkpoint, profile)
         else:
-            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=(getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or bool(witness_phase)), witness_source=(witness_phase=='verify'))
+            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=(getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or bool(witness_phase)), witness_source=(witness_phase=='verify'), require_registry_snapshot=require_snapshot)
+        registry_snapshot_state = None
+        if require_snapshot:
+            fixture, saved_evidence = fixture
+            registry_snapshot_state = registry_snapshots.RegistrySnapshotState(checkpoint, saved_evidence)
+            result['registry_snapshot'] = registry_snapshot_state.metadata()
         target = profile/'save/save_008.xml.gz'
         if any(target.parent.iterdir()): raise ValueError('new profile save directory not empty')
         os.link(staged, target, follow_symlinks=False); target.chmod(0o400)
@@ -949,6 +970,9 @@ def run(args):
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
         protected = (fixture_helpers.install_server(case, profile, fixture_scripts, sock.getsockname()[1], lease, epoch)
                      if fixture_mode else bridge.install_probe(case, profile, sock.getsockname()[1], lease, epoch))
+        if require_snapshot:
+            protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
+                                                             read_source=read_evidence))
         sample_writer = None
         if sample_write_slot is not None:
             import authority_fixture_player_sample_install as sample_install
@@ -1056,6 +1080,7 @@ def run(args):
             clock = authority_overlap_clock.OverlapClock(clock_sock, lease)
         if not fixture_mode:
             protected.append(bridge.install_saved_identity_fixture(case, fixture))
+        protected = list(dict.fromkeys(protected))
         expected = {path:live.sha(path) for path in protected}
         store_path = out/'checkpoints'; store_path.mkdir(mode=0o700)
         store = CheckpointStore(store_path)
@@ -1102,6 +1127,9 @@ def run(args):
                     **({'check_source': playback_window.check_source} if playback_window is not None else {}))
             check()
         peer = bridge.activate(sock, watch, lease, epoch, deadline, check, verify)
+        if require_snapshot:
+            registry_snapshot_state.verify_initial(profile/'engine-output.log')
+            result['registry_snapshot'] = registry_snapshot_state.metadata()
         if registry_check is not None:
             registry_check.matches_log(profile/'engine-output.log',registry_nonce,'startup',registry_expected)
             if witness_check:
@@ -1118,6 +1146,10 @@ def run(args):
             evidence=read_cycle_evidence(store_arg,checkpoint_id,save_name)
             if fixture_mode:
                 fixture_helpers.verify_checkpoint_mapping(store_arg.get(checkpoint_id))
+            if require_snapshot:
+                saved = store_arg.get(checkpoint_id)
+                registry_snapshot_state.verify_save(saved, profile/'engine-output.log')
+                result['registry_snapshot'] = registry_snapshot_state.metadata()
             if registry_check is not None:
                 saved=store_arg.get(checkpoint_id)
                 actual=registry_check.saved_status(saved)
@@ -1733,6 +1765,9 @@ def run(args):
                     if fixture_source_result_path.name == 'result.json':
                         import authority_saved_registry_checkpoint_source as fixture_source
                         fixture_source.verify_current_confirmed(source_store.directory)
+                if require_snapshot:
+                    verify_previous_source(source_store, checkpoint, profile,
+                                           require_registry_snapshot=True)
             except BaseException as error:
                 result.update(success=False, error='final recovery evidence invalid: '+str(error))
         if local_pair:
@@ -1771,6 +1806,8 @@ def main():
     parser.add_argument('--display',required=True); parser.add_argument('--timeout',type=float,default=3600)
     parser.add_argument('--seed',type=int,default=276944566)
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
+    parser.add_argument('--require-registry-snapshot',action='store_true',
+                        help='require confirmed format-3 source and full live registry observations for every save')
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')
     parser.add_argument('--registry-witness',choices=('create','verify'),help='isolated paused diagnostic; never admit clients')
     parser.add_argument('--registry-witness-join',action='store_true',help='private one-client witness join experiment; not identity proof')
