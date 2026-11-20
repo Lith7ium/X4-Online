@@ -309,12 +309,14 @@ class ExperimentalSourceMotionIPC:
         self._state = 'pulling'
         deadline = time.monotonic() + self._timeout
         try:
-            # Respect the maximum per-track TCP send frequency even if the X4
-            # sampler returns the same track on two consecutive pulls.
-            while self._last_pull is not None and time.monotonic() - self._last_pull < self._motion._min_interval:
+            # The sampler can return the same track twice, so this bridge spaces
+            # all requests from the completion of its previous pull.
+            while self._last_pull is not None:
+                remaining = self._last_pull + self._motion._min_interval - time.monotonic()
+                if remaining <= 0:
+                    break
                 self._check(deadline, 'pulling')
-                select.select([], [], [], max(0, min(.01, self._motion._min_interval -
-                                                    (time.monotonic() - self._last_pull))))
+                time.sleep(min(.01, remaining))
             self._quiet(deadline, 'pulling')
             if self._next >= _MAX:
                 raise RuntimeError('source motion request capacity')
@@ -461,17 +463,15 @@ class ExperimentalSourceMotionIPC:
             selected = None
         else:
             selected = self._select(sample, deadline)
-        unselected = selected == []
-        if selected != []:
-            if latest:
-                if self._motion_call(self._motion.enqueue_latest, sample, recipients=selected,
-                                     _guard=self._latest_guard) is not True:
-                    selected = []
-            elif self._motion_call(self._motion.send, sample, guard=lambda: self._check(deadline, 'pulling') or True,
-                                   recipients=selected) is not True:
-                raise RuntimeError('motion TCP not confirmed')
-        if unselected:
+        if selected == []:
             self._motion_call(self._motion.observe_unselected, sample)
+        elif latest:
+            if self._motion_call(self._motion.enqueue_latest, sample, recipients=selected,
+                                 _guard=self._latest_guard) is not True:
+                selected = []
+        elif self._motion_call(self._motion.send, sample, guard=lambda: self._check(deadline, 'pulling') or True,
+                               recipients=selected) is not True:
+            raise RuntimeError('motion TCP not confirmed')
         # Keep a detached sample so later callbacks cannot change the clock or
         # frame baseline used to validate the next source observation.
         self._observed[sample['index']] = copy.deepcopy(sample)

@@ -164,23 +164,28 @@ class ExperimentalTCPMotion:
         self._reserved(_source)
         if self._source_owner is None or _source is None or _source is not self._source_lease:
             raise RuntimeError('unselected observation requires the source owner')
-        d=self._delivery;host=d._host;host._check()
-        if self._failed or d._failed:raise RuntimeError('motion owner unavailable')
+        delivery = self._delivery
+        host = delivery._host
+        host._check()
+        if self._failed or delivery._failed:
+            raise RuntimeError('motion owner unavailable')
         try:
-            value=motion_value(raw)
-            key=(value['epoch'],value['generation'],value['index'])
-            state=self._tracks.get(key)
-            if not state or state['closed'] or value['sequence']<=state['sequence']:
+            sample = motion_value(raw)
+            key = (sample['epoch'], sample['generation'], sample['index'])
+            track = self._tracks.get(key)
+            if track is None or track['closed'] or sample['sequence'] <= track['sequence']:
                 raise ValueError('unknown, closed or stale motion track')
-            _check_snapshot_progress(value,state)
+            _check_snapshot_progress(sample, track)
             host._control._reader_free(motion=True)
-            state['sequence']=value['sequence']
-            state['time']=value['source_time']
-            state['capture_time']=value.get('capture_time')
-            state['version']=value['version']
-            state['frame']=value['sector_macro']
+            track['sequence'] = sample['sequence']
+            track['time'] = sample['source_time']
+            track['capture_time'] = sample.get('capture_time')
+            track['version'] = sample['version']
+            track['frame'] = sample['sector_macro']
         except BaseException:
-            self._failed=True;d._failed=True;host._failed=True
+            self._failed = True
+            delivery._failed = True
+            host._failed = True
             raise
 
     def send(self, raw, *, despawn=False, guard=None, recipients=None, _source=None):
