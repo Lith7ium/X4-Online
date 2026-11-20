@@ -149,10 +149,15 @@ This snapshot has no command or motion consumer and is not wired into
 checkpoint admission. Targeted synthetic checks cover the owner, saved-byte
 reader and private adapter. The first full-register native attempt (format 2) refused
 the first batch: index 59 referenced an existing object but failed the combined
-operational/class/reverse/duplicate check. No snapshot was sealed or saved;
-the failing predicate is not yet established. Full-register save/reload
-validation remains outstanding. All registered entries is a narrower claim
-than all universe ships.
+operational/class/reverse/duplicate check. No snapshot was sealed or saved in
+that attempt. A later format-3 run with `isrealclass.ship` passed full capture,
+save verification and inspection after reload in a new X4 process: all 10,082
+indices matched, with 10,075 bindings, seven absent objects, 10,019 operational
+entries and 56 bound non-operational entries matching the saved wreck list.
+See the [native evidence](../reports/AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#full-register-format-3-save-and-reload-passed-2026-11-20).
+All registered entries is a narrower claim than all universe ships. This
+one-shot diagnostic must not be reused as current evidence for a later save;
+integration into repeated checkpoint capture/admission remains outstanding.
 
 ## Existing identity
 

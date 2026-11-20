@@ -1,6 +1,40 @@
 # X4 multiplayer: handover for Astra
 
-## Latest: binding type corrected for X4 wreck semantics (2026-11-20)
+## Latest: full-register binding/operational save and reload passed (2026-11-20)
+
+At `af246556`, private run
+`.local/registry-availability-full-native-20261120-03` passed capture, save,
+saved-byte verification and inspection in a fresh X4 process. Both phases
+covered all 10,082 issued indices in 158 contiguous batches: 10,075 bound,
+seven missing, 10,019 operational. All saved/fresh binding and operational bits
+matched. The 56 bound non-operational indices exactly match the candidate's
+saved wreck list, including 59. Missing indices remain 576–579, 664, 671 and 672.
+
+Snapshot format 3 and marker/run ID: `87d71f76771a398acf7236bf19fc2cec`.
+Capture output `capture/case/home/.config/EgoSoft/X4/45841/save/save_009.xml.gz`
+under that run is 27,095,551 bytes, SHA256
+`b8dd4f45c4cdcb75e5adbf17e977d3251e8c9340ac6cd1bfebe6e1d7fda97377`.
+Reviewed manifest: `.local/registry-availability-full-reviewed-20261120-03.json`.
+The full observations are in `trial-details.json`; `trial-result.json` pins its
+digest and remains small enough for the coordinator. Outer `result.json` reports
+success, valid observation, normal display release, cleanup, unchanged source,
+dependency pins and checked Steam identity. No X4 remains.
+
+This establishes the isolated whole-register representation/save/reload step,
+not historical identity, all-universe coverage, active gameplay, performance,
+Windows/WAN behavior or checkpoint admission. CURRENT/CONFIRMED remain unchanged;
+the diagnostic save was not published or confirmed. Existing command/motion
+guards remain unchanged. No question is pending.
+
+Next work is integration into the existing pause/save/reconnect flow. The
+diagnostic snapshot is deliberately one-shot; do not silently reuse a sealed
+old snapshot as evidence for a later save. Each new checkpoint needs current,
+correlated binding/eligibility evidence and full validation. Runtime commands
+must continue to recheck eligibility rather than trust saved operational bits.
+The integration pointers in the prior section below identify the current strict
+verification and lookup paths. Avoid repeating this unchanged native experiment.
+
+## Previous: binding type corrected for X4 wreck semantics (2026-11-20)
 
 Format-3 native run `.local/registry-availability-full-native-20261120-02` at
 `2da4bf5d` refused before save. Individual diagnostics show exists=1,

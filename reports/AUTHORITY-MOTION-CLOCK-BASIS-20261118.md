@@ -1033,3 +1033,47 @@ in Capture/Inspect to `isrealclass.ship`; operational gating for commands and
 motion remains unchanged. Capture failure diagnostics retain current-class
 flags and additionally report real class. Five focused MD structural tests
 passed after this correction. The new predicate still needs native validation.
+
+## Full-register format-3 save and reload passed (2026-11-20)
+
+At `af246556`, private run `.local/registry-availability-full-native-20261120-03`
+passed the complete isolated experiment: load the pinned candidate read-only,
+confirm pause and source marker, capture every issued index, seal, save a new
+marker, independently verify the saved bytes, then load that output in a fresh
+X4 process and inspect every index. Both phases covered 10,082 indices in 158
+contiguous batches of at most 64. Saved bindings and operational observations
+matched the capture receipts and both fresh vectors after reload.
+
+The measured counts were 10,075 valid bindings, seven absent objects and 10,019
+operational entries. The 56 bound non-operational indices exactly matched the
+previously recorded saved wreck list; index 59 retained its binding with
+operational=false. The seven absent indices were 576, 577, 578, 579, 664, 671,
+672. Every available snapshot component had one saved ship definition and an
+exact inverse mapping; unavailable indices retained their flags without null
+entries in the snapshot's object maps.
+
+Evidence identifiers:
+
+- Manifest: `.local/registry-availability-full-reviewed-20261120-03.json`.
+- Run ID and saved marker: `87d71f76771a398acf7236bf19fc2cec`.
+- Output under the run: `capture/case/home/.config/EgoSoft/X4/45841/save/save_009.xml.gz`.
+- Output size: 27,095,551 compressed bytes.
+- Save SHA256: `b8dd4f45c4cdcb75e5adbf17e977d3251e8c9340ac6cd1bfebe6e1d7fda97377`.
+- Mapping SHA256: `0cbc496c9c507aa71b1f6e68e1045bb2897b1f8f81d34c32bdadc2df5bda90df`.
+- Availability SHA256: `01e702d92260f8d07aa3df6983b7b313f0ae3d35493015a049691d2c03474720`.
+- Operational SHA256: `b9e14b3199a4e3bae46da2f604769439c7c4ec04f43771627d47d148e1eda30c`.
+
+The detailed receipts and vectors are retained in `trial-details.json`; the
+compact `trial-result.json` contains its digest and byte count. The outer
+result reports success, observation validity, normal display release, owned
+process/cgroup and Xauthority cleanup, unchanged source/dependency pins and
+unchanged checked Steam identity. No X4 remained after the test. CURRENT and
+CONFIRMED were unchanged; this diagnostic output was not admitted or published.
+
+This is a full registered-inventory storage/reload result in paused isolated
+Linux instances. It is not all-universe coverage, a live fleet performance
+benchmark, independent historical identity proof, gameplay, Windows/WAN proof,
+or completion of the multiplayer goal. The snapshot remains a one-shot
+diagnostic. Repeated checkpoints need fresh correlated capture, and motion and
+commands must retain live eligibility checks when this representation is
+integrated. No unchanged repeat run is needed for the result above.
