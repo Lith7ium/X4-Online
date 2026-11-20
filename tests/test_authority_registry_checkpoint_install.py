@@ -57,6 +57,29 @@ class RegistryCheckpointInstallationTests(unittest.TestCase):
             installer.install(self.case, 'e' * 32, self.evidence)
         self.assertEqual(changed, {path: path.read_bytes() for path in self.case.rglob('*') if path.is_file()})
 
+    def test_generated_first_capture_initializes_before_first_save(self):
+        installed = installer.install_first_capture(
+            self.case, 'e' * 32, source_marker='d' * 32,
+            epoch='c' * 32, issued_count=3)
+        self.assertEqual(len(installed), 5)
+        for scenario in ('first_capture', 'first_capture_refused'):
+            with self.subTest(scenario=scenario):
+                result = subprocess.run(['luajit', 'tests/authority_registry_checkpoint_bridge.lua',
+                                         str(self.ui), scenario], cwd=ROOT,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_first_capture_rejects_bad_source_before_install(self):
+        before = {path: path.read_bytes() for path in self.case.rglob('*') if path.is_file()}
+        for source_marker, epoch, count in (('e' * 32, 'c' * 32, 3),
+                                            ('c' * 32, 'c' * 32, 3),
+                                            ('d' * 32, 'c' * 32, True),
+                                            ('d' * 32, 'c' * 32, 0)):
+            with self.subTest(source_marker=source_marker, count=count), self.assertRaises(ValueError):
+                installer.install_first_capture(self.case, 'e' * 32,
+                    source_marker=source_marker, epoch=epoch, issued_count=count)
+        self.assertEqual(before, {path: path.read_bytes() for path in self.case.rglob('*') if path.is_file()})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -23,18 +23,21 @@ def evidence(run_id, binding, operational):
             'unavailable_count': binding.count('0'), 'operational_count': operational.count('1')}
 
 
-def exchange(nonce, saved, previous=None):
+def exchange(nonce, saved, previous=None, first_source=None):
+    assert not (previous and first_source)
+    capture = previous is not None or first_source is not None
     run_id = saved['run_id']
     binding, operational = saved['availability_bits'], saved['operational_bits']
     rows = []
-    if previous:
-        rows.append(f'RESPONSE|{nonce}-1|{run_id}|BeginNext|Initialized|{COUNT}')
+    if capture:
+        action = 'Initialize' if first_source else 'BeginNext'
+        rows.append(f'RESPONSE|{nonce}-1|{run_id}|{action}|Initialized|{COUNT}')
     available = unavailable = ops = 0
     for sequence, first in enumerate(range(1, COUNT + 1, 64), 1):
         bits = binding[first - 1:first + 63]
         op_bits = operational[first - 1:first + 63]
-        request = f'{nonce}-{sequence + int(previous is not None)}'
-        if previous:
+        request = f'{nonce}-{sequence + int(capture)}'
+        if capture:
             available += bits.count('1')
             unavailable += bits.count('0')
             ops += op_bits.count('1')
@@ -43,11 +46,13 @@ def exchange(nonce, saved, previous=None):
         else:
             rows.append(f'RESPONSE|{request}|{run_id}|Inspect|{first}|{len(bits)}|Inspected|'
                         f'{bits}|{bits}|{op_bits}|{op_bits}')
-    if previous:
+    if capture:
         rows.append(f'RESPONSE|{nonce}-5|{run_id}|Seal|Sealed|{COUNT}|'
                     f'{saved["available_count"]}|{saved["unavailable_count"]}|{saved["operational_count"]}')
-    rows.append(f'COMPLETE|{"capture" if previous else "inspect"}|{run_id}|'
-                + (f'{previous}|' if previous else '')
+    mode = 'first_capture' if first_source else 'capture' if capture else 'inspect'
+    predecessor = first_source or previous
+    rows.append(f'COMPLETE|{mode}|{run_id}|'
+                + (f'{predecessor}|' if predecessor else '')
                 + f'{COUNT}|{saved["available_count"]}|{saved["unavailable_count"]}|{saved["operational_count"]}')
     return [f'2026-11-20 00:00:00 [X4LAN] AUTH_REGISTRY_CHECKPOINT {nonce}|{row}'
             for row in rows]
@@ -101,6 +106,25 @@ class BridgeObservationTests(unittest.TestCase):
         self.log.write_bytes(b'X' * (16 * 1024 * 1024 + 1))
         with self.assertRaises(ValueError):
             verify_bridge_observation(self.log, NONCE, self.second, previous_run_id=FIRST)
+
+    def test_first_initialize_is_distinct_from_inspect_and_begin_next(self):
+        self.write(exchange(NONCE, self.first, first_source=INITIAL)
+                   + exchange(NONCE, self.second, previous=FIRST))
+        self.assertTrue(verify_bridge_observation(
+            self.log, NONCE, self.first, first_capture_source_marker=INITIAL))
+        self.assertTrue(verify_bridge_observation(
+            self.log, NONCE, self.second, previous_run_id=FIRST))
+        for mode in ({}, {'previous_run_id': INITIAL},
+                     {'first_capture_source_marker': SECOND},
+                     {'first_capture_source_marker': NONCE}):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                verify_bridge_observation(self.log, NONCE, self.first, **mode)
+        rows = exchange(NONCE, self.first, first_source=INITIAL)
+        rows[0] = rows[0].replace('|Initialize|', '|BeginNext|')
+        self.write(rows)
+        with self.assertRaises(ValueError):
+            verify_bridge_observation(self.log, NONCE, self.first,
+                                      first_capture_source_marker=INITIAL)
 
 
 if __name__ == '__main__':

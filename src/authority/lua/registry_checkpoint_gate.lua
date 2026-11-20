@@ -22,22 +22,38 @@ end
 function M.new(options)
     assert(type(options) == 'table' and options.enabled == true,
         'registry checkpoint gate is default-off')
-    assert(token(options.epoch) and token(options.nonce) and token(options.initial_run_id),
-        'epoch, nonce and initial_run_id must be 32 lowercase hex characters')
-    assert(options.epoch ~= options.nonce and options.epoch ~= options.initial_run_id
-        and options.nonce ~= options.initial_run_id, 'gate correlation tokens must be distinct')
+    local first_capture = options.initial_mode == 'first_capture'
+    assert(options.initial_mode == nil or first_capture, 'invalid initial mode')
+    assert(token(options.epoch) and token(options.nonce),
+        'epoch and nonce must be 32 lowercase hex characters')
+    assert(options.epoch ~= options.nonce, 'gate correlation tokens must be distinct')
+    if first_capture then
+        assert(options.initial_run_id == nil and options.expected_binding_bits == nil
+            and options.expected_operational_bits == nil,
+            'first capture cannot claim a saved snapshot')
+        assert(token(options.source_marker) and options.source_marker ~= options.epoch
+            and options.source_marker ~= options.nonce,
+            'distinct confirmed source marker required')
+    else
+        assert(options.source_marker == nil and token(options.initial_run_id),
+            'initial_run_id must identify a saved snapshot')
+        assert(options.initial_run_id ~= options.epoch and options.initial_run_id ~= options.nonce,
+            'gate correlation tokens must be distinct')
+    end
     assert(type(options.issued_count) == 'number' and options.issued_count % 1 == 0
         and options.issued_count >= 1 and options.issued_count <= 200000,
         'issued_count is outside the supported range')
     assert(type(options.timeout) == 'number' and options.timeout > 0
         and options.timeout <= 120 and options.timeout == options.timeout,
         'timeout is outside the supported range')
-    assert(bits(options.expected_binding_bits, options.issued_count), 'invalid expected binding bits')
-    assert(bits(options.expected_operational_bits, options.issued_count), 'invalid expected operational bits')
-    for index = 1, options.issued_count do
-        assert(options.expected_operational_bits:sub(index, index) ~= '1'
-            or options.expected_binding_bits:sub(index, index) == '1',
-            'expected operational bits exceed binding bits')
+    if not first_capture then
+        assert(bits(options.expected_binding_bits, options.issued_count), 'invalid expected binding bits')
+        assert(bits(options.expected_operational_bits, options.issued_count), 'invalid expected operational bits')
+        for index = 1, options.issued_count do
+            assert(options.expected_operational_bits:sub(index, index) ~= '1'
+                or options.expected_binding_bits:sub(index, index) == '1',
+                'expected operational bits exceed binding bits')
+        end
     end
     for _, name in ipairs({'clock', 'guard', 'issue', 'store_marker', 'report', 'fault'}) do
         assert(type(options[name]) == 'function', name .. ' callback is required')
@@ -48,6 +64,7 @@ function M.new(options)
 
     local cfg = {
         epoch = options.epoch, nonce = options.nonce, initial_run_id = options.initial_run_id,
+        source_marker = options.source_marker, first_capture = first_capture,
         issued_count = options.issued_count, expected_binding_bits = options.expected_binding_bits,
         expected_operational_bits = options.expected_operational_bits,
         timeout = options.timeout,
@@ -59,8 +76,10 @@ function M.new(options)
     local active, active_mode, pending_marker, active_deadline
     local ready, started, stopped, busy = false, false, false, false
     local last_time
-    local used_markers = {[cfg.initial_run_id] = true, [cfg.epoch] = true, [cfg.nonce] = true}
+    local used_markers = {[cfg.epoch] = true, [cfg.nonce] = true}
+    used_markers[cfg.initial_run_id or cfg.source_marker] = true
     local current_run_id = cfg.initial_run_id
+    local first_save_confirmed = not first_capture
     local last_evidence
 
     local function fail(reason)
@@ -126,13 +145,20 @@ function M.new(options)
                 else
                     local previous = cfg.expected_binding_bits
                     local current = evidence.availability_bits
-                    for index = 1, cfg.issued_count do
-                        if previous:sub(index, index) == '0' and current:sub(index, index) == '1' then
-                            error('unavailable registry ID revived')
+                    if previous then
+                        for index = 1, cfg.issued_count do
+                            if previous:sub(index, index) == '0' and current:sub(index, index) == '1' then
+                                error('unavailable registry ID revived')
+                            end
                         end
                     end
                     if not guard() then error('pause/game-time guard failed before marker store') end
-                    evidence.previous_run_id = current_run_id
+                    if cfg.first_capture and not current_run_id then
+                        evidence.mode = 'first_capture'
+                        evidence.source_marker = cfg.source_marker
+                    else
+                        evidence.previous_run_id = current_run_id
+                    end
                     last_evidence = copy(evidence)
                     protected(cfg.report, copy(evidence))
                     if stopped or not guard() then error('pause/game-time guard failed after report') end
@@ -157,6 +183,7 @@ function M.new(options)
     end
 
     function api:start()
+        if cfg.first_capture then fail('first capture requires explicit start'); return false end
         if busy or stopped or started then fail('start repeated or reentrant'); return false end
         busy, started = true, true
         local ok = pcall(function() make_owner('inspect', cfg.initial_run_id) end)
@@ -165,8 +192,36 @@ function M.new(options)
         return true
     end
 
+    function api:start_first_capture(marker)
+        if not cfg.first_capture or busy or stopped or started then
+            fail('first capture start refused'); return false
+        end
+        if not token(marker) or used_markers[marker] then
+            fail('invalid or reserved first marker'); return false
+        end
+        busy, started = true, true
+        pending_marker, used_markers[marker] = marker, true
+        local ok = pcall(function() make_owner('capture', marker, nil) end)
+        busy = false
+        if not ok then fail('first capture could not start'); return false end
+        return true
+    end
+
+    function api:confirm_first_save(marker, verified)
+        if not cfg.first_capture or busy or stopped or not ready or active
+            or first_save_confirmed or marker ~= current_run_id or verified ~= true then
+            fail('first save verification refused'); return false
+        end
+        local ok, valid = pcall(guard)
+        if not ok or valid ~= true then
+            fail('pause/game-time guard failed before first save confirmation'); return false
+        end
+        first_save_confirmed = true
+        return true
+    end
+
     function api:prepare(marker)
-        if busy or stopped or not ready or active or pending_marker then
+        if busy or stopped or not ready or active or pending_marker or not first_save_confirmed then
             fail('prepare while gate is not ready'); return false, 'not_ready'
         end
         if not token(marker) or used_markers[marker]
@@ -213,8 +268,14 @@ function M.new(options)
         return ready and not stopped
     end
 
+    function api:admission_ready()
+        return ready and not stopped and first_save_confirmed
+    end
+
     function api:state()
-        return {ready = ready, started = started, stopped = stopped,
+        return {ready = ready, admission_ready = ready and first_save_confirmed,
+            first_save_confirmed = first_save_confirmed,
+            source_marker = cfg.source_marker, started = started, stopped = stopped,
             active_mode = active_mode, current_run_id = current_run_id,
             pending_marker = pending_marker, evidence = copy(last_evidence),
             snapshot = active and active:state() or nil}

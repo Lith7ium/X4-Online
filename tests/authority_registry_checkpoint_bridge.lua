@@ -48,7 +48,13 @@ function AddUITriggeredEvent(screen, action, request)
     assert(screen == 'X4AuthorityRegistryAvailabilitySnapshot')
     local prefix = request.request_id..'|'..request.run_id..'|'..action..'|'
     local response
-    if action == 'Inspect' then
+    if action == 'Initialize' then
+        assert(scenario == 'first_capture' or scenario == 'first_capture_refused')
+        assert(request.previous_run_id == nil and request.issued_count == 3)
+        current_run, sealed_run = request.run_id, nil
+        capture_number = 1
+        response = prefix..(scenario == 'first_capture_refused' and 'Refused' or 'Initialized|3')
+    elseif action == 'Inspect' then
         assert(request.run_id == current_run and request.first == 1 and request.count == 3)
         local fresh = scenario == 'bad_reload' and '100' or binding_bits
         response = prefix..'1|3|Inspected|'..binding_bits..'|'..fresh..'|'
@@ -130,6 +136,18 @@ local function receipt(number, operation, status)
     return 'RECEIPT|'..lease..'|'..world_epoch..'|'..number..'|'..operation..'|'..status
 end
 local ready = 'RECOVERY_READY|'..lease..'|'..world_epoch
+if scenario == 'first_capture_refused' then
+    until_packet(ready)
+    incoming[#incoming + 1] = 'ACTIVATE|'..lease..'|'..world_epoch
+    until_packet('ACTIVATED|'..lease..'|'..world_epoch)
+    command(1, 'pause')
+    until_packet(receipt(1, 'pause', 'confirmed'))
+    command(2, 'save', string.rep('f', 32))
+    for _ = 1, 30 do step() end
+    assert(#saves == 0 and stored_marker == nil)
+    assert(table.concat(logs, '\n'):find('|ERROR|', 1, true))
+    return
+end
 if scenario == 'bad_reload' then
     for _ = 1, 100 do step() end
     assert(not saw(ready) and #saves == 0 and stored_marker == nil)
@@ -150,6 +168,17 @@ if scenario == 'pause_lost' then
 end
 until_packet(receipt(2, 'save', 'native_event_only'))
 assert(#saves == 1 and saves[1].run_id == string.rep('f', 32))
+if scenario == 'first_capture' then
+    assert(capture_number == 1)
+    assert(table.concat(logs, '\n'):find('|COMPLETE|first_capture|', 1, true))
+    incoming[#incoming + 1] = 'VERIFY|'..lease..'|'..world_epoch..'|2'
+    until_packet('VERIFIED|'..lease..'|'..world_epoch..'|2')
+    command(3, 'save', string.rep('1', 32))
+    for _ = 1, 20 do step() end
+    assert(#saves == 1 and capture_number == 1)
+    assert(table.concat(logs, '\n'):find('marker_store', 1, true))
+    return
+end
 incoming[#incoming + 1] = 'VERIFY|'..lease..'|'..world_epoch..'|2'
 until_packet('VERIFIED|'..lease..'|'..world_epoch..'|2')
 command(3, 'resume')

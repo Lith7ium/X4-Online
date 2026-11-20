@@ -22,7 +22,8 @@ def _replace_once(text, old, new):
     return text.replace(old, new)
 
 
-def verify_bridge_observation(log_path, nonce, evidence, *, previous_run_id=None):
+def verify_bridge_observation(log_path, nonce, evidence, *, previous_run_id=None,
+                              first_capture_source_marker=None):
     """Match one saved format-3 snapshot to its complete live bridge exchange.
 
     ``evidence`` must come from ``verify_join_snapshot``. A successful return
@@ -32,6 +33,10 @@ def verify_bridge_observation(log_path, nonce, evidence, *, previous_run_id=None
     if (not isinstance(nonce, str) or not _TOKEN.fullmatch(nonce)
             or previous_run_id is not None and
             (not isinstance(previous_run_id, str) or not _TOKEN.fullmatch(previous_run_id))
+            or first_capture_source_marker is not None and
+            (not isinstance(first_capture_source_marker, str)
+             or not _TOKEN.fullmatch(first_capture_source_marker)
+             or previous_run_id is not None)
             or not isinstance(evidence, dict) or evidence.get('format') != 3
             or evidence.get('source_registry_checked') is not True):
         raise ValueError('invalid verified bridge evidence')
@@ -40,7 +45,9 @@ def verify_bridge_observation(log_path, nonce, evidence, *, previous_run_id=None
     binding = evidence.get('availability_bits')
     operational = evidence.get('operational_bits')
     if (not isinstance(run_id, str) or not _TOKEN.fullmatch(run_id)
-            or run_id in (nonce, previous_run_id) or
+            or run_id in (nonce, previous_run_id, first_capture_source_marker)
+            or first_capture_source_marker is not None and
+            first_capture_source_marker in (nonce, evidence.get('epoch')) or
             type(count) is not int or not 1 <= count <= 200000
             or any(not isinstance(bits, str) or len(bits) != count or not _BITS.fullmatch(bits)
                    for bits in (binding, operational))
@@ -80,15 +87,16 @@ def verify_bridge_observation(log_path, nonce, evidence, *, previous_run_id=None
             target.append(fields)
             positions.append(position)
     batches = (count + 63) // 64
-    capture = previous_run_id is not None
+    capture = previous_run_id is not None or first_capture_source_marker is not None
     expected_rows = batches + (3 if capture else 1)
     if (len(target) != expected_rows or not positions
             or positions != list(range(positions[0], positions[0] + len(positions)))):
         raise ValueError('bridge exchange missing, duplicated or interleaved')
     response = target[:-1]
     if capture:
-        if response[0] != ['RESPONSE', f'{nonce}-1', run_id, 'BeginNext', 'Initialized', str(count)]:
-            raise ValueError('BeginNext receipt mismatch')
+        action = 'Initialize' if first_capture_source_marker is not None else 'BeginNext'
+        if response[0] != ['RESPONSE', f'{nonce}-1', run_id, action, 'Initialized', str(count)]:
+            raise ValueError(action + ' receipt mismatch')
         response = response[1:]
     seen_available = seen_unavailable = seen_operational = 0
     for batch, first in enumerate(range(1, count + 1, 64), 1):
@@ -113,8 +121,11 @@ def verify_bridge_observation(log_path, nonce, evidence, *, previous_run_id=None
                 str(count), str(available), str(unavailable), str(operational_count)]
         if target[-2] != seal:
             raise ValueError('bridge seal receipt mismatch')
-    completion = ['COMPLETE', 'capture' if capture else 'inspect', run_id]
-    if capture:
+    completion = ['COMPLETE', 'first_capture' if first_capture_source_marker is not None
+                  else 'capture' if capture else 'inspect', run_id]
+    if first_capture_source_marker is not None:
+        completion.append(first_capture_source_marker)
+    elif capture:
         completion.append(previous_run_id)
     completion.extend(map(str, (count, available, unavailable, operational_count)))
     if target[-1] != completion:
@@ -123,23 +134,46 @@ def verify_bridge_observation(log_path, nonce, evidence, *, previous_run_id=None
 
 
 def install(case, nonce, evidence):
-    """Install into a fresh disposable case using verified format-3 evidence."""
+    """Install reload inspection and BeginNext from verified format-3 evidence."""
+    return _install(case, nonce, evidence=evidence)
+
+
+def install_first_capture(case, nonce, *, source_marker, epoch, issued_count):
+    """Prepare Initialize from a separately verified confirmed registry seed.
+
+    This installs a one-save lower-level capture owner. The caller must verify
+    the first saved bytes and receipts before confirming it or admitting anyone.
+    A later ordinary recovery must freshly inspect the resulting format-3 save.
+    The source marker identifies the older save, never a prior snapshot.
+    """
+    return _install(case, nonce, first_capture={
+        'source_marker': source_marker, 'epoch': epoch, 'issued_count': issued_count})
+
+
+def _install(case, nonce, *, evidence=None, first_capture=None):
     if (not isinstance(nonce, str) or not _TOKEN.fullmatch(nonce)
-            or not isinstance(evidence, dict) or evidence.get('format') != 3):
+            or (evidence is None) == (first_capture is None)):
         raise ValueError('invalid registry checkpoint configuration')
-    epoch, run_id = evidence.get('epoch'), evidence.get('run_id')
-    count = evidence.get('issued_count')
-    binding_bits = evidence.get('availability_bits')
-    operational_bits = evidence.get('operational_bits')
+    first_mode = first_capture is not None
+    source = first_capture if first_mode else evidence
+    if type(source) is not dict or (not first_mode and source.get('format') != 3):
+        raise ValueError('invalid registry checkpoint source')
+    epoch = source.get('epoch')
+    count = source.get('issued_count')
+    run_id = source.get('source_marker') if first_mode else source.get('run_id')
+    binding_bits = None if first_mode else source.get('availability_bits')
+    operational_bits = None if first_mode else source.get('operational_bits')
     if (any(not isinstance(value, str) or not _TOKEN.fullmatch(value)
             for value in (epoch, run_id))
             or len({epoch, run_id, nonce}) != 3
             or type(count) is not int or not 1 <= count <= 200000
-            or any(not isinstance(bits, str) or len(bits) != count
-                   or not _BITS.fullmatch(bits) for bits in (binding_bits, operational_bits))
-            or any(operational == '1' and binding != '1'
-                   for binding, operational in zip(binding_bits, operational_bits))):
-        raise ValueError('invalid saved snapshot observations')
+            or (first_mode and set(source) != {'source_marker', 'epoch', 'issued_count'})
+            or not first_mode and (
+                any(not isinstance(bits, str) or len(bits) != count
+                    or not _BITS.fullmatch(bits) for bits in (binding_bits, operational_bits))
+                or any(operational == '1' and binding != '1'
+                       for binding, operational in zip(binding_bits, operational_bits)))):
+        raise ValueError('invalid saved registry source observations')
 
     lab = Path(case) / 'extensions/x4_lan_lab'
     ui = lab / 'ui'
@@ -159,14 +193,13 @@ def install(case, nonce, evidence):
         raise ValueError('registry checkpoint module already exists')
 
     probe = _replace_once(probe, 'local activated=false\n', '''local activated=false
-local registry_checkpoint, registry_checkpoint_pause_time
+local registry_checkpoint, registry_checkpoint_pause_time, registry_checkpoint_started
 ''')
     before_activation = ''' if not registry_checkpoint then
   registry_checkpoint_pause_time = engine.game_time()
   registry_checkpoint = X4LAN_AUTHORITY_REGISTRY_CHECKPOINT_GATE.new({
    enabled=true, epoch="EPOCH", issued_count=COUNT, nonce="NONCE",
-   initial_run_id="RUN_ID", expected_binding_bits="BINDING_BITS",
-   expected_operational_bits="OPERATIONAL_BITS", clock=GetCurRealTime,
+   MODE_OPTIONS clock=GetCurRealTime,
    timeout=110,
    guard=function()
     return C.IsPlayerValid() and C.IsGamePaused()
@@ -181,7 +214,8 @@ local registry_checkpoint, registry_checkpoint_pause_time
    report=function(observation)
     DebugError('[X4LAN] AUTH_REGISTRY_CHECKPOINT NONCE|COMPLETE|'
      ..observation.mode..'|'..observation.run_id..'|'
-     ..(observation.previous_run_id and (observation.previous_run_id..'|') or '')
+     ..((observation.previous_run_id or observation.source_marker)
+      and ((observation.previous_run_id or observation.source_marker)..'|') or '')
      ..string.format('%.0f|%.0f|%.0f|%.0f', observation.issued_count,
       observation.available_count, observation.unavailable_count, observation.operational_count))
    end,
@@ -193,23 +227,39 @@ local registry_checkpoint, registry_checkpoint_pause_time
    DebugError('[X4LAN] AUTH_REGISTRY_CHECKPOINT NONCE|RESPONSE|'..value)
    assert(registry_checkpoint:event(value), 'registry checkpoint event refused')
   end)
-  assert(registry_checkpoint:start(), 'registry reload inspection refused')
+  START_ACTION
  end
- assert(registry_checkpoint:tick(), 'registry checkpoint update failed')
- if not activated and not registry_checkpoint:ready() then return end
+ TICK_ACTION
 '''
+    mode_options = (f'initial_mode="first_capture",source_marker="{run_id}",'
+                    if first_mode else
+                    f'initial_run_id="{run_id}",expected_binding_bits="{binding_bits}",'
+                    f'expected_operational_bits="{operational_bits}",')
+    start_action = ('registry_checkpoint_started=false' if first_mode else
+                    "assert(registry_checkpoint:start(), 'registry reload inspection refused');"
+                    'registry_checkpoint_started=true')
+    tick_action = ("if registry_checkpoint_started then assert(registry_checkpoint:tick(),"
+                   " 'registry checkpoint update failed') end" if first_mode else
+                   "assert(registry_checkpoint:tick(), 'registry checkpoint update failed')\n"
+                   ' if not activated and not registry_checkpoint:ready() then return end')
     replacements = {'EPOCH': epoch, 'COUNT': str(count), 'NONCE': nonce,
                     'RUN_ID': run_id, 'BINDING_BITS': binding_bits,
-                    'OPERATIONAL_BITS': operational_bits}
+                    'OPERATIONAL_BITS': operational_bits,
+                    'MODE_OPTIONS': mode_options, 'START_ACTION': start_action,
+                    'TICK_ACTION': tick_action}
     for placeholder, value in replacements.items():
-        before_activation = before_activation.replace(placeholder, value)
+        if value is not None:
+            before_activation = before_activation.replace(placeholder, value)
     probe = _replace_once(probe, ' if not activated then\n',
                           before_activation + ' if not activated then\n')
+    first_start = ('''    assert(not registry_checkpoint_started, 'first registry capture bridge is one-shot')
+    registry_checkpoint_started=true
+    assert(registry_checkpoint:start_first_capture(marker), 'first registry capture refused')
+''' if first_mode else
+                   "    assert(registry_checkpoint:prepare(marker), 'registry checkpoint capture refused')\n")
     probe = _replace_once(probe,
                           "    AddUITriggeredEvent('X4AuthorityCheckpointMarker','Store',{marker=marker})\n",
-                          '''    registry_checkpoint_pause_time = engine.game_time()
-    assert(registry_checkpoint:prepare(marker), 'registry checkpoint capture refused')
-''')
+                          '    registry_checkpoint_pause_time = engine.game_time()\n' + first_start)
     manifest_hook = '    <file name="ui/authority_world_bridge_probe.lua" />\n'
     manifest = _replace_once(manifest, manifest_hook,
                              '    <file name="ui/registry_availability_snapshot.lua" />\n'

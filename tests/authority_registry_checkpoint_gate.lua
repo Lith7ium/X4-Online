@@ -200,10 +200,73 @@ local function test_report_deadline_and_store_refusal_fence()
     assert(gate:state().stopped and attempted == 1 and #stores == 0 and #faults > 0)
 end
 
+local function make_first_gate()
+    local time, paused = 0, true
+    local requests, stores, reports, faults = {}, {}, {}, {}
+    local gate = Gate.new({enabled=true, initial_mode='first_capture',
+        source_marker=INITIAL, epoch=EPOCH, nonce=NONCE,
+        issued_count=COUNT, timeout=110, snapshot_owner=Snapshot,
+        clock=function() return time end, guard=function() return paused end,
+        issue=function(action, payload)
+            requests[#requests + 1] = {action=action, payload=payload}; return true
+        end,
+        store_marker=function(marker) stores[#stores + 1] = marker; return true end,
+        report=function(evidence) reports[#reports + 1] = evidence end,
+        fault=function(reason) faults[#faults + 1] = reason end})
+    return gate, requests, stores, reports, faults,
+        function(value) time = value end, function(value) paused = value end
+end
+
+local function test_first_capture_and_second_save_linkage()
+    local gate, requests, stores, reports, faults = make_first_gate()
+    local first_marker, second_marker = string.rep('d', 32), string.rep('e', 32)
+    assert(not gate:admission_ready())
+    assert(gate:start_first_capture(first_marker) and gate:tick())
+    assert(requests[1].action == 'Initialize'
+        and requests[1].payload.previous_run_id == nil)
+    local cursor = complete_active(gate, requests, 1, 'capture')
+    assert(gate:ready() and not gate:admission_ready())
+    assert(reports[1].mode == 'first_capture' and reports[1].source_marker == INITIAL)
+    assert(reports[1].previous_run_id == nil and stores[1] == first_marker)
+    assert(gate:state().current_run_id == first_marker)
+    assert(gate:confirm_first_save(first_marker, true) and gate:admission_ready())
+    assert(gate:prepare(second_marker) and gate:tick())
+    assert(requests[cursor].action == 'BeginNext'
+        and requests[cursor].payload.previous_run_id == first_marker)
+    complete_active(gate, requests, cursor, 'capture')
+    assert(stores[2] == second_marker and reports[2].mode == 'capture'
+        and reports[2].previous_run_id == first_marker and #faults == 0)
+end
+
+local function test_first_capture_collisions_and_failed_initialize()
+    for _, reserved in ipairs({INITIAL, EPOCH, NONCE}) do
+        local gate, requests, stores, _, faults = make_first_gate()
+        assert(not gate:start_first_capture(reserved))
+        assert(gate:state().stopped and #requests == 0 and #stores == 0 and #faults == 1)
+    end
+    local gate, requests, stores, _, faults = make_first_gate()
+    assert(gate:start_first_capture(string.rep('d', 32)) and gate:tick())
+    local request = requests[1]
+    assert(request.action == 'Initialize')
+    assert(gate:event(request.payload.request_id..'|'..request.payload.run_id
+        ..'|Initialize|Refused'))
+    assert(not gate:tick() and gate:state().stopped and #stores == 0 and #faults > 0)
+
+    gate, requests, stores, _, faults = make_first_gate()
+    local marker = string.rep('d', 32)
+    assert(gate:start_first_capture(marker) and gate:tick())
+    complete_active(gate, requests, 1, 'capture')
+    assert(not gate:confirm_first_save(marker, false))
+    assert(not gate:admission_ready() and gate:state().stopped)
+    assert(#stores == 1 and #faults == 1)
+end
+
 test_two_fresh_full_captures()
 test_corrupt_initial_inspect_blocks_readiness()
 test_replay_marker_and_incomplete_capture_never_store()
 test_reentrant_report_faults_before_store()
 test_guard_reentry_stops_before_issue()
 test_report_deadline_and_store_refusal_fence()
+test_first_capture_and_second_save_linkage()
+test_first_capture_collisions_and_failed_initialize()
 print('authority registry checkpoint gate: ok')
