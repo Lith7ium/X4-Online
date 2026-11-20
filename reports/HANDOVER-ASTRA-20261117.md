@@ -1,5 +1,10 @@
 # X4 multiplayer: handover for Astra
 
+**Current entry point (20 November 2026):**
+[Astra 6.2 handover](HANDOVER-ASTRA-6.2-20261120.md). The goal remains paused.
+This file preserves the historical trail; older next steps and active-goal
+statements below may be superseded by the new brief.
+
 ## Latest: user-requested pause after checkpoint integration (2026-11-20)
 
 The user requested stopping tests, saving a checkpoint and pausing the goal.
