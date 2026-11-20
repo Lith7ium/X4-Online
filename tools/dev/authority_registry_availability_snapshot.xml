@@ -66,7 +66,8 @@
         <set_value name="$chunk_unavailable" exact="$chunk_unavailable + 1"/>
        </do_if>
        <do_else>
-        <do_if value="$ship.isclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index and not State.$byship.{$ship}?">
+        <!-- Wrecks keep their real ship class even when isclass.ship is false. -->
+        <do_if value="$ship.isrealclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index and not State.$byship.{$ship}?">
          <set_value name="State.$available.{$index}" exact="1"/>
          <set_value name="State.$operational.{$index}" exact="if $ship.isoperational then 1 else 0"/>
          <set_value name="$operational_bit" exact="if State.$operational.{$index} == 1 then '1' else '0'"/>
@@ -80,13 +81,14 @@
         <do_else>
          <set_value name="$existing_flag" exact="if @$ship.exists then 1 else 0"/>
          <set_value name="$ship_flag" exact="if $ship.isclass.ship then 1 else 0"/>
+         <set_value name="$real_ship_flag" exact="if $ship.isrealclass.ship then 1 else 0"/>
          <set_value name="$operational_flag" exact="if $ship.isoperational then 1 else 0"/>
          <set_value name="$reverse_matches_flag" exact="if @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index then 1 else 0"/>
          <set_value name="$snapshot_duplicate_flag" exact="if State.$byship.{$ship}? then 1 else 0"/>
          <set_value name="$chunk_fault" exact="true"/>
          <set_value name="$fault_index" exact="$index"/>
          <set_value name="$fault_reason" exact="'existing_invalid_class_reverse_or_snapshot_duplicate'"/>
-         <debug_text text="'Availability capture row index %s existing %s ship %s operational %s reverse_matches %s snapshot_duplicate %s'.[$index,$existing_flag,$ship_flag,$operational_flag,$reverse_matches_flag,$snapshot_duplicate_flag]"/>
+         <debug_text text="'Availability capture row index %s existing %s ship %s real_ship %s operational %s reverse_matches %s snapshot_duplicate %s'.[$index,$existing_flag,$ship_flag,$real_ship_flag,$operational_flag,$reverse_matches_flag,$snapshot_duplicate_flag]"/>
         </do_else>
        </do_else>
       </do_else>
@@ -148,7 +150,7 @@
          <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$index}"/>
          <do_if value="State.$operational.{$index} == 0 or State.$operational.{$index} == 1">
           <do_if value="@$ship.exists">
-           <do_if value="State.$ships.{$index} == $ship and $ship.isclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index">
+           <do_if value="State.$ships.{$index} == $ship and $ship.isrealclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index">
              <set_value name="$saved_binding_bits" exact="$saved_binding_bits + '1'"/>
              <set_value name="$fresh_binding_bits" exact="$fresh_binding_bits + '1'"/>
              <set_value name="$fresh_operational_bit" exact="if $ship.isoperational then '1' else '0'"/>

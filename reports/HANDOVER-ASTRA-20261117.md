@@ -1,6 +1,22 @@
 # X4 multiplayer: handover for Astra
 
-## Latest: full-register snapshot refused an existing wreck (2026-11-20)
+## Latest: binding type corrected for X4 wreck semantics (2026-11-20)
+
+Format-3 native run `.local/registry-availability-full-native-20261120-02` at
+`2da4bf5d` refused before save. Individual diagnostics show exists=1,
+isclass.ship=0, isoperational=0, reverse_matches=1, duplicate=0 for indices
+22–24 and 50–59. These exactly match the 13 saved wrecks in the first 64
+entries. The operational separation alone did not resolve the type check.
+Owned cleanup and unchanged source/pins/Steam were confirmed; no output save.
+
+Installed Egosoft script-property documentation in `08.dat`, lines
+335158–335163, distinguishes `isclass` from state-independent `isrealclass`.
+Binding capture and reload inspection now use `isrealclass.ship`. This retains
+ship-type checks and the approved wreck bindings; it does not change command
+or motion eligibility. Five targeted MD structural tests pass. Native validation
+of this predicate on the complete register is next. No new question is pending.
+
+## Previous: full-register snapshot refused an existing wreck (2026-11-20)
 
 At `40ec71cb`, the separate format-2 availability snapshot passed targeted
 synthetic tests and MD schema validation. Native full-register run

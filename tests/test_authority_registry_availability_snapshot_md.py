@@ -73,15 +73,18 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
         self.assertIn('name="$index" exact="($first + $offset - 1)i"', serialized)
         self.assertIn('name="State.$cursor" exact="($first + $count - 1)i"', serialized)
         capture = ET.tostring(self.cues['Capture'], encoding='unicode')
-        self.assertIn('Availability capture row index %s existing %s ship %s operational %s reverse_matches %s snapshot_duplicate %s', capture)
+        self.assertIn('Availability capture row index %s existing %s ship %s real_ship %s operational %s reverse_matches %s snapshot_duplicate %s', capture)
         self.assertIn('Availability capture row index %s reason missing_forward', capture)
         self.assertIn('Availability capture row index %s reason duplicate_snapshot_index', capture)
-        for flag in ('$existing_flag', '$ship_flag', '$operational_flag',
+        for flag in ('$existing_flag', '$ship_flag', '$real_ship_flag', '$operational_flag',
                      '$reverse_matches_flag', '$snapshot_duplicate_flag'):
             self.assertIn(f'name="{flag}"', capture)
         capture_guard = next(n.get('value', '') for n in actions.iter('do_if')
-                             if '$ship.isclass.ship and' in n.get('value', ''))
+                             if '$ship.isrealclass.ship and' in n.get('value', ''))
         self.assertNotIn('$ship.isoperational', capture_guard)
+        inspect_guards = [node.get('value', '') for node in self.cues['Inspect'].iter('do_if')]
+        self.assertTrue(any('$ship.isrealclass.ship' in guard for guard in inspect_guards))
+        self.assertFalse(any('$ship.isclass.ship' in guard for guard in inspect_guards))
         self.assertIn('or State.$operational.{$index}?', ET.tostring(self.cues['Capture'], encoding='unicode'))
         self.assertEqual(len(self.event_format(self.cues['Capture'], '|Capture|%s|%s|Captured|').split('|')), 11)
 

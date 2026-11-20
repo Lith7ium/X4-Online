@@ -999,3 +999,37 @@ is not a runtime operational result. Counts by saved class: 10 XS, 6,139 S,
 2,880 M, 783 L and 263 XL. Private evidence is
 `.local/registry-availability-full-owner-20261120/candidate-states.json`, bound
 to the pinned candidate SHA. No additional X4 process was started for this pass.
+
+## Separate binding and operational snapshot: native type observation (2026-11-20)
+
+At `2da4bf5d`, format 3 adds an independent operational observation for every
+issued index. A bound non-operational ship is accepted by that condition, while
+the runtime ship-class, reverse-mapping and duplicate checks remain. Targeted
+reader/owner/MD checks, the synthetic adapter/receipt composition and the final
+MD XSD validation passed. This does not change command eligibility or production
+checkpoint admission.
+
+Native run `.local/registry-availability-full-native-20261120-02`, manifest
+`.local/registry-availability-full-reviewed-20261120-02.json`, again refused
+the first batch before Seal/save/reload. The new per-row diagnostics identify
+indices 22, 23, 24 and 50–59: each reported exists=1, ship-class=0,
+operational=0, matching source reverse=1 and snapshot duplicate=0. These 13
+indices are exactly the explicitly saved wrecks in indices 1–64. Thus the
+runtime `isclass.ship` predicate is false for the observed objects even though
+their saved component definitions remain `ship_*` with `state="wreck"`.
+The failure is no longer attributable solely to operational eligibility.
+
+No output save was produced. Input, pinned dependencies and checked Steam
+identity remained unchanged; owned-process/cgroup and Xauthority cleanup were
+confirmed. The run is failed, not a partial pass. Further work must preserve
+the approved wreck bindings without granting motion/command permission or
+silently accepting unrelated object types.
+
+The installed Egosoft script-property documentation (`08.dat`, component
+properties at lines 335158–335163) distinguishes current `isclass` from
+state-independent `isrealclass`. Official scripts also use `isrealclass.ship`
+separately from `iswreck`. The follow-up changes only binding type predicates
+in Capture/Inspect to `isrealclass.ship`; operational gating for commands and
+motion remains unchanged. Capture failure diagnostics retain current-class
+flags and additionally report real class. Five focused MD structural tests
+passed after this correction. The new predicate still needs native validation.

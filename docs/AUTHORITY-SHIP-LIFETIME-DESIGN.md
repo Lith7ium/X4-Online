@@ -128,6 +128,12 @@ such as wrecks. An absent X4 object has neither a binding nor operational
 eligibility. A wrong class, conflicting reverse binding or duplicate object
 still faults capture. The source registry is never rewritten. The user approved
 this separation after the format-2 native attempt encountered an existing wreck.
+Binding checks use `isrealclass.ship`: Egosoft's installed script-property
+documentation defines real class independently of current state. In native
+format-3 run 02, all 13 saved wrecks within indices 1–64 returned
+`isclass.ship=false` despite existing and retaining valid reverse bindings.
+That run failed before save. The state-independent type check preserves the
+ship-type restriction while allowing the approved wreck bindings.
 
 Inspect compares saved flags and current X4 bindings without updating the
 snapshot. A saved missing binding cannot reappear implicitly. Operational status
