@@ -947,3 +947,44 @@ retain multiplayer IDs independently of usable X4 bindings and verify complete
 availability coverage before admission changes. The cause of disappearance,
 historical object identity, automatic rebinding, full-registry performance,
 Windows/WAN play and the user's gameplay goal remain unproven.
+
+## Full-register availability snapshot: first native attempt (2026-11-20)
+
+Code `40ec71cb` adds a separate default-off snapshot for all issued registry
+indices. The MD captures contiguous batches of at most 64, keeps explicit
+availability for every identity and includes only available objects in its
+forward/reverse maps. The standalone saved-byte verifier requires complete
+coverage and existing unique ship definitions for available entries. The
+original registry, command/motion resolution and checkpoint admission are
+unchanged. Synthetic checks covered the Lua owner, the private adapter and
+receipt parser, eight saved-reader cases (including a valid 10,082-entry fixture
+with seven unavailable IDs), and five MD structural tests. MD XSD validation
+passed. Those results do not establish native behavior.
+
+Private run `.local/registry-availability-full-native-20261120-01`, pinned by
+`.local/registry-availability-full-reviewed-20261120-01.json`, loaded the prior
+native04 candidate read-only, confirmed pause and its existing marker, and
+initialized the snapshot with issued count 10,082. The first Capture request
+for indices 1–64 was refused. The recorded last failing index was 59, with
+reason `existing_invalid_class_operational_or_reverse`; that branch also
+checks duplicate snapshot bindings. The aggregated diagnostic does not identify
+the failing predicate or show that 59 was the only rejected entry.
+
+No Seal, save or reload occurred; output slot 009 was absent. The whole native
+attempt failed. Source files, dependency pins and checked Steam identity were
+unchanged. The owned process group and cgroup were cleaned up, Xauthority
+cleanup was confirmed, and no X4 process remained. The failed coordinator did
+not report normal display release; outer cleanup still completed. No checkpoint
+pointer changed and no candidate was confirmed. Follow-up logging reports each
+rejected row and its individual predicates without changing acceptance rules.
+
+Offline comparison identifies index 59 as component `[0x62a1b]` in both the
+CURRENT candidate and CONFIRMED baseline, with exact reverse mapping to 59 in
+each. The candidate definition is `class="ship_s"`, macro
+`ship_kha_s_fighter_02_a_macro`, code NAX-887, owner khaak, `state="wreck"`; a
+saved kill event records `method="selfdestructed"`. The confirmed definition has
+the same identity fields without that wreck state or kill event. These saved
+bytes suggest non-operational status as the failed predicate; they do not
+establish its live value or the timing of that state change. The user was asked
+whether valid object bindings should be retained separately from operational
+eligibility. Dependent acceptance changes await that decision.

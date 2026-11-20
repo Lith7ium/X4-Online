@@ -10,7 +10,7 @@
      <set_value name="State.$format" exact="2"/>
      <set_value name="State.$epoch" exact="$request.$epoch"/>
      <set_value name="State.$run_id" exact="$request.$run_id"/>
-     <set_value name="State.$issued_count" exact="$request.$issued_count"/>
+     <set_value name="State.$issued_count" exact="(md.X4AuthorityShipRegistry.State.$last)i"/>
      <set_value name="State.$cursor" exact="0"/>
      <set_value name="State.$available_count" exact="0"/>
      <set_value name="State.$unavailable_count" exact="0"/>
@@ -39,11 +39,18 @@
      <set_value name="$fault_index" exact="0"/>
      <set_value name="$fault_reason" exact="''"/>
      <do_all exact="$count" counter="$offset">
-      <set_value name="$index" exact="$first + $offset - 1"/>
+      <set_value name="$index" exact="($first + $offset - 1)i"/>
       <do_if value="not md.X4AuthorityShipRegistry.State.$ships.{$index}? or State.$available.{$index}?">
        <set_value name="$chunk_fault" exact="true"/>
        <set_value name="$fault_index" exact="$index"/>
-       <set_value name="$fault_reason" exact="'missing_forward_or_duplicate'"/>
+       <do_if value="not md.X4AuthorityShipRegistry.State.$ships.{$index}?">
+        <set_value name="$fault_reason" exact="'missing_forward'"/>
+        <debug_text text="'Availability capture row index %s reason missing_forward'.[$index]"/>
+       </do_if>
+       <do_else>
+        <set_value name="$fault_reason" exact="'duplicate_snapshot_index'"/>
+        <debug_text text="'Availability capture row index %s reason duplicate_snapshot_index'.[$index]"/>
+       </do_else>
       </do_if>
       <do_else>
        <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$index}"/>
@@ -60,7 +67,17 @@
          <set_value name="$bits" exact="$bits + '1'"/>
          <set_value name="$chunk_available" exact="$chunk_available + 1"/>
         </do_if>
-        <do_else><set_value name="$chunk_fault" exact="true"/><set_value name="$fault_index" exact="$index"/><set_value name="$fault_reason" exact="'existing_invalid_class_operational_or_reverse'"/></do_else>
+        <do_else>
+         <set_value name="$existing_flag" exact="if @$ship.exists then 1 else 0"/>
+         <set_value name="$ship_flag" exact="if $ship.isclass.ship then 1 else 0"/>
+         <set_value name="$operational_flag" exact="if $ship.isoperational then 1 else 0"/>
+         <set_value name="$reverse_matches_flag" exact="if @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index then 1 else 0"/>
+         <set_value name="$snapshot_duplicate_flag" exact="if State.$byship.{$ship}? then 1 else 0"/>
+         <set_value name="$chunk_fault" exact="true"/>
+         <set_value name="$fault_index" exact="$index"/>
+         <set_value name="$fault_reason" exact="'existing_invalid_class_operational_reverse_or_snapshot_duplicate'"/>
+         <debug_text text="'Availability capture row index %s existing %s ship %s operational %s reverse_matches %s snapshot_duplicate %s'.[$index,$existing_flag,$ship_flag,$operational_flag,$reverse_matches_flag,$snapshot_duplicate_flag]"/>
+        </do_else>
        </do_else>
       </do_else>
      </do_all>
@@ -70,7 +87,7 @@
       <raise_lua_event name="'X4AuthorityRegistryAvailabilitySnapshot.Result'" param="'%s|%s|Capture|Refused'.[$request.$request_id,State.$run_id]"/>
      </do_if>
      <do_else>
-      <set_value name="State.$cursor" exact="$first + $count - 1"/>
+      <set_value name="State.$cursor" exact="($first + $count - 1)i"/>
       <set_value name="State.$available_count" exact="State.$available_count + $chunk_available"/>
       <set_value name="State.$unavailable_count" exact="State.$unavailable_count + $chunk_unavailable"/>
       <raise_lua_event name="'X4AuthorityRegistryAvailabilitySnapshot.Result'" param="'%s|%s|Capture|%s|%s|Captured|%s|%s|%s'.[$request.$request_id,State.$run_id,$first,$count,State.$available_count,State.$unavailable_count,$bits]"/>

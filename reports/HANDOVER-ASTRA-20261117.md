@@ -1,6 +1,43 @@
 # X4 multiplayer: handover for Astra
 
-## Latest: availability capture/save/reload observed; null references collapse (2026-11-20)
+## Latest: full-register snapshot refused an existing wreck (2026-11-20)
+
+At `40ec71cb`, the separate format-2 availability snapshot passed targeted
+synthetic tests and MD schema validation. Native full-register run
+`.local/registry-availability-full-native-20261120-01` loaded and paused the
+pinned native04 candidate, then refused the first batch of 64. Its last failing
+index was 59. No seal, save or reload occurred; no admission rule changed.
+Source/pins/Steam identity stayed unchanged and owned cleanup completed; no X4
+remained. Full-register validation is still outstanding.
+
+Offline inspection found index 59 maps both ways to `[0x62a1b]` in CURRENT and
+CONFIRMED. The CURRENT component is a `ship_s`, macro
+`ship_kha_s_fighter_02_a_macro`, code NAX-887, with `state="wreck"` and a saved
+kill event marked `selfdestructed`. CONFIRMED lacks that wreck state. This
+suggests the live operational check failed, but the aggregate native diagnostic
+does not establish the specific predicate or whether other rows also failed.
+Follow-up logging records each rejected row's individual predicates. Persisted
+counts, cursor and reverse indices are explicitly converted to MD integers
+after validating incoming UI numbers; UI-origin numeric keys were observed as
+largefloat in the previous experiment.
+
+**Question pending:** the user was asked whether to separate valid object
+binding from operational eligibility: retain a wreck's identity and valid
+binding while refusing motion/commands; reserve missing bindings for absent
+X4 objects. Do not change these acceptance rules before that answer. The
+original approval for separate availability remains valid. A read-only offline
+inventory of saved component states can proceed meanwhile.
+
+Next integration pointers: `authority.saved_registry.saved_status()` calls the
+old strict saved-map verifier; `checkpoint_status()` requires unchanged recovered
+status. `tools/dev/authority_recovered_loopback_server.py` uses both for candidate
+verification. `tools/dev/authority_ship_registry.xml` Resolve and
+`authority/lua/ship_registry_client.lua` already refuse unusable actors.
+`authority_registry_motion_candidate.lua` requires two successful live
+eligibility checks. None currently consumes the separate availability snapshot;
+the live checkpoint status probe checks only epoch/count, not the full mapping.
+
+## Previous: availability capture/save/reload observed; null references collapse (2026-11-20)
 
 At `d831414c`, one private X4 process captured the seven missing entries plus
 control 1318 and saved. At `d8da5c08`, a fresh private process loaded that retained

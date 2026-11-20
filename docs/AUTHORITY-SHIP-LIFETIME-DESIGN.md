@@ -135,8 +135,12 @@ describes saved bytes only; it is not a runtime or historical identity proof.
 
 This snapshot has no command or motion consumer and is not wired into
 checkpoint admission. Targeted synthetic checks cover the owner, saved-byte
-reader and private adapter; full-register native save/reload validation is the
-next step. All registered entries is a narrower claim than all universe ships.
+reader and private adapter. The first full-register native attempt refused
+the first batch: index 59 referenced an existing object but failed the combined
+operational/class/reverse/duplicate check. No snapshot was sealed or saved;
+the failing predicate is not yet established. Full-register save/reload
+validation remains outstanding. All registered entries is a narrower claim
+than all universe ships.
 
 ## Existing identity
 

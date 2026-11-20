@@ -27,7 +27,7 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
         self.assertEqual(writes, {
             'State.$format': '2', 'State.$epoch': '$request.$epoch',
             'State.$run_id': '$request.$run_id',
-            'State.$issued_count': '$request.$issued_count',
+            'State.$issued_count': '(md.X4AuthorityShipRegistry.State.$last)i',
             'State.$cursor': '0', 'State.$available_count': '0',
             'State.$unavailable_count': '0', 'State.$sealed': 'false',
             'State.$faulted': 'false', 'State.$available': 'table[]',
@@ -64,6 +64,17 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
         serialized = ET.tostring(self.root, encoding='unicode')
         self.assertIn('State.$faulted" exact="true"', serialized)
         self.assertIn('Availability snapshot capture fault at index %s: %s', serialized)
+        # UI numbers arrive as largefloat. Validate before normalizing the
+        # persisted count, cursor and reverse-map indices to MD integers.
+        self.assertIn('name="$index" exact="($first + $offset - 1)i"', serialized)
+        self.assertIn('name="State.$cursor" exact="($first + $count - 1)i"', serialized)
+        capture = ET.tostring(self.cues['Capture'], encoding='unicode')
+        self.assertIn('Availability capture row index %s existing %s ship %s operational %s reverse_matches %s snapshot_duplicate %s', capture)
+        self.assertIn('Availability capture row index %s reason missing_forward', capture)
+        self.assertIn('Availability capture row index %s reason duplicate_snapshot_index', capture)
+        for flag in ('$existing_flag', '$ship_flag', '$operational_flag',
+                     '$reverse_matches_flag', '$snapshot_duplicate_flag'):
+            self.assertIn(f'name="{flag}"', capture)
         self.assertEqual(len(self.event_format(self.cues['Capture'], '|Capture|%s|%s|Captured|').split('|')), 9)
 
     def test_seal_requires_full_coverage_and_counts(self):
