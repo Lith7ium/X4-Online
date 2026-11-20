@@ -771,3 +771,72 @@ modules passed 35 tests in 1.410 s after correcting default receipt ordering;
 seven new prepared-start cases passed after the final review fixes. Agent-run
 outputs were not persisted. Syntax and diff checks passed. No full-suite rerun
 or new native success is claimed here.
+
+
+## Native04: prepared playback completed; overall registry check failed (2026-11-20)
+
+One changed two-Linux-X4 run at `5221187a` completed the bounded real-source
+motion and STOP path. The overall run still **failed** with
+`registered components missing`, after source motion completed. Engine operation
+history ends in pause/save. The failure is in saved-registry verification after
+`CheckpointStore.publish()` and before `CheckpointStore.confirm()`; the
+coordinator did not adopt the candidate as its baseline. There was no unchanged
+native rerun.
+
+The candidate `CURRENT` is `checkpoint-69e674a31a4645b2bd4b9f15b31e9365`
+(27,237,375 bytes); `CONFIRMED` remains
+`checkpoint-d36e035c0756499e8551512c3b37720b` (26,230,396 bytes).
+`registry_evidence.verify()` found fewer saved ship components than the 10,082
+registered references. A subsequent read-only streaming comparison found 10,075
+matching components in `CURRENT`, versus all 10,082 in `CONFIRMED`. The missing
+index/component pairs are `576/5a65e`, `577/5a665`, `578/5a66c`, `579/5a673`,
+`664/5b40b`, `671/5b43c` and `672/5b443`. None occurs as a saved component
+elsewhere in the candidate. This establishes absence from that save, not its
+cause or a validated destruction event. The failed candidate is retained;
+neither pointer is a successful post-motion confirmation.
+
+All seven are `ship_xs` components with macro
+`ship_arg_xs_police_01_a_macro` in `CONFIRMED`. The read-only comparison used the
+repository streaming parser and component-ID normalization; it did not start X4
+or change either save. The original input also passed the repository verifier
+with all 10,082 registered components present. Candidate compressed SHA-256:
+`1f80685675ae90972ee293b7707a643919d028cfb3b4cd965acb241f29801535`;
+confirmed compressed SHA-256:
+`8adaefd196db1ea6a04b3187620fd1d2229a6d23035971b0176ba60ce12bbb54`.
+The registry contract already defines its count as the highest allocated index,
+including references that cannot currently be resolved. The saved verifier,
+however, requires a corresponding component for every entry. Handling an absent
+component across save/reload therefore remains an unresolved integration issue;
+this run does not justify treating absence as destruction, reusing an index, or
+silently accepting the candidate. The approved lifetime-number design is still
+unimplemented. Investigate lifecycle evidence next, without an unchanged game
+rerun or weakening the verifier.
+
+The server captured all 26 samples; latest delivery acknowledged
+`1,3,5,7,9,11,13,15,17,19,21,23,25,26`. The client aligned sequence 3 once with
+0 m readback error, 27.612 ms after its original Lua arrival. The aligned sample
+matched the original pre-delivery capture and its rate/clocks. Source capture
+gaps ranged 0.2272–0.3261 s (median 0.2554 s); acknowledged capture gaps stayed
+below 0.5822 s. No 0.75 s continuity or 50 m correction limit was widened.
+
+Native STOP recorded 14 consumed packets, 445 observations, 436 readbacks,
+final sequence 26, `frozen`, `uncertain=0` and `drained=1`. Final error was
+0.002808222 m; the source-derived predicted target matched exactly. After the
+aligned start, recorded source displacement was 884.494 m and client displacement
+939.794 m (includes bounded prediction), over 5.8406 source capture seconds.
+The bounded trace saturated at 32 events and includes interpolation and
+extrapolation; it is not a complete event history. Shared control release was
+confirmed before pause. These are one-fixture telemetry results, not visual
+smoothness, native engine velocity-setting, full-fleet, Windows or WAN proof.
+
+The 489-pin manifest and original checkpoint were unchanged after the run.
+Owned cgroup/Xauthority cleanup passed, the cgroup was removed, and an independent
+process scan found no X4. The outer `observation_valid` remains false;
+`display_released_after_runner=false` is the expected overall-failure branch.
+Private artifacts: `.local/private-paired-capture-native-20261120-04/`.
+`trial-result.json` references the verified 42,284-byte `trial-details.json`,
+SHA-256 `8d6ca9a768bda13fc40290a30a204b82456eeffaa64810b61fc9ef4cc273d4f4`.
+Client engine log SHA-256:
+`ff6957146319e78e865fe126b7eacc59db43ac1c20478c6bad98fde950daf439`.
+The private prepared-start correlator also passed a synthetic V3 integration
+check before launch; see `.local/check-prepared-start-private-20261120-04.json`.

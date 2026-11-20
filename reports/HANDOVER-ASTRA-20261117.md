@@ -1,6 +1,31 @@
 # X4 multiplayer: handover for Astra
 
-## Latest: prepared startup implemented (2026-11-20)
+## Latest: native04 motion completed; overall test failed (2026-11-20)
+
+At code `5221187a`, the prepared entry aligned sequence 3 at 0 m error and
+completed the real-source one-ship playback through sequence 26. Of 26 captured
+samples, latest delivery acknowledged 14. Native STOP had 436 readbacks,
+0.002808222 m final error and a drained/certain writer; source-derived target
+and capture clocks correlated. This fixes the previously observed startup
+failure in this bounded run, not the multiplayer acceptance goal.
+
+The overall run failed later with `registered components missing`; history ends
+in pause/save. Saved-registry verification failed after publishing the candidate
+and before confirming it or adopting the new baseline. `CURRENT` points to
+`checkpoint-69e674a31a4645b2bd4b9f15b31e9365`; `CONFIRMED` still points to
+`checkpoint-d36e035c0756499e8551512c3b37720b`. Offline comparison found seven
+registered components absent from the candidate (10,075 present), while all
+10,082 exist in the confirmed checkpoint. All seven were `ship_xs` components
+with macro `ship_arg_xs_police_01_a_macro`. Their absence alone does not establish
+destruction or lost identity. The registry counts issued indices, but its saved
+verifier requires a component for every entry; handling unavailable entries
+across saves is unresolved. Investigate lifecycle evidence before changing
+registry acceptance or repeating the native run. Cleanup,
+source preservation and all input-pin checks passed; no X4 remains. No
+Windows/WAN/full-fleet or visual-smoothness proof.
+[Native04 evidence](AUTHORITY-MOTION-CLOCK-BASIS-20261118.md#native04-prepared-playback-completed-overall-registry-check-failed-2026-11-20).
+
+## Previous: prepared startup implemented (2026-11-20)
 
 The approved two-stage entry is implemented and focused synthetic/fake-ABI
 checks pass. The first BIND prepares only; a later sample with velocity aligns
