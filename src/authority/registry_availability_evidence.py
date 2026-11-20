@@ -26,6 +26,7 @@ _MAX = 200000
 _FIELDS = {'$format', '$epoch', '$run_id', '$issued_count', '$cursor',
            '$available_count', '$unavailable_count', '$operational_count',
            '$sealed', '$faulted', '$available', '$operational', '$ships', '$byship'}
+_CAPTURE_ONLY_FIELDS = {'$previous_run_id', '$previous_available', '$previous_ships', '$previous_byship'}
 
 
 def _integer(field, expected=None):
@@ -96,6 +97,9 @@ def verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
                     source_var_sets += 1
             elif path == ['savegame', 'md', 'script', 'cue', 'vars', 'value']:
                 name = attrs.get('name')
+                if active_script and active_cue and name in _CAPTURE_ONLY_FIELDS:
+                    # BeginNext cannot start from a save that still carries prior capture state.
+                    raise RegistryAvailabilityEvidenceError('saved snapshot contains unfinished capture state')
                 if active_script and active_cue and name in _FIELDS:
                     if name in fields:
                         raise RegistryAvailabilityEvidenceError('duplicate snapshot field')

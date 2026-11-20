@@ -177,6 +177,16 @@ class RegistryAvailabilityEvidenceTests(unittest.TestCase):
             with self.subTest(), self.assertRaises(RegistryAvailabilityEvidenceError):
                 self.check(xml)
 
+    def test_sealed_snapshot_cannot_retain_state_from_previous_capture(self):
+        for name, kind, ref in (('$previous_run_id', 'string', '11'),
+                                ('$previous_available', 'table', '20'),
+                                ('$previous_ships', 'table', '22'),
+                                ('$previous_byship', 'table', '23')):
+            field = f'<value name="{name}" type="{kind}" value="{ref}"/>'
+            with self.subTest(field=name), self.assertRaisesRegex(
+                    RegistryAvailabilityEvidenceError, 'unfinished capture state'):
+                self.check(build_xml(fields_extra=field), verify_source_registry=True)
+
     def test_format2_alias_duplicate_refs_and_binding_mismatch_rejected(self):
         cases = [build_xml(format_version=2),
                  build_xml().replace(b'value="21"', b'value="20"'),
