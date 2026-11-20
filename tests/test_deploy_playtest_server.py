@@ -36,10 +36,31 @@ class DeploymentPlanTests(unittest.TestCase):
                  {'user': 'Bad Name'}, {'folder': '/home/invalid path'},
                  {'service': 'Bad Name'}, {'server': {'host': '192.0.2.10', 'port': 65535}},
                  {'server': {'host': '192.0.2.10', 'port': True}},
-                 {'server': {'host': 'not-an-ip', 'port': 47000}})
+                 {'server': {'host': 'not-an-ip', 'port': 47000}},
+                 {'server': {'host': '2001:db8::1', 'port': 47000}})
         for change in cases:
             with self.subTest(change=change), self.assertRaises(ValueError):
                 deploy.deployment_plan(**{**self.values, **change})
+
+    def test_ssh_destinations_accept_aliases_users_and_ipv6(self):
+        cases = {'playtest_edge': 'playtest_edge',
+                 'deploy@playtest.example': 'deploy@playtest.example',
+                 '192.0.2.10': '192.0.2.10',
+                 '2001:db8::1': '2001:db8::1',
+                 'deploy@[2001:db8::1]': 'deploy@2001:db8::1',
+                 '[fe80::1%eth0]': 'fe80::1%eth0'}
+        for target, destination in cases.items():
+            with self.subTest(target=target):
+                plan = deploy.deployment_plan(**{**self.values, 'ssh_target': target})
+                self.assertEqual(plan['ssh'], ['ssh', '-o', 'BatchMode=yes', '--', destination])
+
+    def test_ssh_destinations_reject_options_and_malformed_targets(self):
+        for target in ('deploy@-option', '-user@host', '@host', 'deploy@', 'a@b@host',
+                       'host\n', 'host name', 'host;command', 'ssh://host', 'host:22',
+                       '[2001:db8::1]:22', '[2001:db8::1', '2001:db8:::1',
+                       'fe80::1%bad scope', '[192.0.2.10]'):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                deploy.deployment_plan(**{**self.values, 'ssh_target': target})
 
     def test_archive_keeps_server_key_private_and_refuses_links(self):
         with tempfile.TemporaryDirectory() as folder:

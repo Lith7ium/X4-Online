@@ -65,8 +65,31 @@ journalctl -u {service} -n 5 --no-pager -o cat
 _ACCOUNT = re.compile(r'[a-z_][a-z0-9_-]{0,31}\Z')
 _SERVICE = re.compile(r'[a-z][a-z0-9_-]{0,62}\Z')
 _COMMIT = re.compile(r'[0-9a-f]{40}\Z')
-_HOST = re.compile(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}\Z')
+_SSH_USER = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]*')
+_SSH_HOST = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}')
+_IPV6_SCOPE = re.compile(r'[A-Za-z0-9_.-]+')
 _FOLDER_PART = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]*\Z')
+
+
+def ssh_destination(target):
+    error_message = 'SSH destination must be [user@]hostname, SSH alias, IPv4 or IPv6'
+    if not isinstance(target, str):
+        raise ValueError(error_message)
+    username, separator, host = target.rpartition('@')
+    if separator and not _SSH_USER.fullmatch(username):
+        raise ValueError(error_message)
+    if _SSH_HOST.fullmatch(host):
+        return target
+    if host.startswith('[') and host.endswith(']'):
+        host = host[1:-1]
+    address, scope_separator, scope = host.partition('%')
+    if scope_separator and not _IPV6_SCOPE.fullmatch(scope):
+        raise ValueError(error_message)
+    try:
+        ipaddress.IPv6Address(address)
+    except ipaddress.AddressValueError as error:
+        raise ValueError(error_message) from error
+    return f'{username}{separator}{host}'
 
 
 def deployment_plan(*, ssh_target, user, folder, service, server, manifest, name_time):
@@ -75,9 +98,7 @@ def deployment_plan(*, ssh_target, user, folder, service, server, manifest, name
         raise ValueError('invalid server account')
     if not isinstance(service, str) or not _SERVICE.fullmatch(service):
         raise ValueError('invalid systemd service name')
-    if (not isinstance(ssh_target, str) or ssh_target.startswith('-') or
-            not ssh_target.startswith('root@') or not _HOST.fullmatch(ssh_target[5:])):
-        raise ValueError('SSH destination must be root@hostname or root@IPv4')
+    destination = ssh_destination(ssh_target)
     if (not isinstance(folder, str) or not folder.startswith('/') or folder == '/' or
             not all(_FOLDER_PART.fullmatch(part) and part not in ('.', '..')
                     for part in folder[1:].split('/'))):
@@ -109,7 +130,7 @@ def deployment_plan(*, ssh_target, user, folder, service, server, manifest, name
     extract = (f'umask 077; mkdir -p -- {q(target)} && '
                f'tar xzf - --no-same-owner --no-same-permissions -C {q(target)}')
     return {'name': name, 'target': target,
-            'ssh': ['ssh', '-o', 'BatchMode=yes', '--', ssh_target],
+            'ssh': ['ssh', '-o', 'BatchMode=yes', '--', destination],
             'extract': extract, 'remote': remote}
 
 
@@ -134,7 +155,8 @@ def pack(kit):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--kit', type=Path, required=True, help='a kit folder made with make_playtest_kit.py --server')
-    p.add_argument('--ssh', required=True, metavar='USER@ADDRESS', help='an account that may write the unit file (root)')
+    p.add_argument('--ssh', required=True, metavar='[USER@]HOST',
+        help='SSH alias or address for an account with permission to write the systemd unit')
     p.add_argument('--user', default='x4server', help='the account the server runs as (default x4server)')
     p.add_argument('--dir', default='', help='where it lives (default /home/<user>/lockstep-lobby)')
     p.add_argument('--service', default='x4mp-lobby')
