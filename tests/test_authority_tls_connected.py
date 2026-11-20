@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests')]
-from authority.experimental_tls_tunnel import relay_connected_client, relay_connected_server
+from authority.experimental_tls_tunnel import create_server_context, relay_connected_client, relay_connected_server
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY
 
 
@@ -42,8 +42,7 @@ class ConnectedTunnelTests(unittest.IsolatedAsyncioTestCase):
         key = Path(self.temp.name) / 'key.pem'
         cert.write_text(TEST_CERTIFICATE)
         key.write_text(TEST_PRIVATE_KEY)
-        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        self.context.load_cert_chain(cert, key)
+        self.context = create_server_context(cert, key)
         self.fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest()
 
     async def run_pair(self, *, fingerprint=None, client_key=b'a' * 32, exchange=False):

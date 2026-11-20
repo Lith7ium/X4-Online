@@ -13,7 +13,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests')]
 
-from authority.experimental_tls_tunnel import _relay, start_client, start_server
+from authority.experimental_tls_tunnel import create_server_context, _relay, start_client, start_server
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY
 
 
@@ -32,8 +32,7 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         private_key = Path(self.temp.name) / 'key.pem'
         certificate.write_text(TEST_CERTIFICATE)
         private_key.write_text(TEST_PRIVATE_KEY)
-        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        self.context.load_cert_chain(certificate, private_key)
+        self.context = create_server_context(certificate, private_key)
         self.fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest()
         self.tunnels = []
         self.servers = []

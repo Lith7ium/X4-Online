@@ -4,13 +4,12 @@ import asyncio
 import json
 from pathlib import Path
 import socket
-import ssl
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'src'))
 from authority.experimental_tls_tunnel import (
-    relay_connected_client, relay_connected_server, start_client, start_server,
+    create_server_context, relay_connected_client, relay_connected_server, start_client, start_server,
 )
 
 
@@ -19,9 +18,7 @@ async def serve(ipc, raw_socket, tls_socket, listeners, config):
     if len(key) != 32:
         raise ValueError('invalid session key')
     if config['role'] == 'server':
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.load_cert_chain(config['certificate'], config['private_key'])
+        context = create_server_context(config['certificate'], config['private_key'])
         tunnel = await start_server(listener=listeners[0], ssl_context=context,
             shared_key=key, control_port=config['unused_port'], file_port=config['file_port'])
         relay = relay_connected_server(tls_socket=tls_socket, backend_socket=raw_socket,

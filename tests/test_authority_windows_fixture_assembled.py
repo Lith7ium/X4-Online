@@ -24,7 +24,7 @@ from authority import experimental_windows_fixture_overlay as overlay
 from authority import windows_fixture_session as fixture_session
 from authority.experimental_tcp_control import offer_request
 from authority.experimental_tcp_motion import motion_digest
-from authority.experimental_tls_tunnel import start_server
+from authority.experimental_tls_tunnel import create_server_context, start_server
 from authority.load_messages import Offer
 from authority.trusted_load_messages import decode_load_claim, encode_bound_offer
 from authority.trusted_marker_load_session import MarkerBoundOffer
@@ -84,8 +84,7 @@ class AssembledFixtureSessionTest(unittest.TestCase):
         key = self.root / 'key.pem'
         cert.write_text(TEST_CERTIFICATE)
         key.write_text(TEST_PRIVATE_KEY)
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(str(cert), str(key))
+        context = create_server_context(str(cert), str(key))
         fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest()
         control_listener = listening_socket()
         self.addCleanup(control_listener.close)

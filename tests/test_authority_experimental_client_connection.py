@@ -19,7 +19,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tests')]
 from authority import experimental_client_connection as subject
-from authority.experimental_tls_tunnel import start_server
+from authority.experimental_tls_tunnel import create_server_context, start_server
 import test_authority_experimental_local_host as host_fixture
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY, listening_socket
 
@@ -33,8 +33,7 @@ class IndependentStageTests(unittest.IsolatedAsyncioTestCase):
         certificate, key = self.root/'certificate.pem', self.root/'key.pem'
         certificate.write_text(TEST_CERTIFICATE)
         key.write_text(TEST_PRIVATE_KEY)
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(certificate, key)
+        context = create_server_context(certificate, key)
         self.fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest()
         listener = listening_socket()
         self.server_port = listener.getsockname()[1]

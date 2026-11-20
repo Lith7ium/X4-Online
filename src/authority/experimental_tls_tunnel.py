@@ -228,6 +228,14 @@ async def _accepted_stream(conn, *, ssl_context=None):
     return reader, asyncio.StreamWriter(transport, protocol, reader, loop)
 
 
+def create_server_context(certificate, private_key):
+    """Use the tunnel's TLS floor regardless of the platform OpenSSL defaults."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(certificate, private_key)
+    return context
+
+
 def _validate_server_context(context):
     if not isinstance(context, ssl.SSLContext) or context.protocol != ssl.PROTOCOL_TLS_SERVER:
         raise ValueError('server TLS context required')
@@ -456,9 +464,7 @@ async def _run_cli(options):
     tunnel = None
     try:
         if options.mode == 'server':
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.minimum_version = ssl.TLSVersion.TLSv1_2
-            context.load_cert_chain(options.certificate, options.private_key)
+            context = create_server_context(options.certificate, options.private_key)
             listeners.append(_bind_listener(options.listen_address, options.listen_port))
             tunnel = await start_server(listener=listeners[0], ssl_context=context,
                                         shared_key=key, control_port=options.control_port,

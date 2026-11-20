@@ -20,7 +20,7 @@ import test_authority_experimental_local_host as local_host_fixture
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 from authority.experimental_tcp_participant_client import ExperimentalTCPParticipantClient
 from authority.experimental_tcp_participants import ExperimentalTCPParticipants
-from authority.experimental_tls_tunnel import start_client, start_server
+from authority.experimental_tls_tunnel import create_server_context, start_client, start_server
 from lockstep.launcher.joinfiles import FetchError, request_line
 
 TEST_CERTIFICATE = """-----BEGIN CERTIFICATE-----
@@ -113,8 +113,7 @@ class RelayIntegrationTests(unittest.TestCase):
         private_key = root / 'test-key.pem'
         certificate.write_text(TEST_CERTIFICATE, encoding='ascii')
         private_key.write_text(TEST_PRIVATE_KEY, encoding='ascii')
-        server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        server_context.load_cert_chain(str(certificate), str(private_key))
+        server_context = create_server_context(str(certificate), str(private_key))
         fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest()
         server_listener = listening_socket()
         control_listener = listening_socket()
