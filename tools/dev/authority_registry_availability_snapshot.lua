@@ -40,8 +40,15 @@ function Snapshot.new(options)
         'mode must be capture or inspect')
     assert(token(options.epoch) and token(options.run_id) and token(options.nonce),
         'epoch, run_id, and nonce must be 32 lowercase hex characters')
+    assert(options.run_id ~= options.epoch,
+        'run_id must differ from epoch')
     assert(integer(options.issued_count, 1, MAX_ISSUED_COUNT),
         'issued_count is outside the supported range')
+    local previous_run_id = options.previous_run_id
+    assert(previous_run_id == nil or (options.mode == 'capture'
+        and token(previous_run_id) and previous_run_id ~= options.run_id
+        and previous_run_id ~= options.epoch),
+        'previous_run_id is invalid for this snapshot')
     local batch_size = options.batch_size == nil and 64 or options.batch_size
     assert(integer(batch_size, 1, 64), 'batch_size must be in [1, 64]')
     assert(type(options.timeout) == 'number' and options.timeout > 0
@@ -53,12 +60,13 @@ function Snapshot.new(options)
     local config = {
         enabled = options.enabled, mode = options.mode, epoch = options.epoch,
         run_id = options.run_id, nonce = options.nonce,
+        previous_run_id = previous_run_id,
         issued_count = options.issued_count, batch_size = batch_size,
         timeout = options.timeout, clock = options.clock, guard = options.guard,
         issue = options.issue, complete = options.complete, fault = options.fault,
     }
     local api = {}
-    local phase = config.mode == 'capture' and 'initialize' or 'inspect'
+    local phase = config.mode == 'capture' and (config.previous_run_id and 'begin_next' or 'initialize') or 'inspect'
     local cursor, request_number = 1, 0
     local started, stopped, busy, issuing = false, false, false, false
     local pending, queued, previous_time = nil, nil, nil
@@ -106,6 +114,10 @@ function Snapshot.new(options)
             epoch = config.epoch,
         }
         if action == 'Initialize' then payload.issued_count = config.issued_count end
+        if action == 'BeginNext' then
+            payload.previous_run_id = config.previous_run_id
+            payload.issued_count = config.issued_count
+        end
         if first then payload.first, payload.count = first, count end
         pending = { request_id = request_id, action = action,
             first = first, count = count, deadline = now() + config.timeout }
@@ -119,6 +131,7 @@ function Snapshot.new(options)
     end
     local function next_request()
         if phase == 'initialize' then issue('Initialize'); return end
+        if phase == 'begin_next' then issue('BeginNext'); return end
         if phase == 'seal' then issue('Seal'); return end
         local count = math.min(config.batch_size, config.issued_count - cursor + 1)
         issue(phase == 'capture' and 'Capture' or 'Inspect', cursor, count)
@@ -148,6 +161,12 @@ function Snapshot.new(options)
             if #row ~= 5 or row[4] ~= 'Initialized'
                 or row[5] ~= number_text(config.issued_count) then
                 error('Initialize response mismatch')
+            end
+            phase, cursor = 'capture', 1
+        elseif req.action == 'BeginNext' then
+            if #row ~= 5 or row[4] ~= 'Initialized'
+                or row[5] ~= number_text(config.issued_count) then
+                error('BeginNext response mismatch')
             end
             phase, cursor = 'capture', 1
         elseif req.action == 'Capture' then

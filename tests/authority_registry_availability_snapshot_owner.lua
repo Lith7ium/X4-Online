@@ -1,10 +1,11 @@
 local Snapshot = assert(loadfile('tools/dev/authority_registry_availability_snapshot.lua'))()
 
-local function fixture(mode, count, batch, issue_override)
+local function fixture(mode, count, batch, issue_override, previous_run_id)
     local time, requests, result, fault = 0, {}, nil, nil
     local options = {
         enabled = true, mode = mode, epoch = string.rep('a', 32),
         run_id = string.rep('b', 32), nonce = string.rep('c', 32),
+        previous_run_id = previous_run_id,
         issued_count = count, batch_size = batch, timeout = 2,
         clock = function() return time end,
         guard = function() return true end,
@@ -94,6 +95,38 @@ local function test_inspect_divergence_is_observation()
     assert(completed().saved_operational_bits == saved_operational .. '000000')
     assert(completed().fresh_operational_bits == fresh_operational .. '000000')
     assert(completed().operational_count == 63)
+end
+
+local function test_begin_next_correlates_completed_predecessor()
+    local previous = string.rep('d', 32)
+    local owner, requests, _, completed, fault = fixture('capture', 1, 1, nil, previous)
+    assert(owner:tick())
+    local begin = requests[1]
+    assert(begin.action == 'BeginNext')
+    assert(begin.payload.previous_run_id == previous and begin.payload.run_id ~= previous)
+    assert(begin.payload.issued_count == 1)
+    deliver(owner, begin, 'Initialized|1')
+    local capture = requests[2]
+    assert(capture.action == 'Capture' and capture.payload.first == 1)
+    deliver(owner, capture, '1|1|Captured|1|0|0|1|0')
+    local seal = requests[3]
+    assert(seal.action == 'Seal')
+    deliver(owner, seal, 'Sealed|1|1|0|0')
+    assert(completed() and completed().run_id ~= previous and fault() == nil)
+
+    local ok = pcall(function()
+        fixture('inspect', 1, 1, nil, previous)
+    end)
+    assert(not ok, 'inspect must not accept a predecessor')
+    ok = pcall(function()
+        Snapshot.new({ enabled = true, mode = 'capture', epoch = previous,
+            run_id = string.rep('b', 32), previous_run_id = previous,
+            nonce = string.rep('c', 32), issued_count = 1, timeout = 1,
+            clock = function() return 0 end, guard = function() return true end,
+            issue = function() return true end, complete = function() end,
+            fault = function() end })
+    end)
+    assert(not ok, 'previous run must differ from epoch')
 end
 
 local function test_sync_event_and_protocol_failures()
@@ -215,6 +248,7 @@ end
 
 test_full_capture_and_chunked_remainder()
 test_inspect_divergence_is_observation()
+test_begin_next_correlates_completed_predecessor()
 test_sync_event_and_protocol_failures()
 test_duplicate_late_and_deadline()
 test_reentry_rollback_config_copy_and_disabled()

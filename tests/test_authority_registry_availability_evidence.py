@@ -16,7 +16,9 @@ MISSING_INDICES = (576, 577, 578, 579, 664, 671, 672)
 
 def build_xml(bits=(1, 0, 1), *, operational=None, key_type='integer', available=None,
               op_table=None, ships=None, reverse=None, counters=None, operational_count=None,
-              format_version=3, fields_extra='', refs_extra='', definitions=None):
+              format_version=3, fields_extra='', refs_extra='', definitions=None,
+              source_ships=None, source_reverse=None, source_epoch=EPOCH, source_last=None,
+              source_fault_value=None, source_fields_extra='', source_epoch_ref='12'):
     count = len(bits)
     available = {i: bit for i, bit in enumerate(bits, 1)} if available is None else dict(available)
     operational = tuple(bits) if operational is None else tuple(operational)
@@ -24,6 +26,9 @@ def build_xml(bits=(1, 0, 1), *, operational=None, key_type='integer', available
     indices = [i for i, bit in enumerate(bits, 1) if bit]
     ships = {i: f'{0x100+i:x}' for i in indices} if ships is None else dict(ships)
     reverse = {v: k for k, v in ships.items()} if reverse is None else dict(reverse)
+    source_ships = {i: (ships[i] if i in ships else f'{0x1000+i:x}')
+                    for i in range(1, count + 1)} if source_ships is None else dict(source_ships)
+    source_reverse = {v: k for k, v in source_ships.items()} if source_reverse is None else dict(source_reverse)
     available_count = sum(bits) if counters is None else counters[0]
     unavailable_count = count - available_count if counters is None else counters[1]
     op_count = sum(operational) if operational_count is None else operational_count
@@ -41,14 +46,25 @@ def build_xml(bits=(1, 0, 1), *, operational=None, key_type='integer', available
     op_xml = ''.join(entry(k, v) for k,v in op_table.items())
     ship_xml = ''.join(entry(k, f'[0x{v}]', 'component') for k,v in ships.items())
     reverse_xml = ''.join(entry(f'[0x{k}]', v, 'integer', 'component') for k,v in reverse.items())
-    refs = (f'<refs type="string"><ref id="10" string="{EPOCH}"/><ref id="11" string="{RUN}"/></refs>'
+    source_ship_xml = ''.join(entry(k, f'[0x{v}]', 'component', 'integer') for k,v in source_ships.items())
+    source_reverse_xml = ''.join(entry(f'[0x{k}]', v, 'integer', 'component') for k,v in source_reverse.items())
+    refs = (f'<refs type="string"><ref id="10" string="{EPOCH}"/><ref id="11" string="{RUN}"/><ref id="12" string="{source_epoch}"/></refs>'
             f'<refs type="table"><ref id="20">{avail_xml}</ref></refs>'
             f'<refs type="table"><ref id="21">{op_xml}</ref></refs>'
             f'<refs type="table"><ref id="22">{ship_xml}</ref></refs>'
-            f'<refs type="table"><ref id="23">{reverse_xml}</ref></refs>') + refs_extra
+            f'<refs type="table"><ref id="23">{reverse_xml}</ref></refs>'
+            f'<refs type="table"><ref id="30">{source_ship_xml}</ref></refs>'
+            f'<refs type="table"><ref id="31">{source_reverse_xml}</ref></refs>') + refs_extra
     if definitions is None:
         definitions = ''.join(f'<component id="[0x{v}]" class="ship_s"/>' for v in ships.values())
-    return (f'<savegame><md><script name="X4AuthorityRegistryAvailabilitySnapshot"><cue name="State"><vars>{values}</vars></cue></script></md>'
+    source_fault = '<value name="$faulted" type="integer"' + (f' value="{source_fault_value}"' if source_fault_value is not None else '') + '/>'
+    source_last = count if source_last is None else source_last
+    source_values = (f'<value name="$epoch" type="string" value="{source_epoch_ref}"/>'
+                     f'<value name="$last" type="integer" value="{source_last}"/>'
+                     + source_fault + '<value name="$ships" type="table" value="30"/>'
+                     '<value name="$byship" type="table" value="31"/>' + source_fields_extra)
+    return (f'<savegame><md><script name="X4AuthorityRegistryAvailabilitySnapshot"><cue name="State"><vars>{values}</vars></cue></script>'
+            f'<script name="X4AuthorityShipRegistry"><cue name="State"><vars>{source_values}</vars></cue></script></md>'
             f'<script>{refs}</script><universe>{definitions}</universe></savegame>').encode()
 
 
@@ -61,10 +77,10 @@ class RegistryAvailabilityEvidenceTests(unittest.TestCase):
             path.write_bytes(data)
             yield Checkpoint('checkpoint-' + 'c'*32, path, hashlib.sha256(data).hexdigest(), len(data))
 
-    def check(self, xml, count=None, epoch=EPOCH, run=RUN):
+    def check(self, xml, count=None, epoch=EPOCH, run=RUN, **options):
         count = count or 3
         with self.checkpoint(xml) as cp:
-            return verify(cp, epoch, run, count)
+            return verify(cp, epoch, run, count, **options)
 
     def test_mixed_bits_and_v3_digests(self):
         result = self.check(build_xml((1, 0, 1), operational=(1, 0, 0)))
@@ -76,6 +92,7 @@ class RegistryAvailabilityEvidenceTests(unittest.TestCase):
             self.assertEqual(len(result[name]), 64)
         self.assertEqual(result['evidence_scope'], 'saved checkpoint bytes only')
         self.assertIn('recheck live', result['operational_scope'])
+        self.assertFalse(result['source_registry_checked'])
 
     def test_all_missing_and_all_available_but_nonoperational(self):
         missing = build_xml((0, 0, 0), operational=(0, 0, 0), ships={}, reverse={}, definitions='')
@@ -108,6 +125,40 @@ class RegistryAvailabilityEvidenceTests(unittest.TestCase):
         self.assertEqual([i for i, bit in enumerate(result['availability_bits'], 1) if bit == '0'], sorted(missing))
         self.assertEqual([i for i, bit in enumerate(result['operational_bits'], 1) if bit == '0'], sorted(nonop))
         self.assertEqual((result['availability_bits'][58], result['operational_bits'][58]), ('1', '0'))
+
+    def test_optin_source_registry_alignment_and_collapsed_null_reverse(self):
+        result = self.check(build_xml((1, 0, 1)), verify_source_registry=True)
+        self.assertTrue(result['source_registry_checked'])
+        null_forward = {1: '101', 2: '0', 3: '0'}
+        null_reverse = {'101': 1, '0': 3}
+        result = self.check(build_xml((1, 0, 0), operational=(1, 0, 0),
+                                      ships={1: '101'}, reverse={'101': 1},
+                                      source_ships=null_forward, source_reverse=null_reverse),
+                           verify_source_registry=True)
+        self.assertEqual(result['availability_bits'], '100')
+
+    def test_optin_source_registry_rejects_mismatch_count_epoch_fault_and_present_unavailable(self):
+        swapped = build_xml((1, 0, 1), source_ships={1: '103', 2: '1002', 3: '101'},
+                            source_reverse={'103': 1, '1002': 2, '101': 3})
+        with self.assertRaises(RegistryAvailabilityEvidenceError):
+            self.check(swapped, verify_source_registry=True)
+        self.assertEqual(self.check(swapped)['availability_bits'], '101')
+        cases = [build_xml(source_last=2), build_xml(source_epoch='d'*32),
+                 build_xml(source_fault_value='1'), build_xml(source_epoch_ref='10'),
+                 build_xml((1, 0, 1), source_ships={1: '101', 2: '102', 3: '103'},
+                           source_reverse={'101': 1, '102': 2, '103': 3},
+                           definitions='<component id="[0x101]" class="ship_s"/>'
+                                       '<component id="[0x103]" class="ship_s"/>'
+                                       '<component id="[0x102]" class="ship_s"/>')]
+        for xml in cases:
+            with self.subTest(), self.assertRaises(RegistryAvailabilityEvidenceError):
+                self.check(xml, verify_source_registry=True)
+
+    def test_optin_source_registry_rejects_wrong_null_reverse_target(self):
+        xml = build_xml((1, 0, 1), source_ships={1: '101', 2: '0', 3: '103'},
+                        source_reverse={'101': 1, '0': 1, '103': 3})
+        with self.assertRaises(RegistryAvailabilityEvidenceError):
+            self.check(xml, verify_source_registry=True)
 
     def test_missing_component_definition_is_rejected_for_binding(self):
         bits = (1,) * 64

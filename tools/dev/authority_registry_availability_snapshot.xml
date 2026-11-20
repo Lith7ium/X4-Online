@@ -27,6 +27,32 @@
    </actions>
   </cue>
 
+  <cue name="BeginNext" instantiate="true">
+   <conditions><event_ui_triggered screen="'X4AuthorityRegistryAvailabilitySnapshot'" control="'BeginNext'"/></conditions>
+   <actions>
+    <set_value name="$request" exact="event.param3"/>
+    <do_if value="State.$format? and State.$epoch? and State.$run_id? and State.$issued_count? and State.$cursor? and State.$available_count? and State.$unavailable_count? and State.$operational_count? and State.$available? and State.$operational? and State.$ships? and State.$byship? and State.$sealed? and State.$faulted? and State.$format == 3 and State.$sealed and not State.$faulted and State.$cursor == State.$issued_count and State.$available_count + State.$unavailable_count == State.$issued_count and State.$operational_count le State.$available_count and not State.$previous_run_id? and not State.$previous_available? and not State.$previous_ships? and not State.$previous_byship? and State.$issued_count ge 1 and State.$issued_count le 200000 and $request.$request_id? and $request.$previous_run_id == State.$run_id and $request.$run_id? and $request.$run_id != State.$run_id and $request.$run_id != State.$epoch and $request.$epoch == State.$epoch and $request.$issued_count == State.$issued_count and $request.$issued_count == ($request.$issued_count)i and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and not md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch and md.X4AuthorityShipRegistry.State.$last == State.$issued_count">
+     <set_value name="State.$previous_run_id" exact="State.$run_id"/>
+     <set_value name="State.$previous_available" exact="State.$available"/>
+     <set_value name="State.$previous_ships" exact="State.$ships"/>
+     <set_value name="State.$previous_byship" exact="State.$byship"/>
+     <set_value name="State.$run_id" exact="$request.$run_id"/>
+     <set_value name="State.$cursor" exact="0"/>
+     <set_value name="State.$available_count" exact="0"/>
+     <set_value name="State.$unavailable_count" exact="0"/>
+     <set_value name="State.$operational_count" exact="0"/>
+     <set_value name="State.$sealed" exact="false"/>
+     <set_value name="State.$faulted" exact="false"/>
+     <set_value name="State.$available" exact="table[]"/>
+     <set_value name="State.$operational" exact="table[]"/>
+     <set_value name="State.$ships" exact="table[]"/>
+     <set_value name="State.$byship" exact="table[]"/>
+     <raise_lua_event name="'X4AuthorityRegistryAvailabilitySnapshot.Result'" param="'%s|%s|BeginNext|Initialized|%s'.[$request.$request_id,State.$run_id,State.$issued_count]"/>
+    </do_if>
+    <do_else><raise_lua_event name="'X4AuthorityRegistryAvailabilitySnapshot.Result'" param="'%s|%s|BeginNext|Refused'.[$request.$request_id,$request.$run_id]"/></do_else>
+   </actions>
+  </cue>
+
   <cue name="Capture" instantiate="true">
    <conditions><event_ui_triggered screen="'X4AuthorityRegistryAvailabilitySnapshot'" control="'Capture'"/></conditions>
    <actions>
@@ -44,7 +70,7 @@
      <set_value name="$fault_reason" exact="''"/>
      <do_all exact="$count" counter="$offset">
       <set_value name="$index" exact="($first + $offset - 1)i"/>
-      <do_if value="not md.X4AuthorityShipRegistry.State.$ships.{$index}? or State.$available.{$index}? or State.$operational.{$index}?">
+      <do_if value="not md.X4AuthorityShipRegistry.State.$ships.{$index}? or State.$available.{$index}? or State.$operational.{$index}? or (State.$previous_run_id? and (not State.$previous_available.{$index}? or (State.$previous_available.{$index} != 0 and State.$previous_available.{$index} != 1)))">
        <set_value name="$chunk_fault" exact="true"/>
        <set_value name="$fault_index" exact="$index"/>
        <do_if value="not md.X4AuthorityShipRegistry.State.$ships.{$index}?">
@@ -52,12 +78,17 @@
         <debug_text text="'Availability capture row index %s reason missing_forward'.[$index]"/>
        </do_if>
        <do_else>
-        <set_value name="$fault_reason" exact="'duplicate_snapshot_index'"/>
+        <set_value name="$fault_reason" exact="'duplicate_snapshot_index_or_invalid_previous_bit'"/>
         <debug_text text="'Availability capture row index %s reason duplicate_snapshot_index'.[$index]"/>
        </do_else>
       </do_if>
       <do_else>
        <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$index}"/>
+       <do_if value="State.$previous_run_id? and State.$previous_available.{$index} == 0 and @$ship.exists">
+        <set_value name="$chunk_fault" exact="true"/>
+        <set_value name="$fault_index" exact="$index"/>
+        <set_value name="$fault_reason" exact="'previously_unavailable_binding_revived'"/>
+       </do_if>
        <do_if value="not @$ship.exists">
         <set_value name="State.$available.{$index}" exact="0"/>
         <set_value name="State.$operational.{$index}" exact="0"/>
@@ -67,7 +98,7 @@
        </do_if>
        <do_else>
         <!-- Wrecks keep their real ship class even when isclass.ship is false. -->
-        <do_if value="$ship.isrealclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index and not State.$byship.{$ship}?">
+        <do_if value="$ship.isrealclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index and not State.$byship.{$ship}? and (not State.$previous_run_id? or (State.$previous_available.{$index} == 1 and State.$previous_ships.{$index} == $ship and State.$previous_byship.{$ship} == $index))">
          <set_value name="State.$available.{$index}" exact="1"/>
          <set_value name="State.$operational.{$index}" exact="if $ship.isoperational then 1 else 0"/>
          <set_value name="$operational_bit" exact="if State.$operational.{$index} == 1 then '1' else '0'"/>
@@ -116,6 +147,12 @@
     <set_value name="$request" exact="event.param3"/>
     <do_if value="State.$format? and State.$epoch? and State.$run_id? and State.$issued_count? and State.$cursor? and State.$available_count? and State.$unavailable_count? and State.$operational_count? and State.$available? and State.$operational? and State.$ships? and State.$byship? and State.$sealed? and State.$faulted? and State.$format == 3 and not State.$faulted and not State.$sealed and State.$cursor == State.$issued_count and State.$available_count + State.$unavailable_count == State.$issued_count and State.$operational_count le State.$available_count and $request.$request_id? and $request.$run_id == State.$run_id and $request.$epoch == State.$epoch and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch and md.X4AuthorityShipRegistry.State.$last == State.$issued_count">
      <set_value name="State.$sealed" exact="true"/>
+     <do_if value="State.$previous_run_id?">
+      <remove_value name="State.$previous_run_id"/>
+      <remove_value name="State.$previous_available"/>
+      <remove_value name="State.$previous_ships"/>
+      <remove_value name="State.$previous_byship"/>
+     </do_if>
      <raise_lua_event name="'X4AuthorityRegistryAvailabilitySnapshot.Result'" param="'%s|%s|Seal|Sealed|%s|%s|%s|%s'.[$request.$request_id,State.$run_id,State.$issued_count,State.$available_count,State.$unavailable_count,State.$operational_count]"/>
     </do_if>
     <do_else><raise_lua_event name="'X4AuthorityRegistryAvailabilitySnapshot.Result'" param="'%s|%s|Seal|Refused'.[$request.$request_id,$request.$run_id]"/></do_else>

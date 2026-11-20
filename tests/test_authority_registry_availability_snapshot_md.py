@@ -134,7 +134,7 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
             self.assertIn(name, inspect_response)
 
     def test_all_actions_are_explicit_default_off_read_only_registry_triggers(self):
-        self.assertEqual(set(self.cues), {'State', 'Capture', 'Seal', 'Inspect'})
+        self.assertEqual(set(self.cues), {'State', 'BeginNext', 'Capture', 'Seal', 'Inspect'})
         serialized = ET.tostring(self.root, encoding='unicode')
         self.assertNotIn('<destroy_object', serialized)
         self.assertNotIn('<set_value name="md.X4AuthorityShipRegistry.State.', serialized)
@@ -142,9 +142,41 @@ class RegistryAvailabilitySnapshotMD(unittest.TestCase):
             trigger = cue.find('./conditions/event_ui_triggered')
             self.assertIsNotNone(trigger)
             self.assertEqual(trigger.get('screen'), "'X4AuthorityRegistryAvailabilitySnapshot'")
-        for action in ('Capture', 'Seal', 'Inspect'):
+        for action in ('BeginNext', 'Capture', 'Seal', 'Inspect'):
             guards = [n.get('value', '') for n in self.cues[action].iter('do_if')]
             self.assertTrue(any('State.$format == 3' in value for value in guards))
+
+    def test_begin_next_requires_a_completed_correlated_predecessor(self):
+        actions = self.cues['BeginNext'].find('actions')
+        guard = next(n.get('value', '') for n in actions.iter('do_if'))
+        for required in ('State.$sealed', 'not State.$faulted',
+                         'State.$cursor == State.$issued_count',
+                         '$request.$previous_run_id == State.$run_id',
+                         '$request.$run_id != State.$run_id',
+                         '$request.$run_id != State.$epoch',
+                         '$request.$issued_count == State.$issued_count',
+                         'md.X4AuthorityShipRegistry.State.$last == State.$issued_count'):
+            self.assertIn(required, guard)
+        writes = {node.get('name'): node.get('exact') for node in actions.iter('set_value')
+                  if node.get('name', '').startswith('State.')}
+        self.assertEqual(writes['State.$previous_run_id'], 'State.$run_id')
+        self.assertEqual(writes['State.$previous_available'], 'State.$available')
+        self.assertEqual(writes['State.$previous_ships'], 'State.$ships')
+        self.assertEqual(writes['State.$previous_byship'], 'State.$byship')
+        self.assertEqual(writes['State.$run_id'], '$request.$run_id')
+        self.assertEqual(writes['State.$available'], 'table[]')
+        self.assertEqual(self.event_format(self.cues['BeginNext'], '|BeginNext|Initialized|').split('|')[-1], '%s')
+        serialized = ET.tostring(self.root, encoding='unicode')
+        for name in ('$previous_run_id', '$previous_available', '$previous_ships', '$previous_byship'):
+            self.assertIn(f'<remove_value name="State.{name}"', serialized)
+
+    def test_capture_preserves_predecessor_binding_and_never_revives_missing(self):
+        capture = ET.tostring(self.cues['Capture'], encoding='unicode')
+        self.assertIn('previously_unavailable_binding_revived', capture)
+        self.assertIn('State.$previous_available.{$index} == 1', capture)
+        self.assertIn('State.$previous_ships.{$index} == $ship', capture)
+        self.assertIn('State.$previous_byship.{$ship} == $index', capture)
+        self.assertIn('State.$previous_available.{$index} == 0 and @$ship.exists', capture)
 
 
 if __name__ == '__main__':
