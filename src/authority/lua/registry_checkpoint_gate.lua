@@ -12,6 +12,25 @@ local function bits(value, count)
         and value:match('^[01]+$') ~= nil
 end
 
+local function check_inspected_bits(label, expected, observed)
+    if observed == expected then return end
+    if type(observed) ~= 'string' or #observed ~= #expected then
+        error(label .. ' vector has an unexpected length')
+    end
+    local count, examples = 0, {}
+    for index = 1, #expected do
+        local before, after = expected:byte(index), observed:byte(index)
+        if before ~= after then
+            count = count + 1
+            if #examples < 6 then
+                examples[#examples + 1] = string.format('%d(%c>%c)', index, before, after)
+            end
+        end
+    end
+    error(string.format('%s differs at %d indices, first %s', label, count,
+        table.concat(examples, ',')))
+end
+
 local function copy(value)
     if type(value) ~= 'table' then return value end
     local result = {}
@@ -130,12 +149,10 @@ function M.new(options)
                 if evidence.epoch ~= cfg.epoch or evidence.run_id ~= run_id
                     or evidence.issued_count ~= cfg.issued_count then error('snapshot correlation mismatch') end
                 if mode == 'inspect' then
-                    if evidence.saved_bits ~= cfg.expected_binding_bits
-                        or evidence.fresh_bits ~= cfg.expected_binding_bits
-                        or evidence.saved_operational_bits ~= cfg.expected_operational_bits
-                        or evidence.fresh_operational_bits ~= cfg.expected_operational_bits then
-                        error('initial saved and fresh registry observations differ from pinned baseline')
-                    end
+                    check_inspected_bits('saved binding', cfg.expected_binding_bits, evidence.saved_bits)
+                    check_inspected_bits('live binding', cfg.expected_binding_bits, evidence.fresh_bits)
+                    check_inspected_bits('saved operational', cfg.expected_operational_bits, evidence.saved_operational_bits)
+                    check_inspected_bits('live operational', cfg.expected_operational_bits, evidence.fresh_operational_bits)
                     if not guard() then error('pause/game-time guard failed before initial readiness') end
                     last_evidence = copy(evidence)
                     protected(cfg.report, copy(evidence))

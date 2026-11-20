@@ -110,6 +110,15 @@ local function test_corrupt_initial_inspect_blocks_readiness()
     assert(#stores == 0 and #faults > 0)
 end
 
+local function test_mismatch_identifies_the_observation_and_first_indices()
+    local pinned = '00' .. OPERATIONAL:sub(3)
+    local gate, requests, stores, _, faults = make_gate({expected_operational_bits = pinned})
+    assert(gate:start() and gate:tick())
+    complete_active(gate, requests, 1, 'inspect')
+    assert(gate:state().stopped and #stores == 0 and #faults == 1)
+    assert(faults[1]:find('saved operational differs at 2 indices, first 1(0>1),2(0>1)', 1, true))
+end
+
 local function test_replay_marker_and_incomplete_capture_never_store()
     local gate, requests, stores, _, faults, _, set_time = initialized_gate()
     local marker = string.rep('f', 32)
@@ -263,6 +272,7 @@ end
 
 test_two_fresh_full_captures()
 test_corrupt_initial_inspect_blocks_readiness()
+test_mismatch_identifies_the_observation_and_first_indices()
 test_replay_marker_and_incomplete_capture_never_store()
 test_reentrant_report_faults_before_store()
 test_guard_reentry_stops_before_issue()
