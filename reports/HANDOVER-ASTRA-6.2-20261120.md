@@ -1,5 +1,8 @@
 # X4 authoritative multiplayer: handover for Astra 6.2
 
+The [Neon handover](HANDOVER-NEON-20261120.md) records the later successful
+two-client sequential rejoin and the current client development branch.
+
 This brief records the paused handover on 20 November 2026. Development resumed
 afterward. The [checkpoint guide](../tools/dev/AUTHORITY-REGISTRY-CHECKPOINT.md)
 records the subsequent Linux two-save and reload result. The
